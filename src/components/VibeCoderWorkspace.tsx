@@ -29,7 +29,6 @@ import {
   TerminalSquare,
   Trash2,
   ArrowUp,
-  Filter,
   FolderOpen,
   Grid3X3,
   LayoutList,
@@ -1017,6 +1016,7 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
               key="all-projects"
               projects={projects}
               openProjectMenu={openProjectMenu}
+              orbColorTheme={orbColorTheme}
               onBack={() => setWelcomeView("home")}
               onToggleMenu={(id) => setOpenProjectMenu((current) => (current === id ? null : id))}
               onRename={(project) => {
@@ -1266,37 +1266,59 @@ function ProjectThumbnail({
   updatedAt,
   alt,
   className,
+  priority = false,
 }: {
   projectId: string;
   updatedAt?: string;
   alt: string;
   className?: string;
+  priority?: boolean;
 }) {
   const [failed, setFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const src = projectThumbnailUrl(projectId, updatedAt);
 
   if (failed) {
     return (
       <div
         className={cn(
-          "grid h-full w-full place-items-center bg-[linear-gradient(135deg,#ffffff_0%,#f8fafc_46%,#eef2f7_100%)] text-[11px] font-bold uppercase tracking-[0.14em] text-slate-300",
+          "relative h-full w-full overflow-hidden bg-[linear-gradient(135deg,#ffffff_0%,#f8fafc_46%,#eef2f7_100%)]",
           className,
         )}
       >
-        Preview
+        <div className="absolute inset-3 rounded-[18px] border border-slate-200/80 bg-white/90 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+          <div className="mb-3 h-2.5 w-16 rounded-full bg-slate-200" />
+          <div className="mb-2 h-3 w-[70%] rounded-full bg-slate-900/80" />
+          <div className="mb-2 h-2 w-[88%] rounded-full bg-slate-200" />
+          <div className="h-2 w-[62%] rounded-full bg-slate-100" />
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <div className="h-16 rounded-[14px] bg-slate-100" />
+            <div className="h-16 rounded-[14px] bg-slate-50" />
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <img
-      src={src}
-      alt={alt}
-      loading="eager"
-      decoding="async"
-      onError={() => setFailed(true)}
-      className={className}
-    />
+    <div className={cn("relative h-full w-full overflow-hidden", className)}>
+      {!loaded ? (
+        <div className="absolute inset-0 animate-pulse bg-[linear-gradient(135deg,#ffffff_0%,#f1f5f9_50%,#e2e8f0_100%)]" />
+      ) : null}
+      <img
+        src={src}
+        alt={alt}
+        loading={priority ? "eager" : "lazy"}
+        decoding="async"
+        fetchPriority={priority ? "high" : "auto"}
+        onLoad={() => setLoaded(true)}
+        onError={() => setFailed(true)}
+        className={cn(
+          "h-full w-full object-cover transition-opacity duration-200",
+          loaded ? "opacity-100" : "opacity-0",
+        )}
+      />
+    </div>
   );
 }
 
@@ -1320,6 +1342,7 @@ function RecentProjectCard({
             updatedAt={item.updatedAt}
             alt={`${item.name} screenshot`}
             className="h-full w-full object-cover transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] group-hover:scale-[1.025]"
+            priority
           />
           <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0)_58%,rgba(255,255,255,0.78)_100%)]" />
         </div>
@@ -1358,18 +1381,23 @@ function ProjectCard({
 }) {
   return (
     <article className="group relative aspect-square overflow-visible rounded-[20px] border border-slate-200/70 bg-white/88 text-left shadow-[0_10px_28px_rgba(15,23,42,0.03)] transition-[border-color,box-shadow,transform] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-0.5 hover:border-slate-300/80 hover:shadow-[0_16px_38px_rgba(15,23,42,0.05)]">
-      <button type="button" onClick={onOpen} className="flex h-full w-full flex-col overflow-hidden rounded-[20px] p-1.5 text-left">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex h-full w-full flex-col overflow-hidden rounded-[20px] p-1.5 text-left"
+      >
         <div className="relative h-[76%] shrink-0 overflow-hidden rounded-[16px] border border-slate-200/70 bg-[linear-gradient(135deg,#ffffff_0%,#f8fafc_46%,#eef2f7_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.95)]">
           <ProjectThumbnail
             projectId={item.id}
             updatedAt={item.updatedAt}
             alt={`${item.name} screenshot`}
             className="h-full w-full object-cover transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] group-hover:scale-[1.025]"
+            priority
           />
           <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0)_58%,rgba(255,255,255,0.78)_100%)]" />
         </div>
-        <div className="flex min-h-0 flex-1 items-center px-1.5 pb-1 pt-1.5">
-          <div className="min-w-0">
+        <div className="flex min-h-0 flex-1 items-center gap-2 px-1.5 pb-1 pt-1.5">
+          <div className="min-w-0 flex-1">
             <p className="truncate text-[12.5px] font-bold leading-snug tracking-[-0.02em] text-slate-950">
               {item.name}
             </p>
@@ -1377,33 +1405,53 @@ function ProjectCard({
               {relativeTime(item.updatedAt)}
             </p>
           </div>
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-slate-200/70 bg-white/92 text-slate-400 transition-all group-hover:border-slate-300 group-hover:text-slate-900">
+            <FolderOpen className="h-3.5 w-3.5" />
+          </span>
         </div>
       </button>
+
       <button
         type="button"
         onClick={(event) => {
           event.stopPropagation();
           onToggleMenu();
         }}
-        className="absolute bottom-3 right-3 z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-200/70 bg-white/92 text-slate-500 shadow-[0_4px_12px_rgba(15,23,42,0.06)] backdrop-blur-md transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900"
+        className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full border border-slate-200/80 bg-white/95 text-slate-500 opacity-0 shadow-sm transition-all hover:border-slate-300 hover:text-slate-900 group-hover:opacity-100"
         aria-label={`Project actions for ${item.name}`}
       >
         <MoreHorizontal className="h-4 w-4" />
       </button>
+
       <AnimatePresence>
         {menuOpen ? (
           <motion.div
-            initial={{ opacity: 0, y: 8, scale: 0.96 }}
+            initial={{ opacity: 0, y: 6, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 6, scale: 0.96 }}
-            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-            className="absolute bottom-14 right-2 z-20 w-44 overflow-hidden rounded-[16px] border border-slate-200/80 bg-white/96 p-1.5 text-[12px] font-semibold text-slate-600 shadow-[0_18px 46px_rgba(15,23,42,0.12)] backdrop-blur-xl"
+            exit={{ opacity: 0, y: 4, scale: 0.96 }}
+            className="absolute right-3 top-12 z-20 w-40 overflow-hidden rounded-[14px] border border-slate-200 bg-white p-1 shadow-xl"
           >
-            <button type="button" onClick={() => { onRename(); onToggleMenu(); }} className="flex w-full items-center gap-2.5 rounded-[12px] px-3 py-2.5 text-left transition-colors hover:bg-slate-50 hover:text-slate-950">
+            <button
+              type="button"
+              onClick={onOpen}
+              className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold hover:bg-slate-50"
+            >
+              <FolderOpen className="h-3.5 w-3.5" />
+              Open
+            </button>
+            <button
+              type="button"
+              onClick={onRename}
+              className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold hover:bg-slate-50"
+            >
               <Pencil className="h-3.5 w-3.5" />
               Rename
             </button>
-            <button type="button" onClick={() => { onDelete(); onToggleMenu(); }} className="flex w-full items-center gap-2.5 rounded-[12px] px-3 py-2.5 text-left text-rose-500 transition-colors hover:bg-rose-50">
+            <button
+              type="button"
+              onClick={onDelete}
+              className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold text-rose-500 hover:bg-rose-50"
+            >
               <Trash2 className="h-3.5 w-3.5" />
               Delete
             </button>
@@ -1417,6 +1465,7 @@ function ProjectCard({
 function AllProjectsView({
   projects,
   openProjectMenu,
+  orbColorTheme = "default",
   onBack,
   onOpen,
   onToggleMenu,
@@ -1425,6 +1474,7 @@ function AllProjectsView({
 }: {
   projects: any[];
   openProjectMenu: string | null;
+  orbColorTheme?: OrbColorTheme;
   onBack: () => void;
   onOpen: (project: any) => void;
   onToggleMenu: (id: string) => void;
@@ -1472,28 +1522,52 @@ function AllProjectsView({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -10 }}
       transition={{ duration: 0.36, ease: [0.22, 1, 0.36, 1] }}
-      className="mx-auto flex w-full max-w-[1100px] flex-col pb-14 pt-4"
+      className="relative mx-auto flex w-full max-w-[760px] flex-col items-center pb-12 pt-0 text-center"
     >
-      <div className="mb-6 flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <button
-            type="button"
-            onClick={onBack}
-            className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-white/80 px-3 py-1.5 text-[11px] font-bold text-slate-500 shadow-[0_8px_20px_rgba(15,23,42,0.03)] transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-800"
-          >
-            ← Back
-          </button>
-          <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-300">Vibe Coder</p>
-          <h2 className="mt-1 text-[32px] font-bold tracking-[-0.04em] text-slate-950 sm:text-[36px]">All projects</h2>
-          <p className="mt-1 text-[13px] font-medium text-slate-500">
-            {filteredProjects.length} of {projects.length} workspaces
-          </p>
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-[-12%] -top-4 h-[220px] rounded-[48%] bg-[radial-gradient(ellipse_at_center,rgba(148,163,184,0.18)_0%,rgba(255,255,255,0)_70%)] blur-2xl"
+      />
+
+      <div className="relative z-[1] mb-3 flex w-full flex-col items-center">
+        <button
+          type="button"
+          onClick={onBack}
+          className="mb-1.5 self-start rounded-full border border-slate-200/80 bg-white/80 px-3.5 py-1.5 text-[12px] font-bold text-slate-500 shadow-[0_8px_20px_rgba(15,23,42,0.035)] transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-800"
+        >
+          ← Back
+        </button>
+
+        <div className="mb-1.5 flex justify-center">
+          <div className="scale-[0.72]">
+            <AiOrb colorTheme={orbColorTheme} />
+          </div>
         </div>
+        <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-300">
+          Recent projects
+        </p>
+        <h2 className="mt-1 text-3xl font-semibold tracking-[-0.055em] text-slate-950 sm:text-4xl">
+          All projects
+        </h2>
+        <p className="mt-1 max-w-2xl text-[14px] font-semibold text-slate-500 sm:text-[15px]">
+          {filteredProjects.length} of {projects.length} workspaces — reopen, rename, or continue building.
+        </p>
       </div>
 
-      <div className="overflow-hidden rounded-[28px] border border-slate-200/70 bg-white/72 shadow-[0_24px_80px_rgba(15,23,42,0.06)] backdrop-blur-xl">
-        <div className="grid gap-4 border-b border-slate-100/80 px-5 py-4 sm:px-6 lg:grid-cols-[220px_minmax(0,1fr)]">
-          <div className="flex flex-wrap gap-2 lg:flex-col">
+      <div className="relative z-[1] mb-4 w-full max-w-[700px] space-y-2.5">
+        <div className="relative">
+          <Search className="absolute left-4 top-1/2 h-4.5 w-4.5 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search by name, prompt, or id..."
+            className="w-full rounded-[24px] border border-slate-200/70 bg-white/92 py-4 pl-12 pr-4 text-[15px] font-medium text-slate-700 shadow-[0_10px_28px_rgba(15,23,42,0.03)] placeholder:text-slate-400 outline-none transition-all focus:border-slate-300"
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap justify-center gap-2">
             {([
               ["all", "All", statusCounts.all],
               ["ready", "Ready", statusCounts.ready],
@@ -1505,171 +1579,164 @@ function AllProjectsView({
                 type="button"
                 onClick={() => setStatusFilter(id)}
                 className={cn(
-                  "flex items-center justify-between rounded-[14px] border px-3 py-2 text-left text-[12px] font-bold transition-all duration-200",
+                  "inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-[12px] font-bold transition-all duration-200",
                   statusFilter === id
-                    ? "border-slate-900/90 bg-slate-900 text-white shadow-[0_10px_24px_rgba(15,23,42,0.14)]"
-                    : "border-slate-200/80 bg-white/80 text-slate-600 hover:border-slate-300 hover:text-slate-900",
+                    ? "border-slate-200 bg-white text-slate-900 shadow-[0_8px_20px_rgba(15,23,42,0.06)]"
+                    : "border-transparent bg-transparent text-slate-400 hover:border-slate-200/80 hover:bg-white/70 hover:text-slate-700",
                 )}
               >
                 <span>{label}</span>
-                <span className={cn("rounded-full px-2 py-0.5 text-[10px]", statusFilter === id ? "bg-white/15 text-white" : "bg-slate-100 text-slate-500")}>
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-0.5 text-[11px]",
+                    statusFilter === id
+                      ? "bg-slate-100 text-slate-600"
+                      : "bg-slate-100/70 text-slate-400",
+                  )}
+                >
                   {count}
                 </span>
               </button>
             ))}
           </div>
 
-          <div className="space-y-3">
-            <div className="relative">
-              <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search by name, prompt, or id..."
-                className="w-full rounded-[16px] border border-slate-200/80 bg-white/90 py-3 pl-11 pr-4 text-[13.5px] font-medium text-slate-700 placeholder:text-slate-400 outline-none transition-all focus:border-slate-400"
-              />
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <div className="inline-flex rounded-full border border-slate-200/80 bg-white/90 p-1">
-                <button
-                  type="button"
-                  onClick={() => setViewMode("grid")}
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-bold transition-colors duration-200",
-                    viewMode === "grid" ? "bg-slate-900 text-white" : "text-slate-500 hover:text-slate-800",
-                  )}
-                >
-                  <Grid3X3 className="h-3.5 w-3.5" />
-                  Grid
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode("list")}
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-bold transition-colors duration-200",
-                    viewMode === "list" ? "bg-slate-900 text-white" : "text-slate-500 hover:text-slate-800",
-                  )}
-                >
-                  <LayoutList className="h-3.5 w-3.5" />
-                  List
-                </button>
-              </div>
-              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
-                <Filter className="h-3.5 w-3.5" />
-                Sorted by recent
-              </span>
-            </div>
+          <div className="inline-flex rounded-full border border-slate-200/80 bg-white/88 p-1 shadow-[0_8px_20px_rgba(15,23,42,0.03)]">
+            <button
+              type="button"
+              onClick={() => setViewMode("grid")}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-bold transition-colors duration-200",
+                viewMode === "grid"
+                  ? "bg-slate-100 text-slate-900"
+                  : "text-slate-400 hover:text-slate-700",
+              )}
+            >
+              <Grid3X3 className="h-3.5 w-3.5" />
+              Grid
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("list")}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-bold transition-colors duration-200",
+                viewMode === "list"
+                  ? "bg-slate-100 text-slate-900"
+                  : "text-slate-400 hover:text-slate-700",
+              )}
+            >
+              <LayoutList className="h-3.5 w-3.5" />
+              List
+            </button>
           </div>
         </div>
+      </div>
 
-        <div className="clyra-visible-scrollbar min-h-[420px] overflow-auto p-5 sm:p-6">
-              {filteredProjects.length === 0 ? (
-                <div className="flex h-56 flex-col items-center justify-center rounded-[24px] border border-dashed border-slate-200 bg-slate-50/60 text-center">
-                  <div className="mb-3 grid h-12 w-12 place-items-center rounded-full bg-white text-slate-400 shadow-sm">
-                    <Search className="h-5 w-5" />
-                  </div>
-                  <p className="text-[14px] font-semibold text-slate-700">No projects found</p>
-                  <p className="mt-1 max-w-sm text-[12px] text-slate-400">
-                    {searchQuery || statusFilter !== "all"
-                      ? "Try clearing filters or using a different search term."
-                      : "Start a new Vibe project and it will appear here."}
-                  </p>
-                </div>
-              ) : viewMode === "grid" ? (
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                  {filteredProjects.map((project) => (
-                    <ProjectCard
-                      key={project.id}
-                      item={project}
-                      onOpen={() => onOpen(project)}
-                      menuOpen={openProjectMenu === project.id}
-                      onToggleMenu={() => onToggleMenu(project.id)}
-                      onRename={() => onRename(project)}
-                      onDelete={() => onDelete(project)}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {filteredProjects.map((project) => {
-                    return (
-                      <div
-                        key={project.id}
-                        className="group relative flex items-center gap-4 rounded-[18px] border border-slate-200/80 bg-white px-3 py-3 transition-all hover:border-slate-300 hover:shadow-[0_12px_30px_rgba(15,23,42,0.05)]"
-                      >
-                        <button type="button" onClick={() => onOpen(project)} className="flex min-w-0 flex-1 items-center gap-4 text-left">
-                          <div className="h-14 w-20 shrink-0 overflow-hidden rounded-[12px] border border-slate-200/70 bg-slate-50">
-                            <ProjectThumbnail
-                              projectId={project.id}
-                              updatedAt={project.updatedAt}
-                              alt=""
-                              className="h-full w-full object-cover"
-                            />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-[14px] font-bold text-slate-950">{project.name}</p>
-                            <p className="mt-0.5 truncate text-[12px] font-medium text-slate-500">{project.prompt || "Saved Vibe workspace"}</p>
-                          </div>
-                          <div className="hidden shrink-0 text-right sm:block">
-                            <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-slate-400">{project.status || "Draft"}</p>
-                            <p className="mt-1 text-[11px] font-semibold text-slate-400">{relativeTime(project.updatedAt)}</p>
-                          </div>
-                        </button>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => onRename(project)}
-                            className="rounded-full px-3 py-1.5 text-[11px] font-bold text-slate-500 opacity-0 transition-all hover:bg-slate-50 hover:text-slate-900 group-hover:opacity-100"
-                          >
-                            Rename
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onDelete(project)}
-                            className="rounded-full px-3 py-1.5 text-[11px] font-bold text-rose-500 opacity-0 transition-all hover:bg-rose-50 group-hover:opacity-100"
-                          >
-                            Delete
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onToggleMenu(project.id)}
-                            className="grid h-8 w-8 place-items-center rounded-full border border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-900"
-                            aria-label={`More actions for ${project.name}`}
-                          >
-                            <MoreHorizontal className="h-4 w-4" />
-                          </button>
-                        </div>
-                        <AnimatePresence>
-                          {openProjectMenu === project.id ? (
-                            <motion.div
-                              initial={{ opacity: 0, y: 6, scale: 0.96 }}
-                              animate={{ opacity: 1, y: 0, scale: 1 }}
-                              exit={{ opacity: 0, y: 4, scale: 0.96 }}
-                              className="absolute right-8 z-20 mt-24 w-40 overflow-hidden rounded-[14px] border border-slate-200 bg-white p-1 shadow-xl"
-                            >
-                              <button type="button" onClick={() => onOpen(project)} className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold hover:bg-slate-50">
-                                <FolderOpen className="h-3.5 w-3.5" />
-                                Open
-                              </button>
-                              <button type="button" onClick={() => onRename(project)} className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold hover:bg-slate-50">
-                                <Pencil className="h-3.5 w-3.5" />
-                                Rename
-                              </button>
-                              <button type="button" onClick={() => onDelete(project)} className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold text-rose-500 hover:bg-rose-50">
-                                <Trash2 className="h-3.5 w-3.5" />
-                                Delete
-                              </button>
-                            </motion.div>
-                          ) : null}
-                        </AnimatePresence>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+      <div className="relative z-[1] min-h-[360px] w-full max-w-[700px]">
+        {filteredProjects.length === 0 ? (
+          <div className="flex h-56 flex-col items-center justify-center rounded-[26px] border border-dashed border-slate-200 bg-white/75 text-center">
+            <div className="mb-3 grid h-12 w-12 place-items-center rounded-full bg-white text-slate-400 shadow-sm">
+              <Search className="h-5 w-5" />
             </div>
-        </div>
+            <p className="text-[14px] font-semibold text-slate-700">No projects found</p>
+            <p className="mt-1 max-w-sm text-[12px] text-slate-400">
+              {searchQuery || statusFilter !== "all"
+                ? "Try clearing filters or using a different search term."
+                : "Start a new Vibe project and it will appear here."}
+            </p>
+          </div>
+        ) : viewMode === "grid" ? (
+          <div className="grid gap-2.5 sm:grid-cols-3">
+            {filteredProjects.map((project) => (
+              <ProjectCard
+                key={project.id}
+                item={project}
+                onOpen={() => onOpen(project)}
+                menuOpen={openProjectMenu === project.id}
+                onToggleMenu={() => onToggleMenu(project.id)}
+                onRename={() => onRename(project)}
+                onDelete={() => onDelete(project)}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="space-y-2 text-left">
+            {filteredProjects.map((project) => {
+              return (
+                <div
+                  key={project.id}
+                  className="group relative flex items-center gap-4 rounded-[20px] border border-slate-200/70 bg-white/88 px-3 py-3 shadow-[0_10px_28px_rgba(15,23,42,0.03)] transition-all hover:-translate-y-0.5 hover:border-slate-300/80 hover:shadow-[0_16px_38px_rgba(15,23,42,0.05)]"
+                >
+                  <button type="button" onClick={() => onOpen(project)} className="flex min-w-0 flex-1 items-center gap-4 text-left">
+                    <div className="h-14 w-20 shrink-0 overflow-hidden rounded-[14px] border border-slate-200/70 bg-[linear-gradient(135deg,#ffffff_0%,#f8fafc_46%,#eef2f7_100%)]">
+                      <ProjectThumbnail
+                        projectId={project.id}
+                        updatedAt={project.updatedAt}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[14px] font-bold tracking-[-0.02em] text-slate-950">{project.name}</p>
+                      <p className="mt-0.5 truncate text-[12px] font-medium text-slate-500">{project.prompt || "Saved Vibe workspace"}</p>
+                    </div>
+                    <div className="hidden shrink-0 text-right sm:block">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-slate-400">{project.status || "Draft"}</p>
+                      <p className="mt-1 text-[11px] font-semibold text-slate-400">{relativeTime(project.updatedAt)}</p>
+                    </div>
+                  </button>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => onRename(project)}
+                      className="rounded-full px-3 py-1.5 text-[11px] font-bold text-slate-500 opacity-0 transition-all hover:bg-slate-50 hover:text-slate-900 group-hover:opacity-100"
+                    >
+                      Rename
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDelete(project)}
+                      className="rounded-full px-3 py-1.5 text-[11px] font-bold text-rose-500 opacity-0 transition-all hover:bg-rose-50 group-hover:opacity-100"
+                    >
+                      Delete
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onToggleMenu(project.id)}
+                      className="grid h-8 w-8 place-items-center rounded-full border border-slate-200/70 bg-white/92 text-slate-500 hover:border-slate-300 hover:text-slate-900"
+                      aria-label={`More actions for ${project.name}`}
+                    >
+                      <MoreHorizontal className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <AnimatePresence>
+                    {openProjectMenu === project.id ? (
+                      <motion.div
+                        initial={{ opacity: 0, y: 6, scale: 0.96 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 4, scale: 0.96 }}
+                        className="absolute right-8 z-20 mt-24 w-40 overflow-hidden rounded-[14px] border border-slate-200 bg-white p-1 shadow-xl"
+                      >
+                        <button type="button" onClick={() => onOpen(project)} className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold hover:bg-slate-50">
+                          <FolderOpen className="h-3.5 w-3.5" />
+                          Open
+                        </button>
+                        <button type="button" onClick={() => onRename(project)} className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold hover:bg-slate-50">
+                          <Pencil className="h-3.5 w-3.5" />
+                          Rename
+                        </button>
+                        <button type="button" onClick={() => onDelete(project)} className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold text-rose-500 hover:bg-rose-50">
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Delete
+                        </button>
+                      </motion.div>
+                    ) : null}
+                  </AnimatePresence>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </motion.section>
   );
 }

@@ -27,6 +27,7 @@ import {
   ChevronRight,
   FileUp,
   Folder,
+  Globe,
   MessageCircleDashed,
   MousePointer2,
   Paperclip,
@@ -39,11 +40,23 @@ import {
   X,
   XIcon,
   Edit2,
+  Youtube,
 } from "lucide-react";
 import { cn } from "./lib/utils";
 import { SettingsModal } from "./components/SettingsModal";
 import { ChatSearchModal } from "./components/ChatSearchModal";
-import { ShiningText } from "./components/ShiningText";
+import { ShiningBrainIcon, ShiningText } from "./components/ShiningText";
+import {
+  YoutubeScanEmbed,
+  extractYoutubeVideoId,
+  hostnameFromUrl,
+  YOUTUBE_SCAN_DURATION_MS,
+} from "./components/YoutubeScanEmbed";
+import {
+  CLYRA_CHAT_SYSTEM_PROMPT,
+  CLYRA_NOTES_MODE_CONTRACT,
+  wantsNotesMode,
+} from "./lib/clyraChatPrompt";
 import { BlurredStaggerStream } from "@/components/ui/blurred-stagger-text";
 import { MarkdownMessageContent } from "./components/MarkdownMessageContent";
 import {
@@ -109,20 +122,157 @@ function ChatThinkingLabel({
   isThinking,
   isStreaming,
   content,
+  thinkingMode = "thinking",
+  searchSources = [],
 }: {
   isThinking: boolean;
   isStreaming: boolean;
   content: string;
+  thinkingMode?: "thinking" | "youtube" | "search";
+  searchSources?: string[];
 }) {
   const visible = content.length === 0 && (isThinking || isStreaming);
 
   if (!visible) return null;
 
+  const label =
+    thinkingMode === "youtube"
+      ? "Analyzing YouTube"
+      : thinkingMode === "search"
+        ? "Searching the web"
+        : "Thinking";
+
+  const sourceHosts = searchSources
+    .map((url) => hostnameFromUrl(url))
+    .filter(Boolean)
+    .slice(0, 6);
+
   return (
-    <div className="flex items-center gap-1" aria-live="polite">
-      <ShiningText text="Thinking" preset="thinkingChat" />
+    <div className="flex flex-wrap items-center gap-2" aria-live="polite">
+      {thinkingMode === "youtube" ? (
+        <span className="relative inline-flex items-center justify-center" aria-hidden>
+          <motion.span
+            className="absolute inset-0 rounded-full bg-red-500/15"
+            animate={{ scale: [1, 1.35, 1], opacity: [0.55, 0.15, 0.55] }}
+            transition={{ repeat: Infinity, duration: 1.6, ease: "easeInOut" }}
+          />
+          <Youtube className="relative h-[16px] w-[16px] text-[#ff0033]" strokeWidth={2} />
+        </span>
+      ) : thinkingMode === "search" ? (
+        <motion.span
+          className="inline-flex"
+          animate={{ rotate: [0, 12, -8, 0] }}
+          transition={{ repeat: Infinity, duration: 2.2, ease: "easeInOut" }}
+          aria-hidden
+        >
+          <Globe className="h-[15px] w-[15px] text-slate-500" strokeWidth={1.75} />
+        </motion.span>
+      ) : (
+        <ShiningBrainIcon />
+      )}
+      <ShiningText text={label} preset="thinkingChat" />
+      {thinkingMode === "search" ? (
+        <span className="ml-0.5 flex items-center gap-1.5">
+          <AnimatePresence initial={false}>
+            {sourceHosts.map((host, index) => (
+              <motion.span
+                key={host}
+                initial={{ opacity: 0, scale: 0.55, y: 4 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.8 }}
+                transition={{
+                  type: "tween",
+                  duration: 0.38,
+                  ease: [0.22, 1, 0.36, 1],
+                  delay: Math.min(index * 0.04, 0.12),
+                }}
+                className="grid h-5 w-5 place-items-center overflow-hidden rounded-full border border-slate-200/80 bg-white"
+                title={host}
+              >
+                <img
+                  src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`}
+                  alt=""
+                  className="h-3.5 w-3.5 object-cover"
+                />
+              </motion.span>
+            ))}
+          </AnimatePresence>
+          {sourceHosts.length === 0 ? (
+            <span className="ml-0.5 flex items-center gap-1">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-slate-300" />
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-slate-200 [animation-delay:200ms]" />
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-slate-200 [animation-delay:400ms]" />
+            </span>
+          ) : null}
+        </span>
+      ) : null}
     </div>
   );
+}
+
+function SearchSourcesFooter({ urls }: { urls?: string[] }) {
+  if (!urls?.length) return null;
+  const items = urls.slice(0, 8).map((url) => ({
+    url,
+    host: hostnameFromUrl(url),
+  }));
+
+  return (
+    <div className="mt-4 border-t border-slate-100 pt-3">
+      <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+        Sources
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {items.map(({ url, host }) => (
+          <a
+            key={url}
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-slate-200/80 bg-slate-50/80 px-2.5 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:border-slate-300 hover:bg-white hover:text-slate-900"
+          >
+            <img
+              src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`}
+              alt=""
+              className="h-3.5 w-3.5 shrink-0 rounded-sm object-cover"
+            />
+            <span className="truncate">{host}</span>
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function extractYoutubeUrl(text: string): string | null {
+  const match = text.match(
+    /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/)|youtu\.be\/)[\w\-?=&%.]+/i,
+  );
+  if (!match?.[0]) return null;
+  const raw = match[0];
+  return raw.startsWith("http") ? raw : `https://${raw}`;
+}
+
+function looksLikeWebSearchQuery(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  const yt = extractYoutubeUrl(t);
+  const withoutYt = yt ? t.replace(yt, "").trim() : t;
+  if (!withoutYt) return false;
+  return (
+    /^(?:search|look\s*up|find|research|google)\b/i.test(withoutYt) ||
+    /\b(?:search the web|look online|from the (?:web|internet)|web search)\b/i.test(
+      withoutYt,
+    ) ||
+    /\b(?:latest|current|today'?s|this week'?s|breaking)\b.+\b(?:news|price|score|release|update|headline)s?\b/i.test(
+      withoutYt,
+    ) ||
+    /^(?:what(?:'| i)?s|who is|when (?:did|is|was)|how many)\b.+/i.test(withoutYt)
+  );
+}
+
+function wantsYoutubeAndWebSearch(text: string): boolean {
+  return Boolean(extractYoutubeUrl(text)) && looksLikeWebSearchQuery(text);
 }
 
 function UserMessageText({ text }: { text: string }) {
@@ -152,6 +302,9 @@ const AnimatedMessage = ({
   markdownSupport,
   codeHighlighting = true,
   assistantKind = "chat",
+  thinkingMode = "thinking",
+  youtubeVideoId,
+  searchSources,
   isLastAssistant,
   onVibePreviewReady,
   onDocumentRewriteRequest,
@@ -167,6 +320,9 @@ const AnimatedMessage = ({
   markdownSupport?: boolean;
   codeHighlighting?: boolean;
   assistantKind?: "chat" | "vibe";
+  thinkingMode?: "thinking" | "youtube" | "search";
+  youtubeVideoId?: string;
+  searchSources?: string[];
   isLastAssistant?: boolean;
   onVibePreviewReady?: (
     messageId: string,
@@ -176,6 +332,11 @@ const AnimatedMessage = ({
   onContentChange?: (messageId: string, newContent: string) => void;
 }) => {
   const isVibe = assistantKind === "vibe";
+  const showYoutubeScan =
+    thinkingMode === "youtube" &&
+    !!youtubeVideoId &&
+    content.length === 0 &&
+    (!!isThinking || !!isStreaming);
   /** Vibe agent now drives its own thought UI from the model's <<<VIBE_THINKING>>> blocks. While we have no
    *  content yet, show the unified "Thinking" shimmer so the seam into the inline VibeThoughtPanel is clean. */
   const suppressVibeAnswerBody = isVibe && !!isThinking && content.length === 0;
@@ -243,6 +404,18 @@ const AnimatedMessage = ({
         fontSizeClass,
       )}
     >
+      {!isVibe ? (
+        <ChatThinkingLabel
+          isThinking={!!isThinking}
+          isStreaming={!!isStreaming}
+          content={content}
+          thinkingMode={thinkingMode}
+          searchSources={searchSources}
+        />
+      ) : null}
+      {youtubeVideoId ? (
+        <YoutubeScanEmbed videoId={youtubeVideoId} active={showYoutubeScan} />
+      ) : null}
       {content.length > 0 && !suppressVibeAnswerBody ? (
         <div
           className={cn("markdown-body mt-1", isVibe && "markdown-body--vibe")}
@@ -296,6 +469,9 @@ const AnimatedMessage = ({
               className={cn("text-inherit", fontSizeClass)}
             />
           )}
+          {thinkingMode === "search" ? (
+            <SearchSourcesFooter urls={searchSources} />
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -477,6 +653,9 @@ export default function App() {
     assistantKind?: "chat" | "vibe";
     /** User prompt for this Vibe reply—drives the fixed Thought summary. */
     vibeUserPrompt?: string;
+    thinkingMode?: "thinking" | "youtube" | "search";
+    youtubeVideoId?: string;
+    searchSources?: string[];
   }
 
   interface ChatSession {
@@ -641,18 +820,21 @@ export default function App() {
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [recentCommand, setRecentCommand] = useState<string | null>(null);
   const [isInputExpanded, setIsInputExpanded] = useState(false);
+  const [isComposerFocused, setIsComposerFocused] = useState(false);
   const inputContainerRef = useRef<HTMLDivElement>(null);
 
   const isAiResponding = messages.some((m) => m.isStreaming || m.isThinking);
   const isExpanded =
-    !isAiResponding &&
-    (isInputExpanded ||
-      attachments.length > 0 ||
-      selectedCommand !== null ||
-      activeWorkspaceTab === "vibe");
+    isComposerFocused ||
+    isInputExpanded ||
+    attachments.length > 0 ||
+    selectedCommand !== null ||
+    activeWorkspaceTab === "vibe";
 
   const { textareaRef, adjustHeight } = useAutoResizeTextarea({
-    minHeight: 40,
+    // Keep expanded min-height while focused/expanded so clearing text
+    // does not visually collapse the composer.
+    minHeight: isExpanded ? 50 : 40,
     maxHeight: 96,
   });
 
@@ -713,6 +895,11 @@ export default function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   /** When true, stream / layout growth will keep the chat column pinned to the bottom (normal chat behavior). */
   const chatNearBottomRef = useRef(true);
+  /** User intentionally scrolled away — stop fighting until they return near bottom. */
+  const userPinnedAwayRef = useRef(false);
+  const programmaticScrollRef = useRef(false);
+  const scrollRafRef = useRef<number | null>(null);
+  const lastScrollTopRef = useRef(0);
 
   useEffect(() => {
     setIsSearching(searchQuery.length > 0);
@@ -830,6 +1017,7 @@ export default function App() {
         const chatContainer = document.getElementById("chat-container");
         if (chatContainer) {
           chatNearBottomRef.current = true;
+          userPinnedAwayRef.current = false;
           chatContainer.scrollTo({
             top: chatContainer.scrollHeight,
             behavior: "smooth",
@@ -893,21 +1081,76 @@ export default function App() {
   useEffect(() => {
     const el = document.getElementById("chat-container");
     if (!el) return;
-    const onScroll = () => {
+
+    const markNearBottom = () => {
       const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
-      chatNearBottomRef.current = gap < 80;
+      const nearBottom = gap < 96;
+      chatNearBottomRef.current = nearBottom;
+      if (nearBottom) userPinnedAwayRef.current = false;
     };
+
+    const onScroll = () => {
+      if (programmaticScrollRef.current) {
+        lastScrollTopRef.current = el.scrollTop;
+        return;
+      }
+      const scrollingUp = el.scrollTop + 2 < lastScrollTopRef.current;
+      lastScrollTopRef.current = el.scrollTop;
+      const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (scrollingUp && gap > 96) {
+        userPinnedAwayRef.current = true;
+        chatNearBottomRef.current = false;
+        return;
+      }
+      markNearBottom();
+    };
+
+    const onUserIntent = () => {
+      const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (gap > 96) {
+        userPinnedAwayRef.current = true;
+        chatNearBottomRef.current = false;
+      }
+    };
+
+    lastScrollTopRef.current = el.scrollTop;
     el.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
-    return () => el.removeEventListener("scroll", onScroll);
+    el.addEventListener("wheel", onUserIntent, { passive: true });
+    el.addEventListener("touchmove", onUserIntent, { passive: true });
+    markNearBottom();
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("wheel", onUserIntent);
+      el.removeEventListener("touchmove", onUserIntent);
+    };
   }, [messages.length]);
 
   useLayoutEffect(() => {
     if (!autoScroll) return;
     const el = document.getElementById("chat-container");
     if (!el || messages.length === 0) return;
-    if (!chatNearBottomRef.current) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    if (userPinnedAwayRef.current || !chatNearBottomRef.current) return;
+
+    if (scrollRafRef.current != null) {
+      cancelAnimationFrame(scrollRafRef.current);
+    }
+    scrollRafRef.current = requestAnimationFrame(() => {
+      programmaticScrollRef.current = true;
+      // Instant follow while streaming — avoids stacked smooth scrolls fighting the user.
+      el.scrollTop = el.scrollHeight;
+      lastScrollTopRef.current = el.scrollTop;
+      requestAnimationFrame(() => {
+        programmaticScrollRef.current = false;
+      });
+      scrollRafRef.current = null;
+    });
+
+    return () => {
+      if (scrollRafRef.current != null) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+    };
   }, [chatScrollSignature, autoScroll, messages.length, showVibeLivePreview]);
 
   useEffect(() => {
@@ -921,6 +1164,10 @@ export default function App() {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "k") {
         e.preventDefault();
+        setIsComposerFocused(true);
+        setIsInputExpanded(true);
+        setShowCommandPalette(true);
+        setValue((current) => (current.startsWith("/") ? current : "/"));
         textareaRef.current?.focus();
       }
     };
@@ -1024,6 +1271,42 @@ export default function App() {
       prefix: "/vibe",
     },
     {
+      id: "search",
+      icon: (isActive) => (
+        <div className="relative flex items-center justify-center w-full h-full text-slate-700">
+          <motion.div
+            animate={isActive ? { rotate: [0, 15, -10, 0] } : { rotate: 0 }}
+            transition={{ repeat: Infinity, duration: 1.8, ease: "easeInOut" }}
+          >
+            <Globe className="w-4 h-4" />
+          </motion.div>
+        </div>
+      ),
+      label: "Web Search",
+      description: "Research the live web and summarize sources",
+      prefix: "/search",
+    },
+    {
+      id: "youtube",
+      icon: (isActive) => (
+        <div className="relative flex items-center justify-center w-full h-full text-slate-700">
+          <motion.div
+            animate={
+              isActive
+                ? { scale: [1, 1.12, 1] }
+                : { scale: 1 }
+            }
+            transition={{ repeat: Infinity, duration: 1.4, ease: "easeOut" }}
+          >
+            <Youtube className="w-4 h-4 text-[#ff0033]" />
+          </motion.div>
+        </div>
+      ),
+      label: "YouTube Analyzer",
+      description: "Pull transcripts and analyze any YouTube video",
+      prefix: "/youtube",
+    },
+    {
       id: "clip",
       icon: (isActive) => (
         <div className="relative flex items-center justify-center w-full h-full text-slate-700">
@@ -1053,7 +1336,7 @@ export default function App() {
     },
   ];
 
-  const commandPaletteEnabled = false;
+  const commandPaletteEnabled = true;
   const isCommandMode =
     commandPaletteEnabled && value.startsWith("/") && !value.includes(" ");
   const commandQuery = isCommandMode ? value.substring(1).toLowerCase() : "";
@@ -1715,7 +1998,8 @@ Request details: ${userPrompt}`,
 
       setTimeout(() => {
         const chatContainer = document.getElementById("chat-container");
-        if (chatContainer && autoScroll) {
+        if (chatContainer && autoScroll && !userPinnedAwayRef.current) {
+          chatNearBottomRef.current = true;
           chatContainer.scrollTo({
             top: chatContainer.scrollHeight,
             behavior: "smooth",
@@ -1865,6 +2149,8 @@ Please analyze the code you just wrote and fix this error.`;
       const rawUserText = value.trim();
       const vibeCommand = rawUserText.match(/^\/vibe(?:\s+(.+))?$/i);
       const clipCommand = rawUserText.match(/^\/clip(?:\s+(.+))?$/i);
+      const youtubeCommand = rawUserText.match(/^\/youtube(?:\s+(.+))?$/i);
+      const searchCommand = rawUserText.match(/^\/search(?:\s+(.+))?$/i);
       if (userCommandId === "clip" || clipCommand) {
         const clipCommandSource = clipCommand?.[1]?.trim() ?? rawUserText;
         setClipInitialUrl(
@@ -1882,8 +2168,48 @@ Please analyze the code you just wrote and fix this error.`;
         setShowCommandPalette(false);
         return;
       }
+
+      const detectedYoutubeUrl = extractYoutubeUrl(rawUserText);
+      const autoSearch =
+        !youtubeCommand &&
+        !searchCommand &&
+        userCommandId !== "youtube" &&
+        userCommandId !== "search" &&
+        looksLikeWebSearchQuery(rawUserText);
+      const multiResearch = wantsYoutubeAndWebSearch(rawUserText);
+      const isYoutubeMode =
+        userCommandId === "youtube" ||
+        Boolean(youtubeCommand) ||
+        Boolean(detectedYoutubeUrl);
+      const isSearchMode =
+        userCommandId === "search" ||
+        Boolean(searchCommand) ||
+        autoSearch ||
+        multiResearch;
+      const youtubePayload =
+        youtubeCommand?.[1]?.trim() ||
+        (isYoutubeMode && !rawUserText.startsWith("/youtube")
+          ? rawUserText
+          : "") ||
+        detectedYoutubeUrl ||
+        "";
+      const searchPayload =
+        searchCommand?.[1]?.trim() ||
+        (isSearchMode && !rawUserText.startsWith("/search")
+          ? rawUserText
+              .replace(detectedYoutubeUrl || "", "")
+              .replace(/^\/youtube\s*/i, "")
+              .trim() || rawUserText
+          : "");
+
       const userText =
         vibeCommand?.[1]?.trim() ||
+        (isYoutubeMode && !isSearchMode
+          ? youtubePayload || rawUserText.replace(/^\/youtube\s*/i, "").trim()
+          : null) ||
+        (isSearchMode && !isYoutubeMode
+          ? searchPayload || rawUserText.replace(/^\/search\s*/i, "").trim()
+          : null) ||
         rawUserText ||
         (userCommandLabel ? `Execute ${userCommandLabel}` : "");
       setValue("");
@@ -1903,6 +2229,17 @@ Please analyze the code you just wrote and fix this error.`;
       const aiMsgId = (Date.now() + 1).toString();
 
       const isVibeMode = userCommandId === "vibe" || Boolean(vibeCommand);
+      const thinkingMode: Message["thinkingMode"] = isYoutubeMode
+        ? "youtube"
+        : isSearchMode
+          ? "search"
+          : "thinking";
+      const youtubeVideoId = isYoutubeMode
+        ? extractYoutubeVideoId(userText) ||
+          extractYoutubeVideoId(youtubePayload) ||
+          extractYoutubeVideoId(detectedYoutubeUrl || "") ||
+          undefined
+        : undefined;
       setActiveWorkspaceTab(isVibeMode ? "vibe" : "chat");
       const userMessage: Message = {
         id: userMsgId,
@@ -1916,11 +2253,14 @@ Please analyze the code you just wrote and fix this error.`;
         isThinking: true,
         isStreaming: true,
         assistantKind: isVibeMode ? "vibe" : "chat",
+        thinkingMode,
+        ...(youtubeVideoId ? { youtubeVideoId } : {}),
         ...(isVibeMode ? { vibeUserPrompt: userText } : {}),
       };
       const nextMessages = [...currentMessages, userMessage, assistantMessage];
 
       chatNearBottomRef.current = true;
+      userPinnedAwayRef.current = false;
       setMessages(nextMessages);
 
       if (isVibeMode && chatId && !isTemporaryChat) {
@@ -1951,6 +2291,7 @@ Please analyze the code you just wrote and fix this error.`;
         const chatContainer = document.getElementById("chat-container");
         if (chatContainer && autoScroll) {
           chatNearBottomRef.current = true;
+          userPinnedAwayRef.current = false;
           chatContainer.scrollTo({
             top: chatContainer.scrollHeight,
             behavior: "smooth",
@@ -1990,6 +2331,373 @@ Please analyze the code you just wrote and fix this error.`;
           return;
         }
 
+        if (isYoutubeMode || isSearchMode) {
+          let analysisPrompt = "";
+          const researchStartedAt = Date.now();
+          if (isYoutubeMode) {
+            const youtubeUrl = extractYoutubeUrl(userText) || userText.trim();
+            if (!youtubeUrl) {
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === aiMsgId
+                    ? {
+                        ...msg,
+                        content:
+                          "Please include a YouTube URL, for example `/youtube https://youtu.be/...`.",
+                        isThinking: false,
+                        isStreaming: false,
+                      }
+                    : msg,
+                ),
+              );
+              return;
+            }
+            const question = userText
+              .replace(youtubeUrl, "")
+              .replace(/^\/youtube\s*/i, "")
+              .trim();
+            let payload: any = null;
+            try {
+              const response = await fetch("/api/research/youtube", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  url: youtubeUrl.startsWith("http")
+                    ? youtubeUrl
+                    : `https://${youtubeUrl}`,
+                  preferredLanguages: ["en"],
+                  question: question || undefined,
+                }),
+              });
+              const raw = await response.text();
+              try {
+                payload = raw ? JSON.parse(raw) : null;
+              } catch {
+                payload = null;
+              }
+              if (!response.ok || !payload?.ok) {
+                const diagnostics = Array.isArray(payload?.diagnostics)
+                  ? payload.diagnostics
+                      .map(
+                        (d: {
+                          provider?: string;
+                          status?: string;
+                          reason?: string;
+                        }) =>
+                          `**${d.provider || "provider"}**: ${d.status || "failed"}${d.reason ? ` — ${d.reason}` : ""}`,
+                      )
+                      .join("\n")
+                  : "";
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === aiMsgId
+                      ? {
+                          ...msg,
+                          content: `I couldn't retrieve a transcript for that video.\n\n${payload?.error?.message || (raw ? raw.slice(0, 280) : response.statusText) || "No captions available."}${diagnostics ? `\n\n### Diagnostics\n${diagnostics}` : ""}`,
+                          isThinking: false,
+                          isStreaming: false,
+                        }
+                      : msg,
+                  ),
+                );
+                return;
+              }
+              analysisPrompt = String(payload.analysisPrompt || "");
+              if (!analysisPrompt.trim()) {
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === aiMsgId
+                      ? {
+                          ...msg,
+                          content:
+                            "I retrieved the video, but couldn't build an analysis prompt from the transcript. Try another video or ask again.",
+                          isThinking: false,
+                          isStreaming: false,
+                        }
+                      : msg,
+                  ),
+                );
+                return;
+              }
+            } catch (youtubeError) {
+              console.error("YouTube analyzer request failed:", youtubeError);
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === aiMsgId
+                    ? {
+                        ...msg,
+                        content:
+                          "I couldn't reach the YouTube analyzer. Check that the app server is running, then try again.",
+                        isThinking: false,
+                        isStreaming: false,
+                      }
+                    : msg,
+                ),
+              );
+              return;
+            }
+
+            // Hold the reply until the scanning animation finishes.
+            const remainingScan = Math.max(
+              0,
+              YOUTUBE_SCAN_DURATION_MS - (Date.now() - researchStartedAt),
+            );
+            if (remainingScan > 0) {
+              await new Promise((resolve) =>
+                window.setTimeout(resolve, remainingScan),
+              );
+            }
+
+            // Multi-tool: also run web search when the prompt asks for both.
+            if (isSearchMode && multiResearch) {
+              const searchQuery =
+                searchPayload.replace(/^\/search\s*/i, "").trim() ||
+                question ||
+                "latest context for this video";
+              try {
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === aiMsgId
+                      ? {
+                          ...msg,
+                          thinkingMode: "search",
+                          isThinking: true,
+                          isStreaming: true,
+                        }
+                      : msg,
+                  ),
+                );
+                const searchResponse = await fetch("/api/research/web-search", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    query: searchQuery,
+                    maxResults: 6,
+                    fetchTop: 3,
+                  }),
+                });
+                const searchPayloadJson = await searchResponse.json();
+                if (searchResponse.ok && searchPayloadJson?.ok) {
+                  const urls = Array.isArray(searchPayloadJson.urls)
+                    ? searchPayloadJson.urls.map(String).filter(Boolean)
+                    : [];
+                  const revealUrls = urls.slice(0, 6);
+                  for (let i = 0; i < revealUrls.length; i += 1) {
+                    const nextSources = revealUrls.slice(0, i + 1);
+                    setMessages((prev) =>
+                      prev.map((msg) =>
+                        msg.id === aiMsgId
+                          ? {
+                              ...msg,
+                              searchSources: nextSources,
+                              isThinking: true,
+                              isStreaming: true,
+                              thinkingMode: "search",
+                            }
+                          : msg,
+                      ),
+                    );
+                    await new Promise((resolve) =>
+                      window.setTimeout(resolve, 420),
+                    );
+                  }
+                  await new Promise((resolve) =>
+                    window.setTimeout(resolve, 1200),
+                  );
+                  const webPrompt = String(
+                    searchPayloadJson.analysisPrompt || "",
+                  ).trim();
+                  if (webPrompt) {
+                    analysisPrompt = `${analysisPrompt}\n\n---\nAlso use this web research:\n${webPrompt}`;
+                  }
+                }
+              } catch (multiSearchError) {
+                console.warn(
+                  "Multi-tool web search skipped:",
+                  multiSearchError,
+                );
+              }
+            }
+          } else {
+            const query = userText.replace(/^\/search\s*/i, "").trim();
+            if (!query) {
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === aiMsgId
+                    ? {
+                        ...msg,
+                        content: "Please include a search query, for example `/search latest AI news`.",
+                        isThinking: false,
+                        isStreaming: false,
+                      }
+                    : msg,
+                ),
+              );
+              return;
+            }
+            try {
+              const response = await fetch("/api/research/web-search", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ query, maxResults: 6, fetchTop: 3 }),
+              });
+              const payload = await response.json();
+              if (!response.ok || !payload?.ok) {
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === aiMsgId
+                      ? {
+                          ...msg,
+                          content: `Web search failed: ${payload?.error?.message || response.statusText}`,
+                          isThinking: false,
+                          isStreaming: false,
+                        }
+                      : msg,
+                  ),
+                );
+                return;
+              }
+              const urls = Array.isArray(payload.urls)
+                ? payload.urls.map(String).filter(Boolean)
+                : [];
+              // Reveal source favicons one-by-one, then hold before answering.
+              const revealUrls = urls.slice(0, 6);
+              for (let i = 0; i < revealUrls.length; i += 1) {
+                const nextSources = revealUrls.slice(0, i + 1);
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === aiMsgId
+                      ? {
+                          ...msg,
+                          searchSources: nextSources,
+                          isThinking: true,
+                          isStreaming: true,
+                          thinkingMode: "search",
+                        }
+                      : msg,
+                  ),
+                );
+                await new Promise((resolve) =>
+                  window.setTimeout(resolve, 420),
+                );
+              }
+              if (revealUrls.length === 0) {
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === aiMsgId
+                      ? {
+                          ...msg,
+                          searchSources: [],
+                          isThinking: true,
+                          isStreaming: true,
+                          thinkingMode: "search",
+                        }
+                      : msg,
+                  ),
+                );
+              }
+              // Keep shimmer + icons visible for a beat before the reply streams.
+              await new Promise((resolve) =>
+                window.setTimeout(resolve, 3000),
+              );
+              analysisPrompt = String(payload.analysisPrompt || "");
+              if (!analysisPrompt.trim()) {
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === aiMsgId
+                      ? {
+                          ...msg,
+                          content:
+                            "Search completed, but I couldn't build an answer from the results. Try again.",
+                          searchSources: urls,
+                          isThinking: false,
+                          isStreaming: false,
+                        }
+                      : msg,
+                  ),
+                );
+                return;
+              }
+            } catch (searchError) {
+              console.error("Web search request failed:", searchError);
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === aiMsgId
+                    ? {
+                        ...msg,
+                        content:
+                          "I couldn't reach the web search service. Check that the app server is running, then try again.",
+                        isThinking: false,
+                        isStreaming: false,
+                      }
+                    : msg,
+                ),
+              );
+              return;
+            }
+          }
+
+          let accumulatedText = "";
+          try {
+            await streamOpenAI(
+              null,
+              [{ role: "user", content: analysisPrompt }],
+              (chunkText, isReasoning) => {
+                if (isReasoning) return;
+                accumulatedText += chunkText;
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === aiMsgId
+                      ? {
+                          ...msg,
+                          content: accumulatedText,
+                          isThinking: false,
+                          isStreaming: true,
+                          thinkingMode,
+                        }
+                      : msg,
+                  ),
+                );
+              },
+              0.5,
+              1800,
+              "deepseek-chat",
+            );
+          } catch (analysisError) {
+            console.error("YouTube/search analysis stream failed:", analysisError);
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === aiMsgId
+                  ? {
+                      ...msg,
+                      content:
+                        accumulatedText.trim() ||
+                        "I gathered the source material, but the analysis reply failed to stream. Please try again in a moment.",
+                      isThinking: false,
+                      isStreaming: false,
+                      thinkingMode,
+                    }
+                  : msg,
+              ),
+            );
+            return;
+          }
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === aiMsgId
+                ? {
+                    ...msg,
+                    content: accumulatedText || "No analysis was generated.",
+                    isThinking: false,
+                    isStreaming: false,
+                    thinkingMode,
+                  }
+                : msg,
+            ),
+          );
+          return;
+        }
+
         const contents = currentMessages.map((msg) => ({
           role: msg.role === "user" ? "user" : "model",
           parts: [{ text: msg.content }],
@@ -2007,101 +2715,11 @@ Please analyze the code you just wrote and fix this error.`;
           const basePrompt =
             systemPrompt.trim() !== ""
               ? systemPrompt.trim()
-              : "Your name is Clyra, an AI assistant. Give helpful and appropriately detailed responses.";
+              : CLYRA_CHAT_SYSTEM_PROMPT;
 
-          const finalPrompt =
-            basePrompt +
-            `\n\nNOTES MODE CONTRACT
-Create clean, easy-to-read notes from the information I give you. If the user asks for notes, a summary, study notes, meeting notes, class notes, tutorial notes, or anything note-like, you must output polished Markdown notes that follow this contract.
-
-The notes must adapt to the topic and user's request. Keep it short unless the topic needs detail. Do not force sections that are not useful. Make the notes feel custom-made, not like a generic template.
-
-Formatting contract:
-* Use # for the big main heading.
-* Use ## for main sections.
-* Use ### for subtopics.
-* Use **bold** for key words.
-* Use --- as dividers between major sections.
-* Use bullet points for quick ideas.
-* Use > quote boxes for important takeaways.
-* Use Markdown tables only when they make the information easier to read.
-* Use - [ ] checklists only when there are real actions or next steps.
-* Add bracket labels showing the format style when helpful, like **[Big heading]**, **[Medium heading]**, **[Small heading]**, **[bold]**, **[divider]**, **[table]**, or **[quote box]**. Do not label every line.
-
-Preferred adaptive layout:
-
----
-
-# 📘 {Topic Title} **[Big heading]**
-
----
-
-> **Quick overview:** **[Quote box + bold label]**
-> {Explain the topic in 1-3 simple sentences.}
-
----
-
-## 🔷 Key Points **[Medium heading]**
-
-* **{Point 1}:** {Simple explanation} **[Bold keyword + bullet point]**
-* **{Point 2}:** {Simple explanation}
-* **{Point 3}:** {Simple explanation}
-
----
-
-## 🧠 Main Notes **[Medium heading]**
-
-### {Subtopic} **[Small heading]**
-
-{Explain clearly using short paragraphs or bullet points.}
-
-> **Remember:** {Main takeaway} **[Quote box]**
-
----
-
-## ✨ Examples / Evidence **[Medium heading]**
-
-Only include this section if useful.
-
-* **Example:** {Example and explanation}
-* **Evidence:** {Quote, fact, or detail}
-
-Use a markdown table only if it improves readability.
-
----
-
-## 🔁 Quick Summary **[Medium heading]**
-
-* {Summary point 1}
-* {Summary point 2}
-* {Summary point 3}
-
-> **Final takeaway:** {One sentence summary} **[Quote box]**
-
----
-
-## ✅ Actions / Next Steps **[Medium heading]**
-
-Only include this section if useful.
-
-* [ ] {Task 1}
-* [ ] {Task 2}
-
-Rules:
-* Keep it clean, scan-friendly, and custom-made.
-* Remove unnecessary sections.
-* Use tables only when they help.
-* Match the layout to the topic: school, business, coding, science, English, meeting, tutorial, or general notes.
-* Do not use "--" as a divider; use markdown dividers (---).
-* Do not output raw template placeholders. Replace every placeholder with useful content.
-* Preserve markdown formatting so headings, tables, quote boxes, checklists, and bold text render properly.
-* Never flatten notes into one paragraph.
-* Always include at least one # heading, one > quote overview or takeaway, and bullets for notes.
-* If a comparison, timeline, schedule, rubric, pros/cons list, meeting agenda, or data summary would be clearer as a table, include a compact Markdown table.
-* If the user asks for email instead of notes, ignore this notes layout and write a clean email with normal line breaks.
-
-Information to turn into notes:
-${userText}`;
+          const finalPrompt = wantsNotesMode(userText)
+            ? `${basePrompt}\n\n${CLYRA_NOTES_MODE_CONTRACT}`
+            : basePrompt;
 
           await streamOpenAI(
             finalPrompt,
@@ -3415,7 +4033,7 @@ ${userText}`;
                                     <div
                                       data-invert-ignore="true"
                                       className={cn(
-                                        "clyra-chat-user-bubble px-5 py-3.5 rounded-[24px] max-w-[85%] sm:max-w-[75%] border border-slate-200/60 whitespace-pre-wrap",
+                                        "clyra-chat-user-bubble px-5 py-3.5 rounded-[24px] max-w-[85%] sm:max-w-[75%] border border-slate-200/70 whitespace-pre-wrap shadow-none",
                                         message.id === firstUserMessageId &&
                                           "clyra-chat-user-bubble--first",
                                         fontClass,
@@ -3458,6 +4076,9 @@ ${userText}`;
                                           vibeUserPrompt={
                                             message.vibeUserPrompt
                                           }
+                                          thinkingMode={message.thinkingMode}
+                                          youtubeVideoId={message.youtubeVideoId}
+                                          searchSources={message.searchSources}
                                           fontSizeClass={fontClass}
                                           markdownSupport={markdownSupport}
                                           codeHighlighting={codeHighlighting}
@@ -3492,8 +4113,31 @@ ${userText}`;
                             key="composer"
                             ref={inputContainerRef}
                             onClick={() => {
-                              if (!isInputExpanded && isVibeWorkspace) {
-                                setIsInputExpanded(true);
+                              setIsComposerFocused(true);
+                              setIsInputExpanded(true);
+                              textareaRef.current?.focus();
+                            }}
+                            onFocusCapture={() => {
+                              setIsComposerFocused(true);
+                              setIsInputExpanded(true);
+                            }}
+                            onBlurCapture={(event) => {
+                              const next = event.relatedTarget as Node | null;
+                              if (
+                                next &&
+                                inputContainerRef.current?.contains(next)
+                              ) {
+                                return;
+                              }
+                              setIsComposerFocused(false);
+                              const currentValue =
+                                textareaRef.current?.value?.trim() ?? value.trim();
+                              if (
+                                !currentValue &&
+                                attachments.length === 0 &&
+                                !selectedCommand
+                              ) {
+                                setIsInputExpanded(false);
                               }
                             }}
                             initial={false}
@@ -3519,7 +4163,7 @@ ${userText}`;
                               backfaceVisibility: "hidden",
                             }}
                             className={cn(
-                              "clyra-composer-transition w-full shrink-0 relative z-20 transition-all duration-300 max-w-3xl mx-auto",
+                              "clyra-composer-transition w-full shrink-0 relative z-20 transition-all duration-700 max-w-3xl mx-auto",
                               showWorkspaceLivePreview
                                 ? "px-3 sm:px-4"
                                 : "px-5 sm:px-8",
@@ -3566,7 +4210,7 @@ ${userText}`;
                             </AnimatePresence>
                             <motion.div
                               className={cn(
-                                "input-wrapper relative backdrop-blur-xl border transition-[background-color,border-color,padding,box-shadow] duration-300 cursor-text overflow-visible mx-auto z-[3]",
+                                "input-wrapper relative backdrop-blur-xl border transition-[background-color,border-color,padding,box-shadow,border-radius] duration-[720ms] ease-[cubic-bezier(0.22,1,0.36,1)] cursor-text overflow-visible mx-auto z-[3]",
                                 isVibeWorkspace && "clyra-vibe-composer",
                                 theme === "Dark"
                                   ? "bg-slate-200/90 border-slate-400/50"
@@ -3605,8 +4249,8 @@ ${userText}`;
                                   introState === "input_circle"
                                     ? 24
                                     : isExpanded
-                                      ? 32
-                                      : 40,
+                                      ? 28
+                                      : 36,
                                 opacity:
                                   introState === "booting" ||
                                   introState === "orb_up"
@@ -3618,11 +4262,19 @@ ${userText}`;
                                     ? 20
                                     : 0,
                               }}
-                              transition={{
-                                type: "tween",
-                                ease: [0.22, 1, 0.36, 1],
-                                duration: 0.8,
-                              }}
+                              transition={
+                                introState !== "complete"
+                                  ? {
+                                      type: "tween",
+                                      ease: [0.22, 1, 0.36, 1],
+                                      duration: 0.8,
+                                    }
+                                  : {
+                                      type: "tween",
+                                      ease: [0.22, 1, 0.36, 1],
+                                      duration: 0.72,
+                                    }
+                              }
                             >
                               <motion.div
                                 className="relative z-10 w-full h-full"
@@ -3727,17 +4379,25 @@ ${userText}`;
                                     showCommandPalette && (
                                       <motion.div
                                         ref={commandPaletteRef}
-                                        className="absolute left-4 right-4 sm:left-6 sm:right-6 bottom-[calc(100%+8px)] max-h-[170px] overflow-y-auto bg-white rounded-2xl shadow-[0_4px_24px_rgba(0,0,0,0.12)] border border-slate-100 z-50 scrollbar-none transform-gpu origin-bottom pb-1"
-                                        initial={{ opacity: 0, y: 20 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0, y: 20 }}
+                                        className={cn(
+                                          "absolute z-50 max-h-[240px] w-auto overflow-y-auto rounded-[28px] border border-slate-200 bg-white shadow-[0_22px_55px_rgba(15,23,42,0.16)] scrollbar-none transform-gpu origin-bottom",
+                                          "bottom-[calc(100%+10px)]",
+                                          isExpanded
+                                            ? "-left-2 -right-2 sm:-left-3 sm:-right-3"
+                                            : "-left-1.5 -right-1.5 sm:-left-2 sm:-right-2",
+                                        )}
+                                        initial={{ opacity: 0, y: 12, scale: 0.992 }}
+                                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                                        exit={{ opacity: 0, y: 8, scale: 0.992 }}
                                         transition={{
-                                          duration: 0.25,
-                                          ease: "easeOut",
+                                          type: "spring",
+                                          stiffness: 560,
+                                          damping: 34,
+                                          mass: 0.65,
                                         }}
                                       >
-                                        <div className="py-2">
-                                          <div className="px-3 pb-2 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                                        <div className="py-2.5">
+                                          <div className="px-4 pb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
                                             Commands
                                           </div>
                                           {filteredSuggestions.map(
@@ -3752,10 +4412,10 @@ ${userText}`;
                                                 <motion.div
                                                   key={suggestion.prefix}
                                                   className={cn(
-                                                    "flex items-center gap-3 px-4 py-2.5 text-sm transition-colors cursor-pointer",
+                                                    "flex cursor-pointer items-center gap-3 px-4 py-3 text-sm transition-colors",
                                                     activeSuggestion === index
                                                       ? "bg-slate-100 text-slate-900"
-                                                      : "text-slate-600 hover:bg-slate-50/50 hover:text-slate-900",
+                                                      : "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
                                                   )}
                                                   onClick={() =>
                                                     selectCommandSuggestion(
@@ -3909,14 +4569,10 @@ ${userText}`;
                                     onChange={(e) => {
                                       const nextValue = e.target.value;
                                       setValue(nextValue);
-                                      if (
-                                        !isVibeWorkspace &&
-                                        !selectedCommand &&
-                                        attachments.length === 0
-                                      ) {
-                                        setIsInputExpanded(
-                                          nextValue.trim().length > 0,
-                                        );
+                                      // Stay expanded while the composer is focused,
+                                      // even if the user backspaces everything.
+                                      if (nextValue.trim().length > 0) {
+                                        setIsInputExpanded(true);
                                       }
                                       if (
                                         activeSkeletonText &&
@@ -3930,10 +4586,28 @@ ${userText}`;
                                     }}
                                     onKeyDown={handleKeyDown}
                                     onFocus={() => {
-                                      if (isVibeWorkspace) {
-                                        setIsInputExpanded(true);
-                                      }
+                                      setIsComposerFocused(true);
+                                      setIsInputExpanded(true);
                                       adjustHeight();
+                                    }}
+                                    onBlur={(event) => {
+                                      const next = event.relatedTarget as Node | null;
+                                      if (
+                                        next &&
+                                        inputContainerRef.current?.contains(next)
+                                      ) {
+                                        return;
+                                      }
+                                      setIsComposerFocused(false);
+                                      const currentValue =
+                                        event.currentTarget.value.trim();
+                                      if (
+                                        !currentValue &&
+                                        attachments.length === 0 &&
+                                        !selectedCommand
+                                      ) {
+                                        setIsInputExpanded(false);
+                                      }
                                     }}
                                     spellCheck
                                     placeholder={
@@ -3951,7 +4625,7 @@ ${userText}`;
                                       isExpanded
                                         ? "min-h-[50px] max-h-[96px] py-3 px-1"
                                         : "min-h-[40px] max-h-[96px] py-2 px-1",
-                                      "clyra-visible-scrollbar transition-[height,min-height,max-height,padding,opacity,transform] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]",
+                                      "clyra-visible-scrollbar transition-[height,min-height,max-height,padding,opacity,transform] duration-[720ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
                                       isFadingInText
                                         ? "opacity-0 translate-y-1 scale-[0.99]"
                                         : introState !== "complete"

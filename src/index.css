@@ -1322,24 +1322,14 @@
   overflow: hidden;
   opacity: 0;
   transform: translateY(10px) scale(0.96);
-  border-color: rgba(148, 163, 184, 0.22) !important;
-  background-image:
-    radial-gradient(
-      circle at 12% 0%,
-      rgba(255, 255, 255, 0.76),
-      transparent 34%
-    ),
-    linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.42),
-      rgba(255, 255, 255, 0.18)
-    );
+  border-color: rgba(148, 163, 184, 0.28) !important;
+  background-image: none !important;
   box-shadow: none !important;
-  filter: none;
-  backdrop-filter: blur(8px) saturate(1.03);
-  -webkit-backdrop-filter: blur(8px) saturate(1.03);
-  animation: clyra-user-bubble-appear 0.65s calc(var(--delay, 0.04) * 1s) both
-    cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  filter: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  animation: clyra-user-bubble-appear 0.55s calc(var(--delay, 0.04) * 1s) both
+    cubic-bezier(0.22, 1, 0.36, 1);
   transform-origin: bottom right;
 }
 
@@ -1351,26 +1341,8 @@
 }
 
 .clyra-chat-user-bubble--first::after {
-  position: absolute;
-  inset: -45%;
-  pointer-events: none;
-  content: "";
-  background:
-    radial-gradient(
-      circle at 70% 76%,
-      rgba(255, 255, 255, 0.68),
-      transparent 20%
-    ),
-    linear-gradient(
-      115deg,
-      transparent 34%,
-      rgba(255, 255, 255, 0.48) 48%,
-      transparent 62%
-    );
-  opacity: 0;
-  transform: translate3d(-18%, 22%, 0) rotate(8deg);
-  animation: clyra-first-user-glass-impact 0.86s 0.1s both
-    cubic-bezier(0.16, 1, 0.3, 1);
+  display: none !important;
+  content: none !important;
 }
 
 .clyra-chat-user-text {
@@ -1964,10 +1936,49 @@ body,
 }
 
 .clyra-chat-user-bubble {
-  box-shadow:
-    0 0 18px rgba(59, 130, 246, 0.15),
-    0 2px 6px rgba(0, 0, 0, 0.04) !important;
-  transition: box-shadow 0.3s ease;
+  box-shadow: none !important;
+  filter: none !important;
+}
+
+/* Solid base color + narrow moving highlight — text never disappears. */
+.clyra-shimmer-text {
+  display: inline-block;
+  position: relative;
+  color: #64748b !important;
+  -webkit-text-fill-color: #64748b;
+  background: none;
+}
+
+.clyra-shimmer-text::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    105deg,
+    transparent 0%,
+    transparent 42%,
+    rgba(255, 255, 255, 0.95) 50%,
+    transparent 58%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: clyra-text-shimmer 2.2s linear infinite;
+  pointer-events: none;
+  will-change: background-position;
+}
+
+@keyframes clyra-text-shimmer {
+  0% {
+    background-position: 120% 0;
+  }
+  100% {
+    background-position: -120% 0;
+  }
 }
 
 /* Animated Workspace Backgrounds */

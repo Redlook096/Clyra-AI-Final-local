@@ -31,6 +31,12 @@ import { MultiPassCoder } from "./lib/vibe-coder/harness/multi-pass-coder";
 import { TaskGroupPlanner } from "./lib/vibe-coder/harness/task-group-planner";
 import { FileSpecPlanner } from "./lib/vibe-coder/harness/file-spec-planner";
 import { registerClineRoutes } from "./lib/cline/cline-routes";
+import {
+  buildWebSearchPrompt,
+  buildYoutubeAnalysisPrompt,
+  retrieveYoutubeTranscript,
+  runWebSearchResearch,
+} from "./lib/research/research-handlers";
 
 type VibeProjectStatus = "Draft" | "Building" | "Ready" | "Failed";
 
@@ -142,6 +148,64 @@ function buildStaticProjectHtml(files: Array<{ path: string; content: string }>)
   </style></head><body><div class="card"><h1>${title}</h1><p>Screenshot will update when the generated project exposes a static preview entry.</p></div></body></html>`;
 }
 
+async function writeQuickThumbnailSvg(
+  projectId: string,
+  projectName = "Vibe project",
+) {
+  const root = projectRoot(projectId);
+  const previewDir = path.join(root, "preview");
+  const svgPath = path.join(previewDir, "thumbnail.svg");
+  await ensureDir(previewDir);
+
+  const hash = [...projectId].reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+  const hues = [210, 250, 280, 195, 230, 265];
+  const hue = hues[hash % hues.length];
+  const title = String(projectName || "Vibe project")
+    .replace(/[<>&]/g, "")
+    .slice(0, 42);
+  const subtitle = projectId.replace(/[<>&]/g, "").slice(0, 36);
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="hsl(${hue} 70% 97%)"/>
+      <stop offset="55%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="hsl(${(hue + 28) % 360} 45% 93%)"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#f8fafc"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="900" fill="url(#bg)"/>
+  <rect x="90" y="90" width="1020" height="720" rx="44" fill="url(#panel)" stroke="#e2e8f0" stroke-width="3"/>
+  <circle cx="170" cy="168" r="14" fill="#fda4af"/>
+  <circle cx="214" cy="168" r="14" fill="#fcd34d"/>
+  <circle cx="258" cy="168" r="14" fill="#86efac"/>
+  <rect x="310" y="152" width="520" height="32" rx="16" fill="#e2e8f0"/>
+  <rect x="140" y="230" width="280" height="500" rx="28" fill="hsl(${hue} 55% 96%)" stroke="#e2e8f0"/>
+  <rect x="170" y="270" width="180" height="22" rx="11" fill="hsl(${hue} 40% 78%)"/>
+  <rect x="170" y="320" width="220" height="16" rx="8" fill="#cbd5e1"/>
+  <rect x="170" y="354" width="200" height="16" rx="8" fill="#e2e8f0"/>
+  <rect x="170" y="388" width="160" height="16" rx="8" fill="#e2e8f0"/>
+  <rect x="450" y="230" width="610" height="180" rx="28" fill="hsl(${(hue + 18) % 360} 60% 95%)" stroke="#e2e8f0"/>
+  <rect x="490" y="275" width="360" height="28" rx="14" fill="#0f172a"/>
+  <rect x="490" y="328" width="480" height="16" rx="8" fill="#94a3b8"/>
+  <rect x="490" y="360" width="420" height="16" rx="8" fill="#cbd5e1"/>
+  <rect x="450" y="440" width="295" height="290" rx="28" fill="#ffffff" stroke="#e2e8f0"/>
+  <rect x="765" y="440" width="295" height="290" rx="28" fill="#ffffff" stroke="#e2e8f0"/>
+  <rect x="480" y="480" width="220" height="18" rx="9" fill="#cbd5e1"/>
+  <rect x="480" y="520" width="235" height="140" rx="22" fill="hsl(${hue} 70% 94%)"/>
+  <rect x="795" y="480" width="220" height="18" rx="9" fill="#cbd5e1"/>
+  <rect x="795" y="520" width="235" height="140" rx="22" fill="hsl(${(hue + 40) % 360} 65% 94%)"/>
+  <text x="140" y="790" fill="#0f172a" font-family="Inter, ui-sans-serif, system-ui" font-size="36" font-weight="700">${title}</text>
+  <text x="140" y="835" fill="#94a3b8" font-family="Inter, ui-sans-serif, system-ui" font-size="22" font-weight="600">${subtitle}</text>
+</svg>`;
+
+  await fs.writeFile(svgPath, svg, "utf8");
+  return svgPath;
+}
+
 async function captureProjectThumbnail(projectId: string) {
   const root = projectRoot(projectId);
   const previewDir = path.join(root, "preview");
@@ -151,7 +215,7 @@ async function captureProjectThumbnail(projectId: string) {
     const { chromium } = await import("playwright");
     const browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 1200, height: 900 }, deviceScaleFactor: 1 });
-    await page.setContent(buildStaticProjectHtml(await listProjectFiles(projectId)), { waitUntil: "networkidle" });
+    await page.setContent(buildStaticProjectHtml(await listProjectFiles(projectId)), { waitUntil: "domcontentloaded", timeout: 8000 });
     await page.screenshot({ path: thumbnailPath, fullPage: false });
     await browser.close();
     const metadata = await readProjectMetadata(projectId);
@@ -163,9 +227,8 @@ async function captureProjectThumbnail(projectId: string) {
     }
     return thumbnailPath;
   } catch (error) {
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900"><defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#ffffff"/><stop offset=".55" stop-color="#f8fafc"/><stop offset="1" stop-color="#e2e8f0"/></linearGradient></defs><rect width="1200" height="900" fill="url(#g)"/><rect x="150" y="170" width="900" height="560" rx="48" fill="white" stroke="#dbe3ed" stroke-width="3"/><rect x="220" y="240" width="520" height="34" rx="17" fill="#cbd5e1"/><rect x="220" y="320" width="760" height="220" rx="34" fill="#f1f5f9"/><rect x="220" y="585" width="260" height="64" rx="32" fill="#0f172a"/></svg>`;
-    await fs.writeFile(path.join(previewDir, "thumbnail.svg"), svg, "utf8");
-    return path.join(previewDir, "thumbnail.svg");
+    const metadata = await readProjectMetadata(projectId);
+    return writeQuickThumbnailSvg(projectId, metadata?.name || projectId);
   }
 }
 
@@ -1136,6 +1199,74 @@ async function startServer() {
   app.post("/api/clyra/chat", handleClyraChat);
   app.post("/api/deepseek/chat", handleClyraChat);
 
+  app.post("/api/research/youtube", async (req, res) => {
+    const url = String(req.body?.url ?? "").trim();
+    if (!url) {
+      res.status(400).json({ ok: false, error: { code: "invalid_id", message: "YouTube URL required" } });
+      return;
+    }
+    try {
+      const preferredLanguages = Array.isArray(req.body?.preferredLanguages)
+        ? req.body.preferredLanguages.map(String)
+        : ["en"];
+      const transcript = await retrieveYoutubeTranscript({
+        url,
+        preferredLanguages,
+        translateTo: req.body?.translateTo ? String(req.body.translateTo) : undefined,
+        question: req.body?.question ? String(req.body.question) : undefined,
+      });
+      res.json({
+        ...transcript,
+        analysisPrompt: transcript?.ok
+          ? buildYoutubeAnalysisPrompt({
+              url,
+              question: req.body?.question ? String(req.body.question) : undefined,
+              transcript,
+            })
+          : null,
+      });
+    } catch (err) {
+      console.error("YouTube transcript error:", err);
+      res.status(500).json({
+        ok: false,
+        error: {
+          code: "unknown",
+          message: err instanceof Error ? err.message : "Transcript retrieval failed",
+        },
+      });
+    }
+  });
+
+  app.post("/api/research/web-search", async (req, res) => {
+    const query = String(req.body?.query ?? "").trim();
+    if (!query) {
+      res.status(400).json({ ok: false, error: { code: "invalid_query", message: "Search query required" } });
+      return;
+    }
+    try {
+      const research = await runWebSearchResearch({
+        query,
+        maxResults: Number(req.body?.maxResults ?? 6),
+        fetchTop: Number(req.body?.fetchTop ?? 3),
+      });
+      res.json({
+        ...research,
+        analysisPrompt: research.ok
+          ? buildWebSearchPrompt({ query, research })
+          : null,
+      });
+    } catch (err) {
+      console.error("Web search error:", err);
+      res.status(500).json({
+        ok: false,
+        error: {
+          code: "unknown",
+          message: err instanceof Error ? err.message : "Web search failed",
+        },
+      });
+    }
+  });
+
   app.get("/api/vibe/scan", async (_req, res) => {
     res.json(await scanProject());
   });
@@ -1545,22 +1676,39 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
 
   app.get("/api/vibe/projects/:id/thumbnail", async (req, res) => {
     const projectId = safeProjectId(String(req.params.id ?? ""));
-    const metadata = await readProjectMetadata(projectId);
-    if (!metadata) {
+    const root = projectRoot(projectId);
+    if (!existsSync(root)) {
       res.status(404).send("Project not found");
       return;
     }
-    const pngPath = path.join(projectRoot(projectId), "preview", "thumbnail.png");
-    const svgPath = path.join(projectRoot(projectId), "preview", "thumbnail.svg");
+    const metadata = await readProjectMetadata(projectId);
+    const pngPath = path.join(root, "preview", "thumbnail.png");
+    const svgPath = path.join(root, "preview", "thumbnail.svg");
     try {
-      if (!existsSync(pngPath) && !existsSync(svgPath)) {
-        await captureProjectThumbnail(projectId);
-      }
       if (existsSync(pngPath)) {
+        res.setHeader("Cache-Control", "public, max-age=120");
         res.type("png").sendFile(pngPath);
         return;
       }
-      res.type("svg").sendFile(svgPath);
+      if (existsSync(svgPath)) {
+        res.setHeader("Cache-Control", "public, max-age=60");
+        res.type("svg").sendFile(svgPath);
+        return;
+      }
+
+      // Instant placeholder — never block the request on Playwright.
+      const quickPath = await writeQuickThumbnailSvg(
+        projectId,
+        metadata?.name || projectId,
+      );
+      res.setHeader("Cache-Control", "public, max-age=30");
+      res.type("svg").sendFile(quickPath);
+
+      if (metadata) {
+        void captureProjectThumbnail(projectId).catch((error) => {
+          console.warn("Background thumbnail capture failed", projectId, error);
+        });
+      }
     } catch {
       res.status(500).send("Thumbnail unavailable");
     }

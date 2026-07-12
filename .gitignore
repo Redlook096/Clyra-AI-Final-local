@@ -10,5 +10,6 @@ vibe-sandbox/
 vendor/opencode/
 tmp/
 output/
+.cache/
 *.mp4
 .claude/
