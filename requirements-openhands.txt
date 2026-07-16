@@ -1,0 +1,9 @@
+# Host Python tool deps for OpenHands agent-server (uvx --with)
+ddgs
+icrawler
+httpx
+trafilatura
+beautifulsoup4
+tinycss2
+lxml
+pillow

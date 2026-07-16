@@ -60,31 +60,18 @@ export function ShiningText({
     );
   }
 
-  if (preset === "thinkingChat") {
-    return (
-      <span
-        data-text={text}
-        className={cn(
-          "clyra-shimmer-text relative inline-block text-[15px] sm:text-[16px] font-medium leading-none",
-          className,
-        )}
-      >
-        {text}
-      </span>
-    );
-  }
-
   return (
     <motion.span
       className={cn(
-        "inline-block bg-[linear-gradient(110deg,#000,48.5%,#fff,50%,#000,51.5%)] bg-[length:200%_100%] bg-clip-text text-transparent",
+        "inline-block bg-[linear-gradient(110deg,#404040,35%,#fff,50%,#404040,75%,#404040)] bg-[length:200%_100%] bg-clip-text text-transparent",
+        preset === "thinkingChat" && "text-[15px] font-medium leading-none sm:text-[16px]",
         className,
       )}
-      initial={{ backgroundPosition: "100% 0" }}
-      animate={{ backgroundPosition: "0% 0" }}
+      initial={{ backgroundPosition: "200% 0" }}
+      animate={{ backgroundPosition: "-200% 0" }}
       transition={{
         repeat: Infinity,
-        duration: 3.5,
+        duration: 2,
         ease: "linear",
       }}
     >

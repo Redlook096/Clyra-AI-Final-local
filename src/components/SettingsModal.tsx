@@ -1,397 +1,792 @@
-import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { X, ChevronDown, Check } from 'lucide-react';
-import { cn } from '../lib/utils';
+import { useEffect, useMemo, useRef, useState, type ReactNode, type MouseEvent } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-} from './ui/dropdown-menu';
+  Bot,
+  ChevronLeft,
+  ChevronRight,
+  Code2,
+  Download,
+  Headphones,
+  MessageCircle,
+  MonitorCog,
+  Palette,
+  Play,
+  RotateCcw,
+  Shield,
+  Trash2,
+  Type,
+  X,
+} from "lucide-react";
+import { cn } from "../lib/utils";
+import { AiOrb, type OrbColorTheme } from "./AiOrb";
 
-// Exact easing curves requested for ultra-premium Apple-like feel
-const MODAL_EASE = [0.23, 1, 0.32, 1] as [number, number, number, number];
-const MODAL_TRANSITION = { duration: 0.4, ease: MODAL_EASE };
-const TAB_TRANSITION = { duration: 0.2, ease: MODAL_EASE };
+type SettingsModalProps = {
+  isOpen: boolean;
+  onClose: () => void;
+  theme: string;
+  setTheme: (value: string) => void;
+  sendOnEnter: boolean;
+  setSendOnEnter: (value: boolean) => void;
+  fontSize: string;
+  setFontSize: (value: string) => void;
+  clearChats: () => void;
+  autoScroll: boolean;
+  setAutoScroll: (value: boolean) => void;
+  animationSpeed?: number;
+  setAnimationSpeed?: (value: number) => void;
+  codeHighlighting: boolean;
+  setCodeHighlighting: (value: boolean) => void;
+  markdownSupport: boolean;
+  setMarkdownSupport: (value: boolean) => void;
+  systemPrompt: string;
+  setSystemPrompt: (value: string) => void;
+  temperature: number;
+  setTemperature: (value: number) => void;
+  userBubbleColor: string;
+  setUserBubbleColor: (value: string) => void;
+  orbColorTheme: OrbColorTheme;
+  setOrbColorTheme: (value: OrbColorTheme) => void;
+  voiceRate: number;
+  setVoiceRate: (value: number) => void;
+  voicePitch: number;
+  setVoicePitch: (value: number) => void;
+  voiceVolume: number;
+  setVoiceVolume: (value: number) => void;
+  chats: unknown[];
+};
 
-export function SettingsModal({ 
-    isOpen, onClose,
-    theme, setTheme,
-    sendOnEnter, setSendOnEnter,
-    fontSize, setFontSize,
-    clearChats, autoScroll, setAutoScroll,
-    animationSpeed, setAnimationSpeed,
-    codeHighlighting, setCodeHighlighting,
-    markdownSupport, setMarkdownSupport,
-    systemPrompt, setSystemPrompt,
-    temperature, setTemperature,
-    userBubbleColor, setUserBubbleColor,
-    orbColorTheme, setOrbColorTheme,
-    chats
-}: any) {
-    const [activeTab, setActiveTab] = useState('Appearance');
-    const isDark = theme === 'Dark';
+const EASE = [0.16, 1, 0.3, 1] as [number, number, number, number];
+const SPRING = { type: "spring" as const, stiffness: 430, damping: 36, mass: 0.45 };
+const QUICK_SPRING = { type: "spring" as const, stiffness: 620, damping: 42, mass: 0.32 };
 
-    const tabs = [
-        { id: 'Appearance', label: 'Appearance' },
-        { id: 'Personalisation', label: 'Personalisation' },
-        { id: 'Chat', label: 'Chat Behavior' },
-        { id: 'Intelligence', label: 'Intelligence' },
-        { id: 'System', label: 'Advanced' },
-        { id: 'Data', label: 'Data & Privacy' },
-    ];
+const sections = [
+  { id: "look", label: "Appearance", icon: Palette },
+  { id: "chat", label: "Conversation", icon: MessageCircle },
+  { id: "voice", label: "Voice", icon: Bot },
+  { id: "advanced", label: "Model", icon: MonitorCog },
+  { id: "data", label: "Privacy", icon: Shield },
+] as const;
 
-    const Toggle = ({ checked, onChange }: { checked: boolean, onChange: (v: boolean) => void }) => (
-        <button 
+const bubbleColors = [
+  { label: "Mist", value: "#F4F4F4" },
+  { label: "Sky", value: "#DBEAFE" },
+  { label: "Mint", value: "#DCFCE7" },
+  { label: "Lilac", value: "#F3E8FF" },
+  { label: "Rose", value: "#FFE4E6" },
+];
+
+const orbThemes: Array<{ id: OrbColorTheme; label: string; gradient: string }> = [
+  { id: "default", label: "Default", gradient: "conic-gradient(from 45deg,#3b82f6,#2563eb,#22d3ee,#8b5cf6,#3b82f6)" },
+  { id: "ocean", label: "Ocean", gradient: "conic-gradient(from 45deg,#0c4a6e,#0284c7,#06b6d4,#0ea5e9,#0c4a6e)" },
+  { id: "sunset", label: "Sunset", gradient: "conic-gradient(from 45deg,#f97316,#f472b6,#a855f7,#fb7185,#f97316)" },
+  { id: "forest", label: "Forest", gradient: "conic-gradient(from 45deg,#14532d,#16a34a,#2dd4bf,#059669,#14532d)" },
+  { id: "mono", label: "Mono", gradient: "conic-gradient(from 45deg,#1e293b,#64748b,#cbd5e1,#94a3b8,#1e293b)" },
+  { id: "noir", label: "Noir", gradient: "conic-gradient(from 45deg,#000,#333,#fff,#111,#000)" },
+];
+
+const voicePresets = [
+  { id: "calm", label: "Ryan · Calm", detail: "Warm and measured", voice: "Ryan", rate: 0.88, pitch: 0.98, volume: 0.9 },
+  { id: "natural", label: "Ryan · Natural", detail: "Balanced conversation", voice: "Ryan", rate: 0.94, pitch: 1.03, volume: 0.96 },
+  { id: "bright", label: "Aiden · Bright", detail: "Clear with more energy", voice: "Aiden", rate: 1.02, pitch: 1.1, volume: 0.92 },
+] as const;
+
+const modelPresets = [
+  { label: "Precise", detail: "Shorter, direct answers", temperature: 0.1 },
+  { label: "Balanced", detail: "Useful default for most chats", temperature: 0.7 },
+  { label: "Creative", detail: "More exploration and variation", temperature: 1 },
+] as const;
+
+function Toggle({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      aria-label={label}
+      aria-pressed={checked}
+      className={cn(
+        "group relative h-6 w-11 rounded-full p-0.5 transition-[background-color,box-shadow,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:scale-[1.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300",
+        checked ? "bg-slate-950 shadow-[0_6px_18px_rgba(15,23,42,0.16)]" : "bg-slate-200 hover:bg-slate-300/80",
+      )}
+    >
+      <motion.span
+        layout
+        transition={SPRING}
+        className={cn(
+          "block h-5 w-5 rounded-full bg-white shadow-[0_2px_7px_rgba(15,23,42,0.16)] transition-shadow group-hover:shadow-[0_3px_10px_rgba(15,23,42,0.18)]",
+          checked && "ml-5",
+        )}
+      />
+    </button>
+  );
+}
+
+function SettingRow({
+  title,
+  detail,
+  children,
+}: {
+  title: string;
+  detail?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-5 border-b border-slate-100/80 py-3.5 last:border-0">
+      <div className="min-w-0">
+        <p className="text-[13.5px] font-semibold text-slate-950">{title}</p>
+        {detail ? <p className="mt-0.5 text-[12px] leading-snug text-slate-500">{detail}</p> : null}
+      </div>
+      <div className="shrink-0">{children}</div>
+    </div>
+  );
+}
+
+function Segmented<T extends string | number>({
+  value,
+  options,
+  onChange,
+  label,
+}: {
+  value: T;
+  options: Array<{ label: string; value: T }>;
+  onChange: (value: T) => void;
+  label: string;
+}) {
+  const [hovered, setHovered] = useState<T | null>(null);
+  return (
+    <div aria-label={label} className="inline-flex rounded-full border border-slate-200/70 bg-white p-0.5 shadow-[0_1px_0_rgba(15,23,42,0.03)]">
+      {options.map((option) => {
+        const active = option.value === value;
+        const isHovered = hovered === option.value;
+        return (
+          <button
+            key={String(option.value)}
             type="button"
-            onClick={() => onChange(!checked)}
+            onClick={() => onChange(option.value)}
+            onMouseEnter={() => setHovered(option.value)}
+            onFocus={() => setHovered(option.value)}
+            onMouseLeave={() => setHovered(null)}
+            onBlur={() => setHovered(null)}
             className={cn(
-                "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors duration-300 ease-out focus:outline-none",
-                checked ? (isDark ? "bg-blue-500" : "bg-slate-900") : (isDark ? "bg-slate-700" : "bg-slate-200")
+              "relative min-w-20 rounded-full px-3 py-1.5 text-[12px] font-semibold transition-[color,opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+              active ? "text-slate-950" : "text-slate-500 hover:text-slate-900",
             )}
+          >
+            {isHovered && !active ? (
+              <motion.span
+                layoutId={`settings-${label}-hover`}
+                className="clyra-workflow-tab__hover absolute inset-0 rounded-full"
+                transition={QUICK_SPRING}
+              />
+            ) : null}
+            {active ? (
+              <motion.span
+                layoutId={`settings-${label}`}
+                className="absolute inset-0 rounded-full border border-slate-200/70 bg-slate-950 shadow-[0_6px_16px_rgba(15,23,42,0.12)]"
+                transition={QUICK_SPRING}
+              />
+            ) : null}
+            <span className={cn("relative", active && "text-white")}>{option.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function RangeControl({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+  valueLabel,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (value: number) => void;
+  valueLabel: string;
+}) {
+  const percent = ((value - min) / (max - min)) * 100;
+  return (
+    <div className="py-3.5">
+      <div className="mb-2 flex items-center justify-between gap-4">
+        <div>
+          <p className="text-[13.5px] font-semibold text-slate-950">{label}</p>
+          <p className="mt-0.5 text-[12px] text-slate-500">{valueLabel}</p>
+        </div>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-200 accent-slate-950 outline-none transition-opacity hover:opacity-90"
+        style={{
+          background: `linear-gradient(90deg, #0f172a ${percent}%, #e2e8f0 ${percent}%)`,
+        }}
+      />
+    </div>
+  );
+}
+
+export function SettingsModal({
+  isOpen,
+  onClose,
+  theme,
+  setTheme,
+  sendOnEnter,
+  setSendOnEnter,
+  fontSize,
+  setFontSize,
+  clearChats,
+  autoScroll,
+  setAutoScroll,
+  codeHighlighting,
+  setCodeHighlighting,
+  markdownSupport,
+  setMarkdownSupport,
+  systemPrompt,
+  setSystemPrompt,
+  temperature,
+  setTemperature,
+  userBubbleColor,
+  setUserBubbleColor,
+  orbColorTheme,
+  setOrbColorTheme,
+  voiceRate,
+  setVoiceRate,
+  voicePitch,
+  setVoicePitch,
+  voiceVolume,
+  setVoiceVolume,
+  chats,
+}: SettingsModalProps) {
+  const [activeSection, setActiveSection] = useState<(typeof sections)[number]["id"]>("look");
+  const [hoveredSection, setHoveredSection] = useState<(typeof sections)[number]["id"] | null>(null);
+  const [voicePreviewState, setVoicePreviewState] = useState<"idle" | "loading" | "error">("idle");
+  const voicePreviewRef = useRef<{ audio: HTMLAudioElement; url: string } | null>(null);
+  const chatCount = chats.length;
+  const selectedOrbIndex = Math.max(0, orbThemes.findIndex((preset) => preset.id === orbColorTheme));
+  const rotateOrb = (direction: -1 | 1) => {
+    const next = (selectedOrbIndex + direction + orbThemes.length) % orbThemes.length;
+    setOrbColorTheme(orbThemes[next]!.id);
+  };
+  const activeMeta = useMemo(
+    () => sections.find((section) => section.id === activeSection) ?? sections[0],
+    [activeSection],
+  );
+
+  const closeSettings = (event?: MouseEvent<HTMLElement>) => {
+    event?.preventDefault();
+    event?.stopPropagation();
+    onClose();
+  };
+
+  const applyVoicePreset = (preset: (typeof voicePresets)[number]) => {
+    setVoiceRate(preset.rate);
+    setVoicePitch(preset.pitch);
+    setVoiceVolume(preset.volume);
+  };
+
+  useEffect(() => () => {
+    voicePreviewRef.current?.audio.pause();
+    if (voicePreviewRef.current?.url) URL.revokeObjectURL(voicePreviewRef.current.url);
+  }, []);
+
+  const previewVoicePreset = async (preset: (typeof voicePresets)[number]) => {
+    applyVoicePreset(preset);
+    voicePreviewRef.current?.audio.pause();
+    if (voicePreviewRef.current?.url) URL.revokeObjectURL(voicePreviewRef.current.url);
+    voicePreviewRef.current = null;
+    setVoicePreviewState("loading");
+    try {
+      const response = await fetch("/api/creator/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: `Hi, I’m ${preset.voice}. This is how I’ll sound in a natural Clyra conversation.`,
+          voice: preset.voice,
+        }),
+      });
+      if (!response.ok) throw new Error("Chatterbox preview is unavailable");
+      const url = URL.createObjectURL(await response.blob());
+      const audio = new Audio(url);
+      audio.playbackRate = preset.rate;
+      audio.volume = preset.volume;
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        if (voicePreviewRef.current?.url === url) voicePreviewRef.current = null;
+      };
+      voicePreviewRef.current = { audio, url };
+      await audio.play();
+      setVoicePreviewState("idle");
+    } catch {
+      setVoicePreviewState("error");
+    }
+  };
+
+  const exportChats = () => {
+    const blob = new Blob([JSON.stringify(chats, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "clyra-chat-export.json";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <AnimatePresence>
+      {isOpen ? (
+        <motion.div
+          data-invert-ignore={theme === "Dark" ? "true" : undefined}
+          className="fixed inset-0 z-[100] grid place-items-center p-3 sm:p-6"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18, ease: EASE }}
         >
-            <span className={cn(
-                "inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] shadow-[0_1px_3px_rgba(0,0,0,0.15)]",
-                checked ? "translate-x-[22px]" : "translate-x-[2px]"
-            )} />
-        </button>
-    );
-
-    const Select = ({ value, options, onChange }: { value: string, options: string[], onChange: (v: string) => void }) => (
-        <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-                <button className={cn(
-                    "inline-flex items-center gap-2 transition-colors px-3 py-1.5 rounded-lg text-[14px] font-medium outline-none border",
-                    isDark ? "bg-slate-800 border-slate-700 hover:bg-slate-700 text-slate-300" : "bg-white border-slate-200 hover:bg-slate-50 text-slate-500 shadow-sm"
-                )}>
-                    {value}
-                    <ChevronDown className={cn("w-4 h-4 shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]", isDark ? "text-slate-500" : "text-slate-400")} />
-                </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent 
-                align="end" 
-                sideOffset={8}
-                className={cn(
-                    "z-[9999] overflow-hidden rounded-xl border p-1 shadow-xl",
-                    "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-3",
-                    "duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
-                    isDark ? "bg-slate-800 border-slate-700/80 text-slate-300" : "bg-white border-slate-100 text-slate-600"
-                )}
-            >
-                {options.map(opt => (
-                    <DropdownMenuItem 
-                        key={opt} 
-                        onClick={() => onChange(opt)} 
-                        className={cn(
-                            "relative flex cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-3 py-2 text-[14px] font-medium outline-none transition-colors duration-200 w-full min-w-[140px]", 
-                            isDark ? "focus:bg-slate-700/50 text-slate-200" : "focus:bg-slate-50 text-slate-700"
-                        )}
+          <motion.button
+            type="button"
+            aria-label="Close settings"
+            className="absolute inset-0 bg-slate-950/12 backdrop-blur-[4px]"
+            onClick={closeSettings}
+            tabIndex={-1}
+          />
+          <motion.section
+            role="dialog"
+            aria-modal="true"
+            aria-label="Settings"
+            initial={{ opacity: 0, y: 16, scale: 0.985, filter: "blur(5px)" }}
+            animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
+            exit={{ opacity: 0, y: 10, scale: 0.99, filter: "blur(4px)" }}
+            transition={{ type: "spring", stiffness: 420, damping: 38, mass: 0.55 }}
+            className="relative grid h-[min(650px,92vh)] w-full max-w-[820px] overflow-hidden rounded-[22px] border border-slate-200/80 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.13)] sm:grid-cols-[224px_1fr]"
+          >
+            <aside className="hidden border-r border-slate-100 bg-white p-3 sm:block">
+              <div className="px-3 pb-4 pt-2">
+                <p className="text-[17px] font-semibold tracking-tight text-slate-950">Settings</p>
+                <p className="mt-1 text-[12px] leading-snug text-slate-500">Clean controls for how Clyra feels.</p>
+              </div>
+              <div className="relative space-y-1">
+                {sections.map((section) => {
+                  const Icon = section.icon;
+                  const active = section.id === activeSection;
+                  const hovered = hoveredSection === section.id;
+                  return (
+                    <button
+                      key={section.id}
+                      type="button"
+                      onClick={() => setActiveSection(section.id)}
+                      onMouseEnter={() => setHoveredSection(section.id)}
+                      onFocus={() => setHoveredSection(section.id)}
+                      onMouseLeave={() => setHoveredSection(null)}
+                      onBlur={() => setHoveredSection(null)}
+                      className={cn(
+                        "relative flex w-full items-center gap-3 rounded-full px-3 py-2.5 text-left text-[13px] font-semibold transition-[color,opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                        active ? "text-slate-950" : "text-slate-500 hover:text-slate-900",
+                        hoveredSection && !hovered && !active && "opacity-70",
+                      )}
                     >
-                        {opt}
-                        {value === opt && <Check className="w-4 h-4 ml-3 shrink-0" />}
-                    </DropdownMenuItem>
-                ))}
-            </DropdownMenuContent>
-        </DropdownMenu>
-    );
+                      {hovered && !active ? (
+                        <motion.span
+                          layoutId="settings-sidebar-hover"
+                          className="absolute inset-0 rounded-full bg-slate-100"
+                          transition={QUICK_SPRING}
+                        />
+                      ) : null}
+                      {active ? (
+                        <motion.span
+                          layoutId="settings-sidebar-active"
+                          className="absolute inset-0 rounded-full bg-slate-950"
+                          transition={QUICK_SPRING}
+                        />
+                      ) : null}
+                      <Icon className={cn("relative h-4 w-4", active && "text-white")} />
+                      <span className={cn("relative", active && "text-white")}>{section.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </aside>
 
-    const SegmentedControl = ({ options, value, onChange }: any) => (
-        <div className={cn("flex p-1 rounded-xl", isDark ? "bg-slate-800" : "bg-slate-100/70")}>
-            {options.map((opt: any) => (
-                <button
-                    key={opt.label}
-                    onClick={() => onChange(opt.value)}
-                    className={cn(
-                        "flex-1 py-1.5 px-4 rounded-lg text-[13px] font-medium transition-all duration-200 ease-out outline-none",
-                        value === opt.value 
-                            ? (isDark ? "bg-slate-600 text-white shadow-sm" : "bg-white text-slate-900 shadow-[0_1px_3px_rgba(0,0,0,0.06)]") 
-                            : (isDark ? "text-slate-400 hover:text-slate-300" : "text-slate-500 hover:text-slate-700")
-                    )}
-                >
-                    {opt.label}
-                </button>
-            ))}
-        </div>
-    );
-
-    const SettingRow = ({ label, description, children, noBorder }: any) => (
-        <div className={cn("flex items-center justify-between py-4", !noBorder && (isDark ? "border-b border-slate-800" : "border-b border-slate-100/60"))}>
-            <div className="flex flex-col pr-8">
-                <span className={cn("text-[14px] font-medium tracking-tight", isDark ? "text-slate-200" : "text-slate-900")}>{label}</span>
-                {description && <span className={cn("text-[13px] mt-0.5 leading-snug", isDark ? "text-slate-400" : "text-slate-500")}>{description}</span>}
-            </div>
-            <div className="shrink-0 flex items-center justify-end">{children}</div>
-        </div>
-    );
-
-    const SettingBlock = ({ label, description, children, noBorder }: any) => (
-        <div className={cn("flex flex-col py-4", !noBorder && (isDark ? "border-b border-slate-800" : "border-b border-slate-100/60"))}>
-            <div className="flex flex-col mb-4">
-                <span className={cn("text-[14px] font-medium tracking-tight", isDark ? "text-slate-200" : "text-slate-900")}>{label}</span>
-                {description && <span className={cn("text-[13px] mt-0.5 leading-snug", isDark ? "text-slate-400" : "text-slate-500")}>{description}</span>}
-            </div>
-            {children}
-        </div>
-    );
-
-    return (
-        <AnimatePresence>
-            {isOpen && (
-                <div data-invert-ignore={isDark ? "true" : undefined} className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 pb-20 sm:pb-6">
-                    {/* Backdrop */}
-                    <motion.div 
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        transition={{ duration: 0.4, ease: 'easeOut' }}
-                        className="absolute inset-0 bg-slate-900/30" 
-                        onClick={onClose} 
-                    />
-                    
-                    {/* Premium Modal */}
-                    <motion.div 
-                        initial={{ opacity: 0, scale: 0.97, y: 15 }}
-                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.98, y: -5 }}
-                        transition={MODAL_TRANSITION}
-                        style={{ willChange: "transform, opacity" }}
-                        className={cn(
-                            "w-full max-w-[740px] h-[560px] max-h-[85vh] rounded-3xl flex relative overflow-hidden z-10 border",
-                            isDark ? "bg-black border-slate-800 shadow-none" : "bg-white border-transparent shadow-[0_24px_64px_-16px_rgba(0,0,0,0.16)]"
-                        )}
-                    >
-                        {/* Clean Close Button */}
-                        <div className="absolute top-5 right-5 z-20">
-                            <button onClick={onClose} className={cn("p-1.5 transition-colors rounded-full", isDark ? "text-slate-400 hover:text-white hover:bg-slate-800" : "text-slate-400 hover:text-slate-800 hover:bg-slate-100")}>
-                                <X className="w-5 h-5 stroke-[2]" />
-                            </button>
-                        </div>
-
-                        {/* Ultra-Minimal Sidebar */}
-                        <div className={cn("hidden sm:flex w-[220px] shrink-0 pt-8 px-4 flex-col gap-1 border-r", isDark ? "bg-black border-slate-800" : "bg-slate-50/30 border-slate-100/50")}>
-                            <h2 className={cn("text-[17px] font-semibold tracking-tight px-4 mb-6 mt-2", isDark ? "text-slate-100" : "text-slate-800")}>Settings</h2>
-                            {tabs.map(tab => {
-                                const isActive = activeTab === tab.id;
-                                return (
-                                    <button
-                                        key={tab.id}
-                                        onClick={() => setActiveTab(tab.id)}
-                                        className={cn(
-                                            "px-4 py-2.5 rounded-xl text-[14px] text-left transition-all duration-200 outline-none relative",
-                                            isActive 
-                                                ? (isDark ? "text-white font-medium bg-slate-800 shadow-none ring-1 ring-slate-700" : "text-slate-900 font-medium bg-white shadow-sm ring-1 ring-slate-100") 
-                                                : (isDark ? "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50" : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/50")
-                                        )}
-                                    >
-                                        {tab.label}
-                                    </button>
-                                )
-                            })}
-                        </div>
-
-                        {/* Main Content Area */}
-                        <div className={cn("flex-1 pt-8 sm:pt-14 px-6 sm:px-10 overflow-y-auto no-scrollbar relative", isDark ? "bg-black" : "bg-white")}>
-                            <div className="sm:hidden mb-6 flex items-center justify-between">
-                                <h2 className={cn("text-[22px] font-semibold tracking-tight", isDark ? "text-slate-100" : "text-slate-900")}>Settings</h2>
-                                <select 
-                                    value={activeTab} 
-                                    onChange={(e) => setActiveTab(e.target.value)}
-                                    className={cn("py-1.5 px-3 rounded-lg text-sm font-medium border", isDark ? "bg-slate-800 text-slate-200 border-slate-700" : "bg-slate-50 text-slate-700 border-slate-100")}
-                                >
-                                    {tabs.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
-                                </select>
-                            </div>
-                            
-                            <h3 className={cn("hidden sm:block text-[22px] font-semibold tracking-tight mb-6", isDark ? "text-slate-100" : "text-slate-900")}>
-                                {tabs.find(t => t.id === activeTab)?.label}
-                            </h3>
-                            
-                            <AnimatePresence mode="wait">
-                                <motion.div
-                                    key={activeTab}
-                                    initial={{ opacity: 0, y: 10 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    exit={{ opacity: 0, y: -10 }}
-                                    transition={TAB_TRANSITION}
-                                    style={{ willChange: "transform, opacity" }}
-                                    className="pb-12 max-w-[440px]"
-                                >
-                                    {activeTab === 'Appearance' && (
-                                        <>
-                                            <SettingRow label="Theme Mode" description="Interface color scheme">
-                                                <Select value={theme} options={['Light', 'Dark', 'System']} onChange={setTheme} />
-                                            </SettingRow>
-                                            <SettingBlock label="Animation Speed" description="Control how fast the UI transforms" noBorder>
-                                                <SegmentedControl 
-                                                    options={[
-                                                        { label: 'Relaxed', value: 1.5 },
-                                                        { label: 'Normal', value: 1.0 },
-                                                        { label: 'Snappy', value: 0.5 }
-                                                    ]}
-                                                    value={animationSpeed}
-                                                    onChange={setAnimationSpeed}
-                                                />
-                                            </SettingBlock>
-                                        </>
-                                    )}
-
-                                    {activeTab === 'Personalisation' && (
-                                        <>
-                                            <SettingBlock label="User Message Bubble" description="Color for your own messages">
-                                                <div className="flex gap-3 flex-wrap">
-                                                    {[
-                                                        { label: 'Grey', color: '#e2e8f0' },
-                                                        { label: 'Blue', color: '#bfdbfe' },
-                                                        { label: 'Green', color: '#bbf7d0' },
-                                                        { label: 'Purple', color: '#e9d5ff' },
-                                                        { label: 'Rose', color: '#fecdd3' }
-                                                    ].map(preset => (
-                                                        <button
-                                                            key={preset.color}
-                                                            onClick={() => setUserBubbleColor(preset.color)}
-                                                            className={cn(
-                                                                "w-8 h-8 rounded-full transition-all shadow-[0_1px_3px_rgba(0,0,0,0.1)]",
-                                                                userBubbleColor === preset.color ? (isDark ? "ring-2 ring-blue-500 ring-offset-2 ring-offset-[#0b0f19] scale-105" : "ring-2 ring-slate-800 ring-offset-2 scale-105") : "hover:scale-105"
-                                                            )}
-                                                            style={{ backgroundColor: preset.color }}
-                                                            title={preset.label}
-                                                        />
-                                                    ))}
-                                                    <div className={cn("w-[1px] h-8 mx-2", isDark ? "bg-slate-800" : "bg-slate-200")}></div>
-                                                    <div className={cn(
-                                                        "relative w-8 h-8 rounded-full overflow-hidden shadow-[0_1px_3px_rgba(0,0,0,0.1)] transition-transform hover:scale-105",
-                                                        ![ '#e2e8f0', '#bfdbfe', '#bbf7d0', '#e9d5ff', '#fecdd3' ].includes(userBubbleColor) && (isDark ? "ring-2 ring-blue-500 ring-offset-2 ring-offset-[#0b0f19] scale-105" : "ring-2 ring-slate-800 ring-offset-2 scale-105")
-                                                    )}>
-                                                        <input 
-                                                            type="color" 
-                                                            value={userBubbleColor}
-                                                            onChange={(e) => setUserBubbleColor(e.target.value)}
-                                                            className="absolute inset-[-10px] w-12 h-12 cursor-pointer p-0 border-0"
-                                                            title="Custom color"
-                                                        />
-                                                    </div>
-                                                </div>
-                                            </SettingBlock>
-                                            <SettingBlock label="AI Orb Theme" description="Color gradient for the AI indicator">
-                                                <div className="flex gap-3 flex-wrap">
-                                                    {([
-                                                        { id: 'default', label: 'Default', gradient: 'conic-gradient(from 45deg, #3b82f6, #2563eb, #22d3ee, #8b5cf6, #3b82f6)' },
-                                                        { id: 'ocean', label: 'Ocean', gradient: 'conic-gradient(from 45deg, #0c4a6e, #0284c7, #06b6d4, #0ea5e9, #0c4a6e)' },
-                                                        { id: 'sunset', label: 'Sunset', gradient: 'conic-gradient(from 45deg, #7c2d12, #ea580c, #f472b6, #a855f7, #7c2d12)' },
-                                                        { id: 'forest', label: 'Forest', gradient: 'conic-gradient(from 45deg, #14532d, #16a34a, #2dd4bf, #059669, #14532d)' },
-                                                        { id: 'mono', label: 'Mono', gradient: 'conic-gradient(from 45deg, #1e293b, #64748b, #cbd5e1, #94a3b8, #1e293b)' },
-                                                        { id: 'noir', label: 'Noir', gradient: 'conic-gradient(from 45deg, #000000, #333333, #ffffff, #111111, #000000)' },
-                                                    ] as const).map(preset => (
-                                                        <button
-                                                            key={preset.id}
-                                                            onClick={() => setOrbColorTheme(preset.id as any)}
-                                                            className={cn(
-                                                                "w-8 h-8 rounded-full transition-all shadow-[0_1px_3px_rgba(0,0,0,0.1)]",
-                                                                orbColorTheme === preset.id ? (isDark ? "ring-2 ring-blue-500 ring-offset-2 ring-offset-[#0b0f19] scale-105" : "ring-2 ring-slate-800 ring-offset-2 scale-105") : "hover:scale-105"
-                                                            )}
-                                                            style={{ background: preset.gradient }}
-                                                            title={preset.label}
-                                                        />
-                                                    ))}
-                                                </div>
-                                            </SettingBlock>
-                                            <SettingRow label="Text Size" description="Adjust reading scale" noBorder>
-                                                <Select value={fontSize} options={['Small', 'Medium', 'Large']} onChange={setFontSize} />
-                                            </SettingRow>
-                                        </>
-                                    )}
-
-                                    {activeTab === 'Chat' && (
-                                        <>
-                                            <SettingRow label="Quick Submit" description="Send message on Enter (Shift+Enter for newline)">
-                                                <Toggle checked={sendOnEnter} onChange={setSendOnEnter} />
-                                            </SettingRow>
-                                            <SettingRow label="Auto-Scroll" description="Follow new messages as they stream" noBorder>
-                                                <Toggle checked={autoScroll} onChange={setAutoScroll} />
-                                            </SettingRow>
-                                        </>
-                                    )}
-
-                                    {activeTab === 'Intelligence' && (
-                                        <>
-                                            <SettingRow label="Model Routing" description="Intelligent provider selection">
-                                                <span className={cn("rounded-full px-3 py-1 text-[12px] font-semibold tracking-wide uppercase", isDark ? "bg-slate-800 text-slate-300" : "bg-slate-100 text-slate-700")}>
-                                                    Auto
-                                                </span>
-                                            </SettingRow>
-                                            <SettingBlock label="Reasoning Style" description="Adjust AI creativity and precision">
-                                                <SegmentedControl 
-                                                    options={[
-                                                        { label: 'Precise', value: 0.1 },
-                                                        { label: 'Balanced', value: 0.7 },
-                                                        { label: 'Creative', value: 1.0 }
-                                                    ]}
-                                                    value={temperature}
-                                                    onChange={setTemperature}
-                                                />
-                                            </SettingBlock>
-                                            <SettingBlock label="System Prompt" description="Custom instructions for behavior" noBorder>
-                                                <textarea 
-                                                    value={systemPrompt}
-                                                    onChange={(e) => setSystemPrompt(e.target.value)}
-                                                    placeholder="e.g. Always respond in markdown."
-                                                    spellCheck={false}
-                                                    className={cn(
-                                                        "w-full h-24 p-4 rounded-2xl text-[13.5px] focus:outline-none focus:ring-1 transition-colors resize-none shadow-inner",
-                                                        isDark 
-                                                            ? "bg-slate-800/50 text-slate-200 focus:ring-slate-600 focus:bg-slate-800 placeholder:text-slate-500 border border-slate-700/60"
-                                                            : "bg-slate-50/50 text-slate-800 focus:ring-slate-300 focus:bg-white placeholder:text-slate-400 border border-slate-200/60"
-                                                    )}
-                                                />
-                                            </SettingBlock>
-                                        </>
-                                    )}
-
-                                    {activeTab === 'System' && (
-                                        <>
-                                            <SettingRow label="Syntax Highlighting" description="Colorize code blocks">
-                                                <Toggle checked={codeHighlighting} onChange={setCodeHighlighting} />
-                                            </SettingRow>
-                                            <SettingRow label="Markdown Rendering" description="Parse rich text formatting" noBorder>
-                                                <Toggle checked={markdownSupport} onChange={setMarkdownSupport} />
-                                            </SettingRow>
-                                        </>
-                                    )}
-
-                                    {activeTab === 'Data' && (
-                                        <>
-                                            <SettingRow label="Clear History" description="Erase all conversations entirely">
-                                                <button 
-                                                    onClick={clearChats}
-                                                    className={cn("px-4 py-2 rounded-xl font-semibold text-[13px] transition-colors", isDark ? "bg-red-900/30 text-red-400 hover:bg-red-900/50" : "bg-red-50 text-red-600 hover:bg-red-100")}
-                                                >
-                                                    Clear All Data
-                                                </button>
-                                            </SettingRow>
-                                            <SettingRow label="Export Data" description="Download your history as JSON" noBorder>
-                                                <button 
-                                                    onClick={() => {
-                                                        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(chats, null, 2));
-                                                        const downloadAnchorNode = document.createElement('a');
-                                                        downloadAnchorNode.setAttribute("href", dataStr);
-                                                        downloadAnchorNode.setAttribute("download", "chat-export.json");
-                                                        document.body.appendChild(downloadAnchorNode);
-                                                        downloadAnchorNode.click();
-                                                        downloadAnchorNode.remove();
-                                                    }}
-                                                    className={cn("px-4 py-2 rounded-xl font-semibold text-[13px] transition-colors", isDark ? "bg-slate-800 text-slate-300 hover:bg-slate-700" : "bg-slate-100 text-slate-700 hover:bg-slate-200")}
-                                                >
-                                                    Export JSON
-                                                </button>
-                                            </SettingRow>
-                                        </>
-                                    )}
-                                </motion.div>
-                            </AnimatePresence>
-                        </div>
-                    </motion.div>
+            <div className="flex min-h-0 flex-col bg-white">
+              <header className="flex shrink-0 items-center justify-between border-b border-slate-100 px-5 py-4 sm:px-7">
+                <div className="min-w-0">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Preferences</p>
+                  <h2 className="mt-1 text-[20px] font-semibold tracking-tight text-slate-950">{activeMeta.label}</h2>
                 </div>
-            )}
-        </AnimatePresence>
-    );
+                <button
+                  type="button"
+                  onClick={closeSettings}
+                  className="grid h-9 w-9 place-items-center rounded-full text-slate-500 transition-[background-color,color,transform] duration-300 hover:scale-[1.03] hover:bg-slate-100 hover:text-slate-900"
+                  aria-label="Close settings"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </header>
+
+              <div className="flex gap-1 overflow-x-auto border-b border-slate-100 px-4 py-2 sm:hidden">
+                {sections.map((section) => (
+                  <button
+                    key={section.id}
+                    type="button"
+                    onClick={() => setActiveSection(section.id)}
+                    className={cn(
+                      "rounded-full px-3 py-1.5 text-[12px] font-semibold transition-colors",
+                      section.id === activeSection ? "bg-slate-950 text-white" : "bg-white text-slate-600 hover:bg-slate-100",
+                    )}
+                  >
+                    {section.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3 sm:px-7">
+                <motion.div
+                  key={activeSection}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.14, ease: EASE }}
+                  className="mx-auto max-w-[540px] pb-8"
+                >
+                    {activeSection === "look" ? (
+                      <>
+                        <SettingRow title="Theme" detail="Choose the app surface tone.">
+                          <Segmented
+                            label="Theme"
+                            value={theme}
+                            onChange={setTheme}
+                            options={[
+                              { label: "Light", value: "Light" },
+                              { label: "Dark", value: "Dark" },
+                            ]}
+                          />
+                        </SettingRow>
+                        <SettingRow title="Message text" detail="Adjust chat reading size.">
+                          <Segmented
+                            label="Text size"
+                            value={fontSize}
+                            onChange={setFontSize}
+                            options={[
+                              { label: "Small", value: "Small" },
+                              { label: "Medium", value: "Medium" },
+                              { label: "Large", value: "Large" },
+                            ]}
+                          />
+                        </SettingRow>
+                        <div className="border-b border-slate-100 py-4">
+                          <p className="text-[13.5px] font-semibold text-slate-950">User bubble</p>
+                          <p className="mt-0.5 text-[12.5px] text-slate-500">Pick the color used for your chat messages.</p>
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            {bubbleColors.map((color) => (
+                              <button
+                                key={color.value}
+                                type="button"
+                                onClick={() => setUserBubbleColor(color.value)}
+                                title={color.label}
+                                className={cn(
+                                  "h-8 w-8 rounded-full border border-white shadow-[0_3px_10px_rgba(15,23,42,0.09)] transition-transform duration-300 hover:scale-105",
+                                  userBubbleColor === color.value && "ring-2 ring-slate-950 ring-offset-2",
+                                )}
+                                style={{ backgroundColor: color.value }}
+                              />
+                            ))}
+                            <label
+                              className={cn(
+                                "relative grid h-9 w-9 cursor-pointer place-items-center overflow-hidden rounded-full border border-slate-200 shadow-[0_4px_14px_rgba(15,23,42,0.08)]",
+                                !bubbleColors.some((color) => color.value === userBubbleColor) &&
+                                  "ring-2 ring-slate-950 ring-offset-2",
+                              )}
+                              title="Custom bubble color"
+                            >
+                              <span className="absolute inset-0 bg-[conic-gradient(#ef4444,#f59e0b,#22c55e,#06b6d4,#6366f1,#ef4444)]" />
+                              <input
+                                type="color"
+                                value={userBubbleColor}
+                                onChange={(event) => setUserBubbleColor(event.target.value)}
+                                className="absolute inset-[-10px] h-14 w-14 cursor-pointer opacity-0"
+                              />
+                            </label>
+                          </div>
+                        </div>
+                        <div className="py-4">
+                          <p className="text-[13.5px] font-semibold text-slate-950">Orb palette</p>
+                          <p className="mt-0.5 text-[12.5px] text-slate-500">Choose the live orb used across chat and voice.</p>
+                          <div className="mt-4 grid grid-cols-[36px_minmax(0,1fr)_36px] items-center gap-2">
+                            <button type="button" onClick={() => rotateOrb(-1)} aria-label="Previous orb palette" className="grid h-9 w-9 place-items-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-[border-color,color,transform] hover:scale-[1.04] hover:border-slate-300 hover:text-slate-950"><ChevronLeft className="h-4 w-4" /></button>
+                            <div className="relative h-[176px] overflow-hidden rounded-lg border border-slate-200/80 bg-[linear-gradient(180deg,rgba(248,250,252,.85),rgba(255,255,255,.96))]">
+                              <AnimatePresence mode="popLayout" initial={false}>
+                                <motion.div
+                                  key={orbColorTheme}
+                                  initial={{ opacity: 0, x: 24, scale: 0.94 }}
+                                  animate={{ opacity: 1, x: 0, scale: 1 }}
+                                  exit={{ opacity: 0, x: -24, scale: 0.94 }}
+                                  transition={QUICK_SPRING}
+                                  className="absolute inset-0 grid place-items-center"
+                                >
+                                  <div className="absolute left-1 top-1/2 -translate-y-1/2 scale-[0.52] opacity-25 blur-[.15px]">
+                                    <AiOrb colorTheme={orbThemes[(selectedOrbIndex - 1 + orbThemes.length) % orbThemes.length]!.id} introActive={false} />
+                                  </div>
+                                  <div className="relative z-10 flex flex-col items-center">
+                                    <div className="h-[116px] w-[150px] overflow-visible">
+                                      <AiOrb colorTheme={orbColorTheme} introActive={false} />
+                                    </div>
+                                    <span className="-mt-2 text-[12px] font-semibold text-slate-950">{orbThemes[selectedOrbIndex]?.label}</span>
+                                  </div>
+                                  <div className="absolute right-1 top-1/2 -translate-y-1/2 scale-[0.52] opacity-25 blur-[.15px]">
+                                    <AiOrb colorTheme={orbThemes[(selectedOrbIndex + 1) % orbThemes.length]!.id} introActive={false} />
+                                  </div>
+                                </motion.div>
+                              </AnimatePresence>
+                            </div>
+                            <button type="button" onClick={() => rotateOrb(1)} aria-label="Next orb palette" className="grid h-9 w-9 place-items-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-[border-color,color,transform] hover:scale-[1.04] hover:border-slate-300 hover:text-slate-950"><ChevronRight className="h-4 w-4" /></button>
+                          </div>
+                          <div className="mt-3 flex justify-center gap-1.5">
+                            {orbThemes.map((preset) => <button key={preset.id} type="button" onClick={() => setOrbColorTheme(preset.id)} aria-label={`Select ${preset.label} orb`} className={cn("h-1.5 rounded-full transition-[width,background-color]", preset.id === orbColorTheme ? "w-5 bg-slate-950" : "w-1.5 bg-slate-200 hover:bg-slate-400")} />)}
+                          </div>
+                        </div>
+                      </>
+                    ) : null}
+
+                    {activeSection === "chat" ? (
+                      <>
+                        <SettingRow title="Send on Enter" detail="Use Shift + Enter for a new line.">
+                          <Toggle checked={sendOnEnter} onChange={setSendOnEnter} label="Toggle send on Enter" />
+                        </SettingRow>
+                        <SettingRow title="Auto-scroll" detail="Keep the latest streamed response in view.">
+                          <Toggle checked={autoScroll} onChange={setAutoScroll} label="Toggle auto-scroll" />
+                        </SettingRow>
+                        <SettingRow title="Markdown" detail="Render headings, lists, links, and emphasis.">
+                          <Toggle checked={markdownSupport} onChange={setMarkdownSupport} label="Toggle markdown rendering" />
+                        </SettingRow>
+                        <SettingRow title="Code highlighting" detail="Colorize code blocks when markdown is enabled.">
+                          <Toggle checked={codeHighlighting} onChange={setCodeHighlighting} label="Toggle code highlighting" />
+                        </SettingRow>
+                      </>
+                    ) : null}
+
+                    {activeSection === "voice" ? (
+                      <>
+                        <SettingRow title="Delivery" detail="Natural phrase streaming stays enabled.">
+                          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] text-emerald-700">
+                            Natural
+                          </span>
+                        </SettingRow>
+                        <div className="grid gap-2 border-b border-slate-100/80 py-3.5 sm:grid-cols-3">
+                          {voicePresets.map((preset) => {
+                            const active =
+                              Math.abs(voiceRate - preset.rate) < 0.01 &&
+                              Math.abs(voicePitch - preset.pitch) < 0.01 &&
+                              Math.abs(voiceVolume - preset.volume) < 0.02;
+                            return (
+                              <button
+                                key={preset.id}
+                                type="button"
+                                onClick={() => applyVoicePreset(preset)}
+                                className={cn(
+                                  "group rounded-[16px] border p-3 text-left transition-[background-color,border-color,transform] duration-300 hover:-translate-y-0.5",
+                                  active ? "border-slate-950 bg-slate-950 text-white" : "border-slate-200 bg-white hover:bg-slate-50",
+                                )}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <Headphones className="h-4 w-4" />
+                                  <span
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void previewVoicePreset(preset);
+                                    }}
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Enter" || event.key === " ") {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        void previewVoicePreset(preset);
+                                      }
+                                    }}
+                                    className={cn(
+                                      "grid h-7 w-7 place-items-center rounded-full transition-colors",
+                                      active ? "bg-white/12 text-white" : "bg-slate-100 text-slate-600 group-hover:bg-white",
+                                    )}
+                                  >
+                                    <Play className="h-3.5 w-3.5" />
+                                  </span>
+                                </div>
+                                <p className="mt-3 text-[13px] font-semibold">{preset.label}</p>
+                                <p className={cn("mt-1 text-[11.5px]", active ? "text-white/65" : "text-slate-500")}>
+                                  {preset.detail}
+                                </p>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {voicePreviewState !== "idle" ? (
+                          <p className={cn("-mt-1 text-[11px] font-medium", voicePreviewState === "error" ? "text-rose-500" : "text-blue-600")}>
+                            {voicePreviewState === "loading" ? "Preparing Chatterbox preview…" : "Chatterbox preview is unavailable. Check the shared voice worker."}
+                          </p>
+                        ) : null}
+                        <RangeControl
+                          label="Pace"
+                          value={voiceRate}
+                          min={0.82}
+                          max={1.08}
+                          step={0.01}
+                          onChange={setVoiceRate}
+                          valueLabel={voiceRate < 0.91 ? "Calmer delivery" : voiceRate > 1 ? "A little quicker" : "Balanced conversation pace"}
+                        />
+                        <RangeControl
+                          label="Warmth"
+                          value={voicePitch}
+                          min={0.9}
+                          max={1.16}
+                          step={0.01}
+                          onChange={setVoicePitch}
+                          valueLabel={voicePitch < 0.99 ? "Lower, steadier tone" : voicePitch > 1.08 ? "Brighter tone" : "Warm natural tone"}
+                        />
+                        <RangeControl
+                          label="Volume"
+                          value={voiceVolume}
+                          min={0.5}
+                          max={1}
+                          step={0.01}
+                          onChange={setVoiceVolume}
+                          valueLabel={`${Math.round(voiceVolume * 100)}% browser speech volume`}
+                        />
+                      </>
+                    ) : null}
+
+                    {activeSection === "advanced" ? (
+                      <>
+                        <div className="grid gap-2 border-b border-slate-100/80 py-3.5 sm:grid-cols-3">
+                          {modelPresets.map((preset) => {
+                            const active = Math.abs(temperature - preset.temperature) < 0.01;
+                            return (
+                              <button
+                                key={preset.label}
+                                type="button"
+                                onClick={() => setTemperature(preset.temperature)}
+                                className={cn(
+                                  "rounded-[16px] border p-3 text-left transition-[background-color,border-color,transform] duration-300 hover:-translate-y-0.5",
+                                  active ? "border-slate-950 bg-slate-950 text-white" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
+                                )}
+                              >
+                                <p className="text-[13px] font-semibold">{preset.label}</p>
+                                <p className={cn("mt-1 text-[11.5px] leading-snug", active ? "text-white/65" : "text-slate-500")}>
+                                  {preset.detail}
+                                </p>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div className="py-4">
+                          <div className="mb-3 flex items-center gap-2">
+                            <Type className="h-4 w-4 text-slate-500" />
+                            <p className="text-[14px] font-semibold text-slate-950">System prompt</p>
+                          </div>
+                          <textarea
+                            value={systemPrompt}
+                            onChange={(event) => setSystemPrompt(event.target.value)}
+                            placeholder="Add persistent instructions for Clyra..."
+                            spellCheck={false}
+                            className="h-32 w-full resize-none rounded-[20px] border border-slate-200 bg-slate-50/70 px-4 py-3 text-[13.5px] leading-relaxed text-slate-800 outline-none transition-colors placeholder:text-slate-400 focus:border-slate-300 focus:bg-white"
+                          />
+                        </div>
+                        <div className="mb-3 flex flex-wrap gap-2">
+                          {[
+                            "Be concise and practical.",
+                            "Ask one clarifying question when needed.",
+                            "Prefer polished UI details.",
+                          ].map((prompt) => (
+                            <button
+                              key={prompt}
+                              type="button"
+                              onClick={() => setSystemPrompt(prompt)}
+                              className="rounded-full border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-600 transition-colors hover:bg-slate-50"
+                            >
+                              {prompt}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="rounded-[18px] border border-slate-200 bg-white p-3 text-[12px] leading-relaxed text-slate-500">
+                          <Code2 className="mb-2 h-4 w-4 text-slate-500" />
+                          Model routing stays automatic so the app preserves the existing OpenAI-compatible API behavior.
+                        </div>
+                      </>
+                    ) : null}
+
+                    {activeSection === "data" ? (
+                      <>
+                        <div className="rounded-[22px] border border-slate-200 bg-slate-50/70 p-4">
+                          <p className="text-[14px] font-semibold text-slate-950">{chatCount} saved chats</p>
+                          <p className="mt-1 text-[12.5px] text-slate-500">Export a local copy or clear the current browser history.</p>
+                        </div>
+                        <SettingRow title="Export chats" detail="Download your chat list as JSON.">
+                          <button
+                            type="button"
+                            onClick={exportChats}
+                            className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-[13px] font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            <Download className="h-4 w-4" />
+                            Export
+                          </button>
+                        </SettingRow>
+                        <SettingRow title="Clear chats" detail="Remove saved conversations from this browser.">
+                          <button
+                            type="button"
+                            onClick={clearChats}
+                            className="inline-flex items-center gap-2 rounded-full bg-rose-600 px-4 py-2 text-[13px] font-semibold text-white transition-colors hover:bg-rose-500"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Clear
+                          </button>
+                        </SettingRow>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTheme("Light");
+                            setFontSize("Medium");
+                            setUserBubbleColor("#F4F4F4");
+                            setOrbColorTheme("default");
+                            setSendOnEnter(true);
+                            setAutoScroll(true);
+                            setMarkdownSupport(true);
+                            setCodeHighlighting(true);
+                            setTemperature(0.7);
+                            setSystemPrompt("");
+                            setVoiceRate(0.94);
+                            setVoicePitch(1.03);
+                            setVoiceVolume(0.96);
+                          }}
+                          className="mt-2 inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-[13px] font-semibold text-slate-600 transition-colors hover:bg-slate-50"
+                        >
+                          <RotateCcw className="h-4 w-4" />
+                          Reset useful defaults
+                        </button>
+                      </>
+                    ) : null}
+                </motion.div>
+              </div>
+            </div>
+          </motion.section>
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
+  );
 }

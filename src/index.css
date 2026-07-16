@@ -281,8 +281,9 @@
 }
 
 .clyra-workspace-scene {
-  contain: layout paint;
+  contain: layout paint style;
   background: transparent;
+  will-change: transform;
 }
 
 .clyra-workspace-swipe-shadow {
@@ -302,6 +303,8 @@
   );
   transform: translate3d(-50%, -50%, 0);
   will-change: transform, opacity;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }
 
 .clyra-workspace-card {
@@ -315,6 +318,9 @@
   isolation: isolate;
   background: transparent !important;
   box-shadow: none !important;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform: translateZ(0);
 }
 
 .clyra-workspace-card::before {
@@ -323,6 +329,112 @@
 
 .clyra-workspace-card::after {
   display: none;
+}
+
+.clyra-voice-orb-stage {
+  transform: scale(1.55);
+}
+
+.clyra-voice-orb-stage .clyra-ai-orb-shell {
+  width: 132px;
+  height: 132px;
+}
+
+.clyra-voice-mic-meter {
+  margin-top: 1.15rem;
+  display: flex;
+  height: 1.75rem;
+  width: 9.5rem;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.clyra-voice-mic-meter--slim {
+  width: 8.5rem;
+  height: 1.5rem;
+}
+
+.clyra-voice-mic-meter-bar {
+  display: block;
+  width: 1.5px;
+  height: 3px;
+  border-radius: 9999px;
+  background: #0f172a;
+  opacity: 0.22;
+  transform-origin: center center;
+  will-change: height, opacity;
+}
+
+.clyra-voice-call-btn {
+  -webkit-tap-highlight-color: transparent;
+  position: relative;
+  z-index: 1;
+  pointer-events: auto;
+  will-change: transform;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.clyra-voice-reply-card {
+  border-radius: 18px;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  background: rgba(255, 255, 255, 0.92);
+  padding: 0.85rem 1rem;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+  backdrop-filter: blur(10px);
+  text-align: left;
+}
+
+.clyra-voice-chooser,
+.clyra-voice-summary-sheet,
+.clyra-voice-type-composer {
+  transform: translateZ(0);
+}
+
+.clyra-voice-type-composer {
+  box-shadow: none !important;
+}
+
+.clyra-voice-pulse {
+  animation: clyra-voice-pulse 1.1s ease-in-out infinite;
+}
+
+.clyra-voice-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: #94a3b8;
+  animation: clyra-voice-dot 1s ease-in-out infinite;
+}
+
+@keyframes clyra-voice-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes clyra-voice-dot {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
 }
 
 .clyra-composer-transition {
@@ -1127,6 +1239,12 @@
   width: 0;
   height: 0;
   pointer-events: none;
+}
+
+.clyra-launcher-orb .clyra-ai-orb,
+.clyra-launcher-orb .clyra-ai-orb-ball {
+  animation: none !important;
+  transform: translateZ(0) scale(1) !important;
 }
 
 @keyframes clyra-ai-orb-float {
@@ -1940,44 +2058,26 @@ body,
   filter: none !important;
 }
 
-/* Solid base color + narrow moving highlight — text never disappears. */
+/* Opaque color pulse — text stays fully readable (no clip-to-text washout). */
 .clyra-shimmer-text {
   display: inline-block;
-  position: relative;
   color: #64748b !important;
   -webkit-text-fill-color: #64748b;
   background: none;
-}
-
-.clyra-shimmer-text::after {
-  content: attr(data-text);
-  position: absolute;
-  inset: 0;
-  background-image: linear-gradient(
-    105deg,
-    transparent 0%,
-    transparent 42%,
-    rgba(255, 255, 255, 0.95) 50%,
-    transparent 58%,
-    transparent 100%
-  );
-  background-size: 220% 100%;
-  background-repeat: no-repeat;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  animation: clyra-text-shimmer 2.2s linear infinite;
-  pointer-events: none;
-  will-change: background-position;
+  animation: clyra-text-shimmer 1.8s ease-in-out infinite;
 }
 
 @keyframes clyra-text-shimmer {
-  0% {
-    background-position: 120% 0;
-  }
+  0%,
   100% {
-    background-position: -120% 0;
+    color: #64748b;
+    -webkit-text-fill-color: #64748b;
+    opacity: 1;
+  }
+  50% {
+    color: #94a3b8;
+    -webkit-text-fill-color: #94a3b8;
+    opacity: 1;
   }
 }
 
@@ -3132,6 +3232,11 @@ body,
   }
 }
 
+@keyframes clyra-agent-preview-scan {
+  0%, 100% { transform: translateX(-105%); opacity: 0.4; }
+  50% { transform: translateX(205%); opacity: 1; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .agent-soft-shimmer::after {
     animation: none;
@@ -3154,11 +3259,50 @@ body,
     rgba(255, 255, 255, 0) 100%
   );
   background-size: 220% 100%;
-  animation: agent-soft-shimmer 2.8s linear infinite;
+  animation: agent-soft-shimmer 2s linear infinite;
+}
+
+.preview-skeleton-scan {
+  will-change: transform, opacity;
+  animation: clyra-preview-scan 1.7s cubic-bezier(0.45, 0, 0.2, 1) infinite alternate;
+}
+
+.preview-skeleton-morph {
+  will-change: transform;
+  animation: clyra-preview-morph 3s ease-in-out infinite alternate;
+}
+
+@keyframes clyra-preview-scan {
+  from {
+    transform: translate3d(0, -8px, 0);
+    opacity: 0.2;
+  }
+  12%,
+  88% {
+    opacity: 0.9;
+  }
+  to {
+    transform: translate3d(0, calc(100vh - 42px), 0);
+    opacity: 0.2;
+  }
+}
+
+@keyframes clyra-preview-morph {
+  from {
+    transform: scale3d(0.985, 0.99, 1);
+  }
+  to {
+    transform: scale3d(1.01, 1.005, 1);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .preview-skeleton-shimmer::after {
+    animation: none;
+  }
+
+  .preview-skeleton-scan,
+  .preview-skeleton-morph {
     animation: none;
   }
 }

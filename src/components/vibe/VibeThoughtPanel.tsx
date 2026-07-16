@@ -6,7 +6,6 @@ import { ChevronRight } from "lucide-react";
 import { ShiningText } from "@/components/ShiningText";
 import { cn } from "@/lib/utils";
 
-const HOLD_MS = 620;
 const MAX_BODY_PX = 168;
 
 /**
@@ -47,7 +46,8 @@ export function VibeThoughtPanel({
   const notifiedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
-  const shiningDelayRef = useRef(180 + Math.random() * 220);
+  const shiningDelayRef = useRef(120 + Math.random() * 100);
+  const holdMs = Math.min(5200, Math.max(2400, 1800 + body.length * 9));
 
   useEffect(() => {
     if (archived) {
@@ -115,9 +115,9 @@ export function VibeThoughtPanel({
     const id = window.setTimeout(() => {
       setPhase("folded");
       setExpanded(false);
-    }, HOLD_MS);
+    }, holdMs);
     return () => window.clearTimeout(id);
-  }, [archived, phase]);
+  }, [archived, holdMs, phase]);
 
   // Notify parent so the next step can begin.
   useEffect(() => {
@@ -174,7 +174,7 @@ export function VibeThoughtPanel({
               <ChevronRight className="h-4 w-4" aria-hidden />
             </motion.span>
             <ShiningText
-              text="Mapping approach"
+              text="Thinking"
               preset="thinkingChat"
               className="text-[13px] font-medium"
             />
@@ -193,7 +193,7 @@ export function VibeThoughtPanel({
               <ChevronRight className="h-4 w-4" />
             </motion.span>
             <span className="text-[13px] font-medium text-slate-500">
-              Agent note
+              Thought
             </span>
           </button>
         )}

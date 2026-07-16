@@ -1,1201 +1,780 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
-import { createPortal } from "react-dom";
-import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertCircle,
-  ArrowLeft,
   Check,
+  CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  Clock3,
   Download,
-  Flame,
-  Laugh,
+  FileVideo2,
+  Filter,
+  Grid2X2,
+  Heart,
+  Link2,
+  List,
   Loader2,
+  Pause,
   Play,
-  Scissors,
+  Plus,
+  RefreshCw,
+  Search,
+  SlidersHorizontal,
   Sparkles,
-  Star,
-  Target,
-  Type,
-  Youtube,
-  Zap,
+  Trash2,
+  Upload,
+  Video,
+  WandSparkles,
+  X,
 } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
 import { cn } from "../lib/utils";
 
 interface Props {
   onClose: () => void;
   initialUrl?: string;
   embedded?: boolean;
+  onEngaged?: () => void;
 }
 
-type Step = 0 | 1 | 2 | 3 | 4;
-type CaptionPosition = "bottom" | "centre" | "top";
+type WorkspaceView = "create" | "processing" | "results";
+type SourceMode = "url" | "upload";
+type ClipAspect = "9:16" | "1:1" | "16:9";
+type CaptionPosition = "top" | "centre" | "bottom";
+type CropFocus = "left" | "center" | "right";
+type ResultLayout = "grid" | "list";
+type SortMode = "score" | "duration" | "source";
 
-interface ClipResult {
-  output?: string;
-  title?: string;
-  original_duration?: string;
+type ClipSource = {
+  mode: SourceMode;
+  url: string;
+  uploadId?: string;
+  name?: string;
+  size?: number;
+};
+
+type ClipResult = {
+  id: string;
+  rank: number;
+  output: string;
+  title: string;
+  source_title?: string;
+  source_start?: string;
+  source_end?: string;
   clip_duration?: string;
   reason?: string;
   caption?: string;
+  hashtags?: string;
+  virality_score?: number;
+  score?: number;
+  file_size?: number;
   timing_source?: string;
   word_count?: number;
-  total_seconds?: number;
-  file_size?: number;
   output_quality?: string;
-}
+};
 
-const MOMENTS = [
-  {
-    id: "viral",
-    icon: Flame,
-    label: "Best viral moment",
-    tone: "Highest retention",
-  },
-  { id: "funny", icon: Laugh, label: "Funny", tone: "Clean punchline" },
-  { id: "sad", icon: Star, label: "Sad", tone: "Quiet emotional beat" },
-  { id: "angry", icon: Zap, label: "Angry / drama", tone: "Conflict spike" },
-  {
-    id: "shocking",
-    icon: AlertCircle,
-    label: "Shocking",
-    tone: "Reveal moment",
-  },
-  {
-    id: "inspirational",
-    icon: Sparkles,
-    label: "Inspirational",
-    tone: "Lift beat",
-  },
-  { id: "action", icon: Target, label: "Action", tone: "Fastest section" },
-  {
-    id: "reaction",
-    icon: Youtube,
-    label: "Emotional reaction",
-    tone: "Face-led response",
-  },
+type ClipDraft = {
+  source: ClipSource;
+  objective: string;
+  customObjective: string;
+  clipLength: number;
+  clipCount: number;
+  aspect: ClipAspect;
+  cropFocus: CropFocus;
+  captionsEnabled: boolean;
+  removeFillers: boolean;
+  font: string;
+  fontSize: number;
+  colour: string;
+  position: CaptionPosition;
+};
+
+const OBJECTIVES = [
+  ["viral", "Best viral moments"],
+  ["educational", "Educational insights"],
+  ["funny", "Funny moments"],
+  ["emotional", "Emotional moments"],
+  ["opinions", "Strong opinions"],
+  ["highlights", "Highlights"],
+  ["custom", "Custom prompt"],
 ] as const;
 
-const FLOW = ["Source", "Moment", "Subtitles", "Render"] as const;
-const PIPELINE_STEPS = [
-  "captions",
-  "analyze",
-  "clip",
-  "transcribe",
-  "subtitles",
-  "render",
-  "complete",
-];
-const DEFAULT_CONFIG = {
-  font: "Impact",
-  fontSize: "86",
-  colour: "#FFFFFF",
-  position: "bottom" as CaptionPosition,
-};
-const CLIP_LENGTH_SECONDS = 30;
+const PIPELINE = [
+  ["captions", "Reading source"],
+  ["analyze", "Finding moments"],
+  ["clip", "Preparing clips"],
+  ["transcribe", "Timing every word"],
+  ["subtitles", "Styling captions"],
+  ["render", "Encoding MP4 files"],
+  ["complete", "Complete"],
+] as const;
 
-const outputUrl = (path?: string) =>
-  path ? path.replace("./output/", "/output/") : "";
-const fileSize = (bytes?: number) =>
-  bytes ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : "";
+const DEFAULT_DRAFT: ClipDraft = {
+  source: { mode: "url", url: "" },
+  objective: "viral",
+  customObjective: "",
+  clipLength: 30,
+  clipCount: 3,
+  aspect: "9:16",
+  cropFocus: "center",
+  captionsEnabled: true,
+  removeFillers: true,
+  font: "Impact",
+  fontSize: 74,
+  colour: "#FFFFFF",
+  position: "bottom",
+};
+
+const DRAFT_KEY = "clyra.clip.draft.v2";
+const RESULT_KEY = "clyra.clip.results.v2";
+
+function loadDraft(initialUrl: string): ClipDraft {
+  try {
+    const saved = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null") as Partial<ClipDraft> | null;
+    const merged = saved ? { ...DEFAULT_DRAFT, ...saved, source: { ...DEFAULT_DRAFT.source, ...(saved.source || {}) } } : DEFAULT_DRAFT;
+    if (initialUrl) merged.source = { mode: "url", url: initialUrl };
+    return merged;
+  } catch {
+    return { ...DEFAULT_DRAFT, source: { ...DEFAULT_DRAFT.source, url: initialUrl } };
+  }
+}
+
+function loadResults(): ClipResult[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(RESULT_KEY) || "[]");
+    return Array.isArray(value) ? value.slice(0, 24) : [];
+  } catch {
+    return [];
+  }
+}
+
+function outputUrl(value?: string) {
+  return value ? value.replace("./output/", "/output/") : "";
+}
+
+function fileSize(bytes?: number) {
+  if (!bytes) return "MP4";
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function parseDuration(value?: string) {
+  return Number(String(value || "").replace(/[^0-9.]/g, "")) || 0;
+}
+
+function uploadVideo(file: File, signal: AbortSignal, onProgress: (progress: number) => void) {
+  return new Promise<{ uploadId: string; name: string; size: number }>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", `/api/clipper/upload?filename=${encodeURIComponent(file.name)}`);
+    request.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    request.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) onProgress(event.loaded / event.total);
+    });
+    request.addEventListener("load", () => {
+      try {
+        const payload = JSON.parse(request.responseText);
+        if (request.status < 200 || request.status >= 300 || !payload.uploadId) {
+          reject(new Error(payload.error || "Video upload failed"));
+          return;
+        }
+        resolve(payload);
+      } catch {
+        reject(new Error("The upload server returned an invalid response"));
+      }
+    });
+    request.addEventListener("error", () => reject(new Error("Video upload failed")));
+    request.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError")));
+    signal.addEventListener("abort", () => request.abort(), { once: true });
+    request.send(file);
+  });
+}
+
+function Segment<T extends string | number>({
+  value,
+  current,
+  onClick,
+  children,
+}: {
+  value: T;
+  current: T;
+  onClick: (value: T) => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onClick(value)}
+      className={cn(
+        "relative h-8 min-w-0 flex-1 rounded px-2 text-[9px] font-semibold transition-colors",
+        value === current ? "text-slate-950" : "text-slate-400 hover:text-slate-700",
+      )}
+    >
+      {value === current ? (
+        <motion.span layoutId="clip-segment" className="absolute inset-0 rounded border border-slate-200 bg-white shadow-sm" transition={{ type: "spring", stiffness: 650, damping: 45 }} />
+      ) : null}
+      <span className="relative z-10">{children}</span>
+    </button>
+  );
+}
+
+function Toggle({
+  label,
+  detail,
+  checked,
+  onChange,
+}: {
+  label: string;
+  detail: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <button type="button" onClick={() => onChange(!checked)} className="flex w-full items-center justify-between gap-4 border-b border-slate-100 py-3 text-left last:border-b-0">
+      <span>
+        <span className="block text-[10px] font-semibold text-slate-800">{label}</span>
+        <span className="mt-0.5 block text-[8px] leading-4 text-slate-400">{detail}</span>
+      </span>
+      <span className={cn("relative h-5 w-9 shrink-0 rounded-full transition-colors", checked ? "bg-slate-950" : "bg-slate-200")}>
+        <motion.span animate={{ x: checked ? 17 : 2 }} transition={{ type: "spring", stiffness: 700, damping: 42 }} className="absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm" />
+      </span>
+    </button>
+  );
+}
+
+function SourcePicker({
+  source,
+  onSource,
+  onFile,
+  uploading,
+  uploadProgress,
+}: {
+  source: ClipSource;
+  onSource: (source: ClipSource) => void;
+  onFile: (file: File) => void;
+  uploading: boolean;
+  uploadProgress: number;
+}) {
+  const fileInput = useRef<HTMLInputElement | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const acceptFile = (file?: File) => {
+    if (!file) return;
+    if (!file.type.startsWith("video/") && !/\.(mp4|mov|m4v|webm|mkv)$/i.test(file.name)) return;
+    onFile(file);
+  };
+  const onDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setDragging(false);
+    acceptFile(event.dataTransfer.files?.[0]);
+  };
+  return (
+    <div>
+      <div className="grid grid-cols-2 rounded-[16px] border border-slate-200/80 bg-slate-100/70 p-1.5">
+        {([
+          { mode: "url" as const, label: "Video URL", icon: Link2 },
+          { mode: "upload" as const, label: "Upload", icon: Upload },
+        ]).map((option) => {
+          const Icon = option.icon;
+          return (
+            <button key={option.mode} type="button" onClick={() => onSource({ ...source, mode: option.mode })} className={cn("flex h-10 items-center justify-center gap-2 rounded-xl text-[11px] font-semibold transition-colors", source.mode === option.mode ? "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200" : "text-slate-400 hover:text-slate-700")}>
+              <Icon className="h-3.5 w-3.5" />
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+      {source.mode === "url" ? (
+        <label className="mt-4 block text-[10px] font-semibold text-slate-500">
+          YouTube or public video URL
+          <div className="mt-2 flex h-14 items-center rounded-[16px] border border-slate-200 bg-white px-4 shadow-[0_7px_24px_rgba(15,23,42,.04)] transition-[border-color,box-shadow] focus-within:border-blue-200 focus-within:shadow-[0_10px_28px_rgba(37,99,235,.08)]">
+            <Link2 className="h-4 w-4 shrink-0 text-slate-400" />
+            <input value={source.url} onChange={(event) => onSource({ mode: "url", url: event.target.value })} placeholder="Paste a YouTube or public video link" className="h-full min-w-0 flex-1 bg-transparent px-3 text-[12px] font-medium outline-none placeholder:text-slate-400" />
+            {source.url ? <button type="button" onClick={() => onSource({ mode: "url", url: "" })} aria-label="Clear URL"><X className="h-3.5 w-3.5 text-slate-400" /></button> : null}
+          </div>
+        </label>
+      ) : (
+        <div
+          onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
+          onDragOver={(event) => event.preventDefault()}
+          onDragLeave={() => setDragging(false)}
+          onDrop={onDrop}
+          className={cn("mt-4 flex min-h-[170px] flex-col items-center justify-center rounded-[18px] border border-dashed px-5 text-center transition-colors", dragging ? "border-blue-300 bg-blue-50/60" : "border-slate-300 bg-white")}
+        >
+          {uploading ? (
+            <>
+              <Loader2 className="h-5 w-5 animate-spin text-slate-500" />
+              <p className="mt-3 text-[10px] font-semibold text-slate-700">Uploading {Math.round(uploadProgress * 100)}%</p>
+              <div className="mt-3 h-1 w-40 overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-slate-950" style={{ width: `${uploadProgress * 100}%` }} /></div>
+            </>
+          ) : source.uploadId ? (
+            <>
+              <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+              <p className="mt-3 max-w-full truncate text-[10px] font-semibold text-slate-800">{source.name}</p>
+              <p className="mt-1 text-[8px] text-slate-400">{fileSize(source.size)} · ready to analyse</p>
+              <button type="button" onClick={() => fileInput.current?.click()} className="mt-3 text-[9px] font-semibold text-slate-500 hover:text-slate-950">Replace video</button>
+            </>
+          ) : (
+            <>
+              <FileVideo2 className="h-6 w-6 text-slate-400" />
+              <p className="mt-3 text-[10px] font-semibold text-slate-800">Drop a video here</p>
+              <p className="mt-1 text-[8px] text-slate-400">MP4, MOV, WebM or MKV up to 1.25 GB</p>
+              <button type="button" onClick={() => fileInput.current?.click()} className="mt-3 h-9 rounded-full border border-slate-200 bg-white px-4 text-[10px] font-semibold text-slate-600 shadow-sm transition-colors hover:bg-slate-50">Choose video</button>
+            </>
+          )}
+          <input ref={fileInput} type="file" accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.m4v" className="hidden" onChange={(event) => acceptFile(event.target.files?.[0])} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProcessingScreen({
+  progress,
+  status,
+  activeStep,
+  readyCount,
+  elapsed,
+  onCancel,
+}: {
+  progress: number;
+  status: string;
+  activeStep: string;
+  readyCount: number;
+  elapsed: number;
+  onCancel: () => void;
+}) {
+  return createPortal(
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[700] overflow-y-auto bg-white/95 px-5 py-8 backdrop-blur-xl">
+      <div className="mx-auto flex min-h-full w-full max-w-[760px] flex-col justify-center">
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0] text-blue-600">AI Clip</p>
+            <h2 className="mt-3 text-[clamp(28px,5vw,44px)] font-semibold tracking-[0] text-slate-950">Finding your strongest moments</h2>
+            <p className="mt-2 text-[13px] text-slate-500">{status || "Preparing the source"}</p>
+          </div>
+          <button type="button" onClick={onCancel} className="grid h-10 w-10 place-items-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:bg-slate-50" aria-label="Cancel processing"><X className="h-4 w-4" /></button>
+        </div>
+        <div className="relative mt-10 h-2 overflow-hidden rounded-full bg-slate-100 shadow-inner">
+          <motion.div className="relative h-full overflow-hidden rounded-full bg-blue-600" animate={{ width: `${Math.max(2, progress)}%` }} transition={{ duration: 0.22 }}><motion.span className="absolute inset-y-0 w-24 bg-white/35 blur-sm" animate={{ x: [-100, 760] }} transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }} /></motion.div>
+        </div>
+        <div className="mt-3 flex items-center justify-between text-[9px] font-semibold text-slate-400">
+          <span>{readyCount ? `${readyCount} clip${readyCount === 1 ? "" : "s"} ready` : "Analysing source"}</span>
+          <span className="tabular-nums">{progress}% · {elapsed}s</span>
+        </div>
+        <ol className="mt-9 grid gap-2 sm:grid-cols-2">
+          {PIPELINE.slice(0, -1).map(([id, label]) => {
+            const activeIndex = PIPELINE.findIndex(([step]) => step === activeStep);
+            const index = PIPELINE.findIndex(([step]) => step === id);
+            const complete = activeIndex > index || activeStep === "complete";
+            const active = activeStep === id;
+            return (
+              <li key={id} className={cn("flex h-[52px] items-center gap-3 rounded-[16px] border px-4 transition-colors", active ? "border-blue-100 bg-blue-50/60 text-slate-900 shadow-[0_8px_24px_rgba(37,99,235,.07)]" : complete ? "border-emerald-100 bg-emerald-50/35 text-slate-500" : "border-transparent text-slate-400")}>
+                <span className={cn("grid h-6 w-6 place-items-center rounded-full border", complete ? "border-emerald-200 bg-emerald-50 text-emerald-600" : active ? "border-slate-950 bg-slate-950 text-white" : "border-slate-200 bg-white")}>
+                  {complete ? <Check className="h-3 w-3" /> : active ? <Loader2 className="h-3 w-3 animate-spin" /> : <span className="h-1.5 w-1.5 rounded-full bg-slate-300" />}
+                </span>
+                <span className={cn("text-[11px] font-semibold", active && "text-slate-900")}>{label}</span>
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+    </motion.div>,
+    document.body,
+  );
+}
+
+function ClipCard({
+  result,
+  selected,
+  layout,
+  liked,
+  onSelect,
+  onLike,
+  onDelete,
+}: {
+  result: ClipResult;
+  selected: boolean;
+  layout: ResultLayout;
+  liked: boolean;
+  onSelect: () => void;
+  onLike: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <article className={cn("group border bg-white transition-[border-color,box-shadow] hover:border-slate-400", layout === "grid" ? "rounded-md" : "grid grid-cols-[112px_minmax(0,1fr)_auto] items-center gap-4 rounded-md p-2", selected ? "border-slate-900 shadow-sm" : "border-slate-200")}>
+      <button type="button" onClick={onSelect} className={cn("relative overflow-hidden bg-slate-950", layout === "grid" ? "aspect-video w-full rounded-t-[5px]" : "aspect-[9/16] h-24 rounded")}>
+        <video preload="metadata" muted playsInline src={outputUrl(result.output)} className="h-full w-full object-cover" />
+        <span className="absolute left-2 top-2 rounded bg-black/72 px-1.5 py-1 text-[7px] font-bold text-white">#{result.rank}</span>
+        <span className="absolute inset-0 grid place-items-center bg-black/0 transition-colors group-hover:bg-black/15"><span className="grid h-8 w-8 place-items-center rounded-full bg-white/90 text-slate-950 opacity-0 shadow-sm transition-opacity group-hover:opacity-100"><Play className="ml-0.5 h-3.5 w-3.5" /></span></span>
+      </button>
+      <div className={cn("min-w-0", layout === "grid" ? "p-3" : "")}>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[9px] font-bold text-emerald-600">{result.score ?? Math.round((result.virality_score || 0) * 10)}/100</span>
+          <span className="text-[8px] text-slate-400">{result.clip_duration}</span>
+        </div>
+        <h3 className="mt-1.5 line-clamp-2 text-[11px] font-semibold leading-4 text-slate-900">{result.title}</h3>
+        <p className="mt-1 line-clamp-2 text-[8px] leading-4 text-slate-400">{result.reason}</p>
+        <div className="mt-3 flex items-center gap-1">
+          <button type="button" onClick={onLike} aria-label={liked ? "Unlike clip" : "Like clip"} className={cn("grid h-7 w-7 place-items-center rounded text-slate-400 hover:bg-slate-100", liked && "text-rose-500")}><Heart className={cn("h-3.5 w-3.5", liked && "fill-current")} /></button>
+          <a href={outputUrl(result.output)} download className="flex h-7 items-center gap-1.5 rounded px-2 text-[8px] font-semibold text-slate-600 hover:bg-slate-100"><Download className="h-3 w-3" />Export</a>
+          <button type="button" onClick={onDelete} aria-label="Delete clip" className="ml-auto grid h-7 w-7 place-items-center rounded text-slate-300 hover:bg-red-50 hover:text-red-500"><Trash2 className="h-3.5 w-3.5" /></button>
+        </div>
+      </div>
+      {layout === "list" ? <a href={outputUrl(result.output)} download className="mr-3 grid h-8 w-8 place-items-center rounded-md bg-slate-950 text-white" aria-label="Download MP4"><Download className="h-3.5 w-3.5" /></a> : null}
+    </article>
+  );
+}
 
 export default function AIClipper({
   onClose,
   initialUrl = "",
   embedded = false,
+  onEngaged,
 }: Props) {
-  const [step, setStep] = useState<Step>(0);
-  const [url, setUrl] = useState(initialUrl);
-  const [moment, setMoment] = useState<string>("viral");
-  const [custom, setCustom] = useState("");
-  const [cfg, setCfg] = useState(DEFAULT_CONFIG);
-  const [name, setName] = useState("");
-  const [result, setResult] = useState<ClipResult | null>(null);
+  const [draft, setDraft] = useState<ClipDraft>(() => loadDraft(initialUrl));
+  const [view, setView] = useState<WorkspaceView>("create");
+  const [advanced, setAdvanced] = useState(false);
+  const [wizardStep, setWizardStep] = useState(0);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [results, setResults] = useState<ClipResult[]>(loadResults);
+  const [selectedId, setSelectedId] = useState("");
+  const [selectedResults, setSelectedResults] = useState<Set<string>>(new Set());
+  const [liked, setLiked] = useState<Set<string>>(new Set());
+  const [resultLayout, setResultLayout] = useState<ResultLayout>("grid");
+  const [sortMode, setSortMode] = useState<SortMode>("score");
+  const [search, setSearch] = useState("");
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
-  const [elapsed, setElapsed] = useState(0);
+  const [activeStep, setActiveStep] = useState("captions");
   const [progress, setProgress] = useState(0);
-  const mainRef = useRef<HTMLElement | null>(null);
-  const seenSteps = useRef<Set<string>>(new Set());
-  const runSummary = useRef<Partial<ClipResult>>({});
+  const [elapsed, setElapsed] = useState(0);
+  const [readyCount, setReadyCount] = useState(0);
+  const task = useRef<AbortController | null>(null);
+  const resultBuffer = useRef<ClipResult[]>([]);
+  void onClose;
 
   useEffect(() => {
-    if (initialUrl) setUrl(initialUrl);
+    if (!initialUrl) return;
+    setDraft((current) => ({ ...current, source: { mode: "url", url: initialUrl } }));
   }, [initialUrl]);
 
   useEffect(() => {
-    if (step !== 3) return;
-    const interval = window.setInterval(
-      () => setElapsed((value) => value + 1),
-      1000,
-    );
-    return () => window.clearInterval(interval);
-  }, [step]);
+    const timer = window.setTimeout(() => localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)), 350);
+    return () => window.clearTimeout(timer);
+  }, [draft]);
 
   useEffect(() => {
-    mainRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-  }, [step]);
+    localStorage.setItem(RESULT_KEY, JSON.stringify(results.slice(0, 24)));
+  }, [results]);
 
-  const activeStage = step === 4 ? 3 : Math.min(step, 3);
-  const selectedMomentLabel = useMemo(() => {
-    if (custom.trim()) return custom.trim();
-    return MOMENTS.find((item) => item.id === moment)?.label ?? "Viral";
-  }, [custom, moment]);
+  useEffect(() => {
+    if (view !== "processing") return;
+    const timer = window.setInterval(() => setElapsed((value) => value + 1), 1_000);
+    return () => window.clearInterval(timer);
+  }, [view]);
 
-  const updateProgress = (pipelineStep: string, message?: string) => {
-    seenSteps.current.add(pipelineStep);
-    const index = PIPELINE_STEPS.indexOf(pipelineStep);
-    const nextProgress =
-      pipelineStep === "complete"
-        ? 100
-        : Math.max(
-            8,
-            Math.round(
-              ((index >= 0 ? index + 0.7 : seenSteps.current.size) /
-                PIPELINE_STEPS.length) *
-                100,
-            ),
-          );
-    setProgress(Math.min(98, nextProgress));
-    if (message) setStatus(message);
+  useEffect(() => () => task.current?.abort(), []);
+
+  const updateDraft = <K extends keyof ClipDraft>(key: K, value: ClipDraft[K]) => setDraft((current) => ({ ...current, [key]: value }));
+  const sourceReady = draft.source.mode === "url" ? /^https?:\/\//i.test(draft.source.url.trim()) : Boolean(draft.source.uploadId);
+  const objective = draft.objective === "custom" ? draft.customObjective.trim() : OBJECTIVES.find(([id]) => id === draft.objective)?.[1] || "Best viral moments";
+
+  const handleFile = async (file: File) => {
+    const controller = new AbortController();
+    task.current?.abort();
+    task.current = controller;
+    setUploading(true);
+    setUploadProgress(0);
+    setError("");
+    onEngaged?.();
+    try {
+      const uploaded = await uploadVideo(file, controller.signal, setUploadProgress);
+      setDraft((current) => ({ ...current, source: { mode: "upload", url: "", ...uploaded } }));
+    } catch (cause) {
+      if (!(cause instanceof DOMException && cause.name === "AbortError")) setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (task.current === controller) task.current = null;
+      setUploading(false);
+    }
+  };
+
+  const cancel = () => {
+    task.current?.abort();
+    task.current = null;
+    setView("create");
+    setProgress(0);
+    setStatus("");
   };
 
   const run = useCallback(async () => {
-    setStep(3);
+    if (!sourceReady || !objective) {
+      setError("Add a valid source and choose what Clyra should find.");
+      return;
+    }
+    const controller = new AbortController();
+    task.current?.abort();
+    task.current = controller;
+    resultBuffer.current = [];
     setError("");
-    setResult(null);
+    setView("processing");
+    setStatus("Opening the source");
+    setActiveStep("captions");
+    setProgress(3);
     setElapsed(0);
-    setProgress(4);
-    setStatus("Opening the source...");
-    seenSteps.current = new Set();
-    runSummary.current = {};
-
+    setReadyCount(0);
+    onEngaged?.();
     try {
       const response = await fetch("/api/clipper/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
-          url: url.trim(),
+          url: draft.source.mode === "url" ? draft.source.url.trim() : undefined,
+          uploadId: draft.source.mode === "upload" ? draft.source.uploadId : undefined,
           config: {
-            font: cfg.font,
-            font_size: Number.parseInt(cfg.fontSize, 10),
-            text_colour: cfg.colour,
-            position: cfg.position,
-            moment_type: custom.trim() || moment || "viral",
-            clip_duration: CLIP_LENGTH_SECONDS,
-            clip_name: name.trim() || `clip-${Date.now()}`,
+            font: draft.font,
+            font_size: draft.fontSize,
+            text_colour: draft.colour,
+            position: draft.position,
+            moment_type: objective,
+            clip_duration: draft.clipLength,
+            clip_count: draft.clipCount,
+            aspect_ratio: draft.aspect,
+            crop_focus: draft.cropFocus,
+            captions_enabled: draft.captionsEnabled,
+            remove_fillers: draft.removeFillers,
+            clip_name: draft.source.name || "clyra-clip",
           },
         }),
       });
-
-      if (!response.ok) throw new Error(`Server ${response.status}`);
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(detail.error || `The clip server returned ${response.status}`);
+      }
       const reader = response.body?.getReader();
-      if (!reader) throw new Error("No stream returned from clipper");
-
+      if (!reader) throw new Error("The clip server returned no progress stream");
       const decoder = new TextDecoder();
       let buffer = "";
-
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
+        buffer = lines.pop() || "";
         for (const rawLine of lines) {
           const line = rawLine.trim();
           if (!line.startsWith("data: ")) continue;
-          const event = JSON.parse(line.slice(6));
-
-          if (event.type === "error")
-            throw new Error(event.message || "Clipper failed");
+          const event = JSON.parse(line.slice(6)) as {
+            type?: string;
+            step?: string;
+            message?: string;
+            result?: ClipResult;
+            results?: ClipResult[];
+          };
+          if (event.type === "error") throw new Error(event.message || "Clip rendering failed");
           if (event.step) {
-            updateProgress(event.step, event.message);
-            if (event.step === "transcribe")
-              runSummary.current.timing_source = event.timing_source;
-            if (event.step === "subtitles" && event.word_count)
-              runSummary.current.word_count = event.word_count;
+            setActiveStep(event.step);
+            const index = Math.max(0, PIPELINE.findIndex(([id]) => id === event.step));
+            const candidateBoost = Math.min(0.72, resultBuffer.current.length / Math.max(1, draft.clipCount) * 0.7);
+            setProgress(event.step === "complete" ? 100 : Math.min(98, Math.round((index / (PIPELINE.length - 1) * 28) + candidateBoost * 100)));
           }
-
-          if (event.type === "complete" || event.step === "complete") {
-            setResult({
-              ...runSummary.current,
-              ...event,
-              word_count: event.word_count ?? runSummary.current.word_count,
-            });
+          if (event.message) setStatus(event.message);
+          if (event.type === "clip_result" && event.result) {
+            if (!resultBuffer.current.some((item) => item.output === event.result?.output)) resultBuffer.current.push(event.result);
+            setReadyCount(resultBuffer.current.length);
+          }
+          if (event.step === "complete") {
+            const completeResults = event.results?.length ? event.results : resultBuffer.current;
+            if (!completeResults.length) throw new Error("Rendering completed without any clips");
+            setResults(completeResults);
+            setSelectedId(completeResults[0].id);
+            setSelectedResults(new Set());
             setProgress(100);
-            setStatus(event.message || "720x1280 30fps MP4 ready");
-            setStep(4);
+            setView("results");
             return;
           }
         }
       }
-
-      throw new Error("Clipper finished without returning an MP4");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Clipper failed");
-      setStep(0);
-      setProgress(0);
+      throw new Error("Processing stopped before the clips were returned");
+    } catch (cause) {
+      if (cause instanceof DOMException && cause.name === "AbortError") return;
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setView("create");
+    } finally {
+      if (task.current === controller) task.current = null;
     }
-  }, [cfg, custom, moment, name, url]);
+  }, [draft, objective, onEngaged, sourceReady]);
 
-  const subtitleStyle = {
-    fontFamily: cfg.font,
-    fontSize: `${Math.min(Number.parseInt(cfg.fontSize, 10) * 0.34, 46)}px`,
-    color: cfg.colour,
-    textShadow:
-      "0 3px 0 #000, 0 -3px 0 #000, 3px 0 0 #000, -3px 0 0 #000, 0 12px 24px rgba(0,0,0,.5)",
-    fontWeight: 900,
+  const filteredResults = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    const next = results.filter((result) => !query || `${result.title} ${result.caption} ${result.reason}`.toLowerCase().includes(query));
+    next.sort((left, right) => sortMode === "duration"
+      ? parseDuration(right.clip_duration) - parseDuration(left.clip_duration)
+      : sortMode === "source"
+        ? String(left.source_start || "").localeCompare(String(right.source_start || ""))
+        : (right.score ?? (right.virality_score || 0) * 10) - (left.score ?? (left.virality_score || 0) * 10));
+    return next;
+  }, [results, search, sortMode]);
+
+  const selected = results.find((result) => result.id === selectedId) || results[0];
+
+  const bulkExport = () => {
+    const items = results.filter((result) => selectedResults.has(result.id));
+    items.forEach((result, index) => {
+      window.setTimeout(() => {
+        const anchor = document.createElement("a");
+        anchor.href = outputUrl(result.output);
+        anchor.download = "";
+        anchor.click();
+      }, index * 220);
+    });
   };
 
-  const content = (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className={cn(
-        "flex flex-col overflow-hidden bg-white text-slate-900",
-        embedded ? "relative h-full w-full" : "fixed inset-0 z-[9999]",
-      )}
-    >
-      {/* Header */}
-      <header
-        className={cn(
-          "flex h-11 shrink-0 items-center justify-between border-b border-slate-200/75 bg-white/[0.88] px-3 shadow-[inset_0_-1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl",
-          embedded && "hidden",
-        )}
-      >
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={onClose}
-            className="hidden rounded-lg p-1.5 text-slate-500 transition-all hover:bg-slate-100/80 hover:text-slate-800 hover:shadow-sm lg:inline-flex"
-            aria-label="Close AI clipper"
-          >
-            <ArrowLeft className="h-4.5 w-4.5 stroke-[2.2]" />
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-full border border-slate-200/75 bg-white text-slate-500 transition-all hover:border-slate-300 hover:text-slate-800 hover:shadow-sm lg:hidden"
-            aria-label="Close AI clipper"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </button>
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-900 text-white shadow-lg shadow-slate-900/10 ring-1 ring-white/10">
-              <Scissors className="h-4 w-4" />
-            </div>
-            <div>
-              <p className="text-[13px] font-bold tracking-tight">AI Clipper</p>
-              <div className="mt-0.5 flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-slate-400">
-                  30s · vertical 720p
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="hidden items-center gap-1 rounded-full border border-slate-200/75 bg-white/90 p-[2px] shadow-[0_8px_20px_rgba(15,23,42,0.055)] sm:flex">
-          {FLOW.map((item, index) => (
-            <button
-              key={item}
-              type="button"
-              onClick={() => setStep(Math.max(0, Math.min(index, 3)) as Step)}
-              className={cn(
-                "flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[10.5px] font-semibold transition-all duration-200",
-                index === activeStage
-                  ? "bg-slate-900 text-white shadow-sm"
-                  : index < activeStage
-                    ? "text-emerald-600 hover:bg-slate-100"
-                    : "text-slate-500 hover:text-slate-700",
-              )}
-            >
-              <span
-                className={cn(
-                  "flex h-3.5 w-3.5 items-center justify-center rounded-full text-[7.5px] font-bold",
-                  index <= activeStage
-                    ? "bg-slate-900 text-white"
-                    : "bg-slate-200 text-slate-500",
-                )}
-              >
-                {index < activeStage ? (
-                  <Check className="h-2 w-2" />
-                ) : (
-                  index + 1
-                )}
-              </span>
-              {item}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <div className="hidden flex-col items-end sm:flex">
-            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-[0.2em]">
-              Processing
-            </span>
-            <span className="text-[12px] font-bold text-slate-900">
-              {progress}%
-            </span>
-          </div>
-          <div className="relative h-9 w-9 rounded-full border-2 border-slate-200 flex items-center justify-center">
-            <svg className="w-9 h-9 -rotate-90">
-              <circle
-                cx="18"
-                cy="18"
-                r="16"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeDasharray="100.5"
-                strokeDashoffset={100.5 - (100.5 * progress) / 100}
-                className="text-slate-900 transition-all duration-500 ease-out"
-              />
-            </svg>
-            <div className="absolute inset-0 flex items-center justify-center">
-              <Zap className="h-3.5 w-3.5 text-slate-400" />
-            </div>
-          </div>
-        </div>
+  const wizardMeta = [
+    { title: "Add your source", detail: "Paste a public video link or upload a local file." },
+    { title: "Choose the moments", detail: "Tell Clyra what makes a moment worth keeping." },
+    { title: "Style the subtitles", detail: "Set the framing and caption treatment used in every render." },
+    { title: "Set the output", detail: "Choose clip length and how many distinct moments to create." },
+  ];
+  const canContinue = wizardStep === 0 ? sourceReady && !uploading : wizardStep === 1 ? Boolean(objective) : true;
+  const createView = (
+    <div className="mx-auto flex h-full max-h-full w-full max-w-[920px] flex-col overflow-hidden px-4 py-3 sm:px-6 sm:py-4">
+      <header className="flex shrink-0 items-center justify-between pb-3">
+        <div><p className="text-[8px] font-bold uppercase tracking-[0.12em] text-blue-600">AI Clip</p><h1 className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-slate-950 sm:text-[22px]">Create polished clips</h1></div>
+        {results.length ? <button type="button" onClick={() => setView("results")} className="flex h-9 items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 text-[9px] font-semibold text-slate-600 transition-colors hover:bg-slate-50"><Clock3 className="h-3.5 w-3.5" />Recent</button> : null}
       </header>
 
-      {/* Main Content */}
-      <main
-        ref={mainRef}
-        className="clyra-visible-scrollbar min-h-0 flex-1 overflow-y-auto bg-white"
-      >
-        <div className="mx-auto flex min-h-full w-full max-w-[820px] flex-col items-center justify-center px-5 py-6 sm:px-8 sm:py-8">
-          <AnimatePresence mode="wait">
-            {step === 0 && (
-              <motion.div
-                key="clip-hero"
-                initial={{ opacity: 0, y: 12, filter: "blur(5px)" }}
-                animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-                exit={{ opacity: 0, y: -10, filter: "blur(5px)" }}
-                transition={{ duration: 0.34, ease: [0.22, 1, 0.36, 1] }}
-                className="mb-5 flex w-full max-w-[680px] flex-col items-center text-center"
-              >
-                <div className="relative mb-3 grid h-12 w-12 place-items-center rounded-full bg-[radial-gradient(circle_at_30%_20%,#8b5cf6,transparent_36%),radial-gradient(circle_at_58%_64%,#38bdf8,transparent_42%),linear-gradient(135deg,#5eead4,#3b82f6_48%,#8b5cf6)] text-white shadow-[0_18px_52px_rgba(59,130,246,0.16)]">
-                  <Scissors className="h-5 w-5" />
-                  <span className="absolute inset-[-14px] -z-10 rounded-full bg-[radial-gradient(circle,rgba(56,189,248,0.16),transparent_66%)]" />
-                </div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-slate-400">
-                  Clip Studio
-                </p>
-                <h1 className="mt-1.5 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">
-                  Make one sharp vertical moment.
-                </h1>
-                <p className="mt-1.5 max-w-[520px] text-[13px] font-medium leading-relaxed text-slate-500">
-                  Paste a YouTube link, choose the moment, tune subtitles, then
-                  render a 30 second 720p clip.
-                </p>
-              </motion.div>
-            )}
+      <nav className="grid shrink-0 grid-cols-4 gap-1.5 pb-3" aria-label="Clip setup progress">
+        {wizardMeta.map((item, index) => <button key={item.title} type="button" onClick={() => index <= wizardStep || (index === wizardStep + 1 && canContinue) ? setWizardStep(index) : undefined} className="group text-left"><span className={cn("block h-0.5 rounded-full transition-colors", index <= wizardStep ? "bg-slate-950" : "bg-slate-200")} /><span className={cn("mt-1.5 hidden text-[7px] font-semibold sm:block", index === wizardStep ? "text-slate-900" : "text-slate-400")}>{index + 1}. {item.title.replace(/^Set |^Add |^Choose |^Style /, "")}</span></button>)}
+      </nav>
+
+      <div className="flex min-h-0 flex-1 flex-col">
+        <motion.section layout className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[20px] border border-slate-200/80 bg-white shadow-[0_18px_50px_rgba(15,23,42,.07)]">
+          <div className="shrink-0 border-b border-slate-100 px-5 py-3.5 sm:px-6"><p className="text-[8px] font-bold uppercase tracking-[0.1em] text-blue-600">Step {wizardStep + 1} of 4</p><h2 className="mt-1 text-[17px] font-semibold tracking-[-0.02em] text-slate-950">{wizardMeta[wizardStep].title}</h2><p className="mt-1 text-[10px] leading-4 text-slate-500">{wizardMeta[wizardStep].detail}</p></div>
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div key={wizardStep} initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -8 }} transition={{ duration: 0.16, ease: [0.2, .82, .2, 1] }} className="min-h-0 flex-1 overflow-hidden p-4 sm:p-5">
+              {wizardStep === 0 ? <SourcePicker source={draft.source} onSource={(source) => updateDraft("source", source)} onFile={(file) => void handleFile(file)} uploading={uploading} uploadProgress={uploadProgress} /> : null}
+              {wizardStep === 1 ? <div className="h-full overflow-y-auto"><div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{OBJECTIVES.map(([id, label]) => <button key={id} type="button" onClick={() => updateDraft("objective", id)} className={cn("min-h-[48px] rounded-[14px] border px-3 text-left text-[10px] font-semibold transition-[border-color,background-color,color,transform] active:scale-[.99]", draft.objective === id ? "border-blue-600 bg-blue-600 text-white shadow-[0_8px_18px_rgba(37,99,235,.18)]" : "border-slate-200 bg-white text-slate-600 hover:border-slate-400 hover:bg-slate-50")}>{label}</button>)}</div><label className="mt-4 block text-[9px] font-semibold text-slate-500">Custom direction<textarea value={draft.customObjective} onChange={(event) => { updateDraft("customObjective", event.target.value); if (event.target.value.trim()) updateDraft("objective", "custom"); }} rows={3} placeholder="Find self-contained moments where the guest gives a surprising answer with a clear payoff..." className="mt-1.5 w-full resize-none rounded-[14px] border border-slate-200 bg-white p-3 text-[10px] leading-5 outline-none focus:border-blue-200 focus:ring-2 focus:ring-blue-50" /></label></div> : null}
+              {wizardStep === 2 ? <div className="grid h-full gap-4 overflow-y-auto md:grid-cols-[minmax(0,1fr)_180px]"><div><Toggle label="Dynamic captions" detail="Burn word-timed captions into every exported MP4." checked={draft.captionsEnabled} onChange={(value) => updateDraft("captionsEnabled", value)} /><Toggle label="Remove filler words" detail="Hide common filler words without cutting the source audio." checked={draft.removeFillers} onChange={(value) => updateDraft("removeFillers", value)} /><div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="text-[8px] font-semibold text-slate-500">Caption font<select value={draft.font} onChange={(event) => updateDraft("font", event.target.value)} className="mt-1 h-9 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[9px] outline-none"><option>Impact</option><option>Arial Black</option><option>Helvetica</option></select></label><label className="text-[8px] font-semibold text-slate-500">Position<select value={draft.position} onChange={(event) => updateDraft("position", event.target.value as CaptionPosition)} className="mt-1 h-9 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[9px] outline-none"><option value="top">Top</option><option value="centre">Middle</option><option value="bottom">Bottom safe zone</option></select></label><div><p className="mb-1.5 text-[8px] font-semibold text-slate-500">Aspect ratio</p><div className="flex rounded-md border border-slate-200 bg-slate-50 p-1">{(["9:16", "1:1", "16:9"] as ClipAspect[]).map((value) => <Segment key={value} value={value} current={draft.aspect} onClick={(next) => updateDraft("aspect", next)}>{value}</Segment>)}</div></div><div><p className="mb-1.5 text-[8px] font-semibold text-slate-500">Subject focus</p><div className="flex rounded-md border border-slate-200 bg-slate-50 p-1">{(["left", "center", "right"] as CropFocus[]).map((value) => <Segment key={value} value={value} current={draft.cropFocus} onClick={(next) => updateDraft("cropFocus", next)}>{value}</Segment>)}</div></div></div></div><div className={cn("relative mx-auto w-full overflow-hidden rounded-md bg-[#111318] shadow-[0_12px_28px_rgba(15,23,42,.14)]", draft.aspect === "9:16" ? "aspect-[9/16] max-h-[220px]" : draft.aspect === "1:1" ? "aspect-square max-h-[220px]" : "aspect-video max-h-[180px]")}><div className="absolute inset-0 bg-[linear-gradient(145deg,#3b4350,#090a0d_72%)]" />{draft.captionsEnabled ? <p className={cn("absolute left-[7%] right-[7%] text-center font-black uppercase leading-none text-white [text-shadow:-2px_-2px_0_#000,2px_-2px_0_#000,-2px_2px_0_#000,2px_2px_0_#000]", draft.position === "top" ? "top-[18%]" : draft.position === "centre" ? "top-1/2 -translate-y-1/2" : "bottom-[16%]")} style={{ fontFamily: draft.font, fontSize: `${Math.min(18, draft.fontSize * .2)}px`, color: draft.colour }}>YOUR BEST MOMENT</p> : null}</div></div> : null}
+              {wizardStep === 3 ? <div className="h-full overflow-y-auto"><div className="grid gap-4 sm:grid-cols-2"><div><p className="mb-1.5 text-[8px] font-semibold text-slate-500">Clip length</p><div className="flex rounded-md border border-slate-200 bg-slate-50 p-1">{[15, 30, 45, 60].map((value) => <Segment key={value} value={value} current={draft.clipLength} onClick={(next) => updateDraft("clipLength", next)}>{value}s</Segment>)}</div></div><div><p className="mb-1.5 text-[8px] font-semibold text-slate-500">Number of clips</p><div className="flex rounded-md border border-slate-200 bg-slate-50 p-1">{[1, 3, 5, 8].map((value) => <Segment key={value} value={value} current={draft.clipCount} onClick={(next) => updateDraft("clipCount", next)}>{value}</Segment>)}</div></div></div><dl className="mt-5 divide-y divide-slate-100 rounded-md border border-slate-200 px-3 text-[8px]">{[["Source", draft.source.name || draft.source.url || "Ready"], ["Moments", objective], ["Output", `${draft.clipCount} distinct clips · ${draft.clipLength}s each`], ["Format", `${draft.aspect} · ${draft.captionsEnabled ? "word-timed captions" : "clean video"}`]].map(([label, value]) => <div key={label} className="flex justify-between gap-4 py-2.5"><dt className="text-slate-400">{label}</dt><dd className="max-w-[70%] truncate text-right font-semibold text-slate-700">{value}</dd></div>)}</dl></div> : null}
+              {error ? <p className="mt-3 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[8px] leading-4 text-red-600"><AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{error}</p> : null}
+            </motion.div>
           </AnimatePresence>
+          <div className="flex shrink-0 items-center border-t border-slate-100 px-4 py-3 sm:px-5"><button type="button" disabled={wizardStep === 0} onClick={() => setWizardStep((step) => Math.max(0, step - 1))} className="flex h-9 items-center gap-1.5 rounded-full px-3.5 text-[9px] font-semibold text-slate-500 hover:bg-slate-100 disabled:opacity-0"><ChevronLeft className="h-3.5 w-3.5" />Back</button>{wizardStep < 3 ? <button type="button" disabled={!canContinue} onClick={() => setWizardStep((step) => Math.min(3, step + 1))} className="ml-auto flex h-9 items-center gap-1.5 rounded-full bg-slate-950 px-4 text-[9px] font-semibold text-white transition-transform active:scale-[.98] disabled:opacity-35">Continue<ChevronRight className="h-3.5 w-3.5" /></button> : <button type="button" disabled={!sourceReady || !objective} onClick={() => void run()} className="ml-auto flex h-9 items-center gap-2 rounded-full bg-blue-600 px-5 text-[9px] font-semibold text-white shadow-[0_8px_20px_rgba(37,99,235,.22)] transition-transform active:scale-[.98] disabled:opacity-35"><WandSparkles className="h-3.5 w-3.5" />Generate clips</button>}</div>
+        </motion.section>
+      </div>
+    </div>
+  );
 
-          <ClipFlowRail
-            activeStage={activeStage}
-            onJump={(index) => setStep(Math.max(0, Math.min(index, 3)) as Step)}
-          />
-
-          <AnimatePresence mode="wait">
-            {/* Step 0: Source */}
-            {step === 0 && (
-              <Scene key="source">
-                <div className="mx-auto w-full max-w-[680px]">
-                  <div className="mx-auto max-w-[620px] text-center">
-                    <Intro
-                      eyebrow="Source"
-                      title="Paste the link"
-                      copy="Clyra reads the video context first, then finds a short moment that can stand on its own."
-                      center
-                      compact
-                    />
-                    <div className="mt-4 flex flex-wrap justify-center gap-2.5">
-                      <div className="flex items-center gap-2 rounded-full border border-slate-200/75 bg-white/80 px-3 py-1.5 backdrop-blur-md shadow-sm">
-                        <Check className="h-3.5 w-3.5 text-emerald-500" />
-                        <span className="text-[11px] font-medium text-slate-600">
-                          Retention spike detection
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2 rounded-full border border-slate-200/75 bg-white/80 px-3 py-1.5 backdrop-blur-md shadow-sm">
-                        <Check className="h-3.5 w-3.5 text-emerald-500" />
-                        <span className="text-[11px] font-medium text-slate-600">
-                          Auto-reframing
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <Panel className="relative mx-auto mt-5 max-w-[680px] overflow-hidden">
-                    <div className="absolute top-0 right-0 p-5 opacity-[0.025]">
-                      <Youtube className="h-28 w-28" />
-                    </div>
-                    <div className="relative">
-                      <div className="mb-5 flex items-center gap-3.5">
-                        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-50 text-red-600 ring-1 ring-red-500/10">
-                          <Youtube className="h-5 w-5" />
-                        </div>
-                        <div>
-                          <p className="text-[14px] font-bold tracking-tight">
-                            YouTube Source
-                          </p>
-                          <p className="text-[12px] font-medium text-slate-500">
-                            Shorts or Full Videos
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="group relative flex flex-col gap-2 rounded-[24px] border border-slate-200/75 bg-white/[0.72] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-xl transition-all hover:border-slate-300 focus-within:border-slate-400 focus-within:bg-white focus-within:shadow-lg focus-within:shadow-slate-200/50 sm:flex-row">
-                        <input
-                          value={url}
-                          onChange={(event) => setUrl(event.target.value)}
-                          placeholder="https://youtu.be/..."
-                          className="h-12 min-w-0 flex-1 bg-transparent px-4 text-[14px] font-semibold outline-none placeholder:text-slate-400"
-                          autoFocus
-                          onKeyDown={(event) =>
-                            event.key === "Enter" &&
-                            url.includes("youtu") &&
-                            setStep(1)
-                          }
-                        />
-                        <PrimaryButton
-                          onClick={() => setStep(1)}
-                          disabled={!url.includes("youtu")}
-                          className="h-11 w-full rounded-[18px] sm:w-auto"
-                        >
-                          Continue
-                          <ChevronRight className="h-4 w-4" />
-                        </PrimaryButton>
-                      </div>
-
-                      {error ? (
-                        <motion.div
-                          initial={{ opacity: 0, y: 8 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          className="mt-3.5 flex items-start gap-2.5 rounded-lg border border-red-200 bg-red-50/70 p-3.5 text-[12px] font-medium text-red-700"
-                        >
-                          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                          <span>{error}</span>
-                        </motion.div>
-                      ) : (
-                        <p className="mt-4 text-center text-[11px] font-medium text-slate-400">
-                          Public videos work best. Restricted videos may need
-                          upload or cookies.
-                        </p>
-                      )}
-                    </div>
-                  </Panel>
-                </div>
-              </Scene>
-            )}
-
-            {/* Step 1: Moment */}
-            {step === 1 && (
-              <Scene key="moment">
-                <div className="mx-auto w-full max-w-[680px]">
-                  <Intro
-                    eyebrow="Moment"
-                    title="Choose the feeling"
-                    copy="Pick a known retention pattern, or describe the exact moment you want Clyra to find."
-                    compact
-                    center
-                  />
-                  <div className="mt-8 grid gap-2.5">
-                    {MOMENTS.map((item, index) => {
-                      const Icon = item.icon;
-                      const selected = moment === item.id && !custom.trim();
-                      return (
-                        <motion.button
-                          key={item.id}
-                          type="button"
-                          initial={{ opacity: 0, y: 16 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ delay: index * 0.04, duration: 0.45 }}
-                          onClick={() => {
-                            setMoment(item.id);
-                            setCustom("");
-                          }}
-                          className={cn(
-                            "group relative flex items-center gap-4 rounded-[24px] border p-3.5 text-left transition-all duration-300",
-                            selected
-                              ? "border-slate-900 bg-slate-900 text-white shadow-xl shadow-slate-900/[0.16]"
-                              : "border-slate-200/75 bg-white/[0.78] text-slate-900 shadow-[0_16px_40px_rgba(15,23,42,0.045),inset_0_1px_0_rgba(255,255,255,0.92)] backdrop-blur-xl hover:border-slate-300 hover:bg-white hover:shadow-[0_20px_50px_rgba(15,23,42,0.07)]",
-                          )}
-                        >
-                          <div
-                            className={cn(
-                              "flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl transition-all duration-300",
-                              selected
-                                ? "bg-white/10 text-white"
-                                : "bg-slate-100 text-slate-500 group-hover:bg-slate-200 group-hover:text-slate-800",
-                            )}
-                          >
-                            <Icon className="h-5 w-5" />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <span className="block text-[14px] font-bold tracking-tight">
-                              {item.label}
-                            </span>
-                            <span
-                              className={cn(
-                                "mt-1 block text-[12px] font-medium",
-                                selected ? "text-white/60" : "text-slate-500",
-                              )}
-                            >
-                              {item.tone}
-                            </span>
-                          </div>
-                          <div
-                            className={cn(
-                              "grid h-6 w-6 shrink-0 place-items-center rounded-full border text-[10px] font-bold transition-all",
-                              selected
-                                ? "border-white/20 bg-white text-slate-900"
-                                : "border-slate-200 bg-white text-slate-300",
-                            )}
-                          >
-                            {selected ? (
-                              <Check className="h-3.5 w-3.5" />
-                            ) : (
-                              index + 1
-                            )}
-                          </div>
-                          {selected && (
-                            <motion.div
-                              layoutId="selection-glow"
-                              className="absolute inset-0 -z-10 rounded-xl bg-slate-900 blur-2xl opacity-10"
-                            />
-                          )}
-                        </motion.button>
-                      );
-                    })}
-                  </div>
-
-                  <Panel className="mt-5 border-slate-200/75 bg-white/[0.78]">
-                    <div className="mb-2.5 flex items-center gap-2.5 px-0.5 text-slate-400">
-                      <Sparkles className="h-3.5 w-3.5" />
-                      <span className="text-[10px] font-bold uppercase tracking-[0.2em]">
-                        Custom Direction
-                      </span>
-                    </div>
-                    <textarea
-                      value={custom}
-                      onChange={(event) => {
-                        setCustom(event.target.value);
-                        if (event.target.value.trim()) setMoment("");
-                      }}
-                      placeholder='e.g., "find the moment where the host explains the paradox"'
-                      rows={3}
-                      className="clyra-visible-scrollbar w-full resize-none rounded-[22px] border border-slate-100 bg-white/70 px-4 py-3 text-[14px] font-semibold leading-relaxed outline-none transition-all placeholder:text-slate-400 focus:border-slate-300 focus:bg-white"
-                    />
-                    <div className="mt-3 grid gap-2 text-[11px] font-semibold text-slate-500 sm:grid-cols-2">
-                      {[
-                        "When Alex starts laughing",
-                        "When the villain dies",
-                        "When the host gets shocked",
-                        "When the person in the red hoodie falls",
-                      ].map((example) => (
-                        <button
-                          key={example}
-                          type="button"
-                          onClick={() => {
-                            setCustom(example);
-                            setMoment("");
-                          }}
-                          className="rounded-lg border border-white/80 bg-white/65 px-3 py-2 text-left transition-all hover:border-slate-200 hover:bg-white hover:text-slate-800"
-                        >
-                          {example}
-                        </button>
-                      ))}
-                    </div>
-                  </Panel>
-
-                  <NavActions className="justify-between">
-                    <SecondaryButton onClick={() => setStep(0)}>
-                      Back
-                    </SecondaryButton>
-                    <PrimaryButton
-                      onClick={() => setStep(2)}
-                      disabled={!moment && !custom.trim()}
-                    >
-                      Style Subtitles
-                      <ChevronRight className="h-4 w-4" />
-                    </PrimaryButton>
-                  </NavActions>
-                </div>
-              </Scene>
-            )}
-
-            {/* Step 2: Subtitles */}
-            {step === 2 && (
-              <Scene key="style">
-                <div className="mx-auto flex w-full max-w-[680px] flex-col items-center gap-7">
-                  <div className="flex w-full flex-col items-center space-y-5">
-                    <div className="flex items-center gap-2.5 text-slate-400">
-                      <Type className="h-3.5 w-3.5" />
-                      <span className="text-[10px] font-bold uppercase tracking-[0.2em]">
-                        Visual Preview
-                      </span>
-                    </div>
-                    <div className="relative mx-auto aspect-[9/16] w-[min(240px,64vw)] max-h-[360px] overflow-hidden rounded-[30px] border border-slate-200/75 bg-[#050505] shadow-xl shadow-slate-900/[0.16] ring-4 ring-slate-900/5">
-                      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,#1a1a1a_0%,#050505_100%)]" />
-                      <div className="absolute inset-x-7 bottom-7 top-7 rounded-lg border border-white/[0.03] bg-white/[0.01]" />
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-white/10 backdrop-blur-md ring-1 ring-white/20">
-                          <Play className="h-5 w-5 text-white translate-x-0.5" />
-                        </div>
-                      </div>
-                      <div
-                        className={cn(
-                          "absolute left-1/2 w-full max-w-[85%] -translate-x-1/2 text-center transition-all duration-400",
-                          cfg.position === "top"
-                            ? "top-14"
-                            : cfg.position === "centre"
-                              ? "top-1/2 -translate-y-1/2"
-                              : "bottom-14",
-                        )}
-                      >
-                        <span style={subtitleStyle}>DYNAMIC TEXT</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <Panel className="w-full space-y-7">
-                    <div className="space-y-2 text-center">
-                      <h2 className="text-2xl font-bold tracking-tight">
-                        Design your output.
-                      </h2>
-                      <p className="text-[14px] font-medium text-slate-500">
-                        Customize the visual signature of your clip.
-                      </p>
-                    </div>
-
-                    <div className="space-y-5">
-                      <Control label="Duration">
-                        <div className="flex items-center justify-between rounded-md bg-white px-3 py-2 text-[12px] font-bold text-slate-700 shadow-sm ring-1 ring-slate-200/70">
-                          <span>30 seconds locked</span>
-                          <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] text-emerald-700">
-                            720x1280
-                          </span>
-                        </div>
-                      </Control>
-
-                      <Control label="Size">
-                        {[
-                          ["64", "S"],
-                          ["86", "M"],
-                          ["108", "L"],
-                        ].map(([value, label]) => (
-                          <SegmentButton
-                            key={value}
-                            active={cfg.fontSize === value}
-                            onClick={() => setCfg({ ...cfg, fontSize: value })}
-                          >
-                            {label}
-                          </SegmentButton>
-                        ))}
-                      </Control>
-
-                      <Control label="Position">
-                        {[
-                          ["bottom", "Bottom"],
-                          ["centre", "Mid"],
-                          ["top", "Top"],
-                        ].map(([value, label]) => (
-                          <SegmentButton
-                            key={value}
-                            active={cfg.position === value}
-                            onClick={() =>
-                              setCfg({
-                                ...cfg,
-                                position: value as CaptionPosition,
-                              })
-                            }
-                          >
-                            {label}
-                          </SegmentButton>
-                        ))}
-                      </Control>
-
-                      <div className="space-y-2.5">
-                        <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">
-                          Color Palette
-                        </span>
-                        <div className="flex gap-2.5">
-                          {[
-                            "#FFFFFF",
-                            "#F5C84C",
-                            "#56C7D9",
-                            "#F06752",
-                            "#A5F3FC",
-                          ].map((colour) => (
-                            <button
-                              key={colour}
-                              type="button"
-                              onClick={() => setCfg({ ...cfg, colour })}
-                              className={cn(
-                                "h-9 w-9 rounded-full transition-all duration-200",
-                                cfg.colour === colour
-                                  ? "ring-4 ring-slate-200 scale-110 shadow-md"
-                                  : "hover:scale-105 hover:ring-2 hover:ring-slate-200",
-                              )}
-                              style={{
-                                background: colour,
-                                border:
-                                  colour === "#FFFFFF"
-                                    ? "1px solid rgba(0,0,0,0.1)"
-                                    : "none",
-                              }}
-                              aria-label={`Use ${colour}`}
-                            />
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="space-y-2.5">
-                        <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">
-                          Clip Metadata
-                        </span>
-                        <input
-                          value={name}
-                          onChange={(event) => setName(event.target.value)}
-                          placeholder="Untitled Clip"
-                          className="h-11 w-full rounded-lg border border-slate-200/75 bg-slate-50/60 px-4 text-[14px] font-semibold outline-none transition-all placeholder:text-slate-400 focus:border-slate-400 focus:bg-white focus:ring-2 focus:ring-slate-200"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="pt-1">
-                      <NavActions className="justify-between">
-                        <SecondaryButton onClick={() => setStep(1)}>
-                          Back
-                        </SecondaryButton>
-                        <PrimaryButton
-                          onClick={run}
-                          className="flex-1 sm:flex-none shadow-lg shadow-slate-900/10"
-                        >
-                          Generate Clip
-                        </PrimaryButton>
-                      </NavActions>
-                    </div>
-                  </Panel>
-                </div>
-              </Scene>
-            )}
-
-            {/* Step 3: Render */}
-            {step === 3 && (
-              <Scene key="render">
-                <div className="mx-auto w-full max-w-lg text-center">
-                  <div className="mx-auto mb-8 relative">
-                    <div className="absolute inset-0 bg-slate-900/5 blur-3xl rounded-full" />
-                    <div className="relative mx-auto grid h-36 w-36 place-items-center rounded-full border border-slate-200 bg-white shadow-xl shadow-slate-900/10">
-                      <div className="relative grid h-24 w-24 place-items-center rounded-full bg-slate-900 text-white">
-                        <motion.div
-                          className="absolute inset-0 rounded-full border border-slate-900"
-                          animate={{
-                            scale: [1, 1.4, 1],
-                            opacity: [0.25, 0, 0.25],
-                          }}
-                          transition={{
-                            duration: 2,
-                            repeat: Infinity,
-                            ease: "easeInOut",
-                          }}
-                        />
-                        {progress >= 100 ? (
-                          <Check className="h-9 w-9" />
-                        ) : (
-                          <div className="relative">
-                            <Loader2 className="h-9 w-9 animate-spin opacity-20" />
-                            <Scissors className="absolute inset-0 m-auto h-4.5 w-4.5 animate-pulse" />
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-3">
-                    <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-emerald-600">
-                      {selectedMomentLabel}
-                    </p>
-                    <h2 className="text-3xl font-bold tracking-tight">
-                      Processing Assets
-                    </h2>
-                    <p className="text-[14px] font-medium text-slate-500 h-5">
-                      {status}
-                    </p>
-                  </div>
-
-                  <div className="mt-10 space-y-5">
-                    <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-slate-200/70">
-                      <motion.div
-                        className="absolute inset-y-0 left-0 bg-slate-900"
-                        animate={{ width: `${progress}%` }}
-                        transition={{ duration: 0.8, ease: "circOut" }}
-                      />
-                    </div>
-                    <div className="flex items-center justify-between text-[12px] font-semibold text-slate-400">
-                      <span>{progress}% Optimized</span>
-                      <div className="flex items-center gap-1.5">
-                        <span className="h-1 w-1 rounded-full bg-slate-300" />
-                        <span>{elapsed}s elapsed</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </Scene>
-            )}
-
-            {/* Step 4: Done */}
-            {step === 4 && result && (
-              <Scene key="done">
-                <div className="mx-auto flex w-full max-w-[680px] flex-col items-center gap-7">
-                  <div className="group relative mx-auto aspect-[9/16] w-[min(260px,72vw)] max-h-[440px] overflow-hidden rounded-[30px] border border-slate-200/75 bg-black shadow-xl shadow-slate-900/24 ring-1 ring-white/10">
-                    <video
-                      controls
-                      playsInline
-                      src={outputUrl(result.output)}
-                      className="h-full w-full object-cover"
-                    />
-                  </div>
-
-                  <Panel className="w-full space-y-7">
-                    <div className="flex flex-col items-center space-y-2.5 text-center">
-                      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 ring-1 ring-emerald-500/10">
-                        <Check className="h-5 w-5" />
-                      </div>
-                      <h2 className="text-2xl font-bold tracking-tight">
-                        Clip Synthesized.
-                      </h2>
-                      <p className="line-clamp-2 text-[14px] font-medium text-slate-500">
-                        {result.title}
-                      </p>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2.5">
-                      <Stat
-                        label="Duration"
-                        value={`${result.clip_duration ?? "00:30"}`}
-                      />
-                      <Stat label="Export" value="720x1280 MP4" />
-                      <Stat
-                        label="Words"
-                        value={`${result.word_count ?? "0"} words`}
-                      />
-                      <Stat
-                        label="Payload"
-                        value={fileSize(result.file_size) || "MP4"}
-                      />
-                    </div>
-
-                    {(result.reason || result.caption) && (
-                      <div className="rounded-xl border border-slate-200/75 bg-slate-50/70 p-4">
-                        <div className="mb-2 flex items-center gap-2 text-slate-400">
-                          <Sparkles className="h-3.5 w-3.5" />
-                          <span className="text-[9px] font-bold uppercase tracking-[0.2em]">
-                            Picked because
-                          </span>
-                        </div>
-                        <p className="text-[13px] font-medium leading-relaxed text-slate-600">
-                          {result.reason ?? result.caption}
-                        </p>
-                      </div>
-                    )}
-
-                    <div className="flex flex-col gap-2.5 pt-1.5">
-                      <a
-                        href={outputUrl(result.output)}
-                        download
-                        className="group flex h-12 items-center justify-center gap-2.5 rounded-xl bg-slate-900 px-7 text-[14px] font-bold text-white transition-all hover:bg-slate-800 active:scale-[0.98] shadow-lg shadow-slate-900/10"
-                      >
-                        <Download className="h-4.5 w-4.5 transition-transform group-hover:translate-y-0.5" />
-                        Download High-Res
-                      </a>
-                      <SecondaryButton
-                        onClick={() => {
-                          setStep(0);
-                          setResult(null);
-                          setUrl("");
-                          setError("");
-                        }}
-                        className="h-12 rounded-xl"
-                      >
-                        Create Another
-                      </SecondaryButton>
-                    </div>
-                  </Panel>
-                </div>
-              </Scene>
-            )}
-          </AnimatePresence>
+  const resultsView = (
+    <div className="flex h-full min-h-0 flex-col bg-[#f7f8fa]">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-3">
+        <button type="button" onClick={() => setView("create")} className="flex h-8 items-center gap-2 rounded-md px-2 text-[9px] font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-950"><Plus className="h-3.5 w-3.5" />New generation</button>
+        <span className="hidden text-[8px] text-slate-300 sm:block">/</span>
+        <span className="hidden text-[9px] font-semibold text-slate-700 sm:block">{results.length} ranked clips</span>
+        <div className="ml-auto flex items-center gap-1">
+          <button type="button" onClick={() => void run()} className="hidden h-8 items-center gap-1.5 rounded-md px-2 text-[9px] font-semibold text-slate-500 hover:bg-slate-100 sm:flex"><RefreshCw className="h-3.5 w-3.5" />Generate more</button>
+          <button type="button" disabled={!selectedResults.size} onClick={bulkExport} className="flex h-8 items-center gap-1.5 rounded-md bg-slate-950 px-3 text-[9px] font-semibold text-white disabled:opacity-30"><Download className="h-3.5 w-3.5" />Export selected</button>
         </div>
-      </main>
-    </motion.div>
+      </header>
+      <div className="grid min-h-0 flex-1 lg:grid-cols-[240px_minmax(0,1fr)_330px]">
+        <aside className="hidden min-h-0 border-r border-slate-200 bg-white p-4 lg:block">
+          <p className="text-[9px] font-bold uppercase tracking-[.12em] text-slate-400">Review clips</p>
+          <label className="mt-4 flex h-9 items-center gap-2 rounded-md border border-slate-200 px-2">
+            <Search className="h-3.5 w-3.5 text-slate-400" />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search transcript" className="min-w-0 flex-1 text-[9px] outline-none" />
+          </label>
+          <label className="mt-4 block text-[9px] font-semibold text-slate-500">
+            Sort by
+            <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} className="mt-1.5 h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-[9px] outline-none">
+              <option value="score">Viral score</option>
+              <option value="duration">Duration</option>
+              <option value="source">Source position</option>
+            </select>
+          </label>
+          <div className="mt-5 border-t border-slate-200 pt-4">
+            <p className="text-[8px] font-semibold text-slate-400">Batch selection</p>
+            <button type="button" onClick={() => setSelectedResults(selectedResults.size === results.length ? new Set() : new Set(results.map((result) => result.id)))} className="mt-2 text-[9px] font-semibold text-slate-700 hover:text-slate-950">{selectedResults.size === results.length ? "Clear all" : "Select all clips"}</button>
+          </div>
+          <div className="mt-5 border-t border-slate-200 pt-4 text-[8px] leading-4 text-slate-400">
+            Scores combine transcript density and the connected LLM's assessment of hook, clarity, payoff, and shareability.
+          </div>
+        </aside>
+
+        <main className="min-h-0 overflow-y-auto p-3 sm:p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <p className="text-[12px] font-semibold text-slate-900">Generated clips</p>
+              <p className="mt-0.5 text-[8px] text-slate-400">Distinct source moments, already captioned and exported</p>
+            </div>
+            <div className="flex rounded-md border border-slate-200 bg-white p-1">
+              <button type="button" onClick={() => setResultLayout("grid")} className={cn("grid h-7 w-7 place-items-center rounded", resultLayout === "grid" ? "bg-slate-100 text-slate-950" : "text-slate-400")} aria-label="Grid view"><Grid2X2 className="h-3.5 w-3.5" /></button>
+              <button type="button" onClick={() => setResultLayout("list")} className={cn("grid h-7 w-7 place-items-center rounded", resultLayout === "list" ? "bg-slate-100 text-slate-950" : "text-slate-400")} aria-label="List view"><List className="h-3.5 w-3.5" /></button>
+            </div>
+          </div>
+          <div className={cn(resultLayout === "grid" ? "grid gap-3 sm:grid-cols-2 xl:grid-cols-3" : "space-y-2")}>
+            {filteredResults.map((result) => (
+              <div key={result.id} className="relative">
+                <label className="absolute right-2 top-2 z-20 grid h-5 w-5 place-items-center rounded bg-white/90 shadow-sm">
+                  <input type="checkbox" checked={selectedResults.has(result.id)} onChange={() => setSelectedResults((current) => { const next = new Set(current); if (next.has(result.id)) next.delete(result.id); else next.add(result.id); return next; })} className="h-3 w-3 accent-slate-950" aria-label={`Select ${result.title}`} />
+                </label>
+                <ClipCard result={result} selected={selected?.id === result.id} layout={resultLayout} liked={liked.has(result.id)} onSelect={() => setSelectedId(result.id)} onLike={() => setLiked((current) => { const next = new Set(current); if (next.has(result.id)) next.delete(result.id); else next.add(result.id); return next; })} onDelete={() => setResults((items) => items.filter((item) => item.id !== result.id))} />
+              </div>
+            ))}
+          </div>
+        </main>
+
+        <aside className="hidden min-h-0 border-l border-slate-200 bg-white lg:flex lg:flex-col">
+          {selected ? (
+            <>
+              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                <p className="text-[9px] font-bold uppercase tracking-[.12em] text-slate-400">Selected clip</p>
+                <div className="mx-auto mt-4 aspect-[9/16] max-h-[390px] overflow-hidden rounded-md bg-black shadow-[0_16px_36px_rgba(15,23,42,.2)]">
+                  <video key={selected.output} controls playsInline preload="metadata" src={outputUrl(selected.output)} className="h-full w-full object-cover" />
+                </div>
+                <div className="mt-4 flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-emerald-600">{selected.score ?? Math.round((selected.virality_score || 0) * 10)}/100</span>
+                  <span className="text-[8px] text-slate-400">{selected.clip_duration} · {fileSize(selected.file_size)}</span>
+                </div>
+                <h2 className="mt-2 text-[13px] font-semibold leading-5 text-slate-900">{selected.title}</h2>
+                <p className="mt-2 text-[9px] leading-5 text-slate-500">{selected.reason}</p>
+                {selected.caption ? (
+                  <div className="mt-4 border-y border-slate-200 py-3">
+                    <p className="text-[8px] font-bold uppercase tracking-[.1em] text-slate-400">Transcript excerpt</p>
+                    <p className="mt-2 text-[9px] leading-5 text-slate-600">{selected.caption}</p>
+                  </div>
+                ) : null}
+                <dl className="mt-3 divide-y divide-slate-100 text-[8px]">
+                  <div className="flex justify-between py-2"><dt className="text-slate-400">Source range</dt><dd className="font-semibold text-slate-600">{selected.source_start}–{selected.source_end}</dd></div>
+                  <div className="flex justify-between py-2"><dt className="text-slate-400">Timing</dt><dd className="font-semibold text-slate-600">{selected.timing_source}</dd></div>
+                  <div className="flex justify-between py-2"><dt className="text-slate-400">Output</dt><dd className="max-w-[160px] truncate font-semibold text-slate-600">{selected.output_quality}</dd></div>
+                </dl>
+              </div>
+              <div className="grid gap-2 border-t border-slate-200 p-3">
+                <a href={outputUrl(selected.output)} download className="flex h-9 items-center justify-center gap-2 rounded-md bg-slate-950 text-[9px] font-semibold text-white"><Download className="h-3.5 w-3.5" />Download MP4</a>
+                <button type="button" onClick={() => setView("create")} className="flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 text-[9px] font-semibold text-slate-600 hover:bg-slate-50"><SlidersHorizontal className="h-3.5 w-3.5" />Refine and render again</button>
+              </div>
+            </>
+          ) : null}
+        </aside>
+      </div>
+    </div>
   );
 
+  const content = (
+    <div className={cn("overflow-hidden bg-[#f8fafc] text-slate-950", embedded ? "relative h-full w-full" : "fixed inset-0 z-[600]")}>
+      <AnimatePresence>{view === "processing" ? <ProcessingScreen progress={progress} status={status} activeStep={activeStep} readyCount={readyCount} elapsed={elapsed} onCancel={cancel} /> : null}</AnimatePresence>
+      <div className={cn("h-full", view === "create" ? "overflow-hidden" : "overflow-y-auto")}>{view === "results" ? resultsView : createView}</div>
+    </div>
+  );
   return embedded ? content : createPortal(content, document.body);
-}
-
-/* --- Subcomponents --- */
-
-function ClipFlowRail({
-  activeStage,
-  onJump,
-}: {
-  activeStage: number;
-  onJump: (index: number) => void;
-}) {
-  return (
-    <div className="mb-5 w-full max-w-[680px] rounded-[26px] border border-slate-200/75 bg-white/[0.82] p-1.5 shadow-[0_14px_44px_rgba(15,23,42,0.045),inset_0_1px_0_rgba(255,255,255,0.92)] backdrop-blur-xl">
-      <div className="grid grid-cols-4 gap-1">
-        {FLOW.map((item, index) => {
-          const complete = index < activeStage;
-          const active = index === activeStage;
-          return (
-            <motion.button
-              key={item}
-              type="button"
-              onClick={() => onJump(index)}
-              className={cn(
-                "group flex min-w-0 flex-col items-center justify-center gap-1 rounded-[20px] px-1.5 py-2 text-center transition-all duration-300 sm:flex-row sm:gap-2 sm:px-3 sm:text-left",
-                active
-                  ? "bg-slate-950 text-white shadow-[0_16px_38px_rgba(15,23,42,0.13)]"
-                  : "text-slate-500 hover:bg-slate-50 hover:text-slate-800",
-              )}
-              animate={{
-                y: active ? 0 : 0,
-                opacity: index > activeStage + 1 ? 0.58 : 1,
-              }}
-              transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
-              aria-current={active ? "step" : undefined}
-            >
-              <span
-                className={cn(
-                  "grid h-6 w-6 shrink-0 place-items-center rounded-full text-[10px] font-bold transition-all",
-                  active
-                    ? "bg-white text-slate-950"
-                    : complete
-                      ? "bg-emerald-50 text-emerald-600"
-                      : "bg-slate-100 text-slate-400",
-                )}
-              >
-                {complete ? <Check className="h-3.5 w-3.5" /> : index + 1}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[12px] font-bold tracking-tight">
-                  {item}
-                </span>
-                <span
-                  className={cn(
-                    "hidden text-[10px] font-medium sm:block",
-                    active ? "text-white/60" : "text-slate-400",
-                  )}
-                >
-                  {active ? "Current step" : complete ? "Complete" : "Ready"}
-                </span>
-              </span>
-            </motion.button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function Scene({ children }: { children: ReactNode }) {
-  return (
-    <motion.section
-      initial={{ opacity: 0, y: 16, filter: "blur(5px)" }}
-      animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-      exit={{ opacity: 0, y: -10, filter: "blur(5px)" }}
-      transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
-      className="w-full"
-    >
-      {children}
-    </motion.section>
-  );
-}
-
-function Intro({
-  eyebrow,
-  title,
-  copy,
-  compact = false,
-  center = false,
-}: {
-  eyebrow: string;
-  title: string;
-  copy: string;
-  compact?: boolean;
-  center?: boolean;
-}) {
-  return (
-    <div
-      className={cn(compact ? "" : "max-w-md", center && "mx-auto text-center")}
-    >
-      <motion.p
-        initial={{ opacity: 0, x: -8 }}
-        animate={{ opacity: 1, x: 0 }}
-        transition={{ delay: 0.18 }}
-        className="text-[10px] font-bold uppercase tracking-[0.3em] text-emerald-600"
-      >
-        {eyebrow}
-      </motion.p>
-      <motion.h1
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.26 }}
-        className={cn(
-          "mt-3 font-bold tracking-tight text-slate-900",
-          compact ? "text-3xl sm:text-4xl" : "text-4xl sm:text-5xl",
-        )}
-      >
-        {title}
-      </motion.h1>
-      <motion.p
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.34 }}
-        className="mt-5 text-[15px] font-medium leading-relaxed text-slate-500"
-      >
-        {copy}
-      </motion.p>
-    </div>
-  );
-}
-
-function Panel({
-  children,
-  className = "",
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <div
-      className={cn(
-        "rounded-xl border border-slate-200/75 bg-white/85 p-6 sm:p-7 shadow-[0_24px_60px_-16px_rgba(15,23,42,0.12)] backdrop-blur-xl",
-        className,
-      )}
-    >
-      {children}
-    </div>
-  );
-}
-
-function Control({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="grid gap-3.5 sm:grid-cols-[100px_1fr] sm:items-center">
-      <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">
-        {label}
-      </span>
-      <div className="grid grid-flow-col gap-1.25 rounded-lg border border-slate-200/75 bg-slate-50/70 p-1.25">
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function SegmentButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "h-9 rounded-md px-3.5 text-[12px] font-semibold transition-all duration-200",
-        active
-          ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
-          : "text-slate-500 hover:bg-white/70 hover:text-slate-800",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function NavActions({
-  children,
-  className = "",
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <div className={cn("mt-8 flex justify-end gap-3", className)}>
-      {children}
-    </div>
-  );
-}
-
-function PrimaryButton({
-  children,
-  onClick,
-  disabled = false,
-  className = "",
-}: {
-  children: ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-  className?: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={cn(
-        "group relative inline-flex items-center justify-center gap-2 overflow-hidden rounded-xl bg-slate-900 px-6 text-[14px] font-bold text-white transition-all hover:bg-slate-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-20",
-        className,
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function SecondaryButton({
-  children,
-  onClick,
-  className = "",
-}: {
-  children: ReactNode;
-  onClick: () => void;
-  className?: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "inline-flex h-11 items-center justify-center rounded-lg border border-slate-200/75 bg-white/80 px-6 text-[13px] font-semibold text-slate-600 transition-all hover:border-slate-300 hover:bg-white hover:text-slate-800 active:scale-[0.98] backdrop-blur-md shadow-sm",
-        className,
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-slate-200/75 bg-white/75 px-4 py-3.5 backdrop-blur-md">
-      <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-slate-400">
-        {label}
-      </p>
-      <p className="mt-1 truncate text-[14px] font-bold text-slate-900">
-        {value}
-      </p>
-    </div>
-  );
 }

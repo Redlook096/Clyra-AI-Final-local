@@ -4,6 +4,8 @@
  */
 
 import React, {
+  lazy,
+  Suspense,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -21,14 +23,25 @@ import {
 } from "motion/react";
 import {
   AppWindow,
+  BrainCircuit,
+  CircleAlert,
+  Code2,
   Scissors,
   ArrowUpIcon,
   Check,
   ChevronRight,
+  CirclePause,
+  CirclePlay,
   FileUp,
   Folder,
   Globe,
+  GraduationCap,
+  Heart,
+  Loader2,
+  Maximize2,
   MessageCircleDashed,
+  MessagesSquare,
+  Minimize2,
   MousePointer2,
   Paperclip,
   Pencil,
@@ -53,6 +66,10 @@ import {
   YOUTUBE_SCAN_DURATION_MS,
 } from "./components/YoutubeScanEmbed";
 import {
+  WeatherDiagramCard,
+  type WeatherPayload,
+} from "./components/WeatherDiagramCard";
+import {
   CLYRA_CHAT_SYSTEM_PROMPT,
   CLYRA_NOTES_MODE_CONTRACT,
   wantsNotesMode,
@@ -64,8 +81,11 @@ import {
   type DocumentRewriteRequest,
 } from "./components/ui/document-card";
 import { GradientWaveText } from "./components/GradientWaveText";
-import AIClipper from "./components/AIClipper";
-import VibeCoderWorkspace from "./components/VibeCoderWorkspace";
+import { AppLauncher } from "./components/AppLauncher";
+import type { CreatorMode } from "./components/CreatorStudioWorkspace";
+import { VoiceCallOverlay } from "./components/voice/VoiceCallOverlay";
+import { VoiceWaveIcon } from "./components/voice/VoiceWaveIcon";
+import { useVoiceCall } from "./hooks/useVoiceCall";
 import { AiOrb, type OrbColorTheme } from "./components/AiOrb";
 import { VibeAgentMessageBody } from "./components/vibe/VibeAgentMessageBody";
 import { VibeLivePreviewPanel } from "./components/vibe/VibeLivePreviewPanel";
@@ -73,8 +93,98 @@ import { buildLocalVibeFallbackResponse } from "./lib/buildLocalVibeFallback";
 import { VIBE_CURSOR_AGENT_SYSTEM_PROMPT } from "./lib/vibeAgentConstants";
 import { extractVibeFilesFromContent } from "./lib/parseVibeAgentContent";
 
-type WorkspaceTabId = "chat" | "vibe" | "browser";
-const WORKSPACE_TAB_ORDER: WorkspaceTabId[] = ["chat", "vibe", "browser"];
+const AIClipper = lazy(() => 
+  import("./components/AIClipper").catch(() => ({
+    default: () => (
+      <div className="flex items-center justify-center min-h-screen bg-slate-50">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-slate-400" />
+          <p className="text-sm text-slate-600">Loading AI Clipper...</p>
+        </div>
+      </div>
+    )
+  }))
+);
+const VibeCoderWorkspace = lazy(() => 
+  import("./components/VibeCoderWorkspace").catch(() => ({
+    default: () => (
+      <div className="flex items-center justify-center min-h-screen bg-slate-50">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-slate-400" />
+          <p className="text-sm text-slate-600">Loading Vibe Coder...</p>
+        </div>
+      </div>
+    )
+  }))
+);
+const WebBrowserWorkspace = lazy(() => 
+  import("./components/WebBrowserWorkspace").catch(() => ({
+    default: () => (
+      <div className="flex items-center justify-center min-h-screen bg-slate-50">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-slate-400" />
+          <p className="text-sm text-slate-600">Loading Web Browser...</p>
+        </div>
+      </div>
+    )
+  }))
+);
+const CreatorStudioWorkspace = lazy(() => 
+  import("./components/CreatorStudioWorkspace").catch(() => ({
+    default: () => (
+      <div className="flex items-center justify-center min-h-screen bg-slate-50">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-slate-400" />
+          <p className="text-sm text-slate-600">Loading Creator Studio...</p>
+        </div>
+      </div>
+    )
+  }))
+);
+const StudyPalWorkspace = lazy(() => 
+  import("./components/StudyPalWorkspace").catch(() => ({
+    default: () => (
+      <div className="flex items-center justify-center min-h-screen bg-slate-50">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-slate-400" />
+          <p className="text-sm text-slate-600">Loading Study Pal...</p>
+        </div>
+      </div>
+    )
+  }))
+);
+
+type WorkspaceTabId = "chat" | "vibe" | "clip" | "browser" | "study" | CreatorMode;
+type AppAgentId = "vibe" | "browse" | "clip" | "study" | "fake-text" | "would-rather";
+type AppAgentStatus = "queued" | "running" | "ready" | "needs_input" | "failed";
+
+type AttachedAppAgent = {
+  id: AppAgentId;
+  label: string;
+  status: AppAgentStatus;
+  summary: string;
+  previewUrl?: string;
+  control?: "ai" | "user";
+  paused?: boolean;
+  action?: string;
+};
+const WORKSPACE_TAB_ORDER: WorkspaceTabId[] = [
+  "chat",
+  "vibe",
+  "clip",
+];
+
+function readEmbeddedWorkspace(): WorkspaceTabId {
+  if (typeof window === "undefined") return "chat";
+  const tool = new URLSearchParams(window.location.search).get("embedTool");
+  if (tool === "browse") return "browser";
+  if (tool === "fake-text" || tool === "would-rather") return tool;
+  if (tool === "vibe" || tool === "clip" || tool === "study") return tool;
+  return "chat";
+}
+const WORKSPACE_TAB_WIDTH = 105;
+const WORKSPACE_TAB_GAP = 4;
+const WORKSPACE_TAB_PADDING = 5;
 const ORB_COLOR_THEMES: OrbColorTheme[] = [
   "default",
   "ocean",
@@ -117,6 +227,26 @@ function readStoredOrbColorTheme(): OrbColorTheme {
   }
 }
 
+function readStoredNumber(key: string, fallback: number, min: number, max: number) {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    const parsed = raw == null ? NaN : Number(raw);
+    return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function readStoredString(key: string, fallback = "") {
+  if (typeof window === "undefined") return fallback;
+  try {
+    return window.localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 /** Standard chat: shimmer until the model emits answer text (`content`), then hide so stagger can print it. */
 function ChatThinkingLabel({
   isThinking,
@@ -128,7 +258,7 @@ function ChatThinkingLabel({
   isThinking: boolean;
   isStreaming: boolean;
   content: string;
-  thinkingMode?: "thinking" | "youtube" | "search";
+  thinkingMode?: "thinking" | "youtube" | "search" | "weather";
   searchSources?: string[];
 }) {
   const visible = content.length === 0 && (isThinking || isStreaming);
@@ -140,7 +270,9 @@ function ChatThinkingLabel({
       ? "Analyzing YouTube"
       : thinkingMode === "search"
         ? "Searching the web"
-        : "Thinking";
+        : thinkingMode === "weather"
+          ? "Checking weather"
+          : "Thinking";
 
   const sourceHosts = searchSources
     .map((url) => hostnameFromUrl(url))
@@ -244,6 +376,335 @@ function SearchSourcesFooter({ urls }: { urls?: string[] }) {
   );
 }
 
+function AppAgentGlyph({ id, className = "h-4 w-4" }: { id: AppAgentId; className?: string }) {
+  if (id === "vibe") return <Code2 className={className} />;
+  if (id === "browse") return <Globe className={className} />;
+  if (id === "clip") return <Scissors className={className} />;
+  if (id === "study") return <GraduationCap className={className} />;
+  if (id === "fake-text") return <MessagesSquare className={className} />;
+  return <Heart className={className} />;
+}
+
+function useTypedSummary(text: string, resetKey: string, enabled = true) {
+  const [printed, setPrinted] = useState("");
+  const [done, setDone] = useState(false);
+  const textRef = useRef(text);
+  textRef.current = text;
+
+  useEffect(() => {
+    const snapshot = textRef.current;
+    if (!enabled) {
+      setPrinted(snapshot);
+      setDone(true);
+      return;
+    }
+    setPrinted("");
+    setDone(false);
+    if (!snapshot) {
+      setDone(true);
+      return;
+    }
+    let index = 0;
+    const timer = window.setInterval(() => {
+      index += 1;
+      setPrinted(snapshot.slice(0, index));
+      if (index >= snapshot.length) {
+        window.clearInterval(timer);
+        setDone(true);
+      }
+    }, 16);
+    return () => window.clearInterval(timer);
+  }, [enabled, resetKey]);
+
+  return { printed, done };
+}
+
+function AppAgentCard({
+  agent,
+  selected,
+  onSelect,
+  onControl,
+  onPause,
+}: {
+  agent: AttachedAppAgent;
+  selected: boolean;
+  onSelect: () => void;
+  onControl: (control: "ai" | "user") => void;
+  onPause: (paused: boolean) => void;
+}) {
+  const [fullscreen, setFullscreen] = useState(false);
+  const [iframeReady, setIframeReady] = useState(false);
+  const [revealPreview, setRevealPreview] = useState(false);
+  const origin = typeof window === "undefined" ? "http://localhost:3000" : window.location.origin;
+  const source = `${origin}/?embedTool=${encodeURIComponent(agent.id)}&agentPreview=1`;
+  const running = agent.status === "running" || agent.status === "queued";
+  const ready = agent.status === "ready";
+  const paused = Boolean(agent.paused);
+  const glow = running || paused || ready || agent.control === "user" || selected;
+  const summary = agent.summary || agent.action || `Preparing ${agent.label}…`;
+  const { printed, done: summaryDone } = useTypedSummary(summary, agent.id);
+  // Shrink live workspace into the card so full UI (chrome + content) fits.
+  const previewScale = agent.id === "browse" ? 0.58 : agent.id === "vibe" ? 0.5 : 0.54;
+
+  useEffect(() => {
+    setIframeReady(false);
+    setRevealPreview(false);
+  }, [agent.id]);
+
+  useEffect(() => {
+    if (!summaryDone) return;
+    const timer = window.setTimeout(() => setRevealPreview(true), 1_000);
+    return () => window.clearTimeout(timer);
+  }, [summaryDone, agent.id]);
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previous;
+    };
+  }, [fullscreen]);
+
+  return (
+    <motion.article className="min-w-0 py-2" layout>
+      <p className="mb-3 min-h-[2.5rem] text-[12px] font-medium leading-5 text-slate-600">
+        {printed}
+        {!summaryDone ? <span className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse bg-slate-400 align-middle" /> : null}
+      </p>
+      <AnimatePresence>
+        {revealPreview ? (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <div
+              className={cn(
+                "group relative overflow-hidden bg-white transition-[box-shadow,border-radius,transform] duration-300",
+                fullscreen
+                  ? "fixed inset-0 z-[120] rounded-none"
+                  : "relative min-h-[300px] rounded-[22px]",
+                glow
+                  ? ready
+                    ? "shadow-[0_0_0_1.5px_rgba(16,185,129,.55),0_0_0_6px_rgba(16,185,129,.12),0_22px_50px_rgba(5,150,105,.14)]"
+                    : "shadow-[0_0_0_1.5px_rgba(59,130,246,.55),0_0_0_6px_rgba(59,130,246,.14),0_22px_50px_rgba(37,99,235,.16)]"
+                  : "shadow-[inset_0_0_0_1px_rgba(148,163,184,.35),0_16px_40px_rgba(15,23,42,.07)]",
+              )}
+            >
+              {/* Agent chrome — always visible */}
+              <div className="relative z-30 flex h-10 items-center gap-2 border-b border-slate-200/80 bg-gradient-to-b from-white to-slate-50/90 px-3">
+                <span className="flex items-center gap-1.5">
+                  <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
+                  <span className="h-2.5 w-2.5 rounded-full bg-[#febc2e]" />
+                  <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
+                </span>
+                <div className="ml-1 flex min-w-0 flex-1 items-center gap-2 rounded-md border border-slate-200/90 bg-white px-2.5 py-1 shadow-[inset_0_1px_0_rgba(255,255,255,.9)]">
+                  {agent.id === "browse" ? <Globe className="h-3 w-3 shrink-0 text-slate-400" /> : <AppAgentGlyph id={agent.id} className="h-3 w-3 shrink-0 text-slate-400" />}
+                  <span className="truncate text-[10px] font-medium text-slate-600">
+                    {ready ? "Task complete" : agent.action || agent.label}
+                    {ready ? " · ready for you" : paused ? " · paused" : agent.control === "user" ? " · takeover" : running ? " · AI active" : ""}
+                  </span>
+                </div>
+                {ready ? (
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[8px] font-semibold text-emerald-700">
+                    <Check className="h-3 w-3" />
+                    Done
+                  </span>
+                ) : null}
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onPause(!paused)}
+                    className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-[9px] font-semibold text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                    aria-label={paused ? "Resume AI" : "Pause AI"}
+                    title={paused ? "Resume AI" : "Pause AI"}
+                  >
+                    {paused ? <CirclePlay className="h-3 w-3" /> : <CirclePause className="h-3 w-3" />}
+                    <span className="hidden sm:inline">{paused ? "Resume" : "Pause"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onControl(agent.control === "user" ? "ai" : "user")}
+                    className={cn(
+                      "inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[9px] font-semibold transition-colors",
+                      agent.control === "user"
+                        ? "border-blue-500 bg-blue-600 text-white hover:bg-blue-700"
+                        : "border-slate-200 bg-white text-slate-700 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700",
+                    )}
+                    aria-label={agent.control === "user" ? "Resume AI" : "Take over"}
+                    title={agent.control === "user" ? "Resume AI" : "Take over"}
+                  >
+                    <MousePointer2 className="h-3 w-3" />
+                    <span className="hidden sm:inline">{agent.control === "user" ? "Resume AI" : "Takeover"}</span>
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={onSelect}
+                className={cn(
+                  "relative block w-full overflow-hidden bg-slate-50 text-left",
+                  fullscreen ? "h-[calc(100%-2.5rem)]" : "h-[min(52vh,420px)] min-h-[280px]",
+                )}
+                aria-label={`Select ${agent.label} live preview`}
+              >
+                <AnimatePresence>
+                  {!iframeReady ? (
+                    <motion.div
+                      key="shine"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.45 }}
+                      className="agent-soft-shimmer absolute inset-0 z-10 bg-[linear-gradient(160deg,#f8fafc_0%,#eef2f7_45%,#f8fafc_100%)]"
+                    />
+                  ) : null}
+                </AnimatePresence>
+                <motion.div
+                  className="absolute inset-0"
+                  initial={false}
+                  animate={{ opacity: iframeReady ? 1 : 0 }}
+                  transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+                >
+                  <div
+                    className="absolute inset-0 origin-top-left"
+                    style={
+                      fullscreen
+                        ? undefined
+                        : {
+                            width: `${100 / previewScale}%`,
+                            height: `${100 / previewScale}%`,
+                            transform: `scale(${previewScale})`,
+                          }
+                    }
+                  >
+                    <iframe
+                      title={`${agent.label} live workspace`}
+                      src={source}
+                      tabIndex={-1}
+                      onLoad={() => setIframeReady(true)}
+                      className={cn(
+                        "h-full w-full border-0 bg-white",
+                        fullscreen || agent.control === "user" ? "pointer-events-auto" : "pointer-events-none",
+                      )}
+                    />
+                  </div>
+                </motion.div>
+                {running && agent.control !== "user" && !paused && iframeReady ? (
+                  <div className="pointer-events-none absolute inset-0">
+                    <motion.div
+                      className="absolute left-[38%] top-[42%] flex items-center gap-2"
+                      animate={{ opacity: [0.7, 1, 0.7] }}
+                      transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
+                    >
+                      <MousePointer2 className="h-5 w-5 fill-blue-500 text-blue-700 drop-shadow-md" />
+                      <span className="whitespace-nowrap rounded-full border border-blue-200 bg-white/92 px-2.5 py-1 text-[9px] font-semibold text-blue-700 shadow-sm">
+                        {agent.action || "Agent is working"}
+                      </span>
+                    </motion.div>
+                  </div>
+                ) : null}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setFullscreen((value) => !value)}
+                className={cn(
+                  "absolute z-40 grid h-8 w-8 place-items-center rounded-lg border border-slate-200/90 bg-white/90 text-slate-600 shadow-sm backdrop-blur-md transition-[opacity,transform,background-color,color] hover:bg-slate-950 hover:text-white active:scale-95",
+                  fullscreen ? "right-4 top-[3.25rem] opacity-100" : "right-3 top-[3.25rem] opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+                )}
+                aria-label={fullscreen ? "Exit fullscreen preview" : "Enter fullscreen preview"}
+                title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+              >
+                {fullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+              </button>
+            </div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </motion.article>
+  );
+}
+
+function AppAgentFlowPanel({
+  agents,
+  selectedAgent,
+  onSelect,
+  onControl,
+  onPause,
+}: {
+  agents?: AttachedAppAgent[];
+  selectedAgent: AppAgentId | null;
+  onSelect: (id: AppAgentId) => void;
+  onControl: (id: AppAgentId, control: "ai" | "user") => void;
+  onPause: (id: AppAgentId, paused: boolean) => void;
+}) {
+  const agentList = agents || [];
+  const [activePreview, setActivePreview] = useState<AppAgentId>(selectedAgent || agentList[0]?.id || "vibe");
+
+  useEffect(() => {
+    if (agentList.length && !agentList.some((agent) => agent.id === activePreview)) {
+      setActivePreview(selectedAgent || agentList[0].id);
+    }
+  }, [activePreview, agentList, selectedAgent]);
+
+  if (!agentList.length) return null;
+  const activeAgent = agentList.find((agent) => agent.id === activePreview) || agentList[0];
+  return (
+    <section className="mt-5">
+      <div className="mb-3 flex justify-center">
+        <div className="relative grid h-14 w-14 place-items-center rounded-full bg-white/70 shadow-[inset_0_0_22px_rgba(59,130,246,.14)]">
+          <AiOrb />
+        </div>
+      </div>
+      {agentList.length > 1 ? (
+        <div className="mb-3 flex items-center gap-1 overflow-x-auto rounded-full border border-slate-200/80 bg-white/75 p-1 shadow-sm backdrop-blur-md" role="tablist" aria-label="Live app agents">
+          {agentList.map((agent) => {
+            const isActive = activePreview === agent.id;
+            const isRunning = agent.status === "running" || agent.status === "queued";
+            return (
+              <button
+                key={agent.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => {
+                  setActivePreview(agent.id);
+                  onSelect(agent.id);
+                }}
+                className={cn(
+                  "inline-flex min-w-max items-center gap-1.5 rounded-full px-3 py-2 text-[10px] font-semibold transition-[background-color,color,box-shadow] duration-200",
+                  isActive ? "bg-slate-900 text-white shadow-sm" : "text-slate-500 hover:bg-slate-100 hover:text-slate-800",
+                )}
+              >
+                <AppAgentGlyph id={agent.id} className="h-3.5 w-3.5" />
+                {agent.label}
+                {isRunning ? <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-400" /> : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+      <AppAgentCard
+        key={activeAgent.id}
+        agent={activeAgent}
+        selected={selectedAgent === activeAgent.id}
+        onSelect={() => onSelect(activeAgent.id)}
+        onControl={(control) => onControl(activeAgent.id, control)}
+        onPause={(paused) => onPause(activeAgent.id, paused)}
+      />
+    </section>
+  );
+}
+
 function extractYoutubeUrl(text: string): string | null {
   const match = text.match(
     /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/)|youtu\.be\/)[\w\-?=&%.]+/i,
@@ -273,6 +734,39 @@ function looksLikeWebSearchQuery(text: string): boolean {
 
 function wantsYoutubeAndWebSearch(text: string): boolean {
   return Boolean(extractYoutubeUrl(text)) && looksLikeWebSearchQuery(text);
+}
+
+function looksLikeWeatherQuery(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  return (
+    /\b(?:weather|forecast|temperature|humidity|precip(?:itation)?|how\s+(?:hot|cold|warm)|is it\s+(?:raining|snowing)|will it\s+rain)\b/i.test(
+      t,
+    ) || /^(?:what(?:'| i)?s|how(?:'| i)?s)\s+the\s+weather\b/i.test(t)
+  );
+}
+
+function extractWeatherLocation(text: string): string | null {
+  const cleaned = text
+    .trim()
+    .replace(/^\/(?:weather|forecast)\s*/i, "")
+    .trim();
+  const patterns = [
+    /\b(?:weather|forecast|temperature)\s+(?:in|for|at|near)\s+(.+?)(?:\?|$)/i,
+    /\b(?:in|for|at|near)\s+([A-Za-z][A-Za-z0-9 .,'-]{1,80})(?:\?|$)/i,
+    /^([A-Za-z][A-Za-z0-9 .,'-]{1,80})$/,
+  ];
+  for (const pattern of patterns) {
+    const match = cleaned.match(pattern);
+    const loc = match?.[1]?.trim().replace(/[?.!]+$/, "").trim();
+    if (!loc) continue;
+    if (/^(?:the weather|weather|forecast|today|now|please)$/i.test(loc)) {
+      continue;
+    }
+    if (loc.length < 2) continue;
+    return loc;
+  }
+  return null;
 }
 
 function UserMessageText({ text }: { text: string }) {
@@ -305,10 +799,12 @@ const AnimatedMessage = ({
   thinkingMode = "thinking",
   youtubeVideoId,
   searchSources,
+  weather,
   isLastAssistant,
   onVibePreviewReady,
   onDocumentRewriteRequest,
   onContentChange,
+  documentMode,
 }: {
   messageId?: string;
   content: string;
@@ -320,9 +816,10 @@ const AnimatedMessage = ({
   markdownSupport?: boolean;
   codeHighlighting?: boolean;
   assistantKind?: "chat" | "vibe";
-  thinkingMode?: "thinking" | "youtube" | "search";
+  thinkingMode?: "thinking" | "youtube" | "search" | "weather";
   youtubeVideoId?: string;
   searchSources?: string[];
+  weather?: WeatherPayload;
   isLastAssistant?: boolean;
   onVibePreviewReady?: (
     messageId: string,
@@ -330,6 +827,7 @@ const AnimatedMessage = ({
   ) => void;
   onDocumentRewriteRequest?: (request: DocumentRewriteRequest) => void;
   onContentChange?: (messageId: string, newContent: string) => void;
+  documentMode?: "notes";
 }) => {
   const isVibe = assistantKind === "vibe";
   const showYoutubeScan =
@@ -351,6 +849,7 @@ const AnimatedMessage = ({
     /^(?:Hi|Dear|Hello)\s+[\w\s]+,\s*\n/i.test(content);
 
   const isNote =
+    documentMode === "notes" ||
     /^\s*#{1,3}\s+(?:Meeting Notes|Notes|Summary Notes|Session Notes)\b/i.test(content);
   const useDocumentUI = (isEmail || isNote) && content.length > 5;
 
@@ -416,6 +915,7 @@ const AnimatedMessage = ({
       {youtubeVideoId ? (
         <YoutubeScanEmbed videoId={youtubeVideoId} active={showYoutubeScan} />
       ) : null}
+      {weather ? <WeatherDiagramCard weather={weather} /> : null}
       {content.length > 0 && !suppressVibeAnswerBody ? (
         <div
           className={cn("markdown-body mt-1", isVibe && "markdown-body--vibe")}
@@ -537,11 +1037,12 @@ function useAutoResizeTextarea({
 }
 
 interface CommandSuggestion {
-  id: string;
+  id: AppAgentId;
   icon: (isActive: boolean) => React.ReactNode;
   label: string;
   description: string;
   prefix: string;
+  workspace: WorkspaceTabId;
 }
 
 interface TextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
@@ -549,7 +1050,7 @@ interface TextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement
   highlightOverlay?: string | null;
 }
 
-const PromptGhostText = ({ text, ghost }: { text: string; ghost: string }) => {
+const PromptGhostText = React.memo(({ text, ghost }: { text: string; ghost: string }) => {
   if (!ghost || !ghost.trim()) {
     return null;
   }
@@ -563,7 +1064,7 @@ const PromptGhostText = ({ text, ghost }: { text: string; ghost: string }) => {
       </span>
     </>
   );
-};
+});
 
 const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
   (
@@ -606,7 +1107,7 @@ const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
 );
 Textarea.displayName = "Textarea";
 
-const HighlightText = ({
+const HighlightText = React.memo(({
   text,
   highlight,
 }: {
@@ -634,7 +1135,7 @@ const HighlightText = ({
       )}
     </>
   );
-};
+});
 
 export const FullscreenContext = React.createContext({
   isFullscreen: false,
@@ -653,10 +1154,83 @@ export default function App() {
     assistantKind?: "chat" | "vibe";
     /** User prompt for this Vibe reply—drives the fixed Thought summary. */
     vibeUserPrompt?: string;
-    thinkingMode?: "thinking" | "youtube" | "search";
+    thinkingMode?: "thinking" | "youtube" | "search" | "weather";
+    documentMode?: "notes";
     youtubeVideoId?: string;
+    youtubeContext?: {
+      url: string;
+      analysisPrompt: string;
+    };
     searchSources?: string[];
+    weather?: WeatherPayload;
+    appAgents?: AttachedAppAgent[];
   }
+
+  // Warm Vibe Coder M1 as soon as Clyra loads — before opening the Vibe tab.
+  useEffect(() => {
+    let cancelled = false;
+    let pollTimer: number | undefined;
+    let prefetchFrame: HTMLIFrameElement | null = null;
+
+    const prefetchUi = (uiUrl: string) => {
+      if (prefetchFrame || typeof document === "undefined") return;
+      prefetchFrame = document.createElement("iframe");
+      prefetchFrame.src = `${uiUrl.replace(/\/$/, "")}/conversations`;
+      prefetchFrame.title = "Vibe Coder warmup";
+      prefetchFrame.setAttribute("aria-hidden", "true");
+      prefetchFrame.tabIndex = -1;
+      Object.assign(prefetchFrame.style, {
+        position: "fixed",
+        width: "1px",
+        height: "1px",
+        left: "-9999px",
+        top: "0",
+        opacity: "0",
+        pointerEvents: "none",
+        border: "0",
+      });
+      document.body.appendChild(prefetchFrame);
+    };
+
+    const warm = async () => {
+      try {
+        await fetch("/api/vibe/m1-warmup", { method: "POST" });
+      } catch {
+        // ignore — server may still be starting
+      }
+      if (cancelled) return;
+
+      const check = async () => {
+        try {
+          const res = await fetch("/api/vibe/m1-status");
+          const data = (await res.json()) as {
+            ready?: boolean;
+            uiReady?: boolean;
+            uiUrl?: string;
+          };
+          if (data.uiUrl && (data.uiReady || data.ready)) {
+            prefetchUi(String(data.uiUrl));
+          }
+          if (data.ready || cancelled) return;
+        } catch {
+          // keep polling
+        }
+        if (!cancelled) {
+          pollTimer = window.setTimeout(() => {
+            void check();
+          }, 4000);
+        }
+      };
+      void check();
+    };
+
+    void warm();
+    return () => {
+      cancelled = true;
+      if (pollTimer) window.clearTimeout(pollTimer);
+      prefetchFrame?.remove();
+    };
+  }, []);
 
   interface ChatSession {
     id: string;
@@ -670,19 +1244,32 @@ export default function App() {
 
   const [selectedCommand, setSelectedCommand] =
     useState<CommandSuggestion | null>(null);
+  const [selectedAppAgents, setSelectedAppAgents] = useState<CommandSuggestion[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState<{ messageId: string; agentId: AppAgentId } | null>(null);
   const [activeWorkspaceTab, setActiveWorkspaceTab] =
-    useState<WorkspaceTabId>("chat");
+    useState<WorkspaceTabId>(() => readEmbeddedWorkspace());
+  const [isEmbeddedToolPreview] = useState(
+    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).has("embedTool"),
+  );
+  const [isAppLauncherOpen, setIsAppLauncherOpen] = useState(false);
+  const [workspaceChromeEngaged, setWorkspaceChromeEngaged] = useState(isEmbeddedToolPreview);
+  const [workflowTabsHoverReveal, setWorkflowTabsHoverReveal] = useState(false);
+  const [workflowTabsHintVisible, setWorkflowTabsHintVisible] = useState(false);
+  const workflowTabsWasVisibleRef = useRef(false);
+  const workflowTabsHintTimerRef = useRef<number | null>(null);
   const [workspaceTransitionDirection, setWorkspaceTransitionDirection] =
     useState<number>(0);
 
   const containerMouseX = useMotionValue(0);
   const magneticTargetX = useTransform(containerMouseX, (mouseX) => {
-    // Determine closest button center (assuming 105px width, 4px gap, 5px padding)
-    const padding = 5;
-    const offsetStep = 109; // 105 + 4
+    const padding = WORKSPACE_TAB_PADDING;
+    const offsetStep = WORKSPACE_TAB_WIDTH + WORKSPACE_TAB_GAP;
     const rawIndex = (mouseX - padding) / offsetStep;
-    const closestIndex = Math.max(0, Math.min(2, Math.round(rawIndex)));
-    const closestCenter = padding + closestIndex * offsetStep + 52.5;
+    const closestIndex = Math.max(
+      0,
+      Math.min(WORKSPACE_TAB_ORDER.length - 1, Math.round(rawIndex)),
+    );
+    const closestCenter = padding + closestIndex * offsetStep + WORKSPACE_TAB_WIDTH / 2;
 
     const minDistance = Math.abs(mouseX - closestCenter);
 
@@ -718,7 +1305,12 @@ export default function App() {
   );
   const hoverPillX = useTransform(() => {
     const pillX = springContainerX.get() - 50.5;
-    return Math.min(225, Math.max(7, pillX));
+    const maxX =
+      WORKSPACE_TAB_PADDING +
+      (WORKSPACE_TAB_ORDER.length - 1) *
+        (WORKSPACE_TAB_WIDTH + WORKSPACE_TAB_GAP) +
+      2;
+    return Math.min(maxX, Math.max(7, pillX));
   });
   const [isWorkspaceSwitching, setIsWorkspaceSwitching] = useState(false);
   const workspaceSwitchTimeoutRef = useRef<number | null>(null);
@@ -772,36 +1364,86 @@ export default function App() {
     | "complete";
   const [introState, setIntroState] = useState<IntroState>("booting");
   const [introProgressText, setIntroProgressText] = useState("INITIALIZING");
-  const [progressDuration] = useState(() => 3 + Math.random() * 3);
+  const [introProgress, setIntroProgress] = useState(0);
+  const [progressDuration] = useState(() => 2.4 + Math.random() * 1.4);
+  const introBusy =
+    introState === "booting" ||
+    introState === "orb_up" ||
+    introState === "progress" ||
+    introState === "progress_complete";
+  const introPreExpand =
+    introBusy || introState === "input_circle";
 
   useEffect(() => {
-    if (introState === "complete") {
-      return;
-    }
-
     if (
       typeof document !== "undefined" &&
       document.visibilityState === "hidden"
     ) {
       setIntroState("complete");
+      setIntroProgress(1);
       return;
     }
 
-    const t1 = setTimeout(() => setIntroState("orb_up"), 10);
-    const t2 = setTimeout(() => setIntroState("input_circle"), 1600);
-    const t3 = setTimeout(() => setIntroState("input_expand"), 1980);
-    const t4 = setTimeout(() => {
+    let cancelled = false;
+    let raf = 0;
+    const wait = (ms: number) =>
+      new Promise<void>((resolve) => {
+        window.setTimeout(resolve, ms);
+      });
+
+    const run = async () => {
+      setIntroState("orb_up");
+      await wait(720);
+      if (cancelled) return;
+
+      setIntroState("progress");
+      setIntroProgress(0);
+      setIntroProgressText("INITIALIZING");
+
+      const startedAt = performance.now();
+      const durationMs = progressDuration * 1000;
+      const animate = (now: number) => {
+        if (cancelled) return;
+        const ratio = Math.min(1, (now - startedAt) / durationMs);
+        setIntroProgress(ratio);
+        if (ratio < 0.28) setIntroProgressText("INITIALIZING");
+        else if (ratio < 0.58) setIntroProgressText("LOADING");
+        else if (ratio < 0.86) setIntroProgressText("PREPARING");
+        else setIntroProgressText("READY");
+        if (ratio < 1) raf = requestAnimationFrame(animate);
+      };
+      raf = requestAnimationFrame(animate);
+
+      await Promise.all([
+        wait(durationMs),
+        document.fonts?.ready?.catch(() => undefined) ?? Promise.resolve(),
+      ]);
+      if (cancelled) return;
+
+      setIntroProgress(1);
+      setIntroProgressText("READY");
+      setIntroState("progress_complete");
+      await wait(260);
+      if (cancelled) return;
+
+      setIntroState("input_circle");
+      await wait(360);
+      if (cancelled) return;
+
+      setIntroState("input_expand");
+      await wait(780);
+      if (cancelled) return;
+
       setIntroState("complete");
       setIsSidebarOpen(true);
-    }, 2850);
-
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(t3);
-      clearTimeout(t4);
     };
-  }, []);
+
+    void run();
+    return () => {
+      cancelled = true;
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [progressDuration]);
 
   useEffect(() => {
     return () => {
@@ -814,10 +1456,12 @@ export default function App() {
   const [editingChatId, setEditingChatId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [value, setValue] = useState("");
+  const canSendMessage = Boolean(value.trim() || selectedCommand || selectedAppAgents.length);
   const [attachments, setAttachments] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [activeSuggestion, setActiveSuggestion] = useState<number>(-1);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [isCommandPalettePinned, setIsCommandPalettePinned] = useState(false);
   const [recentCommand, setRecentCommand] = useState<string | null>(null);
   const [isInputExpanded, setIsInputExpanded] = useState(false);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
@@ -829,6 +1473,7 @@ export default function App() {
     isInputExpanded ||
     attachments.length > 0 ||
     selectedCommand !== null ||
+    selectedAppAgents.length > 0 ||
     activeWorkspaceTab === "vibe";
 
   const { textareaRef, adjustHeight } = useAutoResizeTextarea({
@@ -883,12 +1528,82 @@ export default function App() {
   const [animationSpeed, setAnimationSpeed] = useState(1);
   const [codeHighlighting, setCodeHighlighting] = useState(true);
   const [markdownSupport, setMarkdownSupport] = useState(true);
-  const [systemPrompt, setSystemPrompt] = useState("");
-  const [temperature, setTemperature] = useState(0.7);
+  const [systemPrompt, setSystemPrompt] = useState(() =>
+    readStoredString("clyra-system-prompt"),
+  );
+  const [temperature, setTemperature] = useState(() =>
+    readStoredNumber("clyra-temperature", 0.7, 0, 1),
+  );
   const [userBubbleColor, setUserBubbleColor] = useState("#F4F4F4");
   const [orbColorTheme, setOrbColorTheme] = useState<OrbColorTheme>(
     readStoredOrbColorTheme,
   );
+  const [voiceRate, setVoiceRate] = useState(() =>
+    readStoredNumber("clyra-voice-rate", 0.94, 0.82, 1.08),
+  );
+  const [voicePitch, setVoicePitch] = useState(() =>
+    readStoredNumber("clyra-voice-pitch", 1.03, 0.9, 1.16),
+  );
+  const [voiceVolume, setVoiceVolume] = useState(() =>
+    readStoredNumber("clyra-voice-volume", 0.96, 0.5, 1),
+  );
+
+  const voiceChatHistory = useMemo(
+    () =>
+      messages
+        .filter((m) => m.content.trim() && !m.isThinking && !m.isStreaming)
+        .map((m) => ({ role: m.role, content: m.content })),
+    [messages],
+  );
+
+  const handleVoiceTurn = useCallback(
+    ({
+      userText,
+      assistantText,
+    }: {
+      userText: string;
+      assistantText: string;
+    }) => {
+      const user = userText.trim();
+      const assistant = assistantText.trim();
+      if (!user || !assistant) return;
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        const prevUser = prev[prev.length - 2];
+        if (
+          last?.role === "assistant" &&
+          last.content === assistant &&
+          prevUser?.role === "user" &&
+          prevUser.content === user
+        ) {
+          return prev;
+        }
+        return [
+          ...prev,
+          { id: `voice-u-${Date.now()}`, role: "user" as const, content: user },
+          {
+            id: `voice-a-${Date.now() + 1}`,
+            role: "assistant" as const,
+            content: assistant,
+          },
+        ];
+      });
+    },
+    [],
+  );
+
+  const voiceCall = useVoiceCall({
+    conversationId: currentChatId,
+    enabled: true,
+    chatHistory: voiceChatHistory,
+    systemPrompt: systemPrompt,
+    temperature,
+    speechRate: voiceRate,
+    speechPitch: voicePitch,
+    speechVolume: voiceVolume,
+    onTurn: handleVoiceTurn,
+  });
+
   const [bgAnimEnabled, setBgAnimEnabled] = useState(false);
   const [bgAnimColor, setBgAnimColor] = useState("#8b5cf6");
   const commandPaletteRef = useRef<HTMLDivElement>(null);
@@ -912,6 +1627,25 @@ export default function App() {
       console.error("Failed to save orb color theme:", error);
     }
   }, [orbColorTheme]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("clyra-voice-rate", String(voiceRate));
+      window.localStorage.setItem("clyra-voice-pitch", String(voicePitch));
+      window.localStorage.setItem("clyra-voice-volume", String(voiceVolume));
+    } catch (error) {
+      console.error("Failed to save voice settings:", error);
+    }
+  }, [voicePitch, voiceRate, voiceVolume]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("clyra-temperature", String(temperature));
+      window.localStorage.setItem("clyra-system-prompt", systemPrompt);
+    } catch (error) {
+      console.error("Failed to save model settings:", error);
+    }
+  }, [systemPrompt, temperature]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1043,6 +1777,7 @@ export default function App() {
     setCurrentChatId(null);
     setSelectedCommand(null);
     setActiveWorkspaceTab("chat");
+    setWorkspaceChromeEngaged(false);
     setClipInitialUrl("");
     setVibePreviewMessageId(null);
     setVibePreviewFiles(null);
@@ -1162,17 +1897,32 @@ export default function App() {
 
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setIsComposerFocused(true);
-        setIsInputExpanded(true);
-        setShowCommandPalette(true);
-        setValue((current) => (current.startsWith("/") ? current : "/"));
-        textareaRef.current?.focus();
+        setIsAppLauncherOpen((current) => !current);
+        setShowCommandPalette(false);
+        textareaRef.current?.blur();
+      } else if (e.key === "Escape") {
+        setIsAppLauncherOpen(false);
       }
     };
+    const handleWorkspaceMessage = (event: MessageEvent) => {
+      const isTrustedVibeOrigin =
+        event.origin === "http://127.0.0.1:8000" ||
+        event.origin === "http://localhost:8000";
+      if (!isTrustedVibeOrigin || event.data?.type !== "clyra:toggle-app-launcher") {
+        return;
+      }
+      setIsAppLauncherOpen((current) => !current);
+      setShowCommandPalette(false);
+      textareaRef.current?.blur();
+    };
     window.addEventListener("keydown", handleGlobalKeyDown);
-    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+    window.addEventListener("message", handleWorkspaceMessage);
+    return () => {
+      window.removeEventListener("keydown", handleGlobalKeyDown);
+      window.removeEventListener("message", handleWorkspaceMessage);
+    };
   }, []);
 
   const isVibeComposerMode =
@@ -1225,6 +1975,7 @@ export default function App() {
         value.trim().length === 0 &&
         attachments.length === 0 &&
         !selectedCommand &&
+        selectedAppAgents.length === 0 &&
         activeWorkspaceTab !== "vibe"
       ) {
         setIsInputExpanded(false);
@@ -1232,9 +1983,9 @@ export default function App() {
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [value, attachments.length, selectedCommand, activeWorkspaceTab]);
+  }, [value, attachments.length, selectedCommand, selectedAppAgents.length, activeWorkspaceTab]);
 
-  const commandSuggestions: CommandSuggestion[] = [
+  const commandSuggestions: CommandSuggestion[] = useMemo(() => [
     {
       id: "vibe",
       icon: (isActive) => (
@@ -1269,42 +2020,80 @@ export default function App() {
       label: "Vibe Coder",
       description: "Build polished apps in a live workbench",
       prefix: "/vibe",
+      workspace: "vibe",
     },
     {
-      id: "search",
+      id: "study",
       icon: (isActive) => (
         <div className="relative flex items-center justify-center w-full h-full text-slate-700">
           <motion.div
-            animate={isActive ? { rotate: [0, 15, -10, 0] } : { rotate: 0 }}
-            transition={{ repeat: Infinity, duration: 1.8, ease: "easeInOut" }}
+            animate={isActive ? { y: [0, -1.5, 0] } : { y: 0 }}
+            transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
           >
-            <Globe className="w-4 h-4" />
+            <GraduationCap className="w-4 h-4" />
           </motion.div>
         </div>
       ),
-      label: "Web Search",
-      description: "Research the live web and summarize sources",
-      prefix: "/search",
+      label: "Study Pal",
+      description: "Build grounded notes, quizzes, and study maps",
+      prefix: "/study",
+      workspace: "study",
     },
     {
-      id: "youtube",
+      id: "browse",
+      icon: (isActive) => (
+        <div className="relative flex h-full w-full items-center justify-center text-slate-700">
+          <motion.div
+            animate={
+              isActive
+                ? { y: [0, -1.5, 0], rotate: [0, -4, 0] }
+                : { y: 0, rotate: 0 }
+            }
+            transition={{ repeat: Infinity, duration: 1.6, ease: "easeInOut" }}
+          >
+            <Globe className="h-4 w-4" />
+          </motion.div>
+        </div>
+      ),
+      label: "Web Browser",
+      description: "Research and act across live websites",
+      prefix: "/browse",
+      workspace: "browser",
+    },
+    {
+      id: "fake-text",
       icon: (isActive) => (
         <div className="relative flex items-center justify-center w-full h-full text-slate-700">
           <motion.div
             animate={
               isActive
-                ? { scale: [1, 1.12, 1] }
+                ? { scale: [1, 1.08, 1], y: [0, -1, 0] }
                 : { scale: 1 }
             }
             transition={{ repeat: Infinity, duration: 1.4, ease: "easeOut" }}
           >
-            <Youtube className="w-4 h-4 text-[#ff0033]" />
+            <MessagesSquare className="w-4 h-4" />
           </motion.div>
         </div>
       ),
-      label: "YouTube Analyzer",
-      description: "Pull transcripts and analyze any YouTube video",
-      prefix: "/youtube",
+      label: "Text Story",
+      description: "Generate a narrated iMessage-style story",
+      prefix: "/text-story",
+      workspace: "fake-text",
+    },
+    {
+      id: "would-rather",
+      icon: (isActive) => (
+        <div className="relative flex items-center justify-center w-full h-full text-slate-700">
+          <motion.div animate={isActive ? { scale: [1, 1.1, 1] } : { scale: 1 }} transition={{ repeat: Infinity, duration: 1.45, ease: "easeInOut" }}>
+            <Heart className="w-4 h-4" />
+          </motion.div>
+        </div>
+      ),
+      label: "Would You Rather",
+      description: "Create voiced quiz videos with timed reveals",
+      prefix: "/would-rather",
+      workspace: "would-rather",
     },
     {
       id: "clip",
@@ -1333,8 +2122,9 @@ export default function App() {
       label: "AI Clip",
       description: "Render cinematic 720p clips with timed subtitles",
       prefix: "/clip",
+      workspace: "clip",
     },
-  ];
+  ], []);
 
   const commandPaletteEnabled = true;
   const isCommandMode =
@@ -1361,15 +2151,15 @@ export default function App() {
   );
 
   const filteredSuggestions = isCommandMode
-    ? commandSuggestions.filter((cmd) =>
-        cmd.label.toLowerCase().includes(commandQuery),
-      )
-    : [];
+    ? commandSuggestions.filter((cmd) => cmd.label.toLowerCase().includes(commandQuery))
+    : isCommandPalettePinned
+      ? commandSuggestions
+      : [];
 
   useEffect(() => {
     if (
       commandPaletteEnabled &&
-      isCommandMode &&
+      (isCommandMode || isCommandPalettePinned) &&
       filteredSuggestions.length > 0
     ) {
       setShowCommandPalette(true);
@@ -1386,6 +2176,7 @@ export default function App() {
   }, [
     commandPaletteEnabled,
     isCommandMode,
+    isCommandPalettePinned,
     commandQuery,
     filteredSuggestions.length,
   ]);
@@ -1401,6 +2192,7 @@ export default function App() {
         !commandButton?.contains(target)
       ) {
         setShowCommandPalette(false);
+        setIsCommandPalettePinned(false);
       }
     };
 
@@ -1466,31 +2258,31 @@ export default function App() {
       } else if (e.key === "Escape") {
         e.preventDefault();
         setShowCommandPalette(false);
+        setIsCommandPalettePinned(false);
         setValue("");
-        setSelectedCommand(null);
-        setIsInputExpanded(false);
+        setIsInputExpanded(selectedAppAgents.length > 0);
         adjustHeight();
-        textareaRef.current?.blur();
       }
     } else if (e.key === "Enter" && !e.shiftKey) {
       if (sendOnEnter) {
         e.preventDefault();
-        if (value.trim() || selectedCommand) {
+        if (value.trim() || selectedCommand || selectedAppAgents.length) {
           handleSendMessage();
         }
       }
     } else if (e.key === "Enter" && e.shiftKey) {
       if (!sendOnEnter) {
         e.preventDefault();
-        if (value.trim() || selectedCommand) {
+        if (value.trim() || selectedCommand || selectedAppAgents.length) {
           handleSendMessage();
         }
       }
     } else if (e.key === "Escape") {
-      if (value || selectedCommand) {
+      if (value || selectedCommand || selectedAppAgents.length) {
         e.preventDefault();
         setValue("");
         setSelectedCommand(null);
+        setSelectedAppAgents([]);
         setIsInputExpanded(false);
         adjustHeight();
       } else {
@@ -2080,10 +2872,100 @@ Please analyze the code you just wrote and fix this error.`;
     [patchMessagesForChat],
   );
 
-  const handleSendMessage = async () => {
-    if (!value.trim() && attachments.length === 0) return;
+  const executeAttachedAppAgent = useCallback(async (agentId: AppAgentId, prompt: string, conversationContext = ""): Promise<Pick<AttachedAppAgent, "status" | "summary" | "previewUrl" | "action">> => {
+    const cleanPrompt = prompt.trim() || "Help me move this task forward.";
+    if (agentId === "browse") {
+      const response = await fetch("/api/openbrowser/assist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task: cleanPrompt }) });
+      const payload = await response.json();
+      if (!response.ok || !payload?.ok) throw new Error(payload?.error?.message || "Browser agent could not complete the task");
+      return { status: "ready", action: "Verified live page", summary: String(payload.content || "Browser task completed with live-page verification.").slice(0, 360) };
+    }
+    if (agentId === "study") {
+      const evidence = conversationContext.trim()
+        ? `${conversationContext.trim()}\n\nCurrent instruction:\n${cleanPrompt}`
+        : cleanPrompt;
+      const response = await fetch("/api/study/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: cleanPrompt, mode: "plan", context: [{ id: "conversation-brief", title: "Conversation brief", source: "Current chat", body: evidence.slice(0, 8_000) }] }) });
+      const payload = await response.json();
+      if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Study Pal could not prepare the workspace");
+      return { status: "ready", action: "Mapped study sources", summary: String(payload.answer || "Study plan prepared.").slice(0, 360) };
+    }
+    if (agentId === "vibe") {
+      const response = await fetch("/api/vibe/m1-launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: cleanPrompt, planMode: false, continueExisting: false }) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.error || "Vibe Coder could not start the build");
+      return { status: "running", action: "Building in Vibe Coder", summary: `Vibe Coder is building the requested workspace${payload.projectId ? ` in project ${String(payload.projectId).slice(0, 28)}` : ""}. Watch the live preview or take over anytime.` };
+    }
+    if (agentId === "fake-text" || agentId === "would-rather") {
+      const response = await fetch("/api/creator/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: agentId === "fake-text" ? "fake_text_story" : "would_rather", prompt: cleanPrompt, count: agentId === "fake-text" ? 8 : 5, tone: "engaging" }) });
+      const payload = await response.json();
+      if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Creator agent could not generate a script");
+      const data = payload.data || {};
+      const count = agentId === "fake-text" ? (Array.isArray(data.messages) ? data.messages.length : 0) : (Array.isArray(data.rounds) ? data.rounds.length : 0);
+      return { status: "ready", action: "Drafted timeline", summary: agentId === "fake-text" ? `${data.title || "Text story"} is drafted with ${count} timed messages for ${data.contactName || "the selected contact"}.` : `${data.title || "Would You Rather"} is drafted with ${count} voiced questions and percentage reveals.` };
+    }
+    const sourceUrl = cleanPrompt.match(/https?:\/\/[^\s]+/i)?.[0];
+    const videoId = sourceUrl ? extractYoutubeVideoId(sourceUrl) : null;
+    if (!sourceUrl) return { status: "needs_input", action: "Waiting for a source", summary: "Add a public video URL or upload a source, then steer this agent with the moments you want to find." };
+    return { status: "ready", action: "Source captured", summary: "Source captured. Open AI Clip to choose moments, subtitle style, duration, and output count before processing.", previewUrl: videoId ? `https://img.youtube.com/vi/${videoId}/hqdefault.jpg` : undefined };
+  }, []);
 
-    if (value.trim() || selectedCommand) {
+  const runAttachedAppAgent = useCallback(async (messageId: string, agent: Pick<AttachedAppAgent, "id" | "label">, instruction: string, conversationContext = "") => {
+    setMessages((current) => current.map((message) => message.id === messageId ? { ...message, appAgents: message.appAgents?.map((item) => item.id === agent.id ? { ...item, status: "running", control: "ai", action: "Working in live workspace", summary: `Working on: ${instruction}` } : item) } : message));
+    try {
+      const result = await executeAttachedAppAgent(agent.id, instruction, conversationContext);
+      setMessages((current) => current.map((message) => message.id === messageId ? {
+        ...message,
+        appAgents: message.appAgents?.map((item) => item.id === agent.id ? {
+          ...item,
+          ...result,
+          ...(result.status === "ready" ? {
+            control: "user" as const,
+            paused: true,
+            action: "Task complete — you have control",
+            summary: result.summary || `${agent.label} finished. You can take over and continue in the live workspace.`,
+          } : {}),
+        } : item),
+      } : message));
+    } catch (error) {
+      setMessages((current) => current.map((message) => message.id === messageId ? { ...message, appAgents: message.appAgents?.map((item) => item.id === agent.id ? { ...item, status: "failed", summary: error instanceof Error ? error.message : "This app agent stopped unexpectedly." } : item) } : message));
+    }
+  }, [executeAttachedAppAgent]);
+
+  const openAttachedAppAgent = useCallback((agentId: AppAgentId) => {
+    const workspace: WorkspaceTabId = agentId === "browse" ? "browser" : agentId;
+    setSelectedCommand(null);
+    setActiveWorkspaceTab(workspace);
+    setWorkspaceChromeEngaged(true);
+  }, []);
+
+  const controlAttachedAppAgent = useCallback((messageId: string, agentId: AppAgentId, control: "ai" | "user") => {
+    setMessages((current) => current.map((message) => message.id === messageId ? { ...message, appAgents: message.appAgents?.map((item) => item.id === agentId ? { ...item, control, paused: control === "user" ? true : item.paused, action: control === "user" ? "User has control" : "Agent resumed" } : item) } : message));
+    if (agentId === "browse") {
+      void fetch("/api/openbrowser/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: control === "user" ? "take_control" : "return_control" }),
+      }).catch(() => undefined);
+    }
+    setToastMessage(control === "user" ? "You have control of this workspace" : "Agent resumed from the current workspace");
+  }, []);
+
+  const pauseAttachedAppAgent = useCallback((messageId: string, agentId: AppAgentId, paused: boolean) => {
+    setMessages((current) => current.map((message) => message.id === messageId ? { ...message, appAgents: message.appAgents?.map((item) => item.id === agentId ? { ...item, paused, action: paused ? "Paused" : "Resumed" } : item) } : message));
+    if (agentId === "browse") {
+      void fetch("/api/openbrowser/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: paused ? "pause" : "resume" }),
+      }).catch(() => undefined);
+    }
+    setToastMessage(paused ? "Agent paused" : "Agent resumed");
+  }, []);
+
+  const handleSendMessage = async () => {
+    if (!value.trim() && attachments.length === 0 && !selectedCommand && selectedAppAgents.length === 0) return;
+
+    if (value.trim() || selectedCommand || selectedAppAgents.length) {
       const pendingRewrite = pendingDocumentRewriteRef.current;
       if (pendingRewrite && value.trim()) {
         const instruction = value.trim();
@@ -2138,17 +3020,35 @@ Please analyze the code you just wrote and fix this error.`;
         return;
       }
 
+      if (selectedAgent && value.trim()) {
+        const message = messages.find((item) => item.id === selectedAgent.messageId);
+        const agent = message?.appAgents?.find((item) => item.id === selectedAgent.agentId);
+        if (agent) {
+          const instruction = value.trim();
+          setValue("");
+          setSelectedAgent(null);
+          adjustHeight(true);
+          setToastMessage(`Steering ${agent.label}...`);
+          void runAttachedAppAgent(message.id, agent, instruction);
+          return;
+        }
+      }
+
       setVibePreviewMessageId(null);
       setVibePreviewFiles(null);
+      const attachedAgentCommands = [...selectedAppAgents];
       const userCommandLabel =
         selectedCommand?.label ??
+        (attachedAgentCommands.length ? attachedAgentCommands.map((agent) => agent.label).join(", ") : undefined) ??
         (activeWorkspaceTab === "vibe" ? "Vibe Coder" : undefined);
-      const userCommandId =
+      const userCommandId: string | undefined =
         selectedCommand?.id ??
         (activeWorkspaceTab === "vibe" ? "vibe" : undefined);
       const rawUserText = value.trim();
+      if (rawUserText) setWorkspaceChromeEngaged(true);
       const vibeCommand = rawUserText.match(/^\/vibe(?:\s+(.+))?$/i);
       const clipCommand = rawUserText.match(/^\/clip(?:\s+(.+))?$/i);
+      const browseCommand = rawUserText.match(/^\/browse(?:\s+(.+))?$/i);
       const youtubeCommand = rawUserText.match(/^\/youtube(?:\s+(.+))?$/i);
       const searchCommand = rawUserText.match(/^\/search(?:\s+(.+))?$/i);
       if (userCommandId === "clip" || clipCommand) {
@@ -2161,6 +3061,16 @@ Please analyze the code you just wrote and fix this error.`;
         setSelectedCommand(
           commandSuggestions.find((command) => command.id === "clip") ?? null,
         );
+        setActiveWorkspaceTab("clip");
+        setValue("");
+        adjustHeight(true);
+        setRecentCommand(null);
+        setShowCommandPalette(false);
+        return;
+      }
+
+      if (userCommandId === "browse" || browseCommand) {
+        setSelectedCommand(null);
         setActiveWorkspaceTab("browser");
         setValue("");
         adjustHeight(true);
@@ -2170,22 +3080,74 @@ Please analyze the code you just wrote and fix this error.`;
       }
 
       const detectedYoutubeUrl = extractYoutubeUrl(rawUserText);
+      const attachedAgentOwnsRequest = attachedAgentCommands.length > 0;
+      const priorYoutube = [...messages]
+        .reverse()
+        .find(
+          (msg) =>
+            msg.role === "assistant" &&
+            (msg.youtubeContext?.analysisPrompt || msg.youtubeVideoId),
+        );
+      const priorYoutubeContext = priorYoutube?.youtubeContext;
+      const youtubeFollowUp =
+        !attachedAgentOwnsRequest &&
+        Boolean(priorYoutubeContext?.analysisPrompt) &&
+        !detectedYoutubeUrl &&
+        !rawUserText.startsWith("/youtube") &&
+        !rawUserText.startsWith("/search") &&
+        !rawUserText.startsWith("/vibe") &&
+        !rawUserText.startsWith("/weather") &&
+        userCommandId !== "search" &&
+        userCommandId !== "vibe" &&
+        userCommandId !== "clip" &&
+        userCommandId !== "weather";
+      const weatherCommand = rawUserText.match(/^\/weather\s*(.*)$/i);
+      const awaitingWeatherLocation = [...messages]
+        .reverse()
+        .find(
+          (msg) =>
+            msg.role === "assistant" &&
+            msg.thinkingMode === "weather" &&
+            /which location/i.test(msg.content),
+        );
+      const isWeatherMode =
+        userCommandId === "weather" ||
+        Boolean(weatherCommand) ||
+        (!attachedAgentOwnsRequest && Boolean(awaitingWeatherLocation)) ||
+        (!youtubeFollowUp &&
+          !attachedAgentOwnsRequest &&
+          !detectedYoutubeUrl &&
+          looksLikeWeatherQuery(rawUserText));
+      const weatherLocation =
+        weatherCommand?.[1]?.trim() ||
+        (awaitingWeatherLocation
+          ? rawUserText.replace(/^\/weather\s*/i, "").trim()
+          : "") ||
+        extractWeatherLocation(rawUserText) ||
+        "";
       const autoSearch =
         !youtubeCommand &&
         !searchCommand &&
+        !weatherCommand &&
+        !youtubeFollowUp &&
+        !isWeatherMode &&
         userCommandId !== "youtube" &&
         userCommandId !== "search" &&
+        userCommandId !== "weather" &&
+        !attachedAgentOwnsRequest &&
         looksLikeWebSearchQuery(rawUserText);
       const multiResearch = wantsYoutubeAndWebSearch(rawUserText);
       const isYoutubeMode =
         userCommandId === "youtube" ||
         Boolean(youtubeCommand) ||
-        Boolean(detectedYoutubeUrl);
+        (!attachedAgentOwnsRequest && Boolean(detectedYoutubeUrl)) ||
+        youtubeFollowUp;
       const isSearchMode =
-        userCommandId === "search" ||
-        Boolean(searchCommand) ||
-        autoSearch ||
-        multiResearch;
+        !isWeatherMode &&
+        (userCommandId === "search" ||
+          Boolean(searchCommand) ||
+          autoSearch ||
+          multiResearch);
       const youtubePayload =
         youtubeCommand?.[1]?.trim() ||
         (isYoutubeMode && !rawUserText.startsWith("/youtube")
@@ -2204,6 +3166,11 @@ Please analyze the code you just wrote and fix this error.`;
 
       const userText =
         vibeCommand?.[1]?.trim() ||
+        (isWeatherMode
+          ? weatherCommand?.[1]?.trim() ||
+            rawUserText.replace(/^\/weather\s*/i, "").trim() ||
+            rawUserText
+          : null) ||
         (isYoutubeMode && !isSearchMode
           ? youtubePayload || rawUserText.replace(/^\/youtube\s*/i, "").trim()
           : null) ||
@@ -2214,6 +3181,7 @@ Please analyze the code you just wrote and fix this error.`;
         (userCommandLabel ? `Execute ${userCommandLabel}` : "");
       setValue("");
       setSelectedCommand(null);
+      setSelectedAppAgents([]);
       adjustHeight(true);
       setRecentCommand(null);
 
@@ -2233,11 +3201,14 @@ Please analyze the code you just wrote and fix this error.`;
         ? "youtube"
         : isSearchMode
           ? "search"
-          : "thinking";
+          : isWeatherMode
+            ? "weather"
+            : "thinking";
       const youtubeVideoId = isYoutubeMode
         ? extractYoutubeVideoId(userText) ||
           extractYoutubeVideoId(youtubePayload) ||
           extractYoutubeVideoId(detectedYoutubeUrl || "") ||
+          priorYoutube?.youtubeVideoId ||
           undefined
         : undefined;
       setActiveWorkspaceTab(isVibeMode ? "vibe" : "chat");
@@ -2254,14 +3225,37 @@ Please analyze the code you just wrote and fix this error.`;
         isStreaming: true,
         assistantKind: isVibeMode ? "vibe" : "chat",
         thinkingMode,
+        ...(wantsNotesMode(userText) ? { documentMode: "notes" as const } : {}),
         ...(youtubeVideoId ? { youtubeVideoId } : {}),
         ...(isVibeMode ? { vibeUserPrompt: userText } : {}),
+        ...(attachedAgentCommands.length
+          ? {
+              appAgents: attachedAgentCommands.map((agent) => ({
+                id: agent.id,
+                label: agent.label,
+                status: "queued" as const,
+                summary: `Queued with this message: ${userText}`,
+              })),
+            }
+          : {}),
       };
       const nextMessages = [...currentMessages, userMessage, assistantMessage];
 
       chatNearBottomRef.current = true;
       userPinnedAwayRef.current = false;
       setMessages(nextMessages);
+
+      if (attachedAgentCommands.length) {
+        const agentConversationContext = currentMessages
+          .filter((message) => message.content.trim())
+          .slice(-6)
+          .map((message) => `${message.role === "user" ? "User" : "Assistant"}: ${message.content}`)
+          .join("\n\n")
+          .slice(0, 8_000);
+        for (const agent of attachedAgentCommands) {
+          void runAttachedAppAgent(aiMsgId, agent, userText, agentConversationContext);
+        }
+      }
 
       if (isVibeMode && chatId && !isTemporaryChat) {
         const projectTitle = buildVibeProjectTitle(userText);
@@ -2331,12 +3325,201 @@ Please analyze the code you just wrote and fix this error.`;
           return;
         }
 
+        if (attachedAgentCommands.length) {
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === aiMsgId
+                ? {
+                    ...message,
+                    content: `I understand you want: “${userText.slice(0, 280)}”. I’m coordinating ${attachedAgentCommands.map((agent) => agent.label).join(", ")} now. The live workspaces below are the source of truth; select a preview to steer that agent from this chat input.`,
+                    isThinking: false,
+                    isStreaming: false,
+                  }
+                : message,
+            ),
+          );
+          return;
+        }
+
+        if (isWeatherMode) {
+          if (!weatherLocation) {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === aiMsgId
+                  ? {
+                      ...msg,
+                      content:
+                        "Which location should I check? Reply with a city or place — for example “Hornsby Heights NSW” or “weather in Tokyo”.",
+                      isThinking: false,
+                      isStreaming: false,
+                      thinkingMode: "weather",
+                    }
+                  : msg,
+              ),
+            );
+            return;
+          }
+          try {
+            const response = await fetch("/api/research/weather", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ location: weatherLocation }),
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload?.ok) {
+              const suggestions = Array.isArray(payload?.suggestions)
+                ? payload.suggestions.map(String).filter(Boolean).slice(0, 3)
+                : [];
+              const suggestionText = suggestions.length
+                ? `\n\nDid you mean:\n${suggestions.map((s: string) => `- ${s}`).join("\n")}`
+                : "";
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === aiMsgId
+                    ? {
+                        ...msg,
+                        content:
+                          (payload?.error?.message ||
+                            `I couldn't fetch weather for “${weatherLocation}”. Try another place name.`) +
+                          suggestionText,
+                        isThinking: false,
+                        isStreaming: false,
+                        thinkingMode: "weather",
+                      }
+                    : msg,
+                ),
+              );
+              return;
+            }
+            const weatherPayload: WeatherPayload = {
+              location: String(payload.location || weatherLocation),
+              region: payload.region ? String(payload.region) : undefined,
+              country: payload.country ? String(payload.country) : undefined,
+              timezone: payload.timezone ? String(payload.timezone) : undefined,
+              observedAt: payload.observedAt
+                ? String(payload.observedAt)
+                : undefined,
+              matchedFrom: payload.matchedFrom
+                ? String(payload.matchedFrom)
+                : undefined,
+              current: {
+                tempC: Number(payload.current?.tempC ?? 0),
+                weatherCode: Number(payload.current?.weatherCode ?? 0),
+                isDay: Boolean(payload.current?.isDay),
+                highC: Number(payload.current?.highC ?? 0),
+                lowC: Number(payload.current?.lowC ?? 0),
+                precipProb: Number(payload.current?.precipProb ?? 0),
+                condition: String(payload.current?.condition || "Weather"),
+              },
+              daily: Array.isArray(payload.daily)
+                ? payload.daily.map((day: any) => ({
+                    date: String(day.date || ""),
+                    highC: Number(day.highC ?? 0),
+                    lowC: Number(day.lowC ?? 0),
+                    precipProb: Number(day.precipProb ?? 0),
+                    weatherCode: Number(day.weatherCode ?? 0),
+                    condition: String(day.condition || ""),
+                  }))
+                : [],
+            };
+            const placeLabel = [
+              weatherPayload.location,
+              weatherPayload.region,
+              weatherPayload.country,
+            ]
+              .filter(Boolean)
+              .join(", ");
+            const matchNote = weatherPayload.matchedFrom
+              ? ` (matched from “${weatherPayload.matchedFrom}”)`
+              : "";
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === aiMsgId
+                  ? {
+                      ...msg,
+                      content: `Live conditions for **${placeLabel}**${matchNote} — ${weatherPayload.current.condition}.`,
+                      weather: weatherPayload,
+                      isThinking: false,
+                      isStreaming: false,
+                      thinkingMode: "weather",
+                    }
+                  : msg,
+              ),
+            );
+          } catch (weatherError) {
+            console.error("Weather request failed:", weatherError);
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === aiMsgId
+                  ? {
+                      ...msg,
+                      content:
+                        "I couldn't reach the weather service right now. Please try again in a moment.",
+                      isThinking: false,
+                      isStreaming: false,
+                      thinkingMode: "weather",
+                    }
+                  : msg,
+              ),
+            );
+          }
+          return;
+        }
+
         if (isYoutubeMode || isSearchMode) {
           let analysisPrompt = "";
           const researchStartedAt = Date.now();
+          let youtubeContextForMessage:
+            | { url: string; analysisPrompt: string }
+            | undefined;
           if (isYoutubeMode) {
-            const youtubeUrl = extractYoutubeUrl(userText) || userText.trim();
-            if (!youtubeUrl) {
+            if (youtubeFollowUp && priorYoutubeContext?.analysisPrompt) {
+              const followUpHistory = currentMessages
+                .filter((msg) => msg.content.trim().length > 0)
+                .slice(-8)
+                .map((msg) => ({
+                  role: msg.role === "user" ? "user" : "assistant",
+                  content: msg.content,
+                }));
+              analysisPrompt = [
+                "You previously analyzed a YouTube video. Continue the conversation using that transcript context.",
+                "Answer the user's new question specifically. Quote or reference the transcript when helpful.",
+                "",
+                "### Prior video context",
+                priorYoutubeContext.analysisPrompt.slice(0, 14000),
+                "",
+                "### Conversation so far",
+                ...followUpHistory.map(
+                  (msg) =>
+                    `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`,
+                ),
+                "",
+                `### New user question\n${userText}`,
+              ].join("\n");
+              youtubeContextForMessage = priorYoutubeContext;
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === aiMsgId
+                    ? {
+                        ...msg,
+                        youtubeVideoId:
+                          youtubeVideoId || priorYoutube?.youtubeVideoId,
+                        youtubeContext: priorYoutubeContext,
+                        thinkingMode: "youtube",
+                      }
+                    : msg,
+                ),
+              );
+            } else {
+            const youtubeUrl =
+              extractYoutubeUrl(userText) ||
+              extractYoutubeUrl(youtubePayload) ||
+              userText.trim();
+            if (
+              !youtubeUrl ||
+              (!/^https?:\/\//i.test(youtubeUrl) &&
+                !/youtu\.?be|youtube\.com/i.test(youtubeUrl))
+            ) {
               setMessages((prev) =>
                 prev.map((msg) =>
                   msg.id === aiMsgId
@@ -2352,8 +3535,12 @@ Please analyze the code you just wrote and fix this error.`;
               );
               return;
             }
+            const resolvedUrl = youtubeUrl.startsWith("http")
+              ? youtubeUrl
+              : `https://${youtubeUrl}`;
             const question = userText
               .replace(youtubeUrl, "")
+              .replace(resolvedUrl, "")
               .replace(/^\/youtube\s*/i, "")
               .trim();
             let payload: any = null;
@@ -2419,6 +3606,20 @@ Please analyze the code you just wrote and fix this error.`;
                 );
                 return;
               }
+              youtubeContextForMessage = {
+                url: resolvedUrl,
+                analysisPrompt,
+              };
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === aiMsgId
+                    ? {
+                        ...msg,
+                        youtubeContext: youtubeContextForMessage,
+                      }
+                    : msg,
+                ),
+              );
             } catch (youtubeError) {
               console.error("YouTube analyzer request failed:", youtubeError);
               setMessages((prev) =>
@@ -2518,6 +3719,7 @@ Please analyze the code you just wrote and fix this error.`;
                 );
               }
             }
+            } // end fresh youtube analysis branch
           } else {
             const query = userText.replace(/^\/search\s*/i, "").trim();
             if (!query) {
@@ -2691,6 +3893,15 @@ Please analyze the code you just wrote and fix this error.`;
                     isThinking: false,
                     isStreaming: false,
                     thinkingMode,
+                    ...(youtubeContextForMessage
+                      ? { youtubeContext: youtubeContextForMessage }
+                      : {}),
+                    ...(youtubeVideoId || priorYoutube?.youtubeVideoId
+                      ? {
+                          youtubeVideoId:
+                            youtubeVideoId || priorYoutube?.youtubeVideoId,
+                        }
+                      : {}),
                   }
                 : msg,
             ),
@@ -2791,6 +4002,28 @@ Please analyze the code you just wrote and fix this error.`;
     }
   };
 
+  const handleComposerPrimaryAction = (
+    event?: React.MouseEvent<HTMLButtonElement> | React.PointerEvent<HTMLButtonElement>,
+  ) => {
+    event?.preventDefault();
+    event?.stopPropagation();
+    if (canSendMessage) {
+      void handleSendMessage();
+      return;
+    }
+    void voiceCall.startCall();
+  };
+
+  /** Start voice on pointerdown so framer-motion whileTap scale can't cancel the click. */
+  const handleComposerVoicePointerDown = (
+    event: React.PointerEvent<HTMLButtonElement>,
+  ) => {
+    if (canSendMessage) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void voiceCall.startCall();
+  };
+
   const handleAttachFile = () => {
     fileInputRef.current?.click();
   };
@@ -2810,17 +4043,14 @@ Please analyze the code you just wrote and fix this error.`;
 
   const selectCommandSuggestion = (index: number) => {
     const selectedCmd = commandSuggestions[index];
-    setSelectedCommand(selectedCmd);
-    if (selectedCmd?.id === "vibe") {
-      setActiveWorkspaceTab("vibe");
-    } else if (selectedCmd?.id === "clip") {
-      setActiveWorkspaceTab("browser");
-    } else if (selectedCmd?.id !== "clip") {
-      setActiveWorkspaceTab("chat");
-    }
+    if (!selectedCmd) return;
+    setSelectedAppAgents((current) => current.some((agent) => agent.id === selectedCmd.id) ? current.filter((agent) => agent.id !== selectedCmd.id) : [...current, selectedCmd]);
+    setSelectedCommand(null);
     setClipInitialUrl("");
     setValue("");
+    setIsCommandPalettePinned(false);
     setShowCommandPalette(false);
+    setIsInputExpanded(true);
     setTimeout(() => {
       if (textareaRef.current) {
         textareaRef.current.focus();
@@ -2829,9 +4059,19 @@ Please analyze the code you just wrote and fix this error.`;
   };
 
   const isClipWorkspace =
-    activeWorkspaceTab === "browser" || selectedCommand?.id === "clip";
+    activeWorkspaceTab === "clip" || selectedCommand?.id === "clip";
+  const isBrowserWorkspace = activeWorkspaceTab === "browser";
+  const isStudyWorkspace = activeWorkspaceTab === "study";
+  const creatorMode: CreatorMode | null =
+    activeWorkspaceTab === "would-rather" ||
+    activeWorkspaceTab === "reddit-story" ||
+    activeWorkspaceTab === "fake-text"
+      ? activeWorkspaceTab
+      : null;
+  const isCreatorWorkspace = creatorMode !== null;
   const isVibeWorkspace = activeWorkspaceTab === "vibe" && !isClipWorkspace;
-  const showSidebarControls = activeWorkspaceTab === "chat" && !isClipWorkspace;
+  const showSidebarControls =
+    activeWorkspaceTab === "chat" && !isClipWorkspace && !isBrowserWorkspace;
   const rawShowWorkspaceLivePreview = isVibeWorkspace && showVibeLivePreview;
   const [workspacePreviewLayoutVisible, setWorkspacePreviewLayoutVisible] =
     useState(rawShowWorkspaceLivePreview);
@@ -2851,10 +4091,15 @@ Please analyze the code you just wrote and fix this error.`;
   }, [isWorkspaceSwitching, rawShowWorkspaceLivePreview]);
 
   const workspaceViewKey = isClipWorkspace
-    ? "clip"
-    : isVibeWorkspace
-      ? "vibe"
-      : "chat";
+      ? "clip"
+      : isBrowserWorkspace
+        ? "browser"
+        : isStudyWorkspace
+          ? "study"
+        : creatorMode ??
+          (isVibeWorkspace
+            ? "vibe"
+            : "chat");
   const activeInputCommand =
     selectedCommand && selectedCommand.id !== "vibe" ? selectedCommand : null;
   const inputPlaceholder = isVibeWorkspace
@@ -2876,16 +4121,44 @@ Please analyze the code you just wrote and fix this error.`;
   }> = [
     { id: "chat", label: "Chat", icon: MessageCircleDashed },
     { id: "vibe", label: "Vibe Coder", icon: SquarePen },
-    { id: "browser", label: "Clip", icon: Scissors },
+    { id: "clip", label: "Clip", icon: Scissors },
   ];
+  const workflowTabsRestingVisible =
+    !isCreatorWorkspace &&
+    !isBrowserWorkspace &&
+    !isStudyWorkspace &&
+    !workspaceChromeEngaged &&
+    messages.length === 0;
+  const showWorkflowTabs =
+    !isEmbeddedToolPreview &&
+    (workflowTabsRestingVisible || workflowTabsHoverReveal);
+
+  useEffect(() => {
+    const wasVisible = workflowTabsWasVisibleRef.current;
+    workflowTabsWasVisibleRef.current = showWorkflowTabs;
+    if (!wasVisible || showWorkflowTabs || isEmbeddedToolPreview) return;
+    setWorkflowTabsHintVisible(true);
+    if (workflowTabsHintTimerRef.current) window.clearTimeout(workflowTabsHintTimerRef.current);
+    workflowTabsHintTimerRef.current = window.setTimeout(() => {
+      setWorkflowTabsHintVisible(false);
+      workflowTabsHintTimerRef.current = null;
+    }, 2_000);
+  }, [isEmbeddedToolPreview, showWorkflowTabs]);
+
+  useEffect(() => () => {
+    if (workflowTabsHintTimerRef.current) window.clearTimeout(workflowTabsHintTimerRef.current);
+  }, []);
   const sidebarWidthPx = 272;
   const sidebarClearancePx = sidebarWidthPx + 24;
   const effectiveWorkspaceViewport =
     isSidebarOpen && showSidebarControls && viewportWidth >= 760
       ? Math.max(420, viewportWidth - sidebarClearancePx)
       : viewportWidth;
-  const centeredContentWidth = isClipWorkspace
-    ? Math.min(940, Math.max(0, effectiveWorkspaceViewport - 32))
+  const centeredContentWidth =
+    isBrowserWorkspace || isStudyWorkspace
+      ? Math.min(1280, Math.max(0, effectiveWorkspaceViewport - 32))
+      : isClipWorkspace
+        ? Math.min(940, Math.max(0, effectiveWorkspaceViewport - 32))
     : showWorkspaceLivePreview
       ? Math.min(effectiveWorkspaceViewport, 1180)
       : Math.min(768, Math.max(0, effectiveWorkspaceViewport - 32));
@@ -3104,6 +4377,7 @@ Please analyze the code you just wrote and fix this error.`;
       workspaceSwitchTimeoutRef.current = null;
     }, 620);
     setActiveWorkspaceTab(tabId);
+    setWorkspaceChromeEngaged(false);
     setSelectedCommand(null);
     setShowCommandPalette(false);
     setClipInitialUrl("");
@@ -3123,7 +4397,7 @@ Please analyze the code you just wrote and fix this error.`;
       setVibePreviewFiles(null);
     }
 
-    if (tabId === "browser") {
+    if (tabId !== "chat") {
       setValue("");
       adjustHeight(true);
       return;
@@ -3157,6 +4431,36 @@ Please analyze the code you just wrote and fix this error.`;
           }}
         />
       )}
+      <VoiceCallOverlay
+        open={voiceCall.active}
+        status={voiceCall.status}
+        muted={voiceCall.muted}
+        micLevel={voiceCall.micLevel}
+        partialTranscript={voiceCall.partialTranscript}
+        assistantText={voiceCall.assistantText}
+        error={voiceCall.error}
+        turns={voiceCall.turns}
+        orbColorTheme={orbColorTheme}
+        onToggleMute={voiceCall.toggleMute}
+        onEnd={voiceCall.endCall}
+        onSendText={voiceCall.sendTextMessage}
+        onUpdateUserMessage={voiceCall.updateUserMessage}
+        onResendUserMessage={voiceCall.resendUserMessage}
+      />
+      <AnimatePresence>
+        {isAppLauncherOpen ? (
+          <AppLauncher
+            orbColorTheme={orbColorTheme}
+            onClose={() => setIsAppLauncherOpen(false)}
+            onOpenTool={(tool) => {
+              setIsAppLauncherOpen(false);
+              setSelectedCommand(null);
+              setShowCommandPalette(false);
+              handleWorkspaceTabChange(tool);
+            }}
+          />
+        ) : null}
+      </AnimatePresence>
       <motion.div
         className="clyra-app-shell h-dvh flex min-w-0 bg-white text-slate-900 font-sans selection:bg-slate-200 overflow-hidden scalable-container relative"
         initial={{ opacity: 0, scale: 0.97, filter: "blur(12px)", y: 12 }}
@@ -3641,9 +4945,41 @@ Please analyze the code you just wrote and fix this error.`;
               </motion.button>
             )}
           </AnimatePresence>
-          <div className="relative z-[90] h-[52px] w-full shrink-0">
+          {!isEmbeddedToolPreview ? (
+            <div
+              aria-hidden="true"
+              className="absolute left-1/2 top-0 z-[188] h-7 w-[min(390px,74vw)] -translate-x-1/2"
+              onPointerEnter={() => setWorkflowTabsHoverReveal(true)}
+            />
+          ) : null}
+          <AnimatePresence>
+            {workflowTabsHintVisible && !showWorkflowTabs ? (
+              <motion.div
+                key="workflow-tabs-hint"
+                initial={{ opacity: 0, y: -5 }}
+                animate={{ opacity: 0.62, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.18, ease: "easeOut" }}
+                className="pointer-events-none absolute left-1/2 top-1.5 z-[187] flex -translate-x-1/2 items-center gap-1 text-[9px] font-medium text-slate-400"
+              >
+                <span aria-hidden="true" className="text-[11px] leading-none">↑</span>
+                <span>Hover to switch workspace</span>
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
+          <AnimatePresence initial={false}>
+          {showWorkflowTabs ? (
+          <motion.div
+            key="workflow-tabs"
+            initial={{ opacity: 0, y: -18, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -14, scale: 0.98 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            className="pointer-events-none absolute inset-x-0 top-0 z-[190] h-[70px] overflow-visible"
+            onPointerEnter={() => setWorkflowTabsHoverReveal(true)}
+          >
             <motion.div
-              className="absolute left-1/2 top-5 sm:top-6 -translate-x-1/2 z-50"
+              className="pointer-events-auto absolute left-1/2 top-5 z-50 -translate-x-1/2 sm:top-6"
               initial={introState !== "complete" ? { y: -50 } : false}
               animate={{ y: introState === "complete" ? 0 : -50 }}
               transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
@@ -3661,7 +4997,10 @@ Please analyze the code you just wrote and fix this error.`;
                   const rect = e.currentTarget.getBoundingClientRect();
                   containerMouseX.set(e.clientX - rect.left);
                 }}
-                onMouseLeave={() => setHoveredWorkspaceTab(null)}
+                onMouseLeave={() => {
+                  setHoveredWorkspaceTab(null);
+                  setWorkflowTabsHoverReveal(false);
+                }}
                 onBlur={(event) => {
                   if (
                     !event.currentTarget.contains(
@@ -3731,7 +5070,9 @@ Please analyze the code you just wrote and fix this error.`;
                 })}
               </div>
             </motion.div>
-          </div>
+          </motion.div>
+          ) : null}
+          </AnimatePresence>
           <AnimatePresence></AnimatePresence>
           <motion.div
             className="clyra-screen-stage relative flex min-h-0 min-w-0 flex-1 flex-col"
@@ -3823,6 +5164,9 @@ Please analyze the code you just wrote and fix this error.`;
                         "clyra-workspace-card absolute inset-0 flex flex-col transform-gpu",
                         messages.length === 0 &&
                           !isClipWorkspace &&
+                          !isBrowserWorkspace &&
+                          !isStudyWorkspace &&
+                          !isCreatorWorkspace &&
                           "justify-center",
                       )}
                       initial="enter"
@@ -3835,17 +5179,68 @@ Please analyze the code you just wrote and fix this error.`;
                       }}
                     >
                       {isVibeWorkspace ? (
-                        <VibeCoderWorkspace orbColorTheme={orbColorTheme} />
+                        <Suspense fallback={
+                          <div className="flex items-center justify-center min-h-screen bg-slate-50">
+                            <div className="text-center">
+                              <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-slate-400" />
+                              <p className="text-sm text-slate-600">Loading Vibe Coder...</p>
+                            </div>
+                          </div>
+                        }>
+                          <VibeCoderWorkspace
+                            orbColorTheme={orbColorTheme}
+                            onEngaged={() => setWorkspaceChromeEngaged(true)}
+                          />
+                        </Suspense>
                       ) : isClipWorkspace ? (
-                        <AIClipper
-                          embedded
-                          initialUrl={clipInitialUrl}
-                          onClose={() => {
-                            setSelectedCommand(null);
-                            setClipInitialUrl("");
-                            setActiveWorkspaceTab("chat");
-                          }}
-                        />
+                        <Suspense fallback={
+                          <div className="flex items-center justify-center min-h-screen bg-slate-50">
+                            <div className="text-center">
+                              <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-slate-400" />
+                              <p className="text-sm text-slate-600">Loading AI Clipper...</p>
+                            </div>
+                          </div>
+                        }>
+                          <AIClipper
+                            embedded
+                            initialUrl={clipInitialUrl}
+                            onEngaged={() => setWorkspaceChromeEngaged(true)}
+                            onClose={() => {
+                              setSelectedCommand(null);
+                              setClipInitialUrl("");
+                              setActiveWorkspaceTab("chat");
+                            }}
+                          />
+                        </Suspense>
+                      ) : isBrowserWorkspace ? (
+                        <Suspense fallback={
+                          <div className="flex items-center justify-center min-h-screen bg-slate-50">
+                            <div className="text-center">
+                              <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-slate-400" />
+                              <p className="text-sm text-slate-600">Loading Web Browser...</p>
+                            </div>
+                          </div>
+                        }>
+                          <WebBrowserWorkspace />
+                        </Suspense>
+                      ) : isStudyWorkspace ? (
+                        <Suspense fallback={
+                          <div className="flex items-center justify-center min-h-screen bg-slate-50">
+                            <div className="text-center">
+                              <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-slate-400" />
+                              <p className="text-sm text-slate-600">Loading Study Pal...</p>
+                            </div>
+                          </div>
+                        }>
+                          <StudyPalWorkspace />
+                        </Suspense>
+                      ) : creatorMode ? (
+                        <Suspense fallback={null}>
+                          <CreatorStudioWorkspace
+                            mode={creatorMode}
+                            onBack={() => handleWorkspaceTabChange("chat")}
+                          />
+                        </Suspense>
                       ) : messages.length === 0 ? (
                         <motion.div
                           initial={
@@ -3874,7 +5269,7 @@ Please analyze the code you just wrote and fix this error.`;
                           )}
                         >
                           <motion.div
-                            className="mb-2 flex w-full justify-center relative transform-gpu"
+                            className="mb-2 flex w-full flex-col items-center justify-center relative transform-gpu"
                             initial={
                               isWorkspaceSwitching
                                 ? false
@@ -3897,6 +5292,29 @@ Please analyze the code you just wrote and fix this error.`;
                               colorTheme={orbColorTheme}
                               introActive={introState !== "complete"}
                             />
+                            <AnimatePresence>
+                              {(introState === "progress" ||
+                                introState === "progress_complete") && (
+                                <motion.div
+                                  key="intro-progress"
+                                  initial={{ opacity: 0, y: 8 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  exit={{ opacity: 0, y: -4 }}
+                                  transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+                                  className="mt-7 flex w-[min(220px,62vw)] flex-col items-center gap-2.5"
+                                >
+                                  <div className="h-[3px] w-full overflow-hidden rounded-full bg-slate-200/80">
+                                    <motion.div
+                                      className="h-full rounded-full bg-slate-700"
+                                      style={{ width: `${Math.round(introProgress * 100)}%` }}
+                                    />
+                                  </div>
+                                  <p className="text-[9px] font-semibold tracking-[0.18em] text-slate-400">
+                                    {introProgressText}
+                                  </p>
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
                           </motion.div>
                           <motion.h1
                             className="text-3xl sm:text-4xl font-semibold tracking-tight text-slate-800"
@@ -4079,6 +5497,8 @@ Please analyze the code you just wrote and fix this error.`;
                                           thinkingMode={message.thinkingMode}
                                           youtubeVideoId={message.youtubeVideoId}
                                           searchSources={message.searchSources}
+                                          weather={message.weather}
+                                          documentMode={message.documentMode}
                                           fontSizeClass={fontClass}
                                           markdownSupport={markdownSupport}
                                           codeHighlighting={codeHighlighting}
@@ -4098,6 +5518,16 @@ Please analyze the code you just wrote and fix this error.`;
                                           }
                                           onContentChange={handleDocumentChange}
                                         />
+                                        <AppAgentFlowPanel
+                                          agents={message.appAgents}
+                                          selectedAgent={selectedAgent?.messageId === message.id ? selectedAgent.agentId : null}
+                                          onSelect={(agentId) => {
+                                            setSelectedAgent({ messageId: message.id, agentId });
+                                            openAttachedAppAgent(agentId);
+                                          }}
+                                          onControl={(agentId, control) => controlAttachedAppAgent(message.id, agentId, control)}
+                                          onPause={(agentId, paused) => pauseAttachedAppAgent(message.id, agentId, paused)}
+                                        />
                                       </div>
                                     </div>
                                   )}
@@ -4108,11 +5538,24 @@ Please analyze the code you just wrote and fix this error.`;
                         </div>
                       )}
                       <AnimatePresence initial={false}>
-                        {!isFullscreen && !isClipWorkspace && !isVibeWorkspace && (
+                        {!isFullscreen &&
+                          !isClipWorkspace &&
+                          !isBrowserWorkspace &&
+                          !isStudyWorkspace &&
+                          !isCreatorWorkspace &&
+                          !isVibeWorkspace && (
                           <motion.div
                             key="composer"
                             ref={inputContainerRef}
-                            onClick={() => {
+                            onClick={(event) => {
+                              const target = event.target as HTMLElement | null;
+                              if (
+                                target?.closest?.(
+                                  '[aria-label="Start voice call"], [aria-label="Send message"]',
+                                )
+                              ) {
+                                return;
+                              }
                               setIsComposerFocused(true);
                               setIsInputExpanded(true);
                               textareaRef.current?.focus();
@@ -4163,7 +5606,7 @@ Please analyze the code you just wrote and fix this error.`;
                               backfaceVisibility: "hidden",
                             }}
                             className={cn(
-                              "clyra-composer-transition w-full shrink-0 relative z-20 transition-all duration-700 max-w-3xl mx-auto",
+                              "clyra-composer-transition w-full shrink-0 relative z-20 transition-all duration-[1100ms] max-w-3xl mx-auto",
                               showWorkspaceLivePreview
                                 ? "px-3 sm:px-4"
                                 : "px-5 sm:px-8",
@@ -4210,7 +5653,7 @@ Please analyze the code you just wrote and fix this error.`;
                             </AnimatePresence>
                             <motion.div
                               className={cn(
-                                "input-wrapper relative backdrop-blur-xl border transition-[background-color,border-color,padding,box-shadow,border-radius] duration-[720ms] ease-[cubic-bezier(0.22,1,0.36,1)] cursor-text overflow-visible mx-auto z-[3]",
+                                "input-wrapper relative backdrop-blur-xl border transition-[background-color,border-color,padding,box-shadow,border-radius] duration-[1100ms] ease-[cubic-bezier(0.16,1,0.3,1)] cursor-text overflow-visible mx-auto z-[3]",
                                 isVibeWorkspace && "clyra-vibe-composer",
                                 theme === "Dark"
                                   ? "bg-slate-200/90 border-slate-400/50"
@@ -4232,33 +5675,25 @@ Please analyze the code you just wrote and fix this error.`;
                               }
                               animate={{
                                 width:
-                                  introState === "booting" ||
-                                  introState === "orb_up" ||
-                                  introState === "input_circle"
+                                  introPreExpand
                                     ? 48
                                     : "100%",
                                 height:
-                                  introState === "booting" ||
-                                  introState === "orb_up" ||
-                                  introState === "input_circle"
+                                  introPreExpand
                                     ? 48
                                     : "auto",
                                 borderRadius:
-                                  introState === "booting" ||
-                                  introState === "orb_up" ||
-                                  introState === "input_circle"
+                                  introPreExpand
                                     ? 24
                                     : isExpanded
                                       ? 28
                                       : 36,
                                 opacity:
-                                  introState === "booting" ||
-                                  introState === "orb_up"
+                                  introBusy
                                     ? 0
                                     : 1,
                                 y:
-                                  introState === "booting" ||
-                                  introState === "orb_up"
+                                  introBusy
                                     ? 20
                                     : 0,
                               }}
@@ -4266,13 +5701,13 @@ Please analyze the code you just wrote and fix this error.`;
                                 introState !== "complete"
                                   ? {
                                       type: "tween",
-                                      ease: [0.22, 1, 0.36, 1],
-                                      duration: 0.8,
+                                      ease: [0.16, 1, 0.3, 1],
+                                      duration: 1.05,
                                     }
                                   : {
                                       type: "tween",
-                                      ease: [0.22, 1, 0.36, 1],
-                                      duration: 0.72,
+                                      ease: [0.16, 1, 0.3, 1],
+                                      duration: 1.05,
                                     }
                               }
                             >
@@ -4281,14 +5716,29 @@ Please analyze the code you just wrote and fix this error.`;
                                 initial={{ opacity: 0 }}
                                 animate={{
                                   opacity:
-                                    introState === "booting" ||
-                                    introState === "orb_up" ||
-                                    introState === "input_circle"
+                                    introPreExpand
                                       ? 0
                                       : 1,
                                 }}
                                 transition={{ duration: 0.6, ease: "easeOut" }}
                               >
+                                <AnimatePresence initial={false}>
+                                  {selectedAgent ? (
+                                    <motion.div
+                                      initial={{ opacity: 0, y: 8, scale: 0.98 }}
+                                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                                      exit={{ opacity: 0, y: 6, scale: 0.98 }}
+                                      transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                                      className="absolute bottom-[calc(100%+10px)] left-3 z-30 inline-flex items-center gap-2 rounded-full border border-blue-200/80 bg-white/90 px-3 py-1.5 text-[10px] font-semibold text-blue-700 shadow-sm backdrop-blur-md"
+                                    >
+                                      <span className="h-1.5 w-1.5 rounded-full bg-blue-500 shadow-[0_0_0_4px_rgba(59,130,246,.12)]" />
+                                      Steering selected agent from this chat
+                                      <button type="button" onClick={() => setSelectedAgent(null)} className="ml-0.5 grid h-4 w-4 place-items-center rounded-full text-blue-400 transition-colors hover:bg-blue-50 hover:text-blue-700" aria-label="Stop steering selected agent">
+                                        <X className="h-2.5 w-2.5" />
+                                      </button>
+                                    </motion.div>
+                                  ) : null}
+                                </AnimatePresence>
                                 <AnimatePresence>
                                   {isRephrasingMode && (
                                     <motion.div
@@ -4397,8 +5847,9 @@ Please analyze the code you just wrote and fix this error.`;
                                         }}
                                       >
                                         <div className="py-2.5">
-                                          <div className="px-4 pb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                                            Commands
+                                          <div className="flex items-center justify-between px-4 pb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                            <span>App agents</span>
+                                            <span className="normal-case tracking-normal">{selectedAppAgents.length ? `${selectedAppAgents.length} selected` : "Select one or more"}</span>
                                           </div>
                                           {filteredSuggestions.map(
                                             (suggestion, index) => {
@@ -4408,12 +5859,15 @@ Please analyze the code you just wrote and fix this error.`;
                                                     c.prefix ===
                                                     suggestion.prefix,
                                                 );
+                                              const isSelected = selectedAppAgents.some((agent) => agent.id === suggestion.id);
                                               return (
                                                 <motion.div
                                                   key={suggestion.prefix}
                                                   className={cn(
                                                     "flex cursor-pointer items-center gap-3 px-4 py-3 text-sm transition-colors",
-                                                    activeSuggestion === index
+                                                    isSelected
+                                                      ? "bg-blue-50 text-slate-900"
+                                                      : activeSuggestion === index
                                                       ? "bg-slate-100 text-slate-900"
                                                       : "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
                                                   )}
@@ -4429,14 +5883,13 @@ Please analyze the code you just wrote and fix this error.`;
                                                   <div
                                                     className={cn(
                                                       "w-7 h-7 rounded-md flex items-center justify-center transition-colors shrink-0",
-                                                      activeSuggestion === index
+                                                      isSelected || activeSuggestion === index
                                                         ? "bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.05)] border border-slate-200"
                                                         : "bg-slate-50/50 text-slate-500 border border-transparent",
                                                     )}
                                                   >
                                                     {suggestion.icon(
-                                                      activeSuggestion ===
-                                                        index,
+                                                      isSelected || activeSuggestion === index,
                                                     )}
                                                   </div>
                                                   <div className="flex-1 flex flex-col items-start leading-snug truncate">
@@ -4483,6 +5936,7 @@ Please analyze the code you just wrote and fix this error.`;
                                                       {suggestion.description}
                                                     </span>
                                                   </div>
+                                                  {isSelected ? <Check className="h-4 w-4 shrink-0 text-blue-600" /> : null}
                                                 </motion.div>
                                               );
                                             },
@@ -4604,7 +6058,8 @@ Please analyze the code you just wrote and fix this error.`;
                                       if (
                                         !currentValue &&
                                         attachments.length === 0 &&
-                                        !selectedCommand
+                                        !selectedCommand &&
+                                        selectedAppAgents.length === 0
                                       ) {
                                         setIsInputExpanded(false);
                                       }
@@ -4615,7 +6070,7 @@ Please analyze the code you just wrote and fix this error.`;
                                         ? "Tell Clyra how to change the highlighted text..."
                                         : inputPlaceholder
                                     }
-                                    containerClassName="w-full"
+                                    containerClassName="w-full min-w-0"
                                     className={cn(
                                       "resize-none overflow-y-auto overflow-x-hidden bg-transparent outline-none disabled:opacity-50",
                                       "text-[15px] leading-relaxed sm:text-lg",
@@ -4625,7 +6080,7 @@ Please analyze the code you just wrote and fix this error.`;
                                       isExpanded
                                         ? "min-h-[50px] max-h-[96px] py-3 px-1"
                                         : "min-h-[40px] max-h-[96px] py-2 px-1",
-                                      "clyra-visible-scrollbar transition-[height,min-height,max-height,padding,opacity,transform] duration-[720ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
+                                      "clyra-visible-scrollbar transition-[height,min-height,max-height,padding,opacity,transform] duration-[1100ms] ease-[cubic-bezier(0.16,1,0.3,1)]",
                                       isFadingInText
                                         ? "opacity-0 translate-y-1 scale-[0.99]"
                                         : introState !== "complete"
@@ -4637,26 +6092,31 @@ Please analyze the code you just wrote and fix this error.`;
                                   {!isExpanded && (
                                     <motion.button
                                       type="button"
-                                      onClick={handleSendMessage}
-                                      aria-label="Send message"
+                                      onPointerDown={handleComposerVoicePointerDown}
+                                      onMouseDown={(event) => {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                      }}
+                                      onClick={handleComposerPrimaryAction}
+                                      aria-label={
+                                        canSendMessage ? "Send message" : "Start voice call"
+                                      }
                                       whileHover={{ scale: 1.05 }}
                                       whileTap={{ scale: 0.95 }}
-                                      disabled={
-                                        value.trim().length === 0 &&
-                                        !selectedCommand
-                                      }
                                       className={cn(
-                                        "p-2 rounded-full transition-all duration-700 shrink-0",
+                                        "h-9 w-9 rounded-full transition-all duration-700 shrink-0 relative z-10",
                                         "flex items-center justify-center",
                                         introState === "complete"
                                           ? "opacity-100"
                                           : "opacity-0",
-                                        value.trim() || selectedCommand
-                                          ? "bg-slate-900 text-white hover:bg-slate-800"
-                                          : "bg-slate-100 text-slate-400 cursor-not-allowed",
+                                        "bg-slate-900 text-white hover:bg-slate-800 shadow-sm",
                                       )}
                                     >
-                                      <ArrowUpIcon className="w-4.5 h-4.5" />
+                                      {canSendMessage ? (
+                                        <ArrowUpIcon className="h-[18px] w-[18px]" />
+                                      ) : (
+                                        <VoiceWaveIcon className="text-white" />
+                                      )}
                                     </motion.button>
                                   )}
                                 </div>
@@ -4712,6 +6172,31 @@ Please analyze the code you just wrote and fix this error.`;
                                         <Paperclip className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
                                       </motion.button>
 
+                                      <motion.button
+                                        data-command-button
+                                        type="button"
+                                        onClick={() => {
+                                          const next = !showCommandPalette;
+                                          setIsCommandPalettePinned(next);
+                                          setShowCommandPalette(next);
+                                          if (next) setActiveSuggestion(0);
+                                        }}
+                                        whileTap={{ scale: 0.95 }}
+                                        className={cn("flex h-9 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-semibold transition-colors", showCommandPalette || selectedAppAgents.length ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-100 hover:text-slate-800")}
+                                        aria-label="Select app agents"
+                                      >
+                                        <AppWindow className="h-4 w-4" /><span className="hidden sm:inline">Apps</span>{selectedAppAgents.length ? <span className="grid h-4 min-w-4 place-items-center rounded-full bg-white px-1 text-[8px] text-slate-900">{selectedAppAgents.length}</span> : null}
+                                      </motion.button>
+
+                                      <AnimatePresence initial={false}>
+                                        {selectedAppAgents.map((agent) => (
+                                          <motion.div key={agent.id} layout initial={{ opacity: 0, scale: 0.86, x: -4 }} animate={{ opacity: 1, scale: 1, x: 0 }} exit={{ opacity: 0, scale: 0.86, x: -4 }} className="flex h-8 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2 text-[10px] font-semibold text-slate-600 shadow-sm">
+                                            {agent.icon(false)}<span className="hidden max-w-24 truncate md:inline">{agent.label}</span>
+                                            <button type="button" onClick={() => setSelectedAppAgents((current) => current.filter((item) => item.id !== agent.id))} aria-label={`Remove ${agent.label}`} className="grid h-4 w-4 place-items-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X className="h-2.5 w-2.5" /></button>
+                                          </motion.div>
+                                        ))}
+                                      </AnimatePresence>
+
                                       <AnimatePresence>
                                         {activeInputCommand && (
                                           <motion.div
@@ -4763,7 +6248,7 @@ Please analyze the code you just wrote and fix this error.`;
                                     <div className="flex items-center gap-2">
                                       <AnimatePresence mode="wait">
                                         {commandPaletteEnabled &&
-                                        (value.trim() || selectedCommand) ? (
+                                        (value.trim() || selectedCommand || selectedAppAgents.length) ? (
                                           <motion.div
                                             key="send-hint"
                                             initial={{ opacity: 0, x: 5 }}
@@ -4788,41 +6273,49 @@ Please analyze the code you just wrote and fix this error.`;
                                             </span>
                                           </motion.div>
                                         ) : commandPaletteEnabled ? (
-                                          <motion.div
+                                          <motion.button
                                             key="cmd-hint"
+                                            type="button"
+                                            aria-label="Open app launcher"
+                                            onClick={() => setIsAppLauncherOpen(true)}
                                             initial={{ opacity: 0, x: 5 }}
                                             animate={{ opacity: 1, x: 0 }}
                                             exit={{ opacity: 0, x: 5 }}
-                                            className="hidden sm:flex items-center gap-1.5 text-[10px] text-slate-400/80 font-medium mr-1"
+                                            className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[10px] font-medium text-slate-400/80 transition-colors hover:bg-slate-100/80 hover:text-slate-600 mr-1"
                                           >
                                             <span className="flex items-center gap-1">
                                               <kbd className="font-sans px-1 py-[1.5px] rounded-sm bg-slate-100/50 border border-slate-200/50 shadow-[0_1px_0.5px_rgba(0,0,0,0.02)] text-slate-400">
                                                 Ctrl/⌘K
                                               </kbd>
-                                              for commands
+                                              for apps
                                             </span>
-                                          </motion.div>
+                                          </motion.button>
                                         ) : null}
                                       </AnimatePresence>
                                       <motion.button
                                         type="button"
-                                        onClick={handleSendMessage}
-                                        aria-label="Send message"
+                                        onPointerDown={handleComposerVoicePointerDown}
+                                        onMouseDown={(event) => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                        }}
+                                        onClick={handleComposerPrimaryAction}
+                                        aria-label={
+                                          canSendMessage ? "Send message" : "Start voice call"
+                                        }
                                         whileHover={{ scale: 1.05 }}
                                         whileTap={{ scale: 0.95 }}
-                                        disabled={
-                                          value.trim().length === 0 &&
-                                          !selectedCommand
-                                        }
                                         className={cn(
-                                          "p-2.5 rounded-full transition-all duration-200 shrink-0",
+                                          "h-10 w-10 rounded-full transition-all duration-200 shrink-0 relative z-10",
                                           "flex items-center justify-center shadow-sm",
-                                          value.trim() || selectedCommand
-                                            ? "bg-slate-900 text-white shadow-md hover:bg-slate-800 hover:shadow-lg"
-                                            : "bg-slate-100 text-slate-400 cursor-not-allowed",
+                                          "bg-slate-900 text-white shadow-md hover:bg-slate-800 hover:shadow-lg",
                                         )}
                                       >
-                                        <ArrowUpIcon className="w-5 h-5" />
+                                        {canSendMessage ? (
+                                          <ArrowUpIcon className="h-5 w-5" />
+                                        ) : (
+                                          <VoiceWaveIcon className="text-white" />
+                                        )}
                                       </motion.button>
                                     </div>
                                   </div>
@@ -5019,6 +6512,12 @@ Please analyze the code you just wrote and fix this error.`;
         setUserBubbleColor={setUserBubbleColor}
         orbColorTheme={orbColorTheme}
         setOrbColorTheme={setOrbColorTheme}
+        voiceRate={voiceRate}
+        setVoiceRate={setVoiceRate}
+        voicePitch={voicePitch}
+        setVoicePitch={setVoicePitch}
+        voiceVolume={voiceVolume}
+        setVoiceVolume={setVoiceVolume}
         chats={chats}
         clearChats={() => {
           setChats([]);

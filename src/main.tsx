@@ -95,7 +95,16 @@ if (embedParams.get("vibe_embed") === "1") {
   root.render(
     <StrictMode>
       <RootErrorBoundary>
-        <App />
+        <Suspense fallback={
+          <div className="min-h-dvh flex items-center justify-center bg-slate-50 p-6 text-slate-800">
+            <div className="text-center">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-slate-200 animate-pulse"></div>
+              <p className="text-sm text-slate-600">Loading Clyra AI...</p>
+            </div>
+          </div>
+        }>
+          <App />
+        </Suspense>
       </RootErrorBoundary>
     </StrictMode>,
   );

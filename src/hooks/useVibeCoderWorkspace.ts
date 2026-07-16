@@ -360,6 +360,10 @@ export function useVibeCoderWorkspace(projectId: string) {
           ];
           break;
       }
+
+      if (event.type === "stage" && event.stage === "paused") {
+        next.stage = "paused";
+      }
       return next;
     });
   }, []);
@@ -445,6 +449,21 @@ export function useVibeCoderWorkspace(projectId: string) {
       }
       setState((prev) => ({ ...prev, stage: "cancelled", error: "Cancelled by user" }));
     }
+  }, [state.taskId]);
+
+  const pauseTask = useCallback(async () => {
+    if (!state.taskId) return;
+    await fetch(`/api/vibe/pause/${state.taskId}`, { method: "POST" });
+    setState((prev) => ({ ...prev, stage: "paused" }));
+  }, [state.taskId]);
+
+  const resumeTask = useCallback(async () => {
+    if (!state.taskId) return;
+    await fetch(`/api/vibe/resume/${state.taskId}`, { method: "POST" });
+    setState((prev) => ({
+      ...prev,
+      stage: prev.stage === "paused" ? "generating-file" : prev.stage,
+    }));
   }, [state.taskId]);
 
   const approvePlan = useCallback(async () => {
@@ -557,6 +576,8 @@ export function useVibeCoderWorkspace(projectId: string) {
     state,
     startTask,
     cancelTask,
+    pauseTask,
+    resumeTask,
     approvePlan,
     loadSavedProject,
     restoreProject,

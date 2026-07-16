@@ -1,0 +1,20 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-voice.txt /app/requirements-voice.txt
+RUN pip install --no-cache-dir -r /app/requirements-voice.txt
+
+COPY backend/voice-pipeline /app/backend/voice-pipeline
+
+ENV VOICE_PIPELINE_PORT=8787
+ENV VOICE_STT_MODEL=large-v3
+ENV VOICE_SAMPLE_RATE=16000
+
+EXPOSE 8787
+
+CMD ["python", "backend/voice-pipeline/main.py"]

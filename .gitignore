@@ -12,4 +12,12 @@ tmp/
 output/
 .cache/
 *.mp4
+!public/media/fake-text/gameplay/**/*.mp4
+.clyra/
 .claude/
+.venv*/
+venv/
+projects/
+temp-repo/
+*.bak
+Clyra-AI-Final/

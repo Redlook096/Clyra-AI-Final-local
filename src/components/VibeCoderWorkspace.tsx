@@ -40,12 +40,14 @@ import { MarkdownMessageContent } from "./MarkdownMessageContent";
 
 // --- New Imports for the Advanced Workspace ---
 import { useVibeCoderWorkspace, type ProjectFile } from "../hooks/useVibeCoderWorkspace";
-import { ThinkingStatus } from "./vibe-coder/thinking/ThinkingStatus";
 import { MiniCodeBoxQueue } from "./vibe-coder/code/MiniCodeBoxQueue";
 import { LivePreviewPanel } from "./vibe-coder/preview/LivePreviewPanel";
+import { PreviewSkeletonLayout } from "./vibe-coder/preview/PreviewSkeletonLayout";
+import { OpenPencilWorkspace } from "./vibe-coder/design/OpenPencilWorkspace";
 import {
   buildSessionFromApi,
   deleteProjectSession,
+  loadProjectSession,
   loadProjectSessionAsync,
   mergeSessionWithCache,
   projectThumbnailUrl,
@@ -86,6 +88,36 @@ type AgentActivityItem = {
   filePath?: string;
   command?: string;
 };
+
+const DESIGN_DIRECTIONS = [
+  "Minimalism",
+  "Flat Design",
+  "Material Design",
+  "Glassmorphism",
+  "Neumorphism",
+  "Skeuomorphism",
+  "Brutalism",
+  "Neo-Brutalism",
+  "Bento Box",
+] as const;
+
+type DesignDirection = (typeof DESIGN_DIRECTIONS)[number];
+
+type DesignSession = {
+  basePrompt: string;
+  prompt: string;
+  requestId: number;
+  style: DesignDirection;
+};
+
+function designDirectionPrompt(basePrompt: string, style: DesignDirection) {
+  return [
+    basePrompt,
+    `Create a distinct ${style} desktop interface direction.`,
+    "Use a 1440 by 900 desktop canvas, English interface copy, clear hierarchy, and production-ready responsive components.",
+    "Preserve the requested product behavior while making this direction visually distinct and easy to compare.",
+  ].join("\n\n");
+}
 
 function isUserVisibleTerminalCommand(command?: string) {
   if (!command) return false;
@@ -333,8 +365,8 @@ function buildActivityItems({
   return items;
 }
 
-export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbColorTheme?: OrbColorTheme }) {
-  const { state, startTask, cancelTask, approvePlan, loadSavedProject, resetToIdle } = useVibeCoderWorkspace("project-advanced-vibe");
+export default function VibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: { orbColorTheme?: OrbColorTheme; onEngaged?: () => void }) {
+  const { state, resetToIdle, setState, loadSavedProject, restoreProject } = useVibeCoderWorkspace("project-advanced-vibe");
 
   const [mode, setMode] = useState<"plan" | "fast">("plan");
   const [promptInput, setPromptInput] = useState("");
@@ -358,12 +390,22 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
   const [elapsedNow, setElapsedNow] = useState(Date.now());
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [thinkingCollapsed, setThinkingCollapsed] = useState(false);
+  const [m1ConversationUrl, setM1ConversationUrl] = useState<string | null>(null);
+  const [m1LaunchError, setM1LaunchError] = useState<string | null>(null);
+  const [m1Launching, setM1Launching] = useState(false);
+  const [m1IframeReady, setM1IframeReady] = useState(false);
+  const [designSession, setDesignSession] = useState<DesignSession | null>(null);
+  const m1ReadyTimerRef = useRef<number | null>(null);
 
   const elapsedSinceStart = state.startedAt ? elapsedNow - state.startedAt : 0;
   const planReadyDelayPassed = elapsedSinceStart >= 10000;
   const canReviewPlan = Boolean(state.planMd) && state.planMode;
   const planReady = canReviewPlan && state.fileQueue.length > 0 && planReadyDelayPassed;
   const thinkingIsResting = state.stage === "complete" || (state.planMode && planReady);
+
+  useEffect(() => {
+    if (state.stage !== "idle") onEngaged?.();
+  }, [onEngaged, state.stage]);
 
   useEffect(() => {
     if (thinkingIsResting) {
@@ -373,6 +415,37 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
       setThinkingCollapsed(false);
     }
   }, [thinkingIsResting]);
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string } | null;
+      if (!data || data.type !== "clyra-m1-ready") return;
+      if (m1ReadyTimerRef.current) {
+        window.clearTimeout(m1ReadyTimerRef.current);
+        m1ReadyTimerRef.current = null;
+      }
+      // Small beat so panel motion can settle before we lift the overlay.
+      m1ReadyTimerRef.current = window.setTimeout(() => {
+        setM1IframeReady(true);
+        m1ReadyTimerRef.current = null;
+      }, 480);
+    };
+    window.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      if (m1ReadyTimerRef.current) {
+        window.clearTimeout(m1ReadyTimerRef.current);
+        m1ReadyTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!m1ConversationUrl || m1IframeReady) return;
+    // Safety net: never leave the overlay forever if postMessage fails.
+    const timer = window.setTimeout(() => setM1IframeReady(true), 4500);
+    return () => window.clearTimeout(timer);
+  }, [m1ConversationUrl, m1IframeReady]);
 
   const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
     const response = await fetch(url, init);
@@ -551,11 +624,94 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
     return () => window.cancelAnimationFrame(frame);
   }, [activeScrollSignal, state.stage]);
 
+  const launchM1 = useCallback(
+    async (opts: {
+      prompt?: string;
+      projectId?: string;
+      planMode?: boolean;
+      continueExisting?: boolean;
+      projectName?: string;
+    }) => {
+      setM1LaunchError(null);
+      setM1Launching(true);
+      setM1IframeReady(false);
+      setSkipEnterAnimation(false);
+      setWelcomeView("home");
+      setState((prev) => ({
+        ...prev,
+        stage: "task-created",
+        prompt: opts.prompt || prev.prompt || "",
+        planMode: !!opts.planMode,
+        projectId: opts.projectId || prev.projectId,
+        startedAt: Date.now(),
+        error: null,
+      }));
+      if (opts.projectName) setActiveProjectName(opts.projectName);
+
+      try {
+        const res = await fetch("/api/vibe/m1-launch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt: opts.prompt,
+            projectId: opts.projectId,
+            planMode: !!opts.planMode,
+            continueExisting: !!opts.continueExisting,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data?.error || "Failed to launch Vibe Coder M1");
+        }
+        setM1ConversationUrl(String(data.conversationUrl));
+        setState((prev) => ({
+          ...prev,
+          projectId: String(data.projectId || prev.projectId),
+          stage: "generating-file",
+          taskId: String(data.conversationId || ""),
+        }));
+        setActiveProjectName(
+          opts.projectName ||
+            String(opts.prompt || "").slice(0, 70) ||
+            "Vibe project",
+        );
+        const launchedId = String(data.projectId || opts.projectId || "");
+        void loadProjects();
+        if (launchedId && launchedId !== "project-advanced-vibe") {
+          // Capture a fresh card preview after the workspace updates.
+          window.setTimeout(() => {
+            void fetch(
+              `/api/vibe/projects/${encodeURIComponent(launchedId)}/thumbnail/refresh`,
+              { method: "POST" },
+            )
+              .then(() => loadProjects())
+              .catch(() => undefined);
+          }, 8000);
+          window.setTimeout(() => {
+            void fetch(
+              `/api/vibe/projects/${encodeURIComponent(launchedId)}/thumbnail/refresh`,
+              { method: "POST" },
+            )
+              .then(() => loadProjects())
+              .catch(() => undefined);
+          }, 45000);
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to launch M1";
+        setM1LaunchError(message);
+        setState((prev) => ({ ...prev, stage: "failed", error: message }));
+      } finally {
+        setM1Launching(false);
+      }
+    },
+    [loadProjects, setState],
+  );
+
   const handleSubmit = async (overridePrompt?: string) => {
     const cleanPrompt = (typeof overridePrompt === "string" ? overridePrompt : promptInput).trim();
     if (!cleanPrompt) return;
     persistCurrentSession();
-    setSkipEnterAnimation(false);
     setPlanExpanded(false);
     setPlanChangeMode(false);
     setPlanApproved(!mode || mode === "fast");
@@ -568,8 +724,79 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
         timestamp: Date.now(),
       },
     ]);
-    await startTask(cleanPrompt, mode === "plan");
     setPromptInput("");
+    const explicitDesign = /^\/design(?:\s|$)/i.test(cleanPrompt);
+    const shouldStartWithDesign = state.stage === "idle" && chatMessages.length === 0;
+    if (explicitDesign || shouldStartWithDesign) {
+      const basePrompt = explicitDesign
+        ? cleanPrompt.replace(/^\/design\s*/i, "").trim() || "Create a polished desktop application interface"
+        : cleanPrompt;
+      const style: DesignDirection = "Minimalism";
+      setDesignSession({
+        basePrompt,
+        prompt: designDirectionPrompt(basePrompt, style),
+        requestId: Date.now(),
+        style,
+      });
+      onEngaged?.();
+      return;
+    }
+    await launchM1({
+      prompt: cleanPrompt,
+      planMode: mode === "plan",
+      projectId:
+        state.projectId && state.projectId !== "project-advanced-vibe"
+          ? state.projectId
+          : undefined,
+    });
+  };
+
+  const submitDesignRevision = () => {
+    const revision = promptInput.trim();
+    if (!revision || !designSession) return;
+    setChatMessages((prev) => [
+      ...prev,
+      { id: `user-design-${Date.now()}`, role: "user", content: revision, timestamp: Date.now() },
+    ]);
+    setDesignSession((current) => current ? {
+      ...current,
+      prompt: `${revision}\n\nApply this change to the active ${current.style} direction. Preserve the rest of the approved product brief:\n${current.basePrompt}`,
+      requestId: Date.now(),
+    } : current);
+    setPromptInput("");
+  };
+
+  const chooseDesignDirection = (style: DesignDirection) => {
+    setDesignSession((current) => current ? {
+      ...current,
+      style,
+      prompt: designDirectionPrompt(current.basePrompt, style),
+      requestId: Date.now(),
+    } : current);
+  };
+
+  const approveDesignAndBuild = () => {
+    if (!designSession) return;
+    const approved = designSession;
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        id: `assistant-design-approved-${Date.now()}`,
+        role: "assistant",
+        content: `${approved.style} direction approved. I’m carrying the canvas structure into the working build now.`,
+        timestamp: Date.now(),
+      },
+    ]);
+    setDesignSession(null);
+    void launchM1({
+      prompt: `${approved.basePrompt}\n\nUse the approved ${approved.style} design direction from the live design canvas. Preserve its hierarchy, spacing, component structure, and desktop proportions.`,
+      planMode: mode === "plan",
+      projectId:
+        state.projectId && state.projectId !== "project-advanced-vibe"
+          ? state.projectId
+          : undefined,
+      continueExisting: Boolean(state.projectId && state.projectId !== "project-advanced-vibe"),
+    });
   };
 
   const handlePlanRevisionSubmit = async () => {
@@ -617,308 +844,225 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
     async (project: any) => {
       try {
         persistCurrentSession();
-        const [cached, data] = await Promise.all([
-          loadProjectSessionAsync(project.id, { id: project.id, name: project.name }),
-          fetchJson<{
-            project: any;
-            files: Array<{ path: string; content: string }>;
-            plan?: string;
-          }>(`/api/vibe/projects/${encodeURIComponent(project.id)}`),
-        ]);
+        setWelcomeView("home");
+        setActiveProjectName(project.name || project.id || "Vibe project");
+        setState((prev) => ({
+          ...prev,
+          projectId: project.id,
+          prompt: project.prompt || prev.prompt,
+          stage: "complete",
+          restored: true,
+          preview: { status: "ready" },
+          taskId: null,
+          currentStreamingFile: null,
+        }));
+        const cachedSession = loadProjectSession(project.id);
+        if (cachedSession) applySavedSession(cachedSession);
 
-        const built = buildSessionFromApi(project, data);
-        let session = cached
-          ? refreshSessionFromApi(mergeSessionWithCache(built, cached), project, data)
-          : built;
+        void restoreProject(project.id).catch((error) => {
+          console.warn("Failed to hydrate saved Vibe project", error);
+        });
 
-        if (cached && sessionWorkspaceRichness(cached) > sessionWorkspaceRichness(session)) {
-          session = refreshSessionFromApi(mergeSessionWithCache(session, cached), project, data);
-        }
+        // Reopen the real workspace immediately. A richer server snapshot can
+        // hydrate in the background without holding the preview behind I/O.
+        void launchM1({
+          projectId: project.id,
+          continueExisting: true,
+          projectName: project.name || cachedSession?.projectName || project.id,
+          planMode: false,
+        });
 
-        saveProjectSession(session);
-        void saveProjectSessionToServer(session);
-        applySavedSession(session);
+        void loadProjectSessionAsync(project.id, {
+          id: project.id,
+          name: project.name || project.id,
+        }).then((saved) => {
+          if (!saved) return;
+          if (!cachedSession || sessionWorkspaceRichness(saved) > sessionWorkspaceRichness(cachedSession)) {
+            applySavedSession(saved);
+          }
+        });
       } catch (error) {
-        console.warn("Failed to open Vibe project", error);
+        console.warn("Failed to open Vibe project in M1", error);
       }
     },
-    [applySavedSession, fetchJson, persistCurrentSession],
+    [applySavedSession, launchM1, persistCurrentSession, restoreProject, setState],
   );
 
-  const handlePreviewAutofix = useCallback(
-    (errMsg: string) => {
-      const fixId = `autofix-${state.projectId}-${Date.now()}`;
-      const userFacing = "I'm seeing an error in the preview. Can you fix it?";
-      setPreviewAutofixActive(true);
-      setPlanChangeMode(false);
-      setPlanApproved(true);
-      setChatMessages((prev) => {
-        if (prev.some((message) => message.id.startsWith(`autofix-${state.projectId}`))) return prev;
-        return [
-          ...prev,
-          {
-            id: fixId,
-            role: "user",
-            content: userFacing,
-            timestamp: Date.now(),
-          },
-          {
-            id: `${fixId}-assistant`,
-            role: "assistant",
-            content: "I'll analyze the preview error and patch the build.",
-            timestamp: Date.now(),
-          },
-        ];
-      });
-      const fixPrompt = `Fix this preview error:\n${errMsg}`;
-      void startTask(fixPrompt, false);
-    },
-    [startTask, state.projectId],
-  );
+  const handlePreviewAutofix = useCallback((_errMsg: string) => {
+    // Preview autofix is handled inside full M1 Agent Canvas after handoff.
+  }, []);
 
-  useEffect(() => {
-    if (!skipEnterAnimation || state.stage === "idle") return;
-    const frame = window.requestAnimationFrame(() => {
-      activeScrollRef.current?.scrollTo({
-        top: activeScrollRef.current.scrollHeight,
-        behavior: "auto",
-      });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [skipEnterAnimation, state.projectId, state.stage]);
+  const exitM1ToWelcome = useCallback(() => {
+    const projectId = state.projectId;
+    persistCurrentSession();
+    setM1ConversationUrl(null);
+    setM1LaunchError(null);
+    setM1Launching(false);
+    setM1IframeReady(false);
+    resetToIdle();
+    setWelcomeView("home");
+    if (projectId && projectId !== "project-advanced-vibe") {
+      void fetch(`/api/vibe/projects/${encodeURIComponent(projectId)}/thumbnail/refresh`, {
+        method: "POST",
+      })
+        .catch(() => undefined)
+        .finally(() => {
+          void loadProjects();
+        });
+    } else {
+      void loadProjects();
+    }
+  }, [loadProjects, persistCurrentSession, resetToIdle, state.projectId]);
 
-  if (state.stage !== "idle") {
-    const hasSuccessfulBuild = state.terminalLogs.some((log) =>
-      log.output.includes("Command exited with code 0"),
-    );
-    const shouldShowPreview =
-      state.preview.status === "ready" ||
-      state.stage === "complete" ||
-      hasSuccessfulBuild;
-
-    const generatedFiles = Object.values(state.files);
-    const elapsedSinceStart = state.startedAt ? elapsedNow - state.startedAt : 0;
-    const planBarDelayPassed = elapsedSinceStart > 5000;
-    const canShowPlanCard =
-      state.planMode &&
-      planBarDelayPassed &&
-      state.stage !== "failed" &&
-      state.stage !== "cancelled" &&
-      thinkingCollapsed;
-    const showBuildStream = !state.planMode || planApproved;
-    const restoredWorkspaceKey = skipEnterAnimation ? `restored:${state.projectId}` : null;
-    const visibleChatMessages =
-      chatMessages.length > 0
-        ? skipEnterAnimation
-          ? chatMessages
-          : chatMessages.filter((message) => message.role === "user")
-        : [
-            {
-              id: "prompt",
-              role: "user" as const,
-              content: state.prompt,
-              timestamp: state.startedAt ?? Date.now(),
-            },
-          ];
-
+  if (designSession) {
     return (
-      <>
-      <div className="relative flex h-full min-h-0 w-full overflow-hidden bg-white text-slate-950">
-        <motion.section
-          layout
-          transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
-          className={cn(
-            "flex min-h-0 flex-col transition-[width,max-width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
-            shouldShowPreview
-              ? "w-[36%] min-w-[360px] max-w-[500px] border-r border-slate-200/70"
-              : "mx-auto w-full max-w-[920px]",
-            "relative",
-          )}
-        >
-          <div
-            ref={activeScrollRef}
-            onScroll={handleActiveScroll}
-            className="clyra-visible-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-52 pt-14 sm:px-8"
-          >
-            <motion.div
-              initial={skipEnterAnimation ? false : { opacity: 0, y: 24, scale: 0.985 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              transition={{ duration: skipEnterAnimation ? 0 : 0.42, ease: [0.22, 1, 0.36, 1] }}
-              className="space-y-3"
-            >
-              {visibleChatMessages.map((message) => (
-                <div
-                  key={message.id}
-                  className={cn(
-                    "max-w-[78%] rounded-[26px] border px-5 py-3 text-left text-[15px] font-semibold leading-relaxed shadow-[0_18px_52px_rgba(15,23,42,0.055)]",
-                    message.role === "user"
-                      ? "ml-auto border-slate-200/75 bg-white/92 text-slate-900"
-                      : "mr-auto border-slate-200/60 bg-slate-50/90 text-slate-700",
-                  )}
-                >
-                  {message.content}
-                </div>
-              ))}
-            </motion.div>
+      <motion.div
+        initial={{ opacity: 0, scale: 0.94 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
+        className="relative h-full min-h-0 w-full overflow-hidden bg-white"
+      >
+        <div className="absolute left-5 top-4 z-20 pointer-events-none">
+          <p className="text-[12px] font-semibold text-slate-800">{designSession.style}</p>
+          <p className="mt-0.5 text-[10px] text-slate-400">Watch the canvas assemble, then choose or refine this direction.</p>
+        </div>
 
-            <motion.div
-              initial={skipEnterAnimation ? false : { opacity: 0, y: 14 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: skipEnterAnimation ? 0 : 0.12, duration: skipEnterAnimation ? 0 : 0.34, ease: [0.22, 1, 0.36, 1] }}
-              className="mt-8"
-            >
-              {state.webResearch.startedAt ? (
-                <ThinkingStatus
-                  lines={state.webResearch.lines}
-                  stage="researching-web"
-                  isComplete={Boolean(state.webResearch.completedAt)}
-                  hasError={state.stage === "failed"}
-                  thoughtText={state.planMode && !planApproved ? buildPlanThinkingSummary(state.prompt) : undefined}
-                  resetKey={restoredWorkspaceKey ?? `${state.taskId || state.prompt}:research:${state.webResearch.startedAt}`}
-                />
-              ) : null}
-              {state.stage !== "researching-web" ? (
-                <ThinkingStatus
-                  lines={state.thinkingLines.filter((line) => !state.webResearch.lines.some((item) => item.id === line.id))}
-                  stage={state.stage}
-                  isComplete={thinkingIsResting}
-                  hasError={state.stage === "failed"}
-                  thoughtText={!state.webResearch.startedAt && state.planMode && !planApproved ? buildPlanThinkingSummary(state.prompt) : undefined}
-                  resetKey={restoredWorkspaceKey ?? `${state.taskId || state.prompt}:${state.startedAt ?? 0}`}
-                />
-              ) : null}
-            </motion.div>
+        <div className="absolute inset-0 min-h-0 overflow-hidden bg-white pb-[154px]">
+          <OpenPencilWorkspace
+            initialPrompt={designSession.prompt}
+            requestKey={designSession.requestId}
+            embedded
+            onClose={() => setDesignSession(null)}
+          />
+        </div>
 
-            {canShowPlanCard ? (
-            <PlanReviewCard
-              markdown={state.planMd}
-              expanded={planExpanded}
-              approved={planApproved}
-              ready={planReady}
-              onToggle={() => setPlanExpanded((value) => !value)}
-            />
-            ) : null}
-
-            {showBuildStream ? (
-              <div className="mt-5">
-                {planApproved && state.stage !== "complete" && state.stage !== "failed" && Object.keys(state.files).length === 0 ? (
-                  <CodeModeThinkingRow resetKey={`${state.taskId}:code:${state.startedAt ?? 0}`} />
-                ) : null}
-                <CodeModeActivityStream
-                  statusUpdates={state.statusUpdates}
-                  files={generatedFiles}
-                  queueList={state.fileQueue}
-                />
-              </div>
-            ) : null}
-
-            {state.terminalLogs.some((log) => isUserVisibleTerminalCommand(log.command)) ? (
-              <TerminalTranscript logs={state.terminalLogs.filter((log) => isUserVisibleTerminalCommand(log.command))} />
-            ) : null}
-
-            {state.stage === "complete" ? (
-              <CompletionSummary
-                filesChanged={generatedFiles.length}
-                checksRun={state.terminalLogs.filter((log) => isUserVisibleTerminalCommand(log.command)).length}
-                previewUrl={state.preview.url}
-              />
-            ) : null}
-          </div>
-
-          <AnimatePresence>
-            {showJumpToLatest ? (
-              <motion.button
+        <form onSubmit={(event) => { event.preventDefault(); submitDesignRevision(); }} className="absolute inset-x-3 bottom-3 z-30 mx-auto w-[min(1040px,calc(100%-24px))] rounded-[24px] border border-slate-200/80 bg-white/95 p-2.5 shadow-[0_22px_64px_rgba(15,23,42,.13)] backdrop-blur-xl">
+          <div className="clyra-visible-scrollbar flex gap-1 overflow-x-auto rounded-[16px] bg-slate-100/80 p-1">
+            {DESIGN_DIRECTIONS.map((style) => (
+              <button
+                key={style}
                 type="button"
-                onClick={jumpToLatest}
-                initial={{ opacity: 0, y: 8, scale: 0.96 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 8, scale: 0.96 }}
-                transition={{ duration: 0.18, ease: "easeOut" }}
-                className="absolute bottom-28 left-1/2 z-30 -translate-x-1/2 rounded-full border border-slate-200/80 bg-white/92 px-3.5 py-2 text-[12px] font-bold text-slate-600 shadow-[0_14px_34px_rgba(15,23,42,0.08)] backdrop-blur-xl transition-colors hover:bg-slate-50 hover:text-slate-950"
+                onClick={() => chooseDesignDirection(style)}
+                className={cn(
+                  "relative h-9 shrink-0 rounded-xl px-3 text-[10px] font-semibold transition-colors",
+                  designSession.style === style ? "text-slate-950" : "text-slate-500 hover:text-slate-800",
+                )}
               >
-                Jump to latest
-              </motion.button>
-            ) : null}
-          </AnimatePresence>
-
-          <motion.div
-            layout
-            className={cn(
-              "pointer-events-auto absolute bottom-0 z-20 w-full px-5 sm:px-8",
-              shouldShowPreview
-                ? "bottom-0 left-0 max-w-none"
-                : "left-1/2 max-w-[760px] -translate-x-1/2",
-            )}
-          >
-            <Composer
-              compact
-              placeholder="Add a follow-up or ask for a change..."
-              activePlaceholder={planChangeMode ? "Tell Clyra what to change in the plan..." : undefined}
-              value={promptInput}
-              onChange={setPromptInput}
-              onSubmit={planChangeMode ? handlePlanRevisionSubmit : handleSubmit}
-              mode={mode}
-              onModeChange={setMode}
-              onAttach={() => fileRef?.current?.click()}
-              disabled={!promptInput.trim()}
-              isGenerating={
-                state.stage !== "complete" &&
-                state.stage !== "failed" &&
-                state.stage !== "cancelled" &&
-                !(state.planMode && planApproved)
-              }
-              planApprovalActive={
-                !previewAutofixActive &&
-                state.planMode &&
-                planReady &&
-                state.stage !== "failed" &&
-                state.stage !== "cancelled" &&
-                !(state.planMode && planApproved) &&
-                thinkingCollapsed
-              }
-              onApprovePlan={() => {
-                setPlanApproved(true);
-                setPlanExpanded(false);
-                setPlanChangeMode(false);
-                void approvePlan();
-              }}
-              onRequestPlanChanges={() => {
-                setPlanChangeMode(true);
-                setPromptInput("");
-              }}
-            />
-          </motion.div>
-        </motion.section>
-
-        <AnimatePresence>
-          {shouldShowPreview ? (
-            <motion.aside
-              key="live-preview"
-              initial={skipEnterAnimation ? false : { opacity: 0, x: 80, scale: 0.985 }}
-              animate={{ opacity: 1, x: 0, scale: 1 }}
-              exit={{ opacity: 0, x: 80, scale: 0.985 }}
-              transition={{ duration: skipEnterAnimation ? 0 : 0.58, ease: [0.22, 1, 0.36, 1] }}
-              className="min-w-0 flex-1 bg-white p-5"
-            >
-              <LivePreviewPanel
-                project={{ id: state.projectId, name: activeProjectName, status: state.stage }}
-                onFixError={skipEnterAnimation ? undefined : handlePreviewAutofix}
-              />
-            </motion.aside>
-          ) : null}
-        </AnimatePresence>
-      </div>
-      </>
+                {designSession.style === style ? <motion.span layoutId="vibe-design-direction" className="absolute inset-0 rounded-xl border border-slate-200 bg-white shadow-sm" transition={{ type: "spring", stiffness: 700, damping: 48 }} /> : null}
+                <span className="relative">{style}</span>
+              </button>
+            ))}
+          </div>
+          <div className="mt-2 flex items-end gap-2 rounded-[18px] border border-slate-200 bg-white px-3 py-2 shadow-[0_8px_26px_rgba(15,23,42,.045)] focus-within:border-blue-200 focus-within:shadow-[0_10px_30px_rgba(37,99,235,.08)]">
+            <textarea value={promptInput} onChange={(event) => setPromptInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submitDesignRevision(); } }} rows={1} placeholder={`Refine the ${designSession.style} direction…`} className="max-h-24 min-h-9 min-w-0 flex-1 resize-none bg-transparent py-2 text-[12px] font-medium leading-5 text-slate-800 outline-none placeholder:text-slate-400" />
+            <button type="button" onClick={() => setDesignSession(null)} className="h-9 shrink-0 rounded-full px-3 text-[10px] font-semibold text-slate-400 hover:bg-slate-100 hover:text-slate-700">Cancel</button>
+            <button type="submit" disabled={!promptInput.trim()} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-slate-950 text-white transition-transform active:scale-95 disabled:bg-slate-200 disabled:text-slate-400"><ArrowUp className="h-4 w-4" /></button>
+            <button type="button" onClick={approveDesignAndBuild} className="h-9 shrink-0 rounded-full bg-blue-600 px-4 text-[10px] font-semibold text-white shadow-[0_8px_20px_rgba(37,99,235,.22)] transition-[background-color,transform] hover:bg-blue-700 active:scale-[.98]">Use this design</button>
+          </div>
+        </form>
+      </motion.div>
     );
   }
 
+  if (state.stage !== "idle") {
+    const showBootOverlay =
+      !m1LaunchError && (!m1ConversationUrl || !m1IframeReady);
+
+    return (
+      <div className="relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_55%,#f1f5f9_100%)]">
+        {m1LaunchError ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
+            <p className="text-[15px] font-semibold text-slate-900">
+              Couldn’t start Vibe Coder M1
+            </p>
+            <p className="max-w-lg text-[13px] font-medium text-slate-500">
+              {m1LaunchError}
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={exitM1ToWelcome}
+                className="rounded-full border border-slate-200 bg-white px-4 py-2 text-[12px] font-bold text-slate-700"
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  void launchM1({
+                    projectId: state.projectId,
+                    planMode: state.planMode,
+                    continueExisting: true,
+                    projectName: activeProjectName,
+                  })
+                }
+                className="rounded-full bg-slate-950 px-4 py-2 text-[12px] font-bold text-white"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="relative min-h-0 flex-1 overflow-hidden">
+            {m1ConversationUrl ? (
+              <motion.iframe
+                key={m1ConversationUrl}
+                title="Vibe Coder M1"
+                src={m1ConversationUrl}
+                initial={{ opacity: 0, scale: 0.995 }}
+                animate={
+                  m1IframeReady
+                    ? { opacity: 1, scale: 1 }
+                    : { opacity: 0.22, scale: 0.998 }
+                }
+                transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+                onLoad={() => {
+                  // Fallback if postMessage never arrives; keep overlay longer
+                  // than the shell paint so M1 can mount chat + browser.
+                  if (m1ReadyTimerRef.current) {
+                    window.clearTimeout(m1ReadyTimerRef.current);
+                  }
+                  m1ReadyTimerRef.current = window.setTimeout(() => {
+                    setM1IframeReady(true);
+                    m1ReadyTimerRef.current = null;
+                  }, 2400);
+                }}
+                className="absolute inset-0 h-full w-full border-0 bg-white"
+                allow="clipboard-read; clipboard-write; fullscreen"
+              />
+            ) : null}
+
+            <AnimatePresence>
+              {showBootOverlay ? (
+                <motion.div
+                  key="m1-boot-overlay"
+                  initial={{ opacity: 1 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+                  className="absolute inset-0 z-10 bg-white"
+                >
+                  <PreviewSkeletonLayout message="Opening your workspace…" />
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // IDLE WELCOME PAGE
   // IDLE WELCOME PAGE
   return (
     <>
     <div className="relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-white">
       <div
         ref={welcomeScrollRef}
-        className={cn("clyra-visible-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto px-5 sm:px-8", "pt-16")}
+        className={cn(
+          "clyra-visible-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto px-5 sm:px-8",
+          welcomeView === "projects" ? "pt-3" : "pt-16",
+        )}
       >
         <AnimatePresence mode="wait">
           {welcomeView === "home" && state.stage === "idle" ? (
@@ -1234,33 +1378,6 @@ function CodeModeActivityStream({
   );
 }
 
-function CodeModeThinkingRow({ resetKey }: { resetKey: string }) {
-  const [seconds, setSeconds] = useState(1);
-
-  useEffect(() => {
-    setSeconds(1);
-    const timer = window.setInterval(() => {
-      setSeconds((value) => value + 1);
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [resetKey]);
-
-  return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -4 }}
-      transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-      className="mx-auto mb-4 flex w-full max-w-2xl items-center gap-2 text-left"
-    >
-      <Brain className="h-4 w-4 text-slate-400" strokeWidth={1.6} />
-      <ShiningText text="Thinking" className="text-[13px] font-semibold" />
-      <span className="text-[13px] font-semibold text-slate-500">{seconds}s</span>
-    </motion.div>
-  );
-}
-
 function ProjectThumbnail({
   projectId,
   updatedAt,
@@ -1522,39 +1639,39 @@ function AllProjectsView({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -10 }}
       transition={{ duration: 0.36, ease: [0.22, 1, 0.36, 1] }}
-      className="relative mx-auto flex w-full max-w-[760px] flex-col items-center pb-12 pt-0 text-center"
+      className="relative -mt-1 mx-auto flex w-full max-w-[760px] flex-col items-center pb-10 pt-0 text-center"
     >
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-x-[-12%] -top-4 h-[220px] rounded-[48%] bg-[radial-gradient(ellipse_at_center,rgba(148,163,184,0.18)_0%,rgba(255,255,255,0)_70%)] blur-2xl"
+        className="pointer-events-none absolute inset-x-[-12%] -top-6 h-[180px] rounded-[48%] bg-[radial-gradient(ellipse_at_center,rgba(148,163,184,0.16)_0%,rgba(255,255,255,0)_70%)] blur-2xl"
       />
 
-      <div className="relative z-[1] mb-3 flex w-full flex-col items-center">
+      <div className="relative z-[1] mb-2 flex w-full flex-col items-center">
         <button
           type="button"
           onClick={onBack}
-          className="mb-1.5 self-start rounded-full border border-slate-200/80 bg-white/80 px-3.5 py-1.5 text-[12px] font-bold text-slate-500 shadow-[0_8px_20px_rgba(15,23,42,0.035)] transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-800"
+          className="mb-1 self-start rounded-full border border-slate-200/80 bg-white/80 px-3 py-1.5 text-[11px] font-bold text-slate-500 shadow-[0_8px_20px_rgba(15,23,42,0.035)] transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-800"
         >
           ← Back
         </button>
 
-        <div className="mb-1.5 flex justify-center">
-          <div className="scale-[0.72]">
+        <div className="mb-0 flex justify-center">
+          <div className="scale-[0.55] origin-top">
             <AiOrb colorTheme={orbColorTheme} />
           </div>
         </div>
         <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-300">
           Recent projects
         </p>
-        <h2 className="mt-1 text-3xl font-semibold tracking-[-0.055em] text-slate-950 sm:text-4xl">
+        <h2 className="mt-0.5 text-3xl font-semibold tracking-[-0.055em] text-slate-950 sm:text-[2.35rem]">
           All projects
         </h2>
-        <p className="mt-1 max-w-2xl text-[14px] font-semibold text-slate-500 sm:text-[15px]">
+        <p className="mt-1 max-w-2xl text-[13px] font-semibold text-slate-500 sm:text-[14px]">
           {filteredProjects.length} of {projects.length} workspaces — reopen, rename, or continue building.
         </p>
       </div>
 
-      <div className="relative z-[1] mb-4 w-full max-w-[700px] space-y-2.5">
+      <div className="relative z-[1] mb-3 w-full max-w-[700px] space-y-2">
         <div className="relative">
           <Search className="absolute left-4 top-1/2 h-4.5 w-4.5 -translate-y-1/2 text-slate-400" />
           <input
@@ -2448,6 +2565,9 @@ export function Composer({
   className,
   compact = false,
   isGenerating = false,
+  isPaused = false,
+  onStop,
+  onResume,
   placeholder,
   activePlaceholder,
   planApprovalActive = false,
@@ -2464,6 +2584,9 @@ export function Composer({
   className?: string;
   compact?: boolean;
   isGenerating?: boolean;
+  isPaused?: boolean;
+  onStop?: () => void;
+  onResume?: () => void;
   placeholder?: string;
   activePlaceholder?: string;
   planApprovalActive?: boolean;
@@ -2734,17 +2857,35 @@ export function Composer({
               <ModeDropdown mode={mode as any} onChange={onModeChange as any} />
               <button
                 type="button"
-                disabled={disabled}
-                onClick={onSubmit}
-                aria-label="Send Vibe request"
+                disabled={isGenerating || isPaused ? false : disabled}
+                onClick={() => {
+                  if (isGenerating && onStop) {
+                    onStop();
+                    return;
+                  }
+                  if (isPaused && onResume) {
+                    onResume();
+                    return;
+                  }
+                  onSubmit();
+                }}
+                aria-label={
+                  isGenerating ? "Pause agent" : isPaused ? "Resume agent" : "Send Vibe request"
+                }
                 className={cn(
                   "grid h-10 w-10 shrink-0 place-items-center rounded-full border transition-[background-color,border-color,color] duration-[120ms] ease-out",
-                  disabled && !isGenerating
+                  disabled && !isGenerating && !isPaused
                     ? "border-transparent bg-transparent text-slate-300"
                     : "border-transparent bg-transparent text-slate-700 hover:border-slate-200/70 hover:bg-white/72 hover:text-slate-950",
                 )}
               >
-                {isGenerating ? <div className="h-3 w-3 rounded-[2px] bg-slate-700" /> : <Send className="h-5 w-5" />}
+                {isGenerating ? (
+                  <div className="h-3 w-3 rounded-[2px] bg-slate-700" />
+                ) : isPaused ? (
+                  <div className="ml-0.5 h-0 w-0 border-y-[6px] border-l-[10px] border-y-transparent border-l-slate-700" />
+                ) : (
+                  <Send className="h-5 w-5" />
+                )}
               </button>
             </div>
           </div>
