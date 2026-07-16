@@ -106,6 +106,8 @@ const StudyNodeActions = createContext<{
   updateNode: (id: string, patch: Partial<StudyNodeData>) => void;
   duplicateNode: (id: string) => void;
   ingestNodeUrl: (nodeId: string, url: string) => void;
+  workspaceName: string;
+  workspaceDescription: string;
 } | null>(null);
 
 const nodeStyles: Record<NodeKind, { label: string; accent: string; surface: string; icon: typeof FileText }> = {
@@ -314,6 +316,10 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
   const Icon = sourceMode === "youtube" ? Youtube : sourceMode === "web" ? Globe2 : style.icon;
   const showUrlField = data.kind === "source" && (sourceMode === "youtube" || sourceMode === "web");
   const kindLabel = sourceMode === "youtube" ? "YouTube" : sourceMode === "web" ? "Web page" : style.label;
+  
+  // Get workspace context for starter node
+  const workspaceName = actions?.workspaceName || "";
+  const workspaceDescription = actions?.workspaceDescription || "";
 
   useEffect(() => {
     setUrlDraft(data.sourceUrl || "");
@@ -424,32 +430,14 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
             </>
           )}
         {starter ? (
-          <div className="nodrag nopan mt-2 rounded-[14px] border border-[#e2e4e7] bg-white p-2">
-            <textarea
-              value={starterPrompt}
-              onChange={(event) => setStarterPrompt(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey && starterPrompt.trim()) {
-                  event.preventDefault();
-                  actions?.buildFromPrompt(starterPrompt.trim());
-                  setStarterPrompt("");
-                }
-              }}
-              rows={2}
-              placeholder="Prompt Clyra to build a connected map, or drag from Output to start brainstorming manually..."
-              className="w-full resize-none bg-transparent px-2 py-1.5 text-[10px] leading-4 text-slate-700 outline-none placeholder:text-slate-400"
-            />
-            <button
-              type="button"
-              disabled={!starterPrompt.trim()}
-              onClick={() => {
-                actions?.buildFromPrompt(starterPrompt.trim());
-                setStarterPrompt("");
-              }}
-              className="flex h-9 w-full items-center justify-center gap-1.5 rounded-xl bg-[#30343a] text-[9px] font-semibold text-white transition-[background,transform] hover:bg-[#181b20] active:scale-[.985] disabled:opacity-35"
-            >
-              <Sparkles className="h-3 w-3" />Generate a starting map
-            </button>
+          <div className="nodrag nopan mt-2 rounded-[14px] border border-[#e2e4e7] bg-gradient-to-br from-blue-50 to-indigo-50 p-3 text-center">
+            <p className="text-[9px] font-semibold text-slate-700">{workspaceName || "Welcome to your study workspace"}</p>
+            <p className="mt-1 text-[8px] leading-4 text-slate-500">{workspaceDescription || "Drag from any direction to start adding nodes and build your knowledge map"}</p>
+            <div className="mt-2 flex justify-center gap-1">
+              <div className="h-1 w-1 rounded-full bg-slate-400 animate-pulse" />
+              <div className="h-1 w-1 rounded-full bg-slate-400 animate-pulse delay-75" />
+              <div className="h-1 w-1 rounded-full bg-slate-400 animate-pulse delay-150" />
+            </div>
           </div>
         ) : null}
           {data.sourceLabel ? <div className="mt-3 flex items-center gap-1.5 border-t border-slate-200/70 pt-2 text-[8px] font-medium text-slate-400"><Link2 className="h-3 w-3" /><span className="truncate">{data.sourceLabel}</span></div> : null}
@@ -516,8 +504,8 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
   const [asking, setAsking] = useState(false);
   const [notice, setNotice] = useState("");
   const [composerMode, setComposerMode] = useState<"ask" | "source">("ask");
-  const [studyView, setStudyView] = useState<"nodes" | "notes" | "flashcards" | "test">("nodes");
-  const [hoveredStudyTab, setHoveredStudyTab] = useState<"nodes" | "notes" | "flashcards" | "test" | null>(null);
+  const [studyView, setStudyView] = useState<"nodes" | "notes" | "flashcards" | "test" | "chat">("nodes");
+  const [hoveredStudyTab, setHoveredStudyTab] = useState<"nodes" | "notes" | "flashcards" | "test" | "chat" | null>(null);
   const [notesContent, setNotesContent] = useState(workspace.notesContent || "");
   const [notesLoading, setNotesLoading] = useState(false);
   const [flashLoading, setFlashLoading] = useState(false);
@@ -1213,7 +1201,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
     <div className="relative h-full min-h-0 overflow-hidden bg-[#f5f3ef] text-[#30343a]">
       <input ref={fileInput} type="file" multiple accept=".txt,.md,.csv,.json,.pdf,image/*" className="hidden" onChange={(event) => void ingestFiles(event.target.files)} />
       <main ref={canvasRef} className="absolute inset-0 overflow-hidden">
-        <StudyNodeActions.Provider value={{ buildFromPrompt: (value) => void buildFromPrompt(value), capture, updateNode, duplicateNode, ingestNodeUrl: (nodeId, url) => void ingestNodeUrl(nodeId, url) }}>
+        <StudyNodeActions.Provider value={{ buildFromPrompt: (value) => void buildFromPrompt(value), capture, updateNode, duplicateNode, ingestNodeUrl: (nodeId, url) => void ingestNodeUrl(nodeId, url), workspaceName: name, workspaceDescription: workspace.description }}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -1264,6 +1252,29 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
           {studyView !== "nodes" ? (
             <motion.section key={studyView} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }} className="absolute inset-0 z-[12] overflow-y-auto bg-[#f7f8fa] px-5 pb-32 pt-24 sm:px-8">
               <div className="mx-auto max-w-[900px]">
+                {studyView === "chat" ? (
+                  <div>
+                    <div className="mb-4 flex items-end justify-between">
+                      <div><p className="text-[9px] font-semibold uppercase tracking-[.14em] text-slate-400">AI Assistant</p><h2 className="mt-1 text-[22px] font-semibold tracking-[-.02em] text-slate-950">Chat</h2></div>
+                    </div>
+                    <div className="space-y-4">
+                      {conversations.map((msg) => (
+                        <div key={msg.id} className={cn("rounded-[18px] border p-4 shadow-[0_10px_30px_rgba(15,23,42,.05)]", msg.role === "user" ? "border-slate-200 bg-white" : "border-blue-100 bg-blue-50")}>
+                          <p className="text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">{msg.role === "user" ? "You" : "Clyra"}</p>
+                          <p className="mt-2 text-[11px] leading-5 text-slate-700">{msg.text}</p>
+                          {msg.citations && msg.citations.length > 0 ? (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {msg.citations.map((citation, idx) => (
+                                <span key={idx} className="text-[8px] text-blue-600">[{idx + 1}] {citation}</span>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                      {!conversations.length ? <p className="py-16 text-center text-[11px] text-slate-400">Start a conversation with Clyra about your study materials.</p> : null}
+                    </div>
+                  </div>
+                ) : null}
                 {studyView === "notes" ? (
                   <div>
                     <div className="mb-4 flex items-end justify-between">
@@ -1448,14 +1459,14 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
               <motion.div
                 className="clyra-workflow-tab__hover pointer-events-none absolute bottom-1 top-1 rounded-full"
                 initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1, x: `calc(${(["nodes", "notes", "flashcards", "test"] as const).indexOf(hoveredStudyTab)} * 100%)` }}
+                animate={{ opacity: 1, scale: 1, x: `calc(${(["nodes", "notes", "flashcards", "test", "chat"] as const).indexOf(hoveredStudyTab)} * 100%)` }}
                 exit={{ opacity: 0, scale: 0.95 }}
                 transition={{ type: "spring", stiffness: 520, damping: 38, mass: 0.2 }}
-                style={{ left: 4, width: "calc((100% - 8px) / 4)" }}
+                style={{ left: 4, width: "calc((100% - 8px) / 5)" }}
               />
             ) : null}
           </AnimatePresence>
-          {(["nodes", "notes", "flashcards", "test"] as const).map((view) => (
+          {(["nodes", "notes", "flashcards", "test", "chat"] as const).map((view) => (
             <button
               key={view}
               type="button"
@@ -1469,7 +1480,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
               )}
             >
               {studyView === view ? <motion.span layoutId="study-tab" className="absolute inset-0 -z-10 rounded-full bg-white shadow-sm" transition={{ type: "spring", stiffness: 520, damping: 38 }} /> : null}
-              {view === "nodes" ? "Node" : view === "notes" ? "Notes" : view === "flashcards" ? "Flashcards" : "Test"}
+              {view === "nodes" ? "Node" : view === "notes" ? "Notes" : view === "flashcards" ? "Flashcards" : view === "test" ? "Test" : "Chat"}
             </button>
           ))}
         </div>
