@@ -77,6 +77,8 @@ type StudyNodeData = {
   sourceLabel?: string;
   sourceUrl?: string;
   sourceMode?: "youtube" | "web";
+  sourceStatus?: "processing" | "ready" | "failed";
+  sourceError?: string;
   tags?: string[];
 };
 
@@ -227,6 +229,15 @@ function studyEdgeStyle(label: string) {
 
 type GraphContextItem = { id: string; title: string; body: string; source: string };
 
+function enrichGraphContext(items: GraphContextItem[], allNodes: StudyNode[], resources: StudyResource[]) {
+  return items.map((item) => {
+    const node = allNodes.find((candidate) => candidate.id === item.id);
+    const resource = node?.data.resourceId ? resources.find((candidate) => candidate.id === node.data.resourceId) : undefined;
+    if (!resource?.content || resource.content === item.body) return item;
+    return { ...item, body: `${item.body}\n\nFull analysed source context:\n${resource.content.slice(0, 12_000)}` };
+  });
+}
+
 function questionParts(body = "") {
   const [question, answer = ""] = body.split(/\n\s*Answer:\s*/i);
   return { question: question.replace(/^Question:\s*/i, "").trim(), answer: answer.trim() };
@@ -367,13 +378,21 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
   return (
     <div className={cn("relative cursor-grab pt-6 active:cursor-grabbing", starter ? "w-[340px]" : "w-[300px]")}>
       <span className="absolute left-1 top-0 flex items-center gap-1.5 text-[10px] font-medium text-slate-400"><Icon className="h-3 w-3" style={{ color: style.accent }} />{kindLabel}</span>
-      <div
+      <motion.div
         className={cn(
           "relative overflow-visible rounded-[20px] border bg-[#fffefa] shadow-[0_12px_34px_rgba(34,39,45,.07)] transition-[border-color,box-shadow,transform] duration-150",
           isGhost && "min-h-[180px] border-blue-300 bg-white/70 shadow-[0_0_0_4px_rgba(59,130,246,.10),0_0_34px_rgba(37,99,235,.28)]",
           isAnswering && "border-blue-300 shadow-[0_0_0_4px_rgba(59,130,246,.13),0_0_32px_rgba(37,99,235,.22)]",
           selected ? "border-[#111318] shadow-[0_0_0_4px_rgba(17,19,24,.08),0_16px_38px_rgba(34,39,45,.09)]" : "border-[#dfe2e6]",
         )}
+        animate={isAnswering ? {
+          boxShadow: [
+            "0 0 0 0 rgba(37,99,235,0), 0 0 0 rgba(37,99,235,0)",
+            "0 0 0 7px rgba(37,99,235,.14), 0 0 34px rgba(37,99,235,.34)",
+            "0 0 0 2px rgba(37,99,235,.08), 0 0 20px rgba(37,99,235,.18)",
+          ],
+        } : undefined}
+        transition={isAnswering ? { duration: 1.55, repeat: Infinity, ease: "easeInOut" } : undefined}
       >
         {isGhost ? (
           <motion.span
@@ -450,12 +469,17 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
               <div className="agent-soft-shimmer h-3 w-5/6 rounded-full bg-blue-50" />
             </div>
           ) : sourceMode === "youtube" || sourceMode === "web" ? (
-            data.body ? <p className="mt-2 line-clamp-3 rounded-[14px] border border-[#e2e4e7] bg-[#f7f7f4] p-3 text-[10px] leading-5 text-slate-600">{data.body}</p> : null
+            <>
+              {data.sourceStatus === "processing" ? <div className="mt-3 flex items-center gap-2 rounded-[14px] border border-blue-200 bg-blue-50/70 p-3 text-[9px] font-semibold text-blue-700"><Loader2 className="h-3.5 w-3.5 animate-spin" />Analysing this source for Clyra</div> : null}
+              {data.sourceStatus === "failed" ? <div className="mt-3 rounded-[14px] border border-rose-200 bg-rose-50 p-3 text-[9px] leading-4 text-rose-700">{data.sourceError || "This source could not be analysed."}</div> : null}
+              {data.body ? <p className="mt-2 line-clamp-3 rounded-[14px] border border-[#e2e4e7] bg-[#f7f7f4] p-3 text-[10px] leading-5 text-slate-600">{data.body}</p> : null}
+            </>
           ) : data.kind === "question" ? (
             <div className="mt-3">
               <textarea
                 value={question?.question || ""}
                 onFocus={() => actions?.capture()}
+                onKeyDown={(event) => event.stopPropagation()}
                 onChange={(event) => actions?.updateNode(id, { title: "Question", body: event.target.value.slice(0, 2_000) })}
                 onBlur={(event) => {
                   const next = event.target.value.trim();
@@ -467,7 +491,8 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
                 className="nodrag nopan min-h-[78px] w-full resize-none rounded-[14px] border border-[#e2e4e7] bg-[#f7f7f4] p-3 text-[11px] font-medium leading-5 text-slate-700 outline-none transition-shadow focus:border-blue-300 focus:ring-4 focus:ring-blue-100/60"
               />
               {isAnswering ? (
-                <div className="mt-3 space-y-2 rounded-[14px] border border-blue-100 bg-blue-50/60 p-3">
+                <div className="mt-3 space-y-2 rounded-[14px] border border-blue-200 bg-blue-50/70 p-3 shadow-[0_0_24px_rgba(37,99,235,.14)]">
+                  <div className="flex items-center gap-2 text-[8px] font-semibold uppercase tracking-[.12em] text-blue-600"><Sparkles className="h-3 w-3" />Clyra is analysing connected sources</div>
                   <div className="agent-soft-shimmer h-3 w-4/5 rounded-full bg-blue-100" />
                   <div className="agent-soft-shimmer h-3 w-2/3 rounded-full bg-blue-100" />
                 </div>
@@ -512,7 +537,7 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
         ) : null}
           {data.sourceLabel ? <div className="mt-3 flex items-center gap-1.5 border-t border-slate-200/70 pt-2 text-[8px] font-medium text-slate-400"><Link2 className="h-3 w-3" /><span className="truncate">{data.sourceLabel}</span></div> : null}
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 }
@@ -588,6 +613,7 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
   const [nodeMenuIndex, setNodeMenuIndex] = useState(0);
   const [canvasTool, setCanvasTool] = useState<"select" | "pan" | "cut">("pan");
   const [commandDockOpen, setCommandDockOpen] = useState(false);
+  const [welcomeOpen, setWelcomeOpen] = useState(true);
   const [agentCursor, setAgentCursor] = useState<{ x: number; y: number; label: string } | null>(null);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<StudyNode, StudyEdge> | null>(null);
   const [pendingConnection, setPendingConnection] = useState<{
@@ -602,6 +628,8 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
   const pendingSourceRef = useRef<string | null>(null);
   const undoRef = useRef<Array<{ nodes: StudyNode[]; edges: StudyEdge[] }>>([]);
   const redoRef = useRef<Array<{ nodes: StudyNode[]; edges: StudyEdge[] }>>([]);
+  const autoAnsweredQuestionsRef = useRef(new Set<string>());
+  const backgroundStudyKeyRef = useRef("");
 
   const selected = nodes.find((node) => node.id === selectedId);
   const readyResourceCount = resources.filter((resource) => resource.status === "ready").length;
@@ -729,6 +757,7 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
         sourceLabel: resource?.title,
         sourceUrl: resource?.url,
         sourceMode: resource?.kind === "youtube" ? "youtube" : resource?.kind === "web" ? "web" : undefined,
+        sourceStatus: resource ? "ready" : undefined,
       },
     }]);
     if (sourceNodeId) {
@@ -841,7 +870,7 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
     setNotice("");
     const mode: "youtube" | "web" = isYoutube ? "youtube" : "web";
     capture();
-    updateNode(nodeId, { sourceUrl: value, sourceMode: mode });
+    updateNode(nodeId, { sourceUrl: value, sourceMode: mode, sourceStatus: "processing", sourceError: undefined, body: "" });
     const resource: StudyResource = { id: safeId(), kind: mode, title: value.slice(0, 80), url: value, content: value, status: "processing", createdAt: Date.now() };
     setResources((current) => [resource, ...current]);
     try {
@@ -867,11 +896,14 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
         sourceLabel: resource.title,
         sourceUrl: value,
         sourceMode: mode,
+        sourceStatus: "ready",
+        sourceError: undefined,
       });
     } catch (cause) {
       resource.status = "failed";
       resource.error = cause instanceof Error ? cause.message : String(cause);
       setResources((current) => current.map((item) => item.id === resource.id ? { ...resource } : item));
+      updateNode(nodeId, { sourceStatus: "failed", sourceError: resource.error });
       setNotice(resource.error);
     } finally {
       setAddingSource(false);
@@ -1067,8 +1099,8 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
     const scoped = scopedModes.has(mode)
       ? buildScopedGraphContext(nodes, edges, anchorId)
       : { scopedToAttached: false, context: prioritizeGraphContext(nodes, edges) };
-    const context = scoped.context.length
-      ? scoped.context
+    let context = scoped.context.length
+      ? enrichGraphContext(scoped.context, nodes, resources)
       : resources.slice(0, 8).map((resource) => ({
         id: resource.id,
         title: resource.title,
@@ -1126,6 +1158,27 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
     }
   };
 
+  useEffect(() => {
+    if (studyLocked || asking || !readyResourceCount) return;
+    const readyKey = resources.filter((resource) => resource.status === "ready").map((resource) => resource.id).sort().join("|");
+    if (!readyKey || backgroundStudyKeyRef.current === readyKey) return;
+    const needsFlashcards = !nodes.some((node) => node.data.kind === "flashcards");
+    const needsTest = !nodes.some((node) => node.data.kind === "quiz");
+    if (!needsFlashcards && !needsTest) {
+      backgroundStudyKeyRef.current = readyKey;
+      return;
+    }
+    backgroundStudyKeyRef.current = readyKey;
+    setFlashLoading(needsFlashcards);
+    setTestLoading(needsTest);
+    void (needsFlashcards ? ask("flashcards") : Promise.resolve())
+      .then(() => needsTest ? ask("quiz") : undefined)
+      .finally(() => {
+        setFlashLoading(false);
+        setTestLoading(false);
+      });
+  }, [asking, nodes, readyResourceCount, resources, studyLocked]);
+
   const submitDock = async () => {
     const value = prompt.trim();
     if (!value || asking || addingSource) return;
@@ -1172,9 +1225,16 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
   };
 
   const buildGraphContext = useCallback(
-    () => prioritizeGraphContext(nodes, edges),
-    [edges, nodes],
+    () => enrichGraphContext(prioritizeGraphContext(nodes, edges), nodes, resources),
+    [edges, nodes, resources],
   );
+
+  const nodeContext = useMemo(() => {
+    const attached = selectedId ? connectedNodeIds(selectedId, edges) : null;
+    const sourceNodes = nodes.filter((node) => node.data.kind === "source" && (!attached || attached.has(node.id)));
+    const contextNodes = nodes.filter((node) => (!attached || attached.has(node.id)) && node.data.kind !== "flashcards" && node.data.kind !== "quiz" && node.data.kind !== "study-plan");
+    return { sourceNodes, contextNodes, attached: Boolean(attached && attached.size > 1) };
+  }, [edges, nodes, selectedId]);
 
   const graphFingerprint = useMemo(
     () => JSON.stringify({
@@ -1208,12 +1268,12 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
 
   const answerQuestionNode = useCallback(async (nodeId: string, rawQuestion: string) => {
     const question = rawQuestion.trim();
-    if (!question || asking || studyLocked) return;
+    if (!question || asking) return;
     setAsking(true);
     updateNode(nodeId, { title: "Question", body: question, tags: ["answering"] });
     const scoped = buildScopedGraphContext(nodes, edges, nodeId);
-    const context = scoped.context.length
-      ? scoped.context
+    let context = scoped.context.length
+      ? enrichGraphContext(scoped.context, nodes, resources)
       : resources.slice(0, 8).map((resource) => ({
         id: resource.id,
         title: resource.title,
@@ -1221,6 +1281,25 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
         source: resource.url || resource.title,
       }));
     try {
+      const connectedYoutubeSources = nodes.filter((node) => {
+        const connected = connectedNodeIds(nodeId, edges);
+        return connected.has(node.id) && node.data.kind === "source" && node.data.sourceMode === "youtube" && Boolean(node.data.sourceUrl);
+      });
+      if (connectedYoutubeSources.length) {
+        const youtubeResults = await Promise.allSettled(connectedYoutubeSources.map(async (source) => {
+          const response = await fetch("/api/research/youtube", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: source.data.sourceUrl, preferredLanguages: ["en"], question }),
+          });
+          const payload = await response.json() as { ok?: boolean; analysisPrompt?: string; full_text?: string; metadata?: { title?: string }; error?: { message?: string } };
+          if (!response.ok || !payload.ok) throw new Error(payload.error?.message || "The YouTube transcript was unavailable");
+          const analysed = payload.analysisPrompt || payload.full_text || "";
+          if (analysed) updateNode(source.id, { body: analysed.slice(0, 480), title: payload.metadata?.title || source.data.title, sourceStatus: "ready", sourceError: undefined });
+          return { id: source.id, title: `${source.data.title} (YouTube analysis)`, body: analysed.slice(0, 14_000), source: source.data.sourceUrl || "YouTube" };
+        }));
+        context = [...context, ...youtubeResults.flatMap((result) => result.status === "fulfilled" && result.value.body ? [result.value] : [])];
+      }
       const response = await fetch("/api/study/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1245,6 +1324,21 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
       setAsking(false);
     }
   }, [asking, edges, nodes, regenerateNotes, resources, studyLocked, studyView, updateNode]);
+
+  useEffect(() => {
+    if (studyLocked || asking) return;
+    const candidate = nodes.find((node) => {
+      if (node.data.kind !== "question" || autoAnsweredQuestionsRef.current.has(node.id)) return false;
+      const parsed = questionParts(node.data.body);
+      if (!parsed.question || parsed.answer) return false;
+      const connected = connectedNodeIds(node.id, edges);
+      return nodes.some((source) => connected.has(source.id) && source.data.kind === "source" && source.data.sourceStatus === "ready" && Boolean(source.data.body));
+    });
+    if (!candidate) return;
+    const parsed = questionParts(candidate.data.body);
+    autoAnsweredQuestionsRef.current.add(candidate.id);
+    void answerQuestionNode(candidate.id, parsed.question);
+  }, [answerQuestionNode, asking, edges, nodes, studyLocked]);
 
   useEffect(() => {
     if (studyLocked) return;
@@ -1413,7 +1507,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
             selectionOnDrag={canvasTool === "select"}
             panOnScroll
             fitView
-            fitViewOptions={{ padding: 0.35, minZoom: 0.2, maxZoom: 0.72, duration: 0 }}
+            fitViewOptions={{ padding: 0.22, minZoom: 0.25, maxZoom: 1.08, duration: 0 }}
             minZoom={0.2}
             maxZoom={1.8}
             onlyRenderVisibleElements
@@ -1437,31 +1531,54 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
           </section>
         ) : null}
 
+        <AnimatePresence>
+          {welcomeOpen && studyView === "nodes" ? (
+            <motion.aside
+              initial={{ opacity: 0, y: -8, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -6, scale: 0.98 }}
+              className="pointer-events-auto absolute left-5 top-[76px] z-20 w-[min(286px,calc(100vw-40px))] rounded-[18px] border border-white/90 bg-white/92 p-4 shadow-[0_16px_50px_rgba(15,23,42,.12)] backdrop-blur-xl"
+            >
+              <button type="button" onClick={() => setWelcomeOpen(false)} aria-label="Close workspace welcome" title="Close" className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X className="h-3.5 w-3.5" /></button>
+              <p className="pr-8 text-[9px] font-semibold uppercase tracking-[.14em] text-blue-600">Start with the canvas</p>
+              <h2 className="mt-2 text-[15px] font-semibold text-slate-950">Build a connected study map</h2>
+              <p className="mt-2 text-[9px] leading-4 text-slate-500">Add a source, drag from a node handle, then choose the relationship. Clyra uses the connected path to answer questions and update every study view.</p>
+              <div className="mt-3 grid grid-cols-3 gap-2 text-[8px] font-semibold text-slate-600"><span className="rounded-lg bg-blue-50 px-2 py-2 text-center">1. Source</span><span className="rounded-lg bg-slate-50 px-2 py-2 text-center">2. Connect</span><span className="rounded-lg bg-slate-50 px-2 py-2 text-center">3. Ask</span></div>
+            </motion.aside>
+          ) : null}
+        </AnimatePresence>
+
         <AnimatePresence mode="wait">
           {studyView !== "nodes" ? (
             <motion.section key={studyView} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }} className="absolute inset-0 z-[12] overflow-y-auto bg-[#f7f8fa] px-5 pb-32 pt-24 sm:px-8">
               <div className="mx-auto max-w-[900px]">
                 {studyView === "chat" ? (
-                  <div>
-                    <div className="mb-4 flex items-end justify-between">
-                      <div><p className="text-[9px] font-semibold uppercase tracking-[.14em] text-slate-400">AI Assistant</p><h2 className="mt-1 text-[22px] font-semibold tracking-[-.02em] text-slate-950">Chat</h2></div>
-                    </div>
-                    <div className="space-y-4">
-                      {conversations.map((msg) => (
-                        <div key={msg.id} className={cn("rounded-[18px] border p-4 shadow-[0_10px_30px_rgba(15,23,42,.05)]", msg.role === "user" ? "border-slate-200 bg-white" : "border-blue-100 bg-blue-50")}>
-                          <p className="text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">{msg.role === "user" ? "You" : "Clyra"}</p>
-                          <p className="mt-2 text-[11px] leading-5 text-slate-700">{msg.text}</p>
-                          {msg.citations && msg.citations.length > 0 ? (
-                            <div className="mt-2 flex flex-wrap gap-1">
-                              {msg.citations.map((citation, idx) => (
-                                <span key={idx} className="text-[8px] text-blue-600">[{idx + 1}] {citation}</span>
-                              ))}
+                  <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_240px]">
+                    <div>
+                      <div className="mb-4 flex items-end justify-between"><div><p className="text-[9px] font-semibold uppercase tracking-[.14em] text-slate-400">AI Assistant</p><h2 className="mt-1 text-[22px] font-semibold tracking-[-.02em] text-slate-950">Chat</h2></div></div>
+                      <div className="space-y-5">
+                        {conversations.map((msg) => (
+                          <div key={msg.id} className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
+                            <div className={cn("max-w-[88%]", msg.role === "user" ? "rounded-[18px] rounded-br-md bg-slate-950 px-4 py-3 text-white" : "max-w-[94%] px-1 py-2 text-slate-700")}>
+                              <p className={cn("text-[8px] font-semibold uppercase tracking-[.12em]", msg.role === "user" ? "text-slate-300" : "text-blue-600")}>{msg.role === "user" ? "You" : "Clyra"}</p>
+                              <p className="mt-2 whitespace-pre-wrap text-[11px] leading-5">{msg.text}</p>
+                              {msg.citations && msg.citations.length > 0 ? <div className="mt-2 flex flex-wrap gap-1">{msg.citations.map((citation, idx) => <span key={idx} className="text-[8px] text-blue-600">[{idx + 1}] {citation}</span>)}</div> : null}
                             </div>
-                          ) : null}
-                        </div>
-                      ))}
-                      {!conversations.length ? <p className="py-16 text-center text-[11px] text-slate-400">Start a conversation with Clyra about your study materials.</p> : null}
+                          </div>
+                        ))}
+                        {!conversations.length ? <p className="py-16 text-center text-[11px] text-slate-400">Ask Clyra about the sources and connections in your map.</p> : null}
+                      </div>
                     </div>
+                    <aside className="h-fit border-l border-slate-200/80 pl-5">
+                      <p className="text-[8px] font-semibold uppercase tracking-[.14em] text-slate-400">Node context</p>
+                      <p className="mt-2 text-[9px] leading-4 text-slate-500">{nodeContext.attached ? "Using the selected node's connected context." : "Using the workspace context. Select a node to narrow it."}</p>
+                      <div className="mt-4 space-y-3">
+                        {nodeContext.contextNodes.slice(0, 6).map((node) => <div key={node.id} className="border-b border-slate-100 pb-3"><p className="text-[9px] font-semibold text-slate-700">{node.data.title || node.data.kind}</p><p className="mt-1 line-clamp-2 text-[8px] leading-4 text-slate-400">{node.data.body || node.data.sourceUrl || "Empty node"}</p></div>)}
+                        {!nodeContext.contextNodes.length ? <p className="text-[9px] text-slate-400">No nodes selected yet.</p> : null}
+                      </div>
+                      <p className="mt-5 text-[8px] font-semibold uppercase tracking-[.14em] text-slate-400">Sources</p>
+                      <div className="mt-2 space-y-2">{nodeContext.sourceNodes.slice(0, 4).map((node) => <p key={node.id} className="truncate text-[8px] text-blue-600">{node.data.title || node.data.sourceUrl}</p>)}</div>
+                    </aside>
                   </div>
                 ) : null}
                 {studyView === "notes" ? (
@@ -1536,10 +1653,19 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                               animate={{ opacity: 1, y: 0, rotate: 0, scale: 1 }}
                               transition={{ delay: index * 0.05, type: "spring", stiffness: 420, damping: 28 }}
                               onClick={() => setFlippedCards((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })}
-                              className="min-h-[170px] rounded-[18px] border border-slate-200 bg-white p-5 text-left shadow-[0_10px_30px_rgba(15,23,42,.06)] transition-transform active:scale-[.99]"
+                              style={{ perspective: 900 }}
+                              className="min-h-[170px] overflow-hidden rounded-[18px] border border-slate-200 bg-white p-0 text-left shadow-[0_10px_30px_rgba(15,23,42,.06)] transition-transform active:scale-[.99]"
                             >
-                              <p className="text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">{flipped ? "Answer" : "Question"}</p>
-                              <h3 className="mt-4 text-[13px] font-semibold leading-5 text-slate-900">{flipped ? (back || card) : (front || card)}</h3>
+                              <div className="relative min-h-[170px] w-full transition-transform duration-500 [transform-style:preserve-3d]" style={{ transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)" }}>
+                                <div className="absolute inset-0 p-5 [backface-visibility:hidden]">
+                                  <p className="text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">Question</p>
+                                  <h3 className="mt-4 text-[13px] font-semibold leading-5 text-slate-900">{front || card}</h3>
+                                </div>
+                                <div className="absolute inset-0 bg-slate-950 p-5 text-white [backface-visibility:hidden]" style={{ transform: "rotateY(180deg)" }}>
+                                  <p className="text-[8px] font-semibold uppercase tracking-[.12em] text-blue-300">Answer</p>
+                                  <h3 className="mt-4 text-[13px] font-semibold leading-5">{back || card}</h3>
+                                </div>
+                              </div>
                             </motion.button>
                           );
                         })}
@@ -1639,8 +1765,11 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
         </AnimatePresence>
 
         <button type="button" onClick={onBack} className="absolute left-4 top-4 z-30 flex h-10 items-center gap-2 rounded-[14px] border border-[#dedbd5] bg-[#fffefa]/95 px-3.5 text-[9px] font-semibold shadow-[0_8px_24px_rgba(48,52,58,.06)] transition-[background,transform] hover:bg-white active:scale-[.98]"><LayoutGrid className="h-4 w-4" />Workspaces</button>
-        <div
-          className="clyra-workflow-tabs absolute left-1/2 top-4 z-30 flex -translate-x-1/2 items-center rounded-full border border-slate-200/80 bg-white/95 p-1 shadow-[0_10px_32px_rgba(15,23,42,.10)] backdrop-blur-xl"
+        <motion.div
+          className="clyra-workflow-tabs absolute left-1/2 top-16 z-30 flex -translate-x-1/2 items-center rounded-full border border-slate-200/80 bg-white/95 p-1 shadow-[0_10px_32px_rgba(15,23,42,.10)] backdrop-blur-xl sm:top-20"
+          initial={{ y: -14, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ type: "spring", stiffness: 420, damping: 34, mass: 0.35 }}
           style={{ position: "absolute" }}
           onPointerLeave={() => setHoveredStudyTab(null)}
         >
@@ -1649,7 +1778,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
               <motion.div
                 className="clyra-workflow-tab__hover pointer-events-none absolute bottom-1 top-1 rounded-full"
                 initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1, x: `calc(${(["nodes", "notes", "flashcards", "test", "chat"] as const).indexOf(hoveredStudyTab)} * 100%)` }}
+                animate={{ opacity: 1, scale: 1, x: `${(["nodes", "notes", "flashcards", "test", "chat"] as const).indexOf(hoveredStudyTab) * 100}%` }}
                 exit={{ opacity: 0, scale: 0.95 }}
                 transition={{ type: "spring", stiffness: 520, damping: 38, mass: 0.2 }}
                 style={{ left: 4, width: "calc((100% - 8px) / 5)" }}
@@ -1672,7 +1801,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
               {view === "nodes" ? "Canvas" : view === "notes" ? "Notes" : view === "flashcards" ? "Flashcards" : view === "test" ? "Test" : "Chat"}
             </button>
           ))}
-        </div>
+        </motion.div>
         <div className="absolute right-4 top-4 z-30 flex items-center rounded-[14px] border border-[#dedbd5] bg-[#fffefa]/95 p-1 shadow-[0_8px_24px_rgba(48,52,58,.06)]">
           <button type="button" onClick={undo} title="Undo" className="grid h-8 w-8 place-items-center rounded-[10px] text-slate-500 hover:bg-[#efede8]"><Undo2 className="h-3.5 w-3.5" /></button>
           <button type="button" onClick={redo} title="Redo" className="grid h-8 w-8 place-items-center rounded-[10px] text-slate-500 hover:bg-[#efede8]"><Redo2 className="h-3.5 w-3.5" /></button>
