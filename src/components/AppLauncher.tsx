@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion, useMotionValue, useReducedMotion, useSpring } from "motion/react";
 import { type PointerEvent, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
-import { type OrbColorTheme } from "./AiOrb";
+import { AiOrb, type OrbColorTheme } from "./AiOrb";
 
 export type LauncherToolId =
   | "chat"
@@ -245,14 +245,13 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
 
             <div className="clyra-launcher-orb absolute left-1/2 top-1/2 z-20 grid h-[24%] w-[24%] -translate-x-1/2 -translate-y-1/2 place-items-center">
               <motion.div
-                initial={{ scale: 0.9, opacity: 0 }}
+                initial={{ scale: 0.92, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.95, opacity: 0 }}
-                transition={{ delay: reduceMotion ? 0 : 0.01, type: "spring", stiffness: 780, damping: 42, mass: 0.22 }}
-                className="grid h-24 w-24 place-items-center rounded-full border border-slate-200 bg-white text-[32px] font-semibold text-slate-950 shadow-[0_18px_42px_rgba(15,23,42,.08)]"
-                aria-hidden="true"
+                transition={{ delay: reduceMotion ? 0 : 0.01, type: "spring", stiffness: 760, damping: 40, mass: 0.24 }}
+                className="scale-[0.92]"
               >
-                C
+                <AiOrb colorTheme={orbColorTheme} introActive={false} />
               </motion.div>
             </div>
           </motion.div>
