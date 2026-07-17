@@ -385,40 +385,6 @@ function AppAgentGlyph({ id, className = "h-4 w-4" }: { id: AppAgentId; classNam
   return <Heart className={className} />;
 }
 
-function useTypedSummary(text: string, resetKey: string, enabled = true) {
-  const [printed, setPrinted] = useState("");
-  const [done, setDone] = useState(false);
-  const textRef = useRef(text);
-  textRef.current = text;
-
-  useEffect(() => {
-    const snapshot = textRef.current;
-    if (!enabled) {
-      setPrinted(snapshot);
-      setDone(true);
-      return;
-    }
-    setPrinted("");
-    setDone(false);
-    if (!snapshot) {
-      setDone(true);
-      return;
-    }
-    let index = 0;
-    const timer = window.setInterval(() => {
-      index += 1;
-      setPrinted(snapshot.slice(0, index));
-      if (index >= snapshot.length) {
-        window.clearInterval(timer);
-        setDone(true);
-      }
-    }, 16);
-    return () => window.clearInterval(timer);
-  }, [enabled, resetKey]);
-
-  return { printed, done };
-}
-
 function AppAgentCard({
   agent,
   selected,
@@ -441,21 +407,19 @@ function AppAgentCard({
   const ready = agent.status === "ready";
   const paused = Boolean(agent.paused);
   const glow = running || paused || ready || agent.control === "user" || selected;
-  const summary = agent.summary || agent.action || `Preparing ${agent.label}…`;
-  const { printed, done: summaryDone } = useTypedSummary(summary, agent.id);
   // Shrink live workspace into the card so full UI (chrome + content) fits.
   const previewScale = agent.id === "browse" ? 0.58 : agent.id === "vibe" ? 0.5 : 0.54;
 
   useEffect(() => {
     setIframeReady(false);
-    setRevealPreview(false);
+    setRevealPreview(agent.status !== "queued");
   }, [agent.id]);
 
   useEffect(() => {
-    if (!summaryDone) return;
-    const timer = window.setTimeout(() => setRevealPreview(true), 1_000);
+    if (agent.status === "queued") return;
+    const timer = window.setTimeout(() => setRevealPreview(true), 120);
     return () => window.clearTimeout(timer);
-  }, [summaryDone, agent.id]);
+  }, [agent.status, agent.id]);
 
   useEffect(() => {
     if (!fullscreen) return;
@@ -473,10 +437,6 @@ function AppAgentCard({
 
   return (
     <motion.article className="min-w-0 py-2" layout>
-      <p className="mb-3 min-h-[2.5rem] text-[12px] font-medium leading-5 text-slate-600">
-        {printed}
-        {!summaryDone ? <span className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse bg-slate-400 align-middle" /> : null}
-      </p>
       <AnimatePresence>
         {revealPreview ? (
           <motion.div
@@ -487,7 +447,7 @@ function AppAgentCard({
           >
             <div
               className={cn(
-                "group relative overflow-hidden bg-white transition-[box-shadow,border-radius,transform] duration-300",
+                "group relative overflow-hidden bg-white transition-[box-shadow,border-radius,transform,inset] duration-500 ease-[cubic-bezier(.22,1,.36,1)]",
                 fullscreen
                   ? "fixed inset-0 z-[120] rounded-none"
                   : "relative min-h-[300px] rounded-[22px]",
@@ -498,13 +458,15 @@ function AppAgentCard({
                   : "shadow-[inset_0_0_0_1px_rgba(148,163,184,.35),0_16px_40px_rgba(15,23,42,.07)]",
               )}
             >
-              {/* Agent chrome — always visible */}
+              {running && agent.control !== "user" && !paused ? (
+                <motion.div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 z-40 rounded-[inherit] border border-blue-400/70"
+                  animate={{ opacity: [0.35, 0.9, 0.35], boxShadow: ["0 0 0 0 rgba(59,130,246,0)", "0 0 0 5px rgba(59,130,246,.16)", "0 0 0 0 rgba(59,130,246,0)"] }}
+                  transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
+                />
+              ) : null}
               <div className="relative z-30 flex h-10 items-center gap-2 border-b border-slate-200/80 bg-gradient-to-b from-white to-slate-50/90 px-3">
-                <span className="flex items-center gap-1.5">
-                  <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
-                  <span className="h-2.5 w-2.5 rounded-full bg-[#febc2e]" />
-                  <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
-                </span>
                 <div className="ml-1 flex min-w-0 flex-1 items-center gap-2 rounded-md border border-slate-200/90 bg-white px-2.5 py-1 shadow-[inset_0_1px_0_rgba(255,255,255,.9)]">
                   {agent.id === "browse" ? <Globe className="h-3 w-3 shrink-0 text-slate-400" /> : <AppAgentGlyph id={agent.id} className="h-3 w-3 shrink-0 text-slate-400" />}
                   <span className="truncate text-[10px] font-medium text-slate-600">
@@ -512,28 +474,21 @@ function AppAgentCard({
                     {ready ? " · ready for you" : paused ? " · paused" : agent.control === "user" ? " · takeover" : running ? " · AI active" : ""}
                   </span>
                 </div>
-                {ready ? (
-                  <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[8px] font-semibold text-emerald-700">
-                    <Check className="h-3 w-3" />
-                    Done
-                  </span>
-                ) : null}
-                <div className="flex shrink-0 items-center gap-1">
+                <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
                   <button
                     type="button"
                     onClick={() => onPause(!paused)}
-                    className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-[9px] font-semibold text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                    className="grid h-7 w-7 place-items-center rounded-md border border-slate-200 bg-white text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50"
                     aria-label={paused ? "Resume AI" : "Pause AI"}
                     title={paused ? "Resume AI" : "Pause AI"}
                   >
                     {paused ? <CirclePlay className="h-3 w-3" /> : <CirclePause className="h-3 w-3" />}
-                    <span className="hidden sm:inline">{paused ? "Resume" : "Pause"}</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => onControl(agent.control === "user" ? "ai" : "user")}
                     className={cn(
-                      "inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[9px] font-semibold transition-colors",
+                      "grid h-7 w-7 place-items-center rounded-md border transition-colors",
                       agent.control === "user"
                         ? "border-blue-500 bg-blue-600 text-white hover:bg-blue-700"
                         : "border-slate-200 bg-white text-slate-700 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700",
@@ -542,7 +497,6 @@ function AppAgentCard({
                     title={agent.control === "user" ? "Resume AI" : "Take over"}
                   >
                     <MousePointer2 className="h-3 w-3" />
-                    <span className="hidden sm:inline">{agent.control === "user" ? "Resume AI" : "Takeover"}</span>
                   </button>
                 </div>
               </div>
@@ -606,9 +560,6 @@ function AppAgentCard({
                       transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
                     >
                       <MousePointer2 className="h-5 w-5 fill-blue-500 text-blue-700 drop-shadow-md" />
-                      <span className="whitespace-nowrap rounded-full border border-blue-200 bg-white/92 px-2.5 py-1 text-[9px] font-semibold text-blue-700 shadow-sm">
-                        {agent.action || "Agent is working"}
-                      </span>
                     </motion.div>
                   </div>
                 ) : null}
@@ -660,11 +611,6 @@ function AppAgentFlowPanel({
   const activeAgent = agentList.find((agent) => agent.id === activePreview) || agentList[0];
   return (
     <section className="mt-5">
-      <div className="mb-3 flex justify-center">
-        <div className="relative grid h-14 w-14 place-items-center rounded-full bg-white/70 shadow-[inset_0_0_22px_rgba(59,130,246,.14)]">
-          <AiOrb />
-        </div>
-      </div>
       {agentList.length > 1 ? (
         <div className="mb-3 flex items-center gap-1 overflow-x-auto rounded-full border border-slate-200/80 bg-white/75 p-1 shadow-sm backdrop-blur-md" role="tablist" aria-label="Live app agents">
           {agentList.map((agent) => {
@@ -2888,10 +2834,37 @@ Please analyze the code you just wrote and fix this error.`;
   const executeAttachedAppAgent = useCallback(async (agentId: AppAgentId, prompt: string, conversationContext = ""): Promise<Pick<AttachedAppAgent, "status" | "summary" | "previewUrl" | "action">> => {
     const cleanPrompt = prompt.trim() || "Help me move this task forward.";
     if (agentId === "browse") {
-      const response = await fetch("/api/openbrowser/assist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task: cleanPrompt }) });
-      const payload = await response.json();
-      if (!response.ok || !payload?.ok) throw new Error(payload?.error?.message || "Browser agent could not complete the task");
-      return { status: "ready", action: "Verified live page", summary: String(payload.content || "Browser task completed with live-page verification.").slice(0, 360) };
+      const response = await fetch("/api/openbrowser/assist", { method: "POST", headers: { "Content-Type": "application/json", Accept: "text/event-stream" }, body: JSON.stringify({ task: cleanPrompt }) });
+      if (!response.ok || !response.body) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error?.message || payload?.error || "Browser agent could not start the task");
+      }
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.includes("text/event-stream")) {
+        const payload = await response.json();
+        if (!payload?.ok) throw new Error(payload?.error?.message || payload?.error || "Browser agent could not complete the task");
+        return { status: "ready", action: "Verified live page", summary: String(payload.content || "Browser task completed with live-page verification.").slice(0, 360) };
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finalEvent: Record<string, unknown> | null = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() || "";
+        for (const event of events) {
+          const line = event.split("\n").find((item) => item.startsWith("data: "));
+          if (!line) continue;
+          const next = JSON.parse(line.slice(6)) as Record<string, unknown>;
+          if (next.type === "error") throw new Error(String(next.message || "Browser agent could not complete the task"));
+          if (next.type === "complete") finalEvent = next;
+        }
+      }
+      if (!finalEvent?.ok) throw new Error(String(finalEvent?.message || "Browser agent stopped before returning a verified result"));
+      return { status: "ready", action: "Verified live page", summary: String(finalEvent.content || finalEvent.message || "Browser task completed with live-page verification.").slice(0, 360) };
     }
     if (agentId === "study") {
       const evidence = conversationContext.trim()
@@ -3339,6 +3312,7 @@ Please analyze the code you just wrote and fix this error.`;
         }
 
         if (attachedAgentCommands.length) {
+          await new Promise((resolve) => window.setTimeout(resolve, 420));
           setMessages((current) =>
             current.map((message) =>
               message.id === aiMsgId
