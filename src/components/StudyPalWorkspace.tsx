@@ -931,6 +931,13 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
           return /:/.test(line) || line.split(/\s+/).length <= 10 || /^\d+\./.test(line);
         })
         .slice(0, 4);
+      const sourceUrls = Array.from(new Set(
+        request.match(/https?:\/\/[^\s)\]}>,]+/gi)?.map((url) => url.replace(/[.,;:!?]+$/, "")) || [],
+      ));
+      const questionSection = request.match(/Questions?\s*:\s*(.*?)(?:\s+Sources?\s*:|$)/is)?.[1] || "";
+      const requestedQuestions = Array.from(questionSection.matchAll(/[^?\n]{12,180}?\?/g))
+        .map((match) => match[0]!.trim())
+        .filter((question) => !/^https?:/i.test(question));
       while (branches.length < 4) {
         branches.push(["Core ideas and vocabulary", "Evidence and worked examples", "Common misconceptions", "Questions to practise"][branches.length]!);
       }
@@ -946,12 +953,14 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
             x: rootPosition.x + 390 + (index % 2) * 300,
             y: rootPosition.y - 170 + Math.floor(index / 2) * 245,
           },
-          data: {
-            kind: kinds[index]!,
-            title: (heading || `Study branch ${index + 1}`).slice(0, 84),
-            body: (rest.join(": ") || branch).slice(0, 560),
-          },
-        } satisfies StudyNode;
+        data: {
+          kind: kinds[index]!,
+          title: (heading || `Study branch ${index + 1}`).slice(0, 84),
+          body: kinds[index] === "question"
+            ? (requestedQuestions[0] || rest.join(": ") || branch).slice(0, 560)
+            : (rest.join(": ") || branch).slice(0, 560),
+        },
+      } satisfies StudyNode;
       });
       capture();
       setNodes((current) => {
@@ -981,7 +990,28 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
         const edgeLabel = ["breaks into", "supported by", "remember", "raises"][index] || "connects to";
         await revealGeneratedNode(node, node.data, rootId, edgeLabel);
       }
-      setConversations((current) => [...current, { id: safeId(), role: "assistant", text: "I built a four-branch foundation. Add sources, then ask me to verify or expand any selected branch.", citations: payload.citations }]);
+      for (let index = 0; index < sourceUrls.length; index += 1) {
+        const url = sourceUrls[index]!;
+        const sourceNode: StudyNode = {
+          id: safeId(),
+          type: "study",
+          position: {
+            x: rootPosition.x - 420,
+            y: rootPosition.y - 150 + index * 190,
+          },
+          data: {
+            kind: "source",
+            title: "",
+            body: "",
+            sourceUrl: url,
+            sourceMode: /youtu(?:be\.com|\.be)/i.test(url) ? "youtube" : "web",
+            tags: ["ai-source"],
+          },
+        };
+        await revealGeneratedNode(sourceNode, sourceNode.data, rootId, "grounded by");
+        await ingestNodeUrl(sourceNode.id, url);
+      }
+      setConversations((current) => [...current, { id: safeId(), role: "assistant", text: `I built a four-branch foundation${sourceUrls.length ? ` and connected ${sourceUrls.length} source${sourceUrls.length === 1 ? "" : "s"}` : ""}. You can now verify or expand any selected branch.`, citations: payload.citations }]);
       setSelectedId(rootId);
       window.setTimeout(() => void flowInstance?.fitView({ duration: 520, padding: 0.18 }), 50);
     } catch (cause) {
@@ -1007,6 +1037,10 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
     );
     if (!question || asking) return;
     if (studyLocked) {
+      if (mode !== "answer") {
+        setNotice("Add a ready source to generate this study view.");
+        return;
+      }
       const starter = nodes.find((node) => node.data.tags?.includes("starter"));
       if (starter) {
         capture();

@@ -771,7 +771,7 @@ function extractWeatherLocation(text: string): string | null {
 
 function UserMessageText({ text }: { text: string }) {
   return (
-    <p className="clyra-chat-user-text">
+    <div className="clyra-chat-user-text">
       <GradientWaveText
         align="left"
         speed={1.55}
@@ -783,7 +783,7 @@ function UserMessageText({ text }: { text: string }) {
       >
         {text}
       </GradientWaveText>
-    </p>
+    </div>
   );
 }
 
