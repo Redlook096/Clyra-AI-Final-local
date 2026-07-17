@@ -30,18 +30,14 @@ import {
   ArrowUpIcon,
   Check,
   ChevronRight,
-  CirclePause,
-  CirclePlay,
   FileUp,
   Folder,
   Globe,
   GraduationCap,
   Heart,
   Loader2,
-  Maximize2,
   MessageCircleDashed,
   MessagesSquare,
-  Minimize2,
   MousePointer2,
   Paperclip,
   Pencil,
@@ -75,6 +71,7 @@ import {
   wantsNotesMode,
 } from "./lib/clyraChatPrompt";
 import { BlurredStaggerStream } from "@/components/ui/blurred-stagger-text";
+import { TextBlurIn } from "@/components/ui/text-blur-in";
 import { MarkdownMessageContent } from "./components/MarkdownMessageContent";
 import {
   DocumentCardUI,
@@ -249,22 +246,12 @@ function readStoredString(key: string, fallback = "") {
 
 /** Standard chat: shimmer until the model emits answer text (`content`), then hide so stagger can print it. */
 function ChatThinkingLabel({
-  isThinking,
-  isStreaming,
-  content,
   thinkingMode = "thinking",
   searchSources = [],
 }: {
-  isThinking: boolean;
-  isStreaming: boolean;
-  content: string;
   thinkingMode?: "thinking" | "youtube" | "search" | "weather";
   searchSources?: string[];
 }) {
-  const visible = content.length === 0 && (isThinking || isStreaming);
-
-  if (!visible) return null;
-
   const label =
     thinkingMode === "youtube"
       ? "Analyzing YouTube"
@@ -388,25 +375,17 @@ function AppAgentGlyph({ id, className = "h-4 w-4" }: { id: AppAgentId; classNam
 function AppAgentCard({
   agent,
   selected,
-  onSelect,
-  onControl,
-  onPause,
 }: {
   agent: AttachedAppAgent;
   selected: boolean;
-  onSelect: () => void;
-  onControl: (control: "ai" | "user") => void;
-  onPause: (paused: boolean) => void;
 }) {
-  const [fullscreen, setFullscreen] = useState(false);
   const [iframeReady, setIframeReady] = useState(false);
   const [revealPreview, setRevealPreview] = useState(false);
   const origin = typeof window === "undefined" ? "http://localhost:3000" : window.location.origin;
   const source = `${origin}/?embedTool=${encodeURIComponent(agent.id)}&agentPreview=1`;
   const running = agent.status === "running" || agent.status === "queued";
   const ready = agent.status === "ready";
-  const paused = Boolean(agent.paused);
-  const glow = running || paused || ready || agent.control === "user" || selected;
+  const glow = running || ready || selected;
   // Shrink live workspace into the card so full UI (chrome + content) fits.
   const previewScale = agent.id === "browse" ? 0.58 : agent.id === "vibe" ? 0.5 : 0.54;
 
@@ -421,20 +400,6 @@ function AppAgentCard({
     return () => window.clearTimeout(timer);
   }, [agent.status, agent.id]);
 
-  useEffect(() => {
-    if (!fullscreen) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setFullscreen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = previous;
-    };
-  }, [fullscreen]);
-
   return (
     <motion.article className="min-w-0 py-2" layout>
       <AnimatePresence>
@@ -448,9 +413,7 @@ function AppAgentCard({
             <div
               className={cn(
                 "group relative overflow-hidden bg-white transition-[box-shadow,border-radius,transform,inset] duration-500 ease-[cubic-bezier(.22,1,.36,1)]",
-                fullscreen
-                  ? "fixed inset-0 z-[120] rounded-none"
-                  : "relative min-h-[300px] rounded-[22px]",
+                "relative min-h-[300px] rounded-[22px]",
                 glow
                   ? ready
                     ? "shadow-[0_0_0_1.5px_rgba(16,185,129,.55),0_0_0_6px_rgba(16,185,129,.12),0_22px_50px_rgba(5,150,105,.14)]"
@@ -458,7 +421,7 @@ function AppAgentCard({
                   : "shadow-[inset_0_0_0_1px_rgba(148,163,184,.35),0_16px_40px_rgba(15,23,42,.07)]",
               )}
             >
-              {running && agent.control !== "user" && !paused ? (
+              {running ? (
                 <motion.div
                   aria-hidden="true"
                   className="pointer-events-none absolute inset-0 z-40 rounded-[inherit] border border-blue-400/70"
@@ -471,44 +434,14 @@ function AppAgentCard({
                   {agent.id === "browse" ? <Globe className="h-3 w-3 shrink-0 text-slate-400" /> : <AppAgentGlyph id={agent.id} className="h-3 w-3 shrink-0 text-slate-400" />}
                   <span className="truncate text-[10px] font-medium text-slate-600">
                     {ready ? "Task complete" : agent.action || agent.label}
-                    {ready ? " · ready for you" : paused ? " · paused" : agent.control === "user" ? " · takeover" : running ? " · AI active" : ""}
+                    {ready ? " · ready for you" : running ? " · AI active" : ""}
                   </span>
-                </div>
-                <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
-                  <button
-                    type="button"
-                    onClick={() => onPause(!paused)}
-                    className="grid h-7 w-7 place-items-center rounded-md border border-slate-200 bg-white text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50"
-                    aria-label={paused ? "Resume AI" : "Pause AI"}
-                    title={paused ? "Resume AI" : "Pause AI"}
-                  >
-                    {paused ? <CirclePlay className="h-3 w-3" /> : <CirclePause className="h-3 w-3" />}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onControl(agent.control === "user" ? "ai" : "user")}
-                    className={cn(
-                      "grid h-7 w-7 place-items-center rounded-md border transition-colors",
-                      agent.control === "user"
-                        ? "border-blue-500 bg-blue-600 text-white hover:bg-blue-700"
-                        : "border-slate-200 bg-white text-slate-700 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700",
-                    )}
-                    aria-label={agent.control === "user" ? "Return control to AI" : "Take over"}
-                    title={agent.control === "user" ? "Return control to AI" : "Take over"}
-                  >
-                    <MousePointer2 className="h-3 w-3" />
-                  </button>
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={onSelect}
-                className={cn(
-                  "relative block w-full overflow-hidden bg-slate-50 text-left",
-                  fullscreen ? "h-[calc(100%-2.5rem)]" : "h-[min(52vh,420px)] min-h-[280px]",
-                )}
-                aria-label={`Select ${agent.label} live preview`}
+              <div
+                className="relative block h-[min(52vh,420px)] min-h-[280px] w-full overflow-hidden bg-slate-50"
+                aria-label={`${agent.label} live preview`}
               >
                 <AnimatePresence>
                   {!iframeReady ? (
@@ -531,13 +464,11 @@ function AppAgentCard({
                   <div
                     className="absolute inset-0 origin-top-left"
                     style={
-                      fullscreen
-                        ? undefined
-                        : {
-                            width: `${100 / previewScale}%`,
-                            height: `${100 / previewScale}%`,
-                            transform: `scale(${previewScale})`,
-                          }
+                      {
+                        width: `${100 / previewScale}%`,
+                        height: `${100 / previewScale}%`,
+                        transform: `scale(${previewScale})`,
+                      }
                     }
                   >
                     <iframe
@@ -547,12 +478,12 @@ function AppAgentCard({
                       onLoad={() => setIframeReady(true)}
                       className={cn(
                         "h-full w-full border-0 bg-white",
-                        fullscreen || agent.control === "user" ? "pointer-events-auto" : "pointer-events-none",
+                        "pointer-events-none",
                       )}
                     />
                   </div>
                 </motion.div>
-                {running && agent.control !== "user" && !paused && iframeReady ? (
+                {running && iframeReady ? (
                   <div className="pointer-events-none absolute inset-0">
                     <motion.div
                       className="absolute left-[38%] top-[42%] flex items-center gap-2"
@@ -563,20 +494,7 @@ function AppAgentCard({
                     </motion.div>
                   </div>
                 ) : null}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setFullscreen((value) => !value)}
-                className={cn(
-                  "absolute z-40 grid h-8 w-8 place-items-center rounded-lg border border-slate-200/90 bg-white/90 text-slate-600 shadow-sm backdrop-blur-md transition-[opacity,transform,background-color,color] hover:bg-slate-950 hover:text-white active:scale-95",
-                  fullscreen ? "right-4 top-[3.25rem] opacity-100" : "right-3 top-[3.25rem] opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
-                )}
-                aria-label={fullscreen ? "Exit fullscreen preview" : "Enter fullscreen preview"}
-                title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
-              >
-                {fullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-              </button>
+              </div>
             </div>
           </motion.div>
         ) : null}
@@ -589,14 +507,10 @@ function AppAgentFlowPanel({
   agents,
   selectedAgent,
   onSelect,
-  onControl,
-  onPause,
 }: {
   agents?: AttachedAppAgent[];
   selectedAgent: AppAgentId | null;
   onSelect: (id: AppAgentId) => void;
-  onControl: (id: AppAgentId, control: "ai" | "user") => void;
-  onPause: (id: AppAgentId, paused: boolean) => void;
 }) {
   const agentList = agents || [];
   const [activePreview, setActivePreview] = useState<AppAgentId>(selectedAgent || agentList[0]?.id || "vibe");
@@ -639,14 +553,20 @@ function AppAgentFlowPanel({
           })}
         </div>
       ) : null}
-      <AppAgentCard
-        key={activeAgent.id}
-        agent={activeAgent}
-        selected={selectedAgent === activeAgent.id}
-        onSelect={() => onSelect(activeAgent.id)}
-        onControl={(control) => onControl(activeAgent.id, control)}
-        onPause={(paused) => onPause(activeAgent.id, paused)}
-      />
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={activeAgent.id}
+          initial={{ opacity: 0, x: 14, y: 4 }}
+          animate={{ opacity: 1, x: 0, y: 0 }}
+          exit={{ opacity: 0, x: -10, y: 2 }}
+          transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+        >
+          <AppAgentCard
+            agent={activeAgent}
+            selected={selectedAgent === activeAgent.id}
+          />
+        </motion.div>
+      </AnimatePresence>
     </section>
   );
 }
@@ -842,6 +762,11 @@ const AnimatedMessage = ({
 
   const shouldRenderMarkdown =
     markdownSupport && hasMarkdownStructure && !useDocumentUI;
+  const showThinking =
+    !isVibe && content.length === 0 && (!!isThinking || !!isStreaming);
+  const showAnswer = content.length > 0 && !suppressVibeAnswerBody;
+  const useCompletedBlurReveal =
+    !isVibe && !isStreaming && !useDocumentUI && !shouldRenderMarkdown;
   return (
     <div
       className={cn(
@@ -849,23 +774,33 @@ const AnimatedMessage = ({
         fontSizeClass,
       )}
     >
-      {!isVibe ? (
-        <ChatThinkingLabel
-          isThinking={!!isThinking}
-          isStreaming={!!isStreaming}
-          content={content}
-          thinkingMode={thinkingMode}
-          searchSources={searchSources}
-        />
-      ) : null}
+      <AnimatePresence initial={false} mode="wait">
+        {showThinking ? (
+          <motion.div
+            key="thinking"
+            initial={{ opacity: 0, y: 3 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -3 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+          >
+            <ChatThinkingLabel
+              thinkingMode={thinkingMode}
+              searchSources={searchSources}
+            />
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
       {youtubeVideoId ? (
         <YoutubeScanEmbed videoId={youtubeVideoId} active={showYoutubeScan} />
       ) : null}
       {weather ? <WeatherDiagramCard weather={weather} /> : null}
-      {content.length > 0 && !suppressVibeAnswerBody ? (
-        <div
+      {showAnswer ? (
+        <motion.div
           className={cn("markdown-body mt-1", isVibe && "markdown-body--vibe")}
           data-invert-ignore
+          initial={{ opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
         >
           {isVibe ? (
             <VibeAgentMessageBody
@@ -908,6 +843,16 @@ const AnimatedMessage = ({
               codeHighlighting={!!codeHighlighting}
               codePresentation="default"
             />
+          ) : useCompletedBlurReveal ? (
+            <TextBlurIn
+              className={cn(
+                "font-medium leading-relaxed text-inherit",
+                fontSizeClass,
+              )}
+              by="word"
+            >
+              {content}
+            </TextBlurIn>
           ) : (
             <BlurredStaggerStream
               text={content}
@@ -918,7 +863,7 @@ const AnimatedMessage = ({
           {thinkingMode === "search" ? (
             <SearchSourcesFooter urls={searchSources} />
           ) : null}
-        </div>
+        </motion.div>
       ) : null}
     </div>
   );
@@ -5514,8 +5459,6 @@ Please analyze the code you just wrote and fix this error.`;
                                             setSelectedAgent({ messageId: message.id, agentId });
                                             openAttachedAppAgent(agentId);
                                           }}
-                                          onControl={(agentId, control) => controlAttachedAppAgent(message.id, agentId, control)}
-                                          onPause={(agentId, paused) => pauseAttachedAppAgent(message.id, agentId, paused)}
                                         />
                                       </div>
                                     </div>
