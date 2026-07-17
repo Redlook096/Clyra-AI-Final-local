@@ -1257,8 +1257,21 @@ export default function App() {
   const [workflowTabsHintVisible, setWorkflowTabsHintVisible] = useState(false);
   const workflowTabsWasVisibleRef = useRef(false);
   const workflowTabsHintTimerRef = useRef<number | null>(null);
+  const workflowTabsHoverHideTimerRef = useRef<number | null>(null);
   const [workspaceTransitionDirection, setWorkspaceTransitionDirection] =
     useState<number>(0);
+
+  const revealWorkflowTabs = () => {
+    if (workflowTabsHoverHideTimerRef.current) window.clearTimeout(workflowTabsHoverHideTimerRef.current);
+    setWorkflowTabsHoverReveal(true);
+  };
+  const hideWorkflowTabsSoon = () => {
+    if (workflowTabsHoverHideTimerRef.current) window.clearTimeout(workflowTabsHoverHideTimerRef.current);
+    workflowTabsHoverHideTimerRef.current = window.setTimeout(() => {
+      setWorkflowTabsHoverReveal(false);
+      workflowTabsHoverHideTimerRef.current = null;
+    }, 180);
+  };
 
   const containerMouseX = useMotionValue(0);
   const magneticTargetX = useTransform(containerMouseX, (mouseX) => {
@@ -4948,8 +4961,9 @@ Please analyze the code you just wrote and fix this error.`;
           {!isEmbeddedToolPreview ? (
             <div
               aria-hidden="true"
-              className="absolute left-1/2 top-0 z-[188] h-7 w-[min(390px,74vw)] -translate-x-1/2"
-              onPointerEnter={() => setWorkflowTabsHoverReveal(true)}
+              className="pointer-events-auto absolute left-1/2 top-0 z-[188] h-[88px] w-[min(390px,74vw)] -translate-x-1/2"
+              onPointerEnter={revealWorkflowTabs}
+              onPointerLeave={hideWorkflowTabsSoon}
             />
           ) : null}
           <AnimatePresence>
@@ -4975,8 +4989,9 @@ Please analyze the code you just wrote and fix this error.`;
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -14, scale: 0.98 }}
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="pointer-events-none absolute inset-x-0 top-0 z-[190] h-[70px] overflow-visible"
-            onPointerEnter={() => setWorkflowTabsHoverReveal(true)}
+            className="pointer-events-auto absolute inset-x-0 top-0 z-[190] h-[88px] overflow-visible"
+            onPointerEnter={revealWorkflowTabs}
+            onPointerLeave={hideWorkflowTabsSoon}
           >
             <motion.div
               className="pointer-events-auto absolute left-1/2 top-5 z-50 -translate-x-1/2 sm:top-6"
@@ -4999,7 +5014,7 @@ Please analyze the code you just wrote and fix this error.`;
                 }}
                 onMouseLeave={() => {
                   setHoveredWorkspaceTab(null);
-                  setWorkflowTabsHoverReveal(false);
+                  hideWorkflowTabsSoon();
                 }}
                 onBlur={(event) => {
                   if (
@@ -5056,7 +5071,7 @@ Please analyze the code you just wrote and fix this error.`;
                         handleWorkspaceTabChange(tabItem.id);
                       }}
                       onClick={() => handleWorkspaceTabChange(tabItem.id)}
-                      onMouseEnter={() => setHoveredWorkspaceTab(tabItem.id)}
+                      onMouseEnter={() => { revealWorkflowTabs(); setHoveredWorkspaceTab(tabItem.id); }}
                       onFocus={() => setHoveredWorkspaceTab(tabItem.id)}
                       className={cn(
                         "clyra-workflow-tab w-[105px] justify-center",
@@ -5232,7 +5247,7 @@ Please analyze the code you just wrote and fix this error.`;
                             </div>
                           </div>
                         }>
-                          <StudyPalWorkspace />
+                          <StudyPalWorkspace globalTabsVisible={workflowTabsHoverReveal} />
                         </Suspense>
                       ) : creatorMode ? (
                         <Suspense fallback={null}>

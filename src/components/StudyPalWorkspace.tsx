@@ -613,7 +613,7 @@ function WorkspaceDashboard({ workspaces, onChange, onOpen }: { workspaces: Stud
   );
 }
 
-function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspace; onBack: () => void; onPersist: (workspace: StudyWorkspace) => void }) {
+function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible }: { workspace: StudyWorkspace; onBack: () => void; onPersist: (workspace: StudyWorkspace) => void; globalTabsVisible: boolean }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<StudyNode>(workspace.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<StudyEdge>(workspace.edges);
   const [resources, setResources] = useState(workspace.resources);
@@ -628,6 +628,7 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
   const [notice, setNotice] = useState("");
   const [composerMode, setComposerMode] = useState<"ask" | "source">("ask");
   const [studyView, setStudyView] = useState<"nodes" | "notes" | "flashcards" | "test" | "chat">("nodes");
+  const [studyViewDirection, setStudyViewDirection] = useState(1);
   const [hoveredStudyTab, setHoveredStudyTab] = useState<"nodes" | "notes" | "flashcards" | "test" | "chat" | null>(null);
   const [notesContent, setNotesContent] = useState(workspace.notesContent || "");
   const [notesLoading, setNotesLoading] = useState(false);
@@ -703,8 +704,9 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
   ) => {
     capture();
     setAgentCursor({ x: node.position.x - 54, y: node.position.y + 28, label: "Clyra" });
-    const startPosition = sourceNodeId
-      ? nodes.find((item) => item.id === sourceNodeId)?.position || { x: node.position.x - 280, y: node.position.y }
+    const sourceNode = sourceNodeId ? nodes.find((item) => item.id === sourceNodeId) : undefined;
+    const startPosition = sourceNode
+      ? { x: sourceNode.position.x + (sourceNode.data.tags?.includes("starter") ? 340 : 300), y: sourceNode.position.y + 118 }
       : { x: node.position.x - 220, y: node.position.y - 90 };
     setNodes((current) => [...current, {
       ...node,
@@ -747,7 +749,11 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
         },
       } : item));
       const nodeElement = document.querySelector(`[data-study-node-id="${node.id}"]`);
-      const typingTarget = nodeElement?.querySelector("textarea[aria-label='Node content'], textarea[aria-label='Question'], input[aria-label='Node title'], input[aria-label='YouTube URL']") as HTMLInputElement | HTMLTextAreaElement | null;
+      const typingSelector = title.length && character <= title.length
+        ? "input[aria-label='Node title']"
+        : "textarea[aria-label='Node content'], textarea[aria-label='Question'], input[aria-label='YouTube URL'], input[aria-label='Web page URL']";
+      const typingTarget = nodeElement?.querySelector(typingSelector) as HTMLInputElement | HTMLTextAreaElement | null;
+      typingTarget?.click();
       typingTarget?.focus({ preventScroll: true });
       await new Promise((resolve) => window.setTimeout(resolve, 12));
     }
@@ -1296,6 +1302,10 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
   };
 
   const openStudyView = (view: typeof studyView) => {
+    const studyViews = ["nodes", "notes", "flashcards", "test", "chat"] as const;
+    const currentIndex = studyViews.indexOf(studyView);
+    const nextIndex = studyViews.indexOf(view);
+    if (currentIndex !== nextIndex) setStudyViewDirection(nextIndex > currentIndex ? 1 : -1);
     setStudyView(view);
     if (view === "nodes") return;
     if (view !== "chat" && studyLocked) {
@@ -1665,20 +1675,36 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
               initial={{ opacity: 0, y: -8, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -6, scale: 0.98 }}
-              className="pointer-events-auto absolute left-5 top-[76px] z-20 w-[min(286px,calc(100vw-40px))] rounded-[18px] border border-white/90 bg-white/92 p-4 shadow-[0_16px_50px_rgba(15,23,42,.12)] backdrop-blur-xl"
+              className="pointer-events-auto absolute left-5 top-[76px] z-20 w-[min(332px,calc(100vw-40px))] overflow-hidden rounded-[20px] border border-white/90 bg-white/94 shadow-[0_20px_60px_rgba(15,23,42,.14)] backdrop-blur-xl"
             >
-              <button type="button" onClick={() => setWelcomeOpen(false)} aria-label="Close workspace welcome" title="Close" className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X className="h-3.5 w-3.5" /></button>
-              <p className="pr-8 text-[9px] font-semibold uppercase tracking-[.14em] text-blue-600">Start with the canvas</p>
-              <h2 className="mt-2 text-[15px] font-semibold text-slate-950">Build a connected study map</h2>
-              <p className="mt-2 text-[9px] leading-4 text-slate-500">Add a source, drag from a node handle, then choose the relationship. Clyra uses the connected path to answer questions and update every study view.</p>
-              <div className="mt-3 grid grid-cols-3 gap-2 text-[8px] font-semibold text-slate-600"><span className="rounded-lg bg-blue-50 px-2 py-2 text-center">1. Source</span><span className="rounded-lg bg-slate-50 px-2 py-2 text-center">2. Connect</span><span className="rounded-lg bg-slate-50 px-2 py-2 text-center">3. Ask</span></div>
+              <div className="flex items-start gap-3 border-b border-slate-100 bg-gradient-to-r from-blue-50 via-white to-white px-4 py-3.5">
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-slate-950 text-white shadow-[0_8px_18px_rgba(15,23,42,.14)]"><Sparkles className="h-4 w-4" /></span>
+                <div className="min-w-0 pr-5"><p className="text-[8px] font-semibold uppercase tracking-[.14em] text-blue-600">Study Pal guide</p><h2 className="mt-1 text-[14px] font-semibold text-slate-950">Build a connected map</h2></div>
+                <button type="button" onClick={() => setWelcomeOpen(false)} aria-label="Close workspace welcome" title="Close" className="absolute right-2.5 top-2.5 grid h-7 w-7 place-items-center rounded-full text-slate-400 transition-colors hover:bg-white hover:text-slate-700"><X className="h-3.5 w-3.5" /></button>
+              </div>
+              <div className="p-4"><p className="text-[9px] leading-4 text-slate-500">Add a source, connect a question, and let Clyra carry the evidence into every study view.</p>
+                <div className="mt-4 space-y-2"><div className="flex items-center gap-3 rounded-xl border border-blue-100 bg-blue-50/60 px-3 py-2.5"><span className="grid h-6 w-6 place-items-center rounded-full bg-blue-600 text-[9px] font-bold text-white">1</span><div><p className="text-[9px] font-semibold text-slate-800">Add a source</p><p className="text-[8px] text-slate-500">Web, YouTube, or a file</p></div></div><div className="flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-2.5"><span className="grid h-6 w-6 place-items-center rounded-full bg-white text-[9px] font-bold text-slate-700 shadow-sm">2</span><div><p className="text-[9px] font-semibold text-slate-800">Connect the ideas</p><p className="text-[8px] text-slate-500">Drag from a node handle</p></div></div><div className="flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-2.5"><span className="grid h-6 w-6 place-items-center rounded-full bg-white text-[9px] font-bold text-slate-700 shadow-sm">3</span><div><p className="text-[9px] font-semibold text-slate-800">Ask Clyra</p><p className="text-[8px] text-slate-500">Answers update the map</p></div></div></div>
+              </div>
             </motion.aside>
           ) : null}
         </AnimatePresence>
 
         <AnimatePresence mode="wait">
           {studyView !== "nodes" ? (
-            <motion.section key={studyView} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }} className={cn("absolute inset-0 z-[12] bg-[#f7f8fa] px-5 pt-24 sm:px-8", studyView === "notes" ? "overflow-hidden pb-4" : "overflow-y-auto pb-32")}>
+            <motion.section
+              key={studyView}
+              custom={studyViewDirection}
+              variants={{
+                enter: (direction: number) => ({ opacity: 0, x: direction > 0 ? 42 : -42 }),
+                center: { opacity: 1, x: 0 },
+                exit: (direction: number) => ({ opacity: 0, x: direction > 0 ? -30 : 30 }),
+              }}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={{ duration: 0.34, ease: [0.22, 1, 0.36, 1] }}
+              className={cn("absolute inset-0 z-[12] bg-[#f7f8fa] px-4 pt-24 sm:px-5", studyView === "notes" ? "overflow-hidden pb-4" : "overflow-y-auto pb-32")}
+            >
               <div className={cn("mx-auto max-w-[1180px]", studyView === "notes" && "flex h-full min-h-0 max-w-[1180px] flex-col")}>
                 {studyView === "chat" ? (
                   <div className="grid min-h-full gap-6 lg:grid-cols-[minmax(0,1fr)_280px]">
@@ -1764,12 +1790,12 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                             key={index}
                             className="agent-soft-shimmer absolute h-[190px] w-[140px] rounded-[18px] border border-white/80 bg-gradient-to-br from-slate-100 to-slate-200 shadow-[0_16px_40px_rgba(15,23,42,.12)]"
                             animate={{
-                              x: [0, -(104 - index * 16), 92 - index * 14, 0],
-                              y: [index * 2, -26 + index * 7, 22 - index * 5, index * 2],
-                              rotate: [(index - 2) * 3, -18 + index * 7, 14 - index * 5, (index - 2) * 3],
-                              scale: [1, 1.03, 1.02, 1],
+                              x: [0, -(index * 2), 0, (index - 2) * 52, (index - 2) * 52],
+                              y: [index * 2, index * 2, 0, (index % 2 ? 1 : -1) * 8, 0],
+                              rotate: [(index - 2) * 3, (index - 2) * 3, 0, (index - 2) * 7, 0],
+                              scale: [1, 1, 1.04, 1, 1],
                             }}
-                            transition={{ repeat: Infinity, duration: 2.6, ease: [0.22, 1, 0.36, 1], delay: index * 0.12 }}
+                            transition={{ repeat: Infinity, duration: 3.2, times: [0, 0.22, 0.48, 0.7, 1], ease: [0.22, 1, 0.36, 1], delay: index * 0.12 }}
                           />
                         ))}
                       </div>
@@ -1880,8 +1906,8 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
         <motion.div
           className="clyra-workflow-tabs absolute left-1/2 top-4 z-30 flex -translate-x-1/2 items-center rounded-full border border-slate-200/80 bg-white/95 p-1 shadow-[0_10px_32px_rgba(15,23,42,.10)] backdrop-blur-xl sm:top-6"
           initial={{ y: -14, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ type: "spring", stiffness: 420, damping: 34, mass: 0.35 }}
+          animate={{ y: globalTabsVisible ? 48 : 0, opacity: 1 }}
+          transition={{ type: "spring", stiffness: 360, damping: 32, mass: 0.35 }}
           style={{ position: "absolute" }}
           onPointerLeave={() => setHoveredStudyTab(null)}
         >
@@ -2092,7 +2118,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                 <motion.div
                   key="ask"
                   initial={{ opacity: 0, width: 0 }}
-                  animate={{ opacity: 1, width: "min(420px, calc(100vw - 140px))" }}
+                  animate={{ opacity: 1, width: "min(560px, calc(100vw - 96px))" }}
                   exit={{ opacity: 0, width: 0 }}
                   transition={{ type: "spring", stiffness: 420, damping: 34, mass: 0.35 }}
                   className="flex min-w-0 items-center gap-1 overflow-hidden"
@@ -2104,7 +2130,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                   ) : (
                     <>
                       <div className="relative min-w-0 flex-1">
-                        <motion.span className="pointer-events-none absolute inset-x-3 top-1/2 h-5 -translate-y-1/2 overflow-hidden rounded-full opacity-70" animate={{ backgroundPosition: ["-160% 0", "220% 0"] }} transition={{ repeat: Infinity, duration: 2.4, ease: "linear" }} style={{ backgroundImage: "linear-gradient(90deg, transparent, rgba(96,165,250,.22), transparent)", backgroundSize: "60% 100%", backgroundRepeat: "no-repeat" }} />
+                        <motion.span className="pointer-events-none absolute inset-x-3 top-1/2 h-5 -translate-y-1/2 overflow-hidden rounded-full opacity-70" animate={{ backgroundPosition: ["-160% 0", "220% 0", "-160% 0"] }} transition={{ repeat: Infinity, duration: 2.6, ease: "easeInOut" }} style={{ backgroundImage: "linear-gradient(90deg, transparent, rgba(96,165,250,.26), transparent)", backgroundSize: "60% 100%", backgroundRepeat: "no-repeat" }} />
                         <textarea
                           value={prompt}
                           onChange={(event) => setPrompt(event.target.value)}
@@ -2131,7 +2157,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
 
 }
 
-export default function StudyPalWorkspace() {
+export default function StudyPalWorkspace({ globalTabsVisible = false }: { globalTabsVisible?: boolean }) {
   const [workspaces, setWorkspaces] = useState<StudyWorkspace[]>(readWorkspaces);
   const [activeId, setActiveId] = useState("");
   useEffect(() => {
@@ -2140,5 +2166,5 @@ export default function StudyPalWorkspace() {
   }, [workspaces]);
   const active = workspaces.find((workspace) => workspace.id === activeId);
   const persist = useCallback((next: StudyWorkspace) => setWorkspaces((current) => current.map((workspace) => workspace.id === next.id ? next : workspace)), []);
-  return active ? <StudyCanvas key={active.id} workspace={active} onBack={() => setActiveId("")} onPersist={persist} /> : <WorkspaceDashboard workspaces={workspaces} onChange={setWorkspaces} onOpen={setActiveId} />;
+  return active ? <StudyCanvas key={active.id} workspace={active} onBack={() => setActiveId("")} onPersist={persist} globalTabsVisible={globalTabsVisible} /> : <WorkspaceDashboard workspaces={workspaces} onChange={setWorkspaces} onOpen={setActiveId} />;
 }
