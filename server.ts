@@ -2602,6 +2602,12 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
           clientPort: hmrPort,
         },
       },
+      optimizeDeps: {
+        entries: ["index.html", "todo.html"],
+        // Middleware mode must publish the React prebundle immediately; a
+        // held dependency crawl otherwise serves transient 504 responses.
+        holdUntilCrawlEnd: false,
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
