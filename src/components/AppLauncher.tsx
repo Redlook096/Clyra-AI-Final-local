@@ -11,8 +11,8 @@ import {
   MessagesSquare,
 } from "lucide-react";
 import { AnimatePresence, motion, useMotionValue, useReducedMotion, useSpring } from "motion/react";
-import { type PointerEvent, useEffect, useMemo, useState, type ComponentType } from "react";
-import { AiOrb, type OrbColorTheme } from "./AiOrb";
+import { type PointerEvent, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { type OrbColorTheme } from "./AiOrb";
 
 export type LauncherToolId =
   | "chat"
@@ -98,31 +98,42 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
   const [activeIndex, setActiveIndex] = useState(initialToolIndex);
   const highlightTarget = useMotionValue(initialToolIndex * SLICE_ANGLE);
   const highlightRotation = useSpring(highlightTarget, {
-    stiffness: 1800,
-    damping: 64,
-    mass: 0.045,
+    stiffness: 2600,
+    damping: 58,
+    mass: 0.035,
   });
   const [hoveredBarAction, setHoveredBarAction] = useState<BarAction | null>(null);
+  const pointerFrame = useRef<number | null>(null);
+  const pendingPointer = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const activeTool = tools[activeIndex];
   const quickTool = tools.find((tool) => tool.id === (activeTool.id === "chat" ? "browser" : "chat"))!;
   const QuickToolIcon = quickTool.icon;
   const highlightPath = useMemo(() => wedgePath(-SLICE_ANGLE / 2, SLICE_ANGLE / 2), []);
 
-  const selectTool = (index: number, rotation = index * SLICE_ANGLE) => {
+  const selectTool = useCallback((index: number, rotation = index * SLICE_ANGLE) => {
     setActiveIndex(index);
     highlightTarget.set(closestRotation(highlightTarget.get(), rotation));
-  };
+  }, [highlightTarget]);
 
   const followPointer = (event: PointerEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
-    const x = event.clientX - rect.left - rect.width / 2;
-    const y = event.clientY - rect.top - rect.height / 2;
-    const distance = Math.hypot(x, y);
-    if (distance < rect.width * 0.18) return;
-
-    const angle = normalizeDegrees(Math.atan2(y, x) * 180 / Math.PI + 90);
-    const index = Math.floor(normalizeDegrees(angle + SLICE_ANGLE / 2) / SLICE_ANGLE) % tools.length;
-    selectTool(index, angle);
+    pendingPointer.current = {
+      x: event.clientX - rect.left - rect.width / 2,
+      y: event.clientY - rect.top - rect.height / 2,
+      width: rect.width,
+      height: rect.height,
+    };
+    if (pointerFrame.current != null) return;
+    pointerFrame.current = window.requestAnimationFrame(() => {
+      pointerFrame.current = null;
+      const next = pendingPointer.current;
+      if (!next) return;
+      const distance = Math.hypot(next.x, next.y);
+      if (distance < next.width * 0.18) return;
+      const angle = normalizeDegrees(Math.atan2(next.y, next.x) * 180 / Math.PI + 90);
+      const index = Math.floor(normalizeDegrees(angle + SLICE_ANGLE / 2) / SLICE_ANGLE) % tools.length;
+      selectTool(index, angle);
+    });
   };
 
   const openTool = (tool: LauncherTool) => {
@@ -135,12 +146,15 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
       if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      if (pointerFrame.current != null) window.cancelAnimationFrame(pointerFrame.current);
+    };
   }, [onClose]);
 
   return (
     <motion.div
-      className="fixed inset-0 z-[260] overflow-hidden bg-[rgba(248,250,252,0.92)] text-slate-950 backdrop-blur-[2px]"
+      className="fixed inset-0 z-[260] overflow-hidden bg-[rgba(248,250,252,0.96)] text-slate-950"
       initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.992 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 1.008 }}
@@ -171,7 +185,7 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
             transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 620, damping: 36, mass: 0.34 }}
           >
             <svg viewBox="0 0 640 640" className="absolute inset-0 h-full w-full overflow-visible drop-shadow-[0_28px_70px_rgba(15,23,42,0.10)]" aria-hidden="true">
-              <circle cx="320" cy="320" r="302" fill="rgba(255,255,255,.64)" stroke="rgba(148,163,184,.22)" />
+              <circle cx="320" cy="320" r="302" fill="rgba(255,255,255,.72)" stroke="rgba(148,163,184,.22)" />
               <circle cx="320" cy="320" r={OUTER_RADIUS} fill="rgba(255,255,255,.34)" />
               {tools.map((tool, index) => {
                 const start = index * SLICE_ANGLE - SLICE_ANGLE / 2;
@@ -221,7 +235,7 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
                   style={{ left: `${x / 6.4}%`, top: `${y / 6.4}%` }}
                   aria-label={`Open ${tool.label}`}
                 >
-                  <span className="relative grid h-10 w-10 place-items-center text-[#52617b]">
+                  <span className={selected ? "relative grid h-10 w-10 place-items-center rounded-full bg-white text-slate-950 shadow-[0_0_0_1px_rgba(79,70,229,.12),0_8px_22px_rgba(79,70,229,.14)]" : "relative grid h-10 w-10 place-items-center text-[#52617b]"}>
                     <Icon className={selected ? "h-7 w-7 stroke-[2.05] text-slate-900" : "h-7 w-7 stroke-[1.65]"} />
                   </span>
                   <span className={selected ? "mt-1.5 text-[11px] font-bold leading-tight text-slate-950 sm:text-[12px]" : "mt-1.5 text-[11px] font-semibold leading-tight text-slate-800 sm:text-[12px]"}>{tool.shortLabel}</span>
@@ -230,7 +244,16 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
             })}
 
             <div className="clyra-launcher-orb absolute left-1/2 top-1/2 z-20 grid h-[24%] w-[24%] -translate-x-1/2 -translate-y-1/2 place-items-center">
-              <motion.div initial={{ scale: 0.85, opacity: 0 }} animate={{ scale: 1.65, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} transition={{ delay: reduceMotion ? 0 : 0.01, type: "spring", stiffness: 680, damping: 36, mass: 0.32 }}><AiOrb colorTheme={orbColorTheme} /></motion.div>
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                transition={{ delay: reduceMotion ? 0 : 0.01, type: "spring", stiffness: 780, damping: 42, mass: 0.22 }}
+                className="grid h-24 w-24 place-items-center rounded-full border border-slate-200 bg-white text-[32px] font-semibold text-slate-950 shadow-[0_18px_42px_rgba(15,23,42,.08)]"
+                aria-hidden="true"
+              >
+                C
+              </motion.div>
             </div>
           </motion.div>
         </div>

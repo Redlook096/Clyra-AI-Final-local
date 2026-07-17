@@ -106,6 +106,7 @@ const StudyNodeActions = createContext<{
   updateNode: (id: string, patch: Partial<StudyNodeData>) => void;
   duplicateNode: (id: string) => void;
   ingestNodeUrl: (nodeId: string, url: string) => void;
+  answerQuestionNode: (nodeId: string, question: string) => void;
   workspaceName: string;
   workspaceDescription: string;
 } | null>(null);
@@ -226,6 +227,11 @@ function studyEdgeStyle(label: string) {
 
 type GraphContextItem = { id: string; title: string; body: string; source: string };
 
+function questionParts(body = "") {
+  const [question, answer = ""] = body.split(/\n\s*Answer:\s*/i);
+  return { question: question.replace(/^Question:\s*/i, "").trim(), answer: answer.trim() };
+}
+
 function prioritizeGraphContext(allNodes: StudyNode[], allEdges: StudyEdge[], maxItems = 32): GraphContextItem[] {
   const nodeItems = allNodes
     .filter((node) => node.data.kind !== "flashcards" && node.data.kind !== "quiz" && node.data.kind !== "study-plan")
@@ -316,6 +322,9 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
   const Icon = sourceMode === "youtube" ? Youtube : sourceMode === "web" ? Globe2 : style.icon;
   const showUrlField = data.kind === "source" && (sourceMode === "youtube" || sourceMode === "web");
   const kindLabel = sourceMode === "youtube" ? "YouTube" : sourceMode === "web" ? "Web page" : style.label;
+  const isGhost = data.tags?.includes("ai-ghost");
+  const isAnswering = data.tags?.includes("answering");
+  const question = data.kind === "question" ? questionParts(data.body) : null;
   
   // Get workspace context for starter node
   const workspaceName = actions?.workspaceName || "";
@@ -344,9 +353,18 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
       <div
         className={cn(
           "relative overflow-visible rounded-[20px] border bg-[#fffefa] shadow-[0_12px_34px_rgba(34,39,45,.07)] transition-[border-color,box-shadow,transform] duration-150",
+          isGhost && "min-h-[180px] border-blue-300 bg-white/70 shadow-[0_0_0_4px_rgba(59,130,246,.10),0_0_34px_rgba(37,99,235,.28)]",
+          isAnswering && "border-blue-300 shadow-[0_0_0_4px_rgba(59,130,246,.13),0_0_32px_rgba(37,99,235,.22)]",
           selected ? "border-[#111318] shadow-[0_0_0_4px_rgba(17,19,24,.08),0_16px_38px_rgba(34,39,45,.09)]" : "border-[#dfe2e6]",
         )}
       >
+        {isGhost ? (
+          <motion.span
+            className="pointer-events-none absolute inset-0 rounded-[20px] border border-blue-300/70"
+            animate={{ opacity: [0.38, 1, 0.38] }}
+            transition={{ repeat: Infinity, duration: 1.15, ease: "easeInOut" }}
+          />
+        ) : null}
         <Handle type="target" position={Position.Left} className="!left-[-8px] !top-1/2 !h-4 !w-4 !-translate-y-1/2 !border-[3px] !border-black !bg-black !shadow-none !transition-transform hover:!scale-125" />
         <Handle type="source" position={Position.Right} className="!right-[-8px] !top-1/2 !h-4 !w-4 !-translate-y-1/2 !border-[3px] !border-black !bg-black !shadow-none !transition-transform hover:!scale-125" />
         <Handle type="target" position={Position.Top} className="!top-[-8px] !left-1/2 !h-4 !w-4 !-translate-x-1/2 !border-[3px] !border-black !bg-black !shadow-none !transition-transform hover:!scale-125" />
@@ -367,16 +385,18 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
           </div>
         ) : null}
         {sourceMode === "web" && /^https?:\/\//i.test(data.sourceUrl || urlDraft) ? (
-          <div className="relative mx-4 overflow-hidden rounded-[14px] border border-[#e2e4e7] bg-slate-100">
-            <iframe
-              src={data.sourceUrl || urlDraft}
-              title={data.title || "Web preview"}
-              className="pointer-events-none h-[140px] w-full origin-top-left scale-[0.45]"
-              style={{ width: "222%", height: "222%" }}
-              sandbox=""
-              tabIndex={-1}
-            />
-            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#fffefa]/40 to-transparent" />
+          <div className="mx-4 rounded-[14px] border border-[#dbeafe] bg-gradient-to-br from-blue-50 to-white p-3">
+            <div className="flex items-start gap-2">
+              <Globe2 className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+              <div className="min-w-0">
+                <p className="truncate text-[10px] font-semibold text-slate-800">{data.title || "Web source"}</p>
+                <p className="mt-1 line-clamp-2 break-all text-[8px] leading-4 text-slate-500">{data.sourceUrl || urlDraft}</p>
+              </div>
+            </div>
+            <div className="mt-3 flex items-center justify-between gap-2 text-[8px] font-medium text-blue-700">
+              <span>{data.body ? "Readable page text imported for AI context" : "Paste a URL to import readable page text"}</span>
+              <a href={data.sourceUrl || urlDraft} target="_blank" rel="noreferrer" className="nodrag nopan shrink-0 rounded-full border border-blue-200 bg-white px-2.5 py-1 text-blue-700 hover:bg-blue-50">Open</a>
+            </div>
           </div>
         ) : null}
         <div className="px-4 pb-4">
@@ -406,8 +426,41 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
             />
           ) : null}
           {/* YouTube / web sources: URL (+ preview) only — no extra title/body fields */}
-          {sourceMode === "youtube" || sourceMode === "web" ? (
+          {isGhost ? (
+            <div className="space-y-2 py-3">
+              <div className="agent-soft-shimmer h-3 w-2/3 rounded-full bg-blue-100" />
+              <div className="agent-soft-shimmer h-3 w-full rounded-full bg-blue-50" />
+              <div className="agent-soft-shimmer h-3 w-5/6 rounded-full bg-blue-50" />
+            </div>
+          ) : sourceMode === "youtube" || sourceMode === "web" ? (
             data.body ? <p className="mt-2 line-clamp-3 rounded-[14px] border border-[#e2e4e7] bg-[#f7f7f4] p-3 text-[10px] leading-5 text-slate-600">{data.body}</p> : null
+          ) : data.kind === "question" ? (
+            <div className="mt-3">
+              <textarea
+                value={question?.question || ""}
+                onFocus={() => actions?.capture()}
+                onChange={(event) => actions?.updateNode(id, { title: "Question", body: event.target.value.slice(0, 2_000) })}
+                onBlur={(event) => {
+                  const next = event.target.value.trim();
+                  if (next && !question?.answer) actions?.answerQuestionNode(id, next);
+                }}
+                aria-label="Question"
+                rows={3}
+                placeholder="Ask a focused question..."
+                className="nodrag nopan min-h-[78px] w-full resize-none rounded-[14px] border border-[#e2e4e7] bg-[#f7f7f4] p-3 text-[11px] font-medium leading-5 text-slate-700 outline-none transition-shadow focus:border-blue-300 focus:ring-4 focus:ring-blue-100/60"
+              />
+              {isAnswering ? (
+                <div className="mt-3 space-y-2 rounded-[14px] border border-blue-100 bg-blue-50/60 p-3">
+                  <div className="agent-soft-shimmer h-3 w-4/5 rounded-full bg-blue-100" />
+                  <div className="agent-soft-shimmer h-3 w-2/3 rounded-full bg-blue-100" />
+                </div>
+              ) : question?.answer ? (
+                <div className="mt-3 rounded-[14px] border border-blue-100 bg-blue-50/70 p-3">
+                  <p className="text-[8px] font-semibold uppercase tracking-[.12em] text-blue-500">Answer</p>
+                  <p className="mt-1 line-clamp-4 text-[10px] leading-5 text-slate-700">{question.answer}</p>
+                </div>
+              ) : null}
+            </div>
           ) : (
             <>
               <input
@@ -516,8 +569,9 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
   const [practiceSelections, setPracticeSelections] = useState<Record<string, string>>({});
   const [nodeMenuQuery, setNodeMenuQuery] = useState("");
   const [nodeMenuIndex, setNodeMenuIndex] = useState(0);
-  const [canvasTool, setCanvasTool] = useState<"select" | "pan" | "cut">("select");
+  const [canvasTool, setCanvasTool] = useState<"select" | "pan" | "cut">("pan");
   const [commandDockOpen, setCommandDockOpen] = useState(false);
+  const [agentCursor, setAgentCursor] = useState<{ x: number; y: number; label: string } | null>(null);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<StudyNode, StudyEdge> | null>(null);
   const [pendingConnection, setPendingConnection] = useState<{
     source?: string;
@@ -565,6 +619,35 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
   const updateNode = useCallback((id: string, patch: Partial<StudyNodeData>) => {
     setNodes((current) => current.map((node) => node.id === id ? { ...node, data: { ...node.data, ...patch } } : node));
   }, [setNodes]);
+
+  const revealGeneratedNode = useCallback(async (
+    node: StudyNode,
+    finalData: StudyNodeData,
+    sourceNodeId?: string,
+    edgeLabel = "generated",
+  ) => {
+    capture();
+    setAgentCursor({ x: node.position.x - 54, y: node.position.y + 28, label: "Clyra" });
+    setNodes((current) => [...current, {
+      ...node,
+      data: { ...finalData, title: "", body: "", tags: ["ai-ghost"] },
+    }]);
+    if (sourceNodeId) {
+      setEdges((current) => addEdge({
+        id: safeId(),
+        source: sourceNodeId,
+        target: node.id,
+        ...studyEdgeStyle(edgeLabel),
+      }, current));
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 420));
+    setAgentCursor({ x: node.position.x + 44, y: node.position.y + 54, label: "Clyra" });
+    setNodes((current) => current.map((item) => item.id === node.id ? {
+      ...item,
+      data: { ...finalData, tags: finalData.tags?.filter((tag) => tag !== "ai-ghost") },
+    } : item));
+    await new Promise((resolve) => window.setTimeout(resolve, 130));
+  }, [capture, setEdges, setNodes]);
 
   const duplicateNode = useCallback((id: string) => {
     const original = nodes.find((node) => node.id === id);
@@ -834,7 +917,6 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
       while (branches.length < 4) {
         branches.push(["Core ideas and vocabulary", "Evidence and worked examples", "Common misconceptions", "Questions to practise"][branches.length]!);
       }
-      capture();
       const rootId = starter?.id || safeId();
       const rootPosition = starter?.position || { x: 360, y: 220 };
       const kinds: NodeKind[] = ["concept", "evidence", "note", "question"];
@@ -854,6 +936,7 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
           },
         } satisfies StudyNode;
       });
+      capture();
       setNodes((current) => {
         if (starter) {
           return [
@@ -865,7 +948,6 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
                 body: node.data.body.trim() || request,
               },
             }),
-            ...childNodes,
           ];
         }
         const root: StudyNode = {
@@ -874,20 +956,14 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
           position: rootPosition,
           data: { kind: "concept", title: request.slice(0, 90), body: request, tags: ["starter"] },
         };
-        return [root, ...current, ...childNodes];
+        return [root, ...current];
       });
-      setEdges((current) => [
-        ...current.filter((edge) => edge.source !== rootId || !childNodes.some((node) => node.id === edge.target)),
-        ...childNodes.map((node, index) => {
-          const edgeLabel = ["breaks into", "supported by", "remember", "raises"][index] || "connects to";
-          return {
-            id: safeId(),
-            source: rootId,
-            target: node.id,
-            ...studyEdgeStyle(edgeLabel),
-          };
-        }),
-      ]);
+      setEdges((current) => current.filter((edge) => edge.source !== rootId || !childNodes.some((node) => node.id === edge.target)));
+      for (let index = 0; index < childNodes.length; index += 1) {
+        const node = childNodes[index]!;
+        const edgeLabel = ["breaks into", "supported by", "remember", "raises"][index] || "connects to";
+        await revealGeneratedNode(node, node.data, rootId, edgeLabel);
+      }
       setConversations((current) => [...current, { id: safeId(), role: "assistant", text: "I built a four-branch foundation. Add sources, then ask me to verify or expand any selected branch.", citations: payload.citations }]);
       setSelectedId(rootId);
       window.setTimeout(() => void flowInstance?.fitView({ duration: 520, padding: 0.18 }), 50);
@@ -896,6 +972,7 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
       setNotice(message);
       setConversations((current) => [...current, { id: safeId(), role: "assistant", text: message }]);
     } finally {
+      setAgentCursor(null);
       setAsking(false);
     }
   };
@@ -1001,21 +1078,38 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
   const submitDock = async () => {
     const value = prompt.trim();
     if (!value || asking || addingSource) return;
+    setPrompt("");
     if (composerMode === "source") {
-      setPrompt("");
       await ingestUrl(value);
       return;
     }
-    await ask("answer", value);
+    if (studyLocked) {
+      await buildFromPrompt(value);
+      return;
+    }
+    const anchor = selectedId || nodes.find((node) => node.data.kind === "source")?.id || nodes[0]?.id;
+    const anchorNode = nodes.find((node) => node.id === anchor);
+    const position = anchorNode
+      ? { x: anchorNode.position.x + 360, y: anchorNode.position.y + 24 }
+      : { x: 520, y: 260 };
+    const questionNode: StudyNode = {
+      id: safeId(),
+      type: "study",
+      position,
+      data: { kind: "question", title: "Question", body: value },
+    };
+    await revealGeneratedNode(questionNode, questionNode.data, anchor || undefined, "asks");
+    setSelectedId(questionNode.id);
+    await answerQuestionNode(questionNode.id, value);
   };
 
   const openStudyView = (view: typeof studyView) => {
-    if (view !== "nodes" && studyLocked) {
-      setNotice("Add a ready source before opening study tools.");
-      return;
-    }
     setStudyView(view);
     if (view === "nodes") return;
+    if (view !== "chat" && studyLocked) {
+      setNotice("Add a ready source to generate this study view.");
+      return;
+    }
     if (view === "notes") {
       if (!notesContent) void regenerateNotes();
       return;
@@ -1060,6 +1154,46 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
       setNotesLoading(false);
     }
   }, [buildGraphContext, notesLoading, studyLocked]);
+
+  const answerQuestionNode = useCallback(async (nodeId: string, rawQuestion: string) => {
+    const question = rawQuestion.trim();
+    if (!question || asking || studyLocked) return;
+    setAsking(true);
+    updateNode(nodeId, { title: "Question", body: question, tags: ["answering"] });
+    const scoped = buildScopedGraphContext(nodes, edges, nodeId);
+    const context = scoped.context.length
+      ? scoped.context
+      : resources.slice(0, 8).map((resource) => ({
+        id: resource.id,
+        title: resource.title,
+        body: resource.content.slice(0, 3_000),
+        source: resource.url || resource.title,
+      }));
+    try {
+      const response = await fetch("/api/study/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: `${question}\n\nAnswer this question using connected source nodes first. If a source is connected, explain the answer from that source.`,
+          mode: "answer",
+          scope: scoped.scopedToAttached ? "connected" : "workspace",
+          context,
+        }),
+      });
+      const payload = await response.json() as { ok?: boolean; answer?: string; citations?: string[]; error?: string };
+      if (!response.ok || !payload.answer) throw new Error(payload.error || "Study Pal could not answer");
+      const answer = payload.answer.trim();
+      updateNode(nodeId, { title: "Question", body: `Question: ${question}\n\nAnswer: ${answer}`, tags: [] });
+      setConversations((current) => [...current, { id: safeId(), role: "user", text: question }, { id: safeId(), role: "assistant", text: answer, citations: payload.citations }]);
+      if (studyView === "notes") void regenerateNotes();
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      updateNode(nodeId, { title: "Question", body: question, tags: [] });
+      setNotice(message);
+    } finally {
+      setAsking(false);
+    }
+  }, [asking, edges, nodes, regenerateNotes, resources, studyLocked, studyView, updateNode]);
 
   useEffect(() => {
     if (studyLocked) return;
@@ -1119,10 +1253,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
   );
   const nodeMenuItems = useMemo(() => [
     { id: "text", label: "Text", detail: "Editable thought or note", kind: "note" as NodeKind, icon: Type },
-    { id: "concept", label: "Concept", detail: "A central idea to develop", kind: "concept" as NodeKind, icon: Network },
     { id: "question", label: "Open question", detail: "Something to investigate", kind: "question" as NodeKind, icon: CircleHelp },
-    { id: "claim", label: "Claim", detail: "A statement to prove or challenge", kind: "claim" as NodeKind, icon: Check },
-    { id: "evidence", label: "Evidence", detail: "Support linked to a claim", kind: "evidence" as NodeKind, icon: Link2 },
     { id: "takeaway", label: "Key takeaway", detail: "Capture the main insight", kind: "note" as NodeKind, icon: NotebookPen },
     { id: "flashcards", label: "Flashcards", detail: "Deck scoped to attached nodes", kind: "flashcards" as NodeKind, icon: LayoutGrid },
     { id: "youtube", label: "YouTube video", detail: "Paste a video and ground the map", kind: "source" as NodeKind, icon: Youtube, sourceMode: "youtube" as const },
@@ -1187,6 +1318,13 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
 
   const menuRelationships = ["supports", "explains", "challenges", "relates to"].filter((relationship) => fuzzyContains(relationship, nodeMenuQuery));
   const activeMenuLength = pendingConnection?.target ? menuRelationships.length : filteredNodeMenuItems.length;
+  const agentCursorScreen = agentCursor && flowInstance && canvasRef.current
+    ? (() => {
+      const point = flowInstance.flowToScreenPosition({ x: agentCursor.x, y: agentCursor.y });
+      const rect = canvasRef.current!.getBoundingClientRect();
+      return { x: point.x - rect.left, y: point.y - rect.top, label: agentCursor.label };
+    })()
+    : null;
   const openFreeNodeMenu = () => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -1201,7 +1339,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
     <div className="relative h-full min-h-0 overflow-hidden bg-[#f5f3ef] text-[#30343a]">
       <input ref={fileInput} type="file" multiple accept=".txt,.md,.csv,.json,.pdf,image/*" className="hidden" onChange={(event) => void ingestFiles(event.target.files)} />
       <main ref={canvasRef} className="absolute inset-0 overflow-hidden">
-        <StudyNodeActions.Provider value={{ buildFromPrompt: (value) => void buildFromPrompt(value), capture, updateNode, duplicateNode, ingestNodeUrl: (nodeId, url) => void ingestNodeUrl(nodeId, url), workspaceName: name, workspaceDescription: workspace.description }}>
+        <StudyNodeActions.Provider value={{ buildFromPrompt: (value) => void buildFromPrompt(value), capture, updateNode, duplicateNode, ingestNodeUrl: (nodeId, url) => void ingestNodeUrl(nodeId, url), answerQuestionNode: (nodeId, question) => void answerQuestionNode(nodeId, question), workspaceName: name, workspaceDescription: workspace.description }}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -1451,7 +1589,8 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
 
         <button type="button" onClick={onBack} className="absolute left-4 top-4 z-30 flex h-10 items-center gap-2 rounded-[14px] border border-[#dedbd5] bg-[#fffefa]/95 px-3.5 text-[9px] font-semibold shadow-[0_8px_24px_rgba(48,52,58,.06)] transition-[background,transform] hover:bg-white active:scale-[.98]"><LayoutGrid className="h-4 w-4" />Workspaces</button>
         <div
-          className="clyra-workflow-tabs absolute left-1/2 top-4 z-30 flex -translate-x-1/2 items-center rounded-full border border-white/80 bg-white/85 p-1 shadow-[0_10px_32px_rgba(15,23,42,.08)] backdrop-blur-xl"
+          className="clyra-workflow-tabs absolute left-1/2 top-4 z-30 flex -translate-x-1/2 items-center rounded-full border border-slate-200/80 bg-white/95 p-1 shadow-[0_10px_32px_rgba(15,23,42,.10)] backdrop-blur-xl"
+          style={{ position: "absolute" }}
           onPointerLeave={() => setHoveredStudyTab(null)}
         >
           <AnimatePresence>
@@ -1473,14 +1612,13 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
               onMouseEnter={() => setHoveredStudyTab(view)}
               onFocus={() => setHoveredStudyTab(view)}
               onClick={() => openStudyView(view)}
-              disabled={view !== "nodes" && studyLocked}
               className={cn(
-                "relative z-10 h-8 rounded-full px-3.5 text-[8px] font-semibold transition-colors",
-                studyView === view ? "text-slate-950" : view !== "nodes" && studyLocked ? "cursor-not-allowed text-slate-300" : "text-slate-500 hover:text-slate-800",
+                "clyra-workflow-tab relative z-10 h-8 rounded-full px-3.5 text-[9px] font-semibold transition-colors",
+                studyView === view ? "clyra-workflow-tab--active text-slate-950" : "text-slate-500 hover:text-slate-800",
               )}
             >
               {studyView === view ? <motion.span layoutId="study-tab" className="absolute inset-0 -z-10 rounded-full bg-white shadow-sm" transition={{ type: "spring", stiffness: 520, damping: 38 }} /> : null}
-              {view === "nodes" ? "Node" : view === "notes" ? "Notes" : view === "flashcards" ? "Flashcards" : view === "test" ? "Test" : "Chat"}
+              {view === "nodes" ? "Canvas" : view === "notes" ? "Notes" : view === "flashcards" ? "Flashcards" : view === "test" ? "Test" : "Chat"}
             </button>
           ))}
         </div>
@@ -1582,6 +1720,23 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
           ) : null}
         </AnimatePresence>
 
+        <AnimatePresence>
+          {agentCursorScreen ? (
+            <motion.div
+              key="study-agent-cursor"
+              className="pointer-events-none absolute z-50 flex items-center gap-2"
+              initial={{ opacity: 0, scale: 0.92 }}
+              animate={{ opacity: 1, scale: 1, x: agentCursorScreen.x, y: agentCursorScreen.y }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ type: "spring", stiffness: 520, damping: 34, mass: 0.22 }}
+              style={{ left: 0, top: 0 }}
+            >
+              <MousePointer2 className="h-5 w-5 fill-blue-600 text-blue-600 drop-shadow-[0_4px_10px_rgba(37,99,235,.28)]" />
+              <span className="rounded-full border border-blue-100 bg-white/95 px-2 py-1 text-[8px] font-semibold text-blue-700 shadow-[0_8px_24px_rgba(37,99,235,.16)]">{agentCursorScreen.label}</span>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+
         <div className="absolute inset-x-3 bottom-4 z-30 mx-auto flex max-w-[720px] justify-center">
           <motion.nav
             layout
@@ -1650,17 +1805,25 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                   transition={{ type: "spring", stiffness: 420, damping: 34, mass: 0.35 }}
                   className="flex min-w-0 items-center gap-1 overflow-hidden"
                 >
-                  <textarea
-                    value={prompt}
-                    onChange={(event) => setPrompt(event.target.value)}
-                    onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitDock(); } }}
-                    placeholder="Ask Clyra..."
-                    rows={1}
-                    className="min-h-9 max-h-16 min-w-0 flex-1 resize-none rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-[10px] leading-5 text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-300 focus:bg-white"
-                  />
-                  <button type="button" onClick={() => void submitDock()} disabled={asking || addingSource || !prompt.trim()} title="Send" aria-label="Send" className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-35">
-                    {asking || addingSource ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                  </button>
+                  {asking || addingSource ? (
+                    <div className="flex min-h-10 flex-1 items-center px-2">
+                      <div className="agent-soft-shimmer h-4 w-full rounded-full bg-slate-100" />
+                    </div>
+                  ) : (
+                    <>
+                      <textarea
+                        value={prompt}
+                        onChange={(event) => setPrompt(event.target.value)}
+                        onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitDock(); } }}
+                        placeholder="Ask Clyra..."
+                        rows={1}
+                        className="min-h-9 max-h-16 min-w-0 flex-1 resize-none rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-[10px] leading-5 text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-300 focus:bg-white"
+                      />
+                      <button type="button" onClick={() => void submitDock()} disabled={!prompt.trim()} title="Send" aria-label="Send" className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-35">
+                        <Send className="h-4 w-4" />
+                      </button>
+                    </>
+                  )}
                 </motion.div>
               ) : null}
             </AnimatePresence>
