@@ -493,8 +493,8 @@ function AppAgentCard({
                         ? "border-blue-500 bg-blue-600 text-white hover:bg-blue-700"
                         : "border-slate-200 bg-white text-slate-700 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700",
                     )}
-                    aria-label={agent.control === "user" ? "Resume AI" : "Take over"}
-                    title={agent.control === "user" ? "Resume AI" : "Take over"}
+                    aria-label={agent.control === "user" ? "Return control to AI" : "Take over"}
+                    title={agent.control === "user" ? "Return control to AI" : "Take over"}
                   >
                     <MousePointer2 className="h-3 w-3" />
                   </button>
