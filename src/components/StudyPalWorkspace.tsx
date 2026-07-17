@@ -291,6 +291,18 @@ function splitStudyItems(body: string) {
   return body.split(/\n(?=\s*(?:\d+[.)]|[-*])\s+)/).map((item) => item.replace(/^\s*(?:\d+[.)]|[-*])\s*/, "").trim()).filter(Boolean);
 }
 
+function cleanStudyText(value: string) {
+  return value
+    .replace(/\*\*|__/g, "")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\s{3,}/g, " ")
+    .trim();
+}
+
+function compactStudyMarkdown(value: string) {
+  return value.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function parseFlashcardPairs(body: string): Array<{ front: string; back: string }> {
   const matches = [...body.matchAll(/(?:Flashcard\s*\d+[^\n]*\n?\s*)?(?:\*\*|__)?Front(?:\*\*|__)?\s*:\s*(.*?)(?:\n|\s)+(?:\*\*|__)?Back(?:\*\*|__)?\s*:\s*(.*?)(?=(?:\n\s*(?:\*\*)?Flashcard\s*\d+|\n\s*\d+[.)]|$))/gis)]
     .map((match) => ({ front: match[1]?.replace(/[*_#]/g, "").trim() || "", back: match[2]?.replace(/[*_#]/g, "").trim() || "" }))
@@ -365,6 +377,7 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
   const isGhost = data.tags?.includes("ai-ghost");
   const isAnswering = data.tags?.includes("answering");
   const isSourceAnalysing = data.kind === "source" && data.sourceStatus === "processing";
+  const isTyping = data.tags?.includes("ai-typing");
   const question = data.kind === "question" ? questionParts(data.body) : null;
   
   // Get workspace context for starter node
@@ -389,13 +402,13 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
   };
 
   return (
-    <div className={cn("relative cursor-grab pt-6 active:cursor-grabbing", starter ? "w-[340px]" : "w-[300px]")}>
+    <div data-study-node-id={id} className={cn("relative cursor-grab pt-6 active:cursor-grabbing", starter ? "w-[340px]" : "w-[300px]")}>
       <span className="absolute left-1 top-0 flex items-center gap-1.5 text-[10px] font-medium text-slate-400"><Icon className="h-3 w-3" style={{ color: style.accent }} />{kindLabel}</span>
       <motion.div
         className={cn(
           "relative overflow-visible rounded-[20px] border bg-[#fffefa] shadow-[0_12px_34px_rgba(34,39,45,.07)] transition-[border-color,box-shadow,transform] duration-150",
           isGhost && "min-h-[180px] border-blue-300 bg-white/70 shadow-[0_0_0_4px_rgba(59,130,246,.10),0_0_34px_rgba(37,99,235,.28)]",
-          (isAnswering || isSourceAnalysing) && "border-blue-300 shadow-[0_0_0_4px_rgba(59,130,246,.13),0_0_32px_rgba(37,99,235,.22)]",
+          (isAnswering || isSourceAnalysing) && "border-blue-400 shadow-[0_0_0_6px_rgba(59,130,246,.2),0_0_48px_rgba(37,99,235,.42)]",
           selected ? "border-[#111318] shadow-[0_0_0_4px_rgba(17,19,24,.08),0_16px_38px_rgba(34,39,45,.09)]" : "border-[#dfe2e6]",
         )}
         animate={isAnswering || isSourceAnalysing ? {
@@ -414,6 +427,7 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
             transition={{ repeat: Infinity, duration: 1.15, ease: "easeInOut" }}
           />
         ) : null}
+        {isTyping ? <motion.span className="pointer-events-none absolute left-7 top-[116px] z-20 h-5 w-px bg-blue-600 shadow-[0_0_8px_rgba(37,99,235,.7)]" animate={{ opacity: [0, 1, 0] }} transition={{ repeat: Infinity, duration: 0.8, ease: "linear" }} /> : null}
         <Handle type="target" position={Position.Left} className="!left-[-8px] !top-1/2 !h-4 !w-4 !-translate-y-1/2 !border-[3px] !border-black !bg-black !shadow-none !transition-transform hover:!scale-125" />
         <Handle type="source" position={Position.Right} className="!right-[-8px] !top-1/2 !h-4 !w-4 !-translate-y-1/2 !border-[3px] !border-black !bg-black !shadow-none !transition-transform hover:!scale-125" />
         <Handle type="target" position={Position.Top} className="!top-[-8px] !left-1/2 !h-4 !w-4 !-translate-x-1/2 !border-[3px] !border-black !bg-black !shadow-none !transition-transform hover:!scale-125" />
@@ -603,12 +617,13 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
   const [nodes, setNodes, onNodesChange] = useNodesState<StudyNode>(workspace.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<StudyEdge>(workspace.edges);
   const [resources, setResources] = useState(workspace.resources);
-  const [conversations, setConversations] = useState(workspace.conversations);
+  const [conversations, setConversations] = useState<Array<{ id: string; role: "user" | "assistant"; text: string; citations?: string[] }>>([]);
   const [name, setName] = useState(workspace.name);
   const [selectedId, setSelectedId] = useState("");
   const [sourceInput, setSourceInput] = useState("");
   const [addingSource, setAddingSource] = useState(false);
   const [prompt, setPrompt] = useState("");
+  const [chatDraft, setChatDraft] = useState("");
   const [asking, setAsking] = useState(false);
   const [notice, setNotice] = useState("");
   const [composerMode, setComposerMode] = useState<"ask" | "source">("ask");
@@ -688,8 +703,12 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
   ) => {
     capture();
     setAgentCursor({ x: node.position.x - 54, y: node.position.y + 28, label: "Clyra" });
+    const startPosition = sourceNodeId
+      ? nodes.find((item) => item.id === sourceNodeId)?.position || { x: node.position.x - 280, y: node.position.y }
+      : { x: node.position.x - 220, y: node.position.y - 90 };
     setNodes((current) => [...current, {
       ...node,
+      position: startPosition,
       data: { ...finalData, title: "", body: "", tags: ["ai-ghost"] },
     }]);
     if (sourceNodeId) {
@@ -701,10 +720,20 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
       }, current));
     }
     await new Promise((resolve) => window.setTimeout(resolve, 420));
+    const dragSteps = 18;
+    for (let step = 1; step <= dragSteps; step += 1) {
+      const progress = step / dragSteps;
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const x = startPosition.x + (node.position.x - startPosition.x) * eased;
+      const y = startPosition.y + (node.position.y - startPosition.y) * eased;
+      setAgentCursor({ x: x + 44, y: y + 54, label: "Clyra" });
+      setNodes((current) => current.map((item) => item.id === node.id ? { ...item, position: { x, y } } : item));
+      await new Promise((resolve) => window.setTimeout(resolve, 22));
+    }
     setAgentCursor({ x: node.position.x + 44, y: node.position.y + 54, label: "Clyra" });
     const title = finalData.title || "";
     const body = finalData.body || "";
-    const totalCharacters = Math.min(180, title.length + body.length);
+    const totalCharacters = title.length + body.length;
     for (let character = 1; character <= totalCharacters; character += 1) {
       const titleCharacters = Math.min(title.length, character);
       const bodyCharacters = Math.max(0, character - title.length);
@@ -717,14 +746,17 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
           tags: ["ai-typing"],
         },
       } : item));
-      await new Promise((resolve) => window.setTimeout(resolve, 8));
+      const nodeElement = document.querySelector(`[data-study-node-id="${node.id}"]`);
+      const typingTarget = nodeElement?.querySelector("textarea[aria-label='Node content'], textarea[aria-label='Question'], input[aria-label='Node title'], input[aria-label='YouTube URL']") as HTMLInputElement | HTMLTextAreaElement | null;
+      typingTarget?.focus({ preventScroll: true });
+      await new Promise((resolve) => window.setTimeout(resolve, 12));
     }
     setNodes((current) => current.map((item) => item.id === node.id ? {
       ...item,
       data: { ...finalData, tags: finalData.tags?.filter((tag) => tag !== "ai-ghost" && tag !== "ai-typing") },
     } : item));
     await new Promise((resolve) => window.setTimeout(resolve, 130));
-  }, [capture, setEdges, setNodes]);
+  }, [capture, nodes, setEdges, setNodes]);
 
   const duplicateNode = useCallback((id: string) => {
     const original = nodes.find((node) => node.id === id);
@@ -1031,8 +1063,8 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
           id: safeId(),
           type: "study" as const,
           position: {
-            x: rootPosition.x + 390 + (index % 2) * 300,
-            y: rootPosition.y - 170 + Math.floor(index / 2) * 245,
+            x: rootPosition.x + 430 + (index % 2) * 340,
+            y: rootPosition.y - 210 + Math.floor(index / 2) * 285,
           },
         data: {
           kind: kinds[index]!,
@@ -1078,7 +1110,7 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
           type: "study",
           position: {
             x: rootPosition.x - 420,
-            y: rootPosition.y - 150 + index * 190,
+            y: rootPosition.y - 220 + index * 230,
           },
           data: {
             kind: "source",
@@ -1207,6 +1239,13 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
     }
   };
 
+  const submitChatDraft = async () => {
+    const value = chatDraft.trim();
+    if (!value || asking) return;
+    setChatDraft("");
+    await ask("answer", value);
+  };
+
   useEffect(() => {
     if (studyLocked || asking || !readyResourceCount) return;
     const readyKey = resources.filter((resource) => resource.status === "ready").map((resource) => resource.id).sort().join("|");
@@ -1285,6 +1324,12 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
     return { sourceNodes, contextNodes, attached: Boolean(attached && attached.size > 1) };
   }, [edges, nodes, selectedId]);
 
+  const notesHeading = useMemo(() => {
+    const starter = nodes.find((node) => node.data.tags?.includes("starter"));
+    const subject = cleanStudyText(starter?.data.title || name || "Study workspace").replace(/\s+(study|research)$/i, "");
+    return subject ? `${subject} brief` : "Study brief";
+  }, [name, nodes]);
+
   const graphFingerprint = useMemo(
     () => JSON.stringify({
       nodes: nodes.map((node) => [node.id, node.data.kind, node.data.title, node.data.body?.slice(0, 120)]),
@@ -1307,7 +1352,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
       const response = await fetch("/api/study/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, mode: "summary", scope: "workspace", context }) });
       const payload = await response.json() as { ok?: boolean; answer?: string; error?: string };
       if (!response.ok || !payload.answer) throw new Error(payload.error || "Could not generate notes");
-      setNotesContent(`${payload.answer.trim()}${explicitQuestionNotes(nodes, edges)}`);
+      setNotesContent(compactStudyMarkdown(`${payload.answer.trim()}${explicitQuestionNotes(nodes, edges)}`));
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -1634,40 +1679,43 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
         <AnimatePresence mode="wait">
           {studyView !== "nodes" ? (
             <motion.section key={studyView} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }} className={cn("absolute inset-0 z-[12] bg-[#f7f8fa] px-5 pt-24 sm:px-8", studyView === "notes" ? "overflow-hidden pb-4" : "overflow-y-auto pb-32")}>
-              <div className={cn("mx-auto max-w-[900px]", studyView === "notes" && "flex h-full min-h-0 max-w-[1040px] flex-col")}>
+              <div className={cn("mx-auto max-w-[1180px]", studyView === "notes" && "flex h-full min-h-0 max-w-[1180px] flex-col")}>
                 {studyView === "chat" ? (
-                  <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_240px]">
-                    <div>
-                      <div className="mb-4 flex items-end justify-between"><div><p className="text-[9px] font-semibold uppercase tracking-[.14em] text-slate-400">AI Assistant</p><h2 className="mt-1 text-[22px] font-semibold tracking-[-.02em] text-slate-950">Chat</h2></div></div>
-                      <div className="space-y-5">
+                  <div className="grid min-h-full gap-6 lg:grid-cols-[minmax(0,1fr)_280px]">
+                    <div className="flex min-h-[calc(100vh-150px)] flex-col">
+                      <div className="mb-5 flex items-end justify-between"><div><p className="text-[9px] font-semibold uppercase tracking-[.14em] text-blue-600">Study Pal chat</p><h2 className="mt-1 text-[26px] font-semibold tracking-[-.025em] text-slate-950">Ask about your map</h2><p className="mt-1 text-[10px] text-slate-500">Fresh conversation, grounded in the connected nodes.</p></div></div>
+                      <div className="flex-1 space-y-5">
                         {conversations.map((msg) => (
                           <div key={msg.id} className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
-                            <div className={cn("max-w-[88%]", msg.role === "user" ? "clyra-chat-user-bubble rounded-[24px] rounded-br-md border border-slate-200/70 px-5 py-3.5 text-white" : "clyra-assistant-message max-w-[94%] px-1 py-2 text-slate-700")}>
+                            <div className={cn("max-w-[88%]", msg.role === "user" ? "clyra-chat-user-bubble rounded-[24px] rounded-br-md border border-slate-200/70 bg-slate-950 px-5 py-3.5 text-white shadow-none" : "clyra-assistant-message max-w-[94%] px-1 py-2 text-slate-700")}>
                               <p className={cn("text-[8px] font-semibold uppercase tracking-[.12em]", msg.role === "user" ? "text-slate-300" : "text-blue-600")}>{msg.role === "user" ? "You" : "Clyra"}</p>
-                              {msg.role === "assistant" ? <MarkdownMessageContent content={msg.text} codePresentation="soft" /> : <p className="mt-2 whitespace-pre-wrap text-[11px] leading-5">{msg.text}</p>}
+                              {msg.role === "assistant" ? <MarkdownMessageContent content={msg.text} codePresentation="soft" /> : <p className="mt-2 whitespace-pre-wrap text-[11px] leading-5">{cleanStudyText(msg.text)}</p>}
                               {msg.citations && msg.citations.length > 0 ? <div className="mt-2 flex flex-wrap gap-1">{msg.citations.map((citation, idx) => <span key={idx} className="text-[8px] text-blue-600">[{idx + 1}] {citation}</span>)}</div> : null}
                             </div>
                           </div>
                         ))}
                         {!conversations.length ? <p className="py-16 text-center text-[11px] text-slate-400">Ask Clyra about the sources and connections in your map.</p> : null}
                       </div>
+                      <div className="input-wrapper sticky bottom-0 z-20 mt-6 flex items-end gap-2 rounded-[26px] border border-slate-200/80 bg-white/90 p-2 shadow-[0_18px_50px_rgba(15,23,42,.10)] backdrop-blur-xl">
+                        <textarea value={chatDraft} onChange={(event) => setChatDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitChatDraft(); } }} placeholder="Ask Clyra anything..." rows={1} className="min-h-10 max-h-28 min-w-0 flex-1 resize-none rounded-[20px] bg-transparent px-3 py-2.5 text-[11px] leading-5 text-slate-800 outline-none placeholder:text-slate-400" aria-label="Ask Clyra anything..." />
+                        <button type="button" onClick={() => void submitChatDraft()} disabled={!chatDraft.trim() || asking} aria-label="Send message" className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-slate-950 text-white transition-transform hover:-translate-y-0.5 disabled:opacity-35"><Send className="h-4 w-4" /></button>
+                      </div>
                     </div>
-                    <aside className="h-fit border-l border-slate-200/80 pl-5">
-                      <p className="text-[8px] font-semibold uppercase tracking-[.14em] text-slate-400">Node context</p>
-                      <p className="mt-2 text-[9px] leading-4 text-slate-500">{nodeContext.attached ? "Using the selected node's connected context." : "Using the workspace context. Select a node to narrow it."}</p>
-                      <div className="mt-4 space-y-3">
-                        {nodeContext.contextNodes.slice(0, 6).map((node) => <div key={node.id} className="border-b border-slate-100 pb-3"><p className="text-[9px] font-semibold text-slate-700">{node.data.title || node.data.kind}</p><p className="mt-1 line-clamp-2 text-[8px] leading-4 text-slate-400">{node.data.body || node.data.sourceUrl || "Empty node"}</p></div>)}
+                    <aside className="h-fit rounded-[22px] border border-slate-200/90 bg-white p-5 shadow-[0_16px_44px_rgba(15,23,42,.07)]">
+                      <div className="flex items-start justify-between gap-3"><div><p className="text-[8px] font-semibold uppercase tracking-[.14em] text-blue-600">Live context</p><h3 className="mt-1 text-[15px] font-semibold text-slate-950">Connected map</h3></div><span className="grid h-8 w-8 place-items-center rounded-full bg-blue-50 text-blue-600"><Sparkles className="h-3.5 w-3.5" /></span></div>
+                      <p className="mt-3 rounded-xl bg-slate-50 p-3 text-[9px] leading-4 text-slate-500">{nodeContext.attached ? "Focused on the selected node and its connected path." : "Using the whole workspace until you select a node."}</p>
+                      <div className="mt-5 space-y-3">
+                        {nodeContext.contextNodes.slice(0, 6).map((node) => <div key={node.id} className="rounded-xl border border-slate-100 bg-white p-3"><p className="text-[9px] font-semibold text-slate-700">{cleanStudyText(node.data.title || node.data.kind)}</p><p className="mt-1 line-clamp-3 text-[8px] leading-4 text-slate-400">{cleanStudyText(node.data.body || node.data.sourceUrl || "Empty node")}</p></div>)}
                         {!nodeContext.contextNodes.length ? <p className="text-[9px] text-slate-400">No nodes selected yet.</p> : null}
                       </div>
-                      <p className="mt-5 text-[8px] font-semibold uppercase tracking-[.14em] text-slate-400">Sources</p>
-                      <div className="mt-2 space-y-2">{nodeContext.sourceNodes.slice(0, 4).map((node) => <p key={node.id} className="truncate text-[8px] text-blue-600">{node.data.title || node.data.sourceUrl}</p>)}</div>
+                      <div className="mt-5 border-t border-slate-100 pt-4"><p className="text-[8px] font-semibold uppercase tracking-[.14em] text-slate-400">Sources</p><div className="mt-2 space-y-2">{nodeContext.sourceNodes.slice(0, 4).map((node) => <p key={node.id} className="truncate text-[8px] text-blue-600">{cleanStudyText(node.data.title || node.data.sourceUrl || "Source")}</p>)}</div></div>
                     </aside>
                   </div>
                 ) : null}
                 {studyView === "notes" ? (
                   <div className="flex h-full min-h-0 flex-col">
                     <div className="mb-4 flex shrink-0 items-end justify-between">
-                      <div><p className="text-[9px] font-semibold uppercase tracking-[.14em] text-slate-400">Live from your map</p><h2 className="mt-1 text-[22px] font-semibold tracking-[-.02em] text-slate-950">Notes</h2></div>
+                      <div><p className="text-[9px] font-semibold uppercase tracking-[.14em] text-blue-600">AI-generated study brief</p><h2 className="mt-1 text-[26px] font-semibold tracking-[-.025em] text-slate-950">{notesHeading}</h2><p className="mt-1 text-[10px] text-slate-500">Compact notes that update as your connected evidence changes.</p></div>
                       <button type="button" onClick={() => void regenerateNotes()} disabled={notesLoading || studyLocked} className="flex h-9 items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 text-[9px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">{notesLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}Refresh</button>
                     </div>
                     {notesLoading && !notesContent ? (
@@ -1716,11 +1764,12 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                             key={index}
                             className="agent-soft-shimmer absolute h-[190px] w-[140px] rounded-[18px] border border-white/80 bg-gradient-to-br from-slate-100 to-slate-200 shadow-[0_16px_40px_rgba(15,23,42,.12)]"
                             animate={{
-                              x: [-(90 - index * 8), 90 - index * 8, -(90 - index * 8)],
-                              y: [index % 2 === 0 ? -18 : 18, index % 2 === 0 ? 18 : -18, index % 2 === 0 ? -18 : 18],
-                              rotate: [(index - 2) * 8, (2 - index) * 8, (index - 2) * 8],
+                              x: [0, -(104 - index * 16), 92 - index * 14, 0],
+                              y: [index * 2, -26 + index * 7, 22 - index * 5, index * 2],
+                              rotate: [(index - 2) * 3, -18 + index * 7, 14 - index * 5, (index - 2) * 3],
+                              scale: [1, 1.03, 1.02, 1],
                             }}
-                            transition={{ repeat: Infinity, duration: 2.2, ease: "easeInOut", delay: index * 0.08 }}
+                            transition={{ repeat: Infinity, duration: 2.6, ease: [0.22, 1, 0.36, 1], delay: index * 0.12 }}
                           />
                         ))}
                       </div>
@@ -1744,11 +1793,11 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                               <div className="relative min-h-[170px] w-full transition-transform duration-500 [transform-style:preserve-3d]" style={{ transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)" }}>
                                 <div className="absolute inset-0 p-5 [backface-visibility:hidden]">
                                   <p className="text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">Question</p>
-                                  <h3 className="mt-4 text-[13px] font-semibold leading-5 text-slate-900">{front}</h3>
+                                  <h3 className="mt-4 text-[13px] font-semibold leading-5 text-slate-900">{cleanStudyText(front)}</h3>
                                 </div>
                                 <div className="absolute inset-0 bg-slate-950 p-5 text-white [backface-visibility:hidden]" style={{ transform: "rotateY(180deg)" }}>
                                   <p className="text-[8px] font-semibold uppercase tracking-[.12em] text-blue-300">Answer</p>
-                                  <h3 className="mt-4 text-[13px] font-semibold leading-5">{back}</h3>
+                                  <h3 className="mt-4 text-[13px] font-semibold leading-5">{cleanStudyText(back)}</h3>
                                 </div>
                               </div>
                             </motion.button>
@@ -1793,13 +1842,13 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                         ) : null}
                         {generatedViewNodes.map((node, index) => {
                           const items = splitStudyItems(node.data.body);
-                          const options = items.filter((item) => /^[A-D][.)]\s/i.test(item));
-                          const shortPrompt = items.find((item) => !/^[A-D][.)]\s/i.test(item)) || node.data.title;
+                          const options = items.filter((item) => /^[A-D][.)]\s/i.test(item)).map(cleanStudyText);
+                          const shortPrompt = cleanStudyText(items.find((item) => !/^[A-D][.)]\s/i.test(item)) || node.data.title);
                           const mark = testMarks[node.id];
                           return (
                             <article key={node.id} className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-[0_10px_30px_rgba(15,23,42,.05)]">
                               <p className="text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">Question {index + 1}</p>
-                              <h3 className="mt-2 text-[14px] font-semibold text-slate-900">{node.data.title}</h3>
+                              <h3 className="mt-2 text-[14px] font-semibold text-slate-900">{cleanStudyText(node.data.title)}</h3>
                               <p className="mt-2 text-[10px] leading-5 text-slate-600">{shortPrompt}</p>
                               <div className="mt-4 space-y-2">
                                 {options.map((option) => (
@@ -1829,7 +1878,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
 
         <button type="button" onClick={onBack} className="absolute left-4 top-4 z-30 flex h-10 items-center gap-2 rounded-[14px] border border-[#dedbd5] bg-[#fffefa]/95 px-3.5 text-[9px] font-semibold shadow-[0_8px_24px_rgba(48,52,58,.06)] transition-[background,transform] hover:bg-white active:scale-[.98]"><LayoutGrid className="h-4 w-4" />Workspaces</button>
         <motion.div
-          className="clyra-workflow-tabs absolute left-1/2 top-16 z-30 flex -translate-x-1/2 items-center rounded-full border border-slate-200/80 bg-white/95 p-1 shadow-[0_10px_32px_rgba(15,23,42,.10)] backdrop-blur-xl sm:top-20"
+          className="clyra-workflow-tabs absolute left-1/2 top-4 z-30 flex -translate-x-1/2 items-center rounded-full border border-slate-200/80 bg-white/95 p-1 shadow-[0_10px_32px_rgba(15,23,42,.10)] backdrop-blur-xl sm:top-6"
           initial={{ y: -14, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           transition={{ type: "spring", stiffness: 420, damping: 34, mass: 0.35 }}
@@ -2054,14 +2103,17 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                     </div>
                   ) : (
                     <>
-                      <textarea
-                        value={prompt}
-                        onChange={(event) => setPrompt(event.target.value)}
-                        onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitDock(); } }}
-                        placeholder="Ask Clyra..."
-                        rows={1}
-                        className="min-h-9 max-h-16 min-w-0 flex-1 resize-none rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-[10px] leading-5 text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-300 focus:bg-white"
-                      />
+                      <div className="relative min-w-0 flex-1">
+                        <motion.span className="pointer-events-none absolute inset-x-3 top-1/2 h-5 -translate-y-1/2 overflow-hidden rounded-full opacity-70" animate={{ backgroundPosition: ["-160% 0", "220% 0"] }} transition={{ repeat: Infinity, duration: 2.4, ease: "linear" }} style={{ backgroundImage: "linear-gradient(90deg, transparent, rgba(96,165,250,.22), transparent)", backgroundSize: "60% 100%", backgroundRepeat: "no-repeat" }} />
+                        <textarea
+                          value={prompt}
+                          onChange={(event) => setPrompt(event.target.value)}
+                          onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitDock(); } }}
+                          placeholder="Ask Clyra..."
+                          rows={1}
+                          className="relative z-10 min-h-9 max-h-16 w-full resize-none rounded-full border border-slate-200 bg-slate-50/90 px-3 py-2 text-[10px] leading-5 text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-100/60"
+                        />
+                      </div>
                       <button type="button" onClick={() => void submitDock()} disabled={!prompt.trim()} title="Send" aria-label="Send" className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-35">
                         <Send className="h-4 w-4" />
                       </button>
