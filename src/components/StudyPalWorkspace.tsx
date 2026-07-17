@@ -52,6 +52,7 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../lib/utils";
+import { MarkdownMessageContent } from "./MarkdownMessageContent";
 import { DocumentCardUI } from "./ui/document-card";
 
 type ResourceKind = "web" | "youtube" | "document" | "image" | "text";
@@ -290,6 +291,17 @@ function splitStudyItems(body: string) {
   return body.split(/\n(?=\s*(?:\d+[.)]|[-*])\s+)/).map((item) => item.replace(/^\s*(?:\d+[.)]|[-*])\s*/, "").trim()).filter(Boolean);
 }
 
+function parseFlashcardPairs(body: string): Array<{ front: string; back: string }> {
+  const matches = [...body.matchAll(/(?:Flashcard\s*\d+[^\n]*\n?\s*)?(?:\*\*|__)?Front(?:\*\*|__)?\s*:\s*(.*?)(?:\n|\s)+(?:\*\*|__)?Back(?:\*\*|__)?\s*:\s*(.*?)(?=(?:\n\s*(?:\*\*)?Flashcard\s*\d+|\n\s*\d+[.)]|$))/gis)]
+    .map((match) => ({ front: match[1]?.replace(/[*_#]/g, "").trim() || "", back: match[2]?.replace(/[*_#]/g, "").trim() || "" }))
+    .filter((card) => card.front && card.back);
+  if (matches.length) return matches;
+  return splitStudyItems(body).slice(0, 8).map((item): { front: string; back: string } => {
+    const parts = item.split(/\s+(?:Answer|Back)\s*:\s*/i);
+    return { front: parts[0]?.replace(/^(?:Question|Front)\s*:\s*/i, "").trim() || item, back: parts[1]?.trim() || "Review the connected source." };
+  });
+}
+
 function readWorkspaces(): StudyWorkspace[] {
   try {
     const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
@@ -352,6 +364,7 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
   const kindLabel = sourceMode === "youtube" ? "YouTube" : sourceMode === "web" ? "Web page" : style.label;
   const isGhost = data.tags?.includes("ai-ghost");
   const isAnswering = data.tags?.includes("answering");
+  const isSourceAnalysing = data.kind === "source" && data.sourceStatus === "processing";
   const question = data.kind === "question" ? questionParts(data.body) : null;
   
   // Get workspace context for starter node
@@ -382,17 +395,17 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
         className={cn(
           "relative overflow-visible rounded-[20px] border bg-[#fffefa] shadow-[0_12px_34px_rgba(34,39,45,.07)] transition-[border-color,box-shadow,transform] duration-150",
           isGhost && "min-h-[180px] border-blue-300 bg-white/70 shadow-[0_0_0_4px_rgba(59,130,246,.10),0_0_34px_rgba(37,99,235,.28)]",
-          isAnswering && "border-blue-300 shadow-[0_0_0_4px_rgba(59,130,246,.13),0_0_32px_rgba(37,99,235,.22)]",
+          (isAnswering || isSourceAnalysing) && "border-blue-300 shadow-[0_0_0_4px_rgba(59,130,246,.13),0_0_32px_rgba(37,99,235,.22)]",
           selected ? "border-[#111318] shadow-[0_0_0_4px_rgba(17,19,24,.08),0_16px_38px_rgba(34,39,45,.09)]" : "border-[#dfe2e6]",
         )}
-        animate={isAnswering ? {
+        animate={isAnswering || isSourceAnalysing ? {
           boxShadow: [
             "0 0 0 0 rgba(37,99,235,0), 0 0 0 rgba(37,99,235,0)",
             "0 0 0 7px rgba(37,99,235,.14), 0 0 34px rgba(37,99,235,.34)",
             "0 0 0 2px rgba(37,99,235,.08), 0 0 20px rgba(37,99,235,.18)",
           ],
         } : undefined}
-        transition={isAnswering ? { duration: 1.55, repeat: Infinity, ease: "easeInOut" } : undefined}
+        transition={isAnswering || isSourceAnalysing ? { duration: 1.55, repeat: Infinity, ease: "easeInOut" } : undefined}
       >
         {isGhost ? (
           <motion.span
@@ -605,6 +618,8 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
   const [notesLoading, setNotesLoading] = useState(false);
   const [flashLoading, setFlashLoading] = useState(false);
   const [testLoading, setTestLoading] = useState(false);
+  const [testSubmitting, setTestSubmitting] = useState(false);
+  const [testScore, setTestScore] = useState<{ correct: number; total: number } | null>(null);
   const [testAnswers, setTestAnswers] = useState<Record<string, string>>({});
   const [testMarks, setTestMarks] = useState<Record<string, { correct?: boolean; feedback?: string }>>({});
   const [flippedCards, setFlippedCards] = useState<Set<string>>(() => new Set());
@@ -687,9 +702,26 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
     }
     await new Promise((resolve) => window.setTimeout(resolve, 420));
     setAgentCursor({ x: node.position.x + 44, y: node.position.y + 54, label: "Clyra" });
+    const title = finalData.title || "";
+    const body = finalData.body || "";
+    const totalCharacters = Math.min(180, title.length + body.length);
+    for (let character = 1; character <= totalCharacters; character += 1) {
+      const titleCharacters = Math.min(title.length, character);
+      const bodyCharacters = Math.max(0, character - title.length);
+      setNodes((current) => current.map((item) => item.id === node.id ? {
+        ...item,
+        data: {
+          ...finalData,
+          title: title.slice(0, titleCharacters),
+          body: body.slice(0, bodyCharacters),
+          tags: ["ai-typing"],
+        },
+      } : item));
+      await new Promise((resolve) => window.setTimeout(resolve, 8));
+    }
     setNodes((current) => current.map((item) => item.id === node.id ? {
       ...item,
-      data: { ...finalData, tags: finalData.tags?.filter((tag) => tag !== "ai-ghost") },
+      data: { ...finalData, tags: finalData.tags?.filter((tag) => tag !== "ai-ghost" && tag !== "ai-typing") },
     } : item));
     await new Promise((resolve) => window.setTimeout(resolve, 130));
   }, [capture, setEdges, setNodes]);
@@ -942,14 +974,34 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
     try {
       const starter = nodes.find((node) => node.data.tags?.includes("starter")) || nodes[0];
       const briefBody = [starter?.data.title, starter?.data.body, request].filter(Boolean).join("\n\n");
+      const sourceUrls = Array.from(new Set(
+        request.match(/https?:\/\/[^\s)\]}>,]+/gi)?.map((url) => url.replace(/[.,;:!?]+$/, "")) || [],
+      ));
+      const researchContext: GraphContextItem[] = [];
+      for (const url of sourceUrls) {
+        if (/youtu(?:be\.com|\.be)/i.test(url)) {
+          try {
+            const youtubeResponse = await fetch("/api/research/youtube", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url, preferredLanguages: ["en"], question: request }) });
+            const youtubePayload = await youtubeResponse.json() as { ok?: boolean; analysisPrompt?: string; full_text?: string; metadata?: { title?: string } };
+            if (youtubeResponse.ok && youtubePayload.ok) researchContext.push({ id: `research-${safeId()}`, title: youtubePayload.metadata?.title || "YouTube analysis", body: (youtubePayload.analysisPrompt || youtubePayload.full_text || "").slice(0, 12_000), source: url });
+          } catch { /* The source node will show its own analyser error. */ }
+        }
+      }
+      try {
+        const searchResponse = await fetch("/api/research/web-search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: request, maxResults: 6, fetchTop: 3 }) });
+        const searchPayload = await searchResponse.json() as { ok?: boolean; analysisPrompt?: string; urls?: string[] };
+        if (searchResponse.ok && searchPayload.ok && searchPayload.analysisPrompt) {
+          researchContext.push({ id: `research-${safeId()}`, title: "Web research", body: searchPayload.analysisPrompt.slice(0, 12_000), source: (searchPayload.urls || []).slice(0, 6).join(", ") || "Web search" });
+        }
+      } catch { /* Study Pal can still use the supplied URL or brief. */ }
       const response = await fetch("/api/study/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          question: `Create a concise study-map foundation for: ${request}. Return four short, distinct learning branches with one useful sentence each.`,
+          question: `Create a concise, source-grounded study-map foundation for: ${request}. Use the supplied research to produce four useful branches directly related to the request. Return exactly four lines in the format Branch title: one grounded sentence. If the user asked questions, make one branch answer the most important question. Do not invent unrelated concepts.`,
           mode: "plan",
           scope: "workspace",
-          context: [{ id: starter?.id || "brief", title: starter?.data.title || "Workspace brief", body: briefBody, source: "User brief" }],
+          context: [{ id: starter?.id || "brief", title: starter?.data.title || "Workspace brief", body: briefBody, source: "User brief" }, ...researchContext],
         }),
       });
       const payload = await response.json() as { answer?: string; citations?: string[]; error?: string };
@@ -963,9 +1015,6 @@ function StudyCanvas({ workspace, onBack, onPersist }: { workspace: StudyWorkspa
           return /:/.test(line) || line.split(/\s+/).length <= 10 || /^\d+\./.test(line);
         })
         .slice(0, 4);
-      const sourceUrls = Array.from(new Set(
-        request.match(/https?:\/\/[^\s)\]}>,]+/gi)?.map((url) => url.replace(/[.,;:!?]+$/, "")) || [],
-      ));
       const questionSection = request.match(/Questions?\s*:\s*(.*?)(?:\s+Sources?\s*:|$)/is)?.[1] || "";
       const requestedQuestions = Array.from(questionSection.matchAll(/[^?\n]{12,180}?\?/g))
         .map((match) => match[0]!.trim())
@@ -1387,6 +1436,40 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
   };
   const generatedViewKind: NodeKind | null = studyView === "flashcards" ? "flashcards" : studyView === "test" ? "quiz" : null;
   const generatedViewNodes = generatedViewKind ? nodes.filter((node) => node.data.kind === generatedViewKind) : [];
+  const gradeTest = async () => {
+    if (!generatedViewNodes.length || testSubmitting) return;
+    setTestSubmitting(true);
+    setTestScore(null);
+    let correct = 0;
+    for (const node of generatedViewNodes) {
+      const answer = [practiceSelections[node.id], testAnswers[node.id]].filter(Boolean).join("\n");
+      if (!answer.trim()) {
+        setTestMarks((current) => ({ ...current, [node.id]: { correct: false, feedback: "No answer submitted. Compare your response with the source-grounded material below." } }));
+        continue;
+      }
+      try {
+        const response = await fetch("/api/study/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question: `Mark this student answer. Reply with CORRECT or INCORRECT on the first line, then concise feedback and a line beginning Sample answer:.\nQuestion: ${node.data.title}\nExpected material:\n${node.data.body}\nStudent answer:\n${answer}`,
+            mode: "answer",
+            scope: "workspace",
+            context: buildGraphContext().slice(0, 8),
+          }),
+        });
+        const payload = await response.json() as { answer?: string };
+        const feedback = payload.answer || "The answer could not be graded.";
+        const isCorrect = /^correct\b/i.test(feedback.trim());
+        if (isCorrect) correct += 1;
+        setTestMarks((current) => ({ ...current, [node.id]: { correct: isCorrect, feedback } }));
+      } catch (cause) {
+        setNotice(cause instanceof Error ? cause.message : String(cause));
+      }
+    }
+    setTestScore({ correct, total: generatedViewNodes.length });
+    setTestSubmitting(false);
+  };
   const activeFlashDeck = useMemo(() => {
     if (!generatedViewNodes.length || studyView !== "flashcards") return null;
     return generatedViewNodes.find((node) => node.id === selectedId)
@@ -1550,8 +1633,8 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
 
         <AnimatePresence mode="wait">
           {studyView !== "nodes" ? (
-            <motion.section key={studyView} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }} className="absolute inset-0 z-[12] overflow-y-auto bg-[#f7f8fa] px-5 pb-32 pt-24 sm:px-8">
-              <div className="mx-auto max-w-[900px]">
+            <motion.section key={studyView} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }} className={cn("absolute inset-0 z-[12] bg-[#f7f8fa] px-5 pt-24 sm:px-8", studyView === "notes" ? "overflow-hidden pb-4" : "overflow-y-auto pb-32")}>
+              <div className={cn("mx-auto max-w-[900px]", studyView === "notes" && "flex h-full min-h-0 max-w-[1040px] flex-col")}>
                 {studyView === "chat" ? (
                   <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_240px]">
                     <div>
@@ -1559,9 +1642,9 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                       <div className="space-y-5">
                         {conversations.map((msg) => (
                           <div key={msg.id} className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
-                            <div className={cn("max-w-[88%]", msg.role === "user" ? "rounded-[18px] rounded-br-md bg-slate-950 px-4 py-3 text-white" : "max-w-[94%] px-1 py-2 text-slate-700")}>
+                            <div className={cn("max-w-[88%]", msg.role === "user" ? "clyra-chat-user-bubble rounded-[24px] rounded-br-md border border-slate-200/70 px-5 py-3.5 text-white" : "clyra-assistant-message max-w-[94%] px-1 py-2 text-slate-700")}>
                               <p className={cn("text-[8px] font-semibold uppercase tracking-[.12em]", msg.role === "user" ? "text-slate-300" : "text-blue-600")}>{msg.role === "user" ? "You" : "Clyra"}</p>
-                              <p className="mt-2 whitespace-pre-wrap text-[11px] leading-5">{msg.text}</p>
+                              {msg.role === "assistant" ? <MarkdownMessageContent content={msg.text} codePresentation="soft" /> : <p className="mt-2 whitespace-pre-wrap text-[11px] leading-5">{msg.text}</p>}
                               {msg.citations && msg.citations.length > 0 ? <div className="mt-2 flex flex-wrap gap-1">{msg.citations.map((citation, idx) => <span key={idx} className="text-[8px] text-blue-600">[{idx + 1}] {citation}</span>)}</div> : null}
                             </div>
                           </div>
@@ -1582,8 +1665,8 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                   </div>
                 ) : null}
                 {studyView === "notes" ? (
-                  <div>
-                    <div className="mb-4 flex items-end justify-between">
+                  <div className="flex h-full min-h-0 flex-col">
+                    <div className="mb-4 flex shrink-0 items-end justify-between">
                       <div><p className="text-[9px] font-semibold uppercase tracking-[.14em] text-slate-400">Live from your map</p><h2 className="mt-1 text-[22px] font-semibold tracking-[-.02em] text-slate-950">Notes</h2></div>
                       <button type="button" onClick={() => void regenerateNotes()} disabled={notesLoading || studyLocked} className="flex h-9 items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 text-[9px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">{notesLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}Refresh</button>
                     </div>
@@ -1596,7 +1679,9 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                         ))}
                       </div>
                     ) : (
-                      <DocumentCardUI content={notesContent || "# Notes\n\nAdd sources and connect nodes — notes will generate here."} onContentChange={setNotesContent} />
+                      <div className="min-h-0 flex-1 overflow-y-auto rounded-[20px]">
+                        <DocumentCardUI content={notesContent || "# Notes\n\nAdd sources and connect nodes — notes will generate here."} onContentChange={setNotesContent} />
+                      </div>
                     )}
                   </div>
                 ) : null}
@@ -1641,8 +1726,8 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                       </div>
                     ) : (
                       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                        {(activeFlashDeck ? splitStudyItems(activeFlashDeck.data.body).slice(0, 5) : []).map((card, index) => {
-                          const [front, back] = card.split(/\n+|—|-/).map((part) => part.trim()).filter(Boolean);
+                        {(activeFlashDeck ? parseFlashcardPairs(activeFlashDeck.data.body).slice(0, 8) : []).map((card, index) => {
+                          const { front, back } = card;
                           const id = `${activeFlashDeck?.id}-${index}`;
                           const flipped = flippedCards.has(id);
                           return (
@@ -1659,11 +1744,11 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                               <div className="relative min-h-[170px] w-full transition-transform duration-500 [transform-style:preserve-3d]" style={{ transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)" }}>
                                 <div className="absolute inset-0 p-5 [backface-visibility:hidden]">
                                   <p className="text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">Question</p>
-                                  <h3 className="mt-4 text-[13px] font-semibold leading-5 text-slate-900">{front || card}</h3>
+                                  <h3 className="mt-4 text-[13px] font-semibold leading-5 text-slate-900">{front}</h3>
                                 </div>
                                 <div className="absolute inset-0 bg-slate-950 p-5 text-white [backface-visibility:hidden]" style={{ transform: "rotateY(180deg)" }}>
                                   <p className="text-[8px] font-semibold uppercase tracking-[.12em] text-blue-300">Answer</p>
-                                  <h3 className="mt-4 text-[13px] font-semibold leading-5">{back || card}</h3>
+                                  <h3 className="mt-4 text-[13px] font-semibold leading-5">{back}</h3>
                                 </div>
                               </div>
                             </motion.button>
@@ -1696,6 +1781,16 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                       </div>
                     ) : (
                       <div className="space-y-4">
+                        <div className="flex items-center justify-between rounded-[18px] border border-slate-200 bg-white px-5 py-4 shadow-[0_10px_30px_rgba(15,23,42,.05)]">
+                          <div><p className="text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">Ready when you are</p><p className="mt-1 text-[11px] font-semibold text-slate-800">Answer every question, then submit once for an AI review.</p></div>
+                          <button type="button" onClick={() => void gradeTest()} disabled={testSubmitting} className="flex h-9 items-center gap-2 rounded-full bg-slate-950 px-4 text-[9px] font-semibold text-white transition-transform hover:-translate-y-0.5 disabled:opacity-50">{testSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}Submit test</button>
+                        </div>
+                        {testScore ? (
+                          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex items-center gap-5 rounded-[20px] border border-blue-100 bg-white p-5 shadow-[0_16px_40px_rgba(37,99,235,.10)]">
+                            <div className="relative grid h-20 w-20 shrink-0 place-items-center rounded-full" style={{ background: `conic-gradient(#2563eb ${(testScore.correct / Math.max(1, testScore.total)) * 360}deg, #e2e8f0 0deg)` }}><div className="grid h-14 w-14 place-items-center rounded-full bg-white text-center"><span className="text-[15px] font-semibold text-slate-950">{Math.round((testScore.correct / Math.max(1, testScore.total)) * 100)}%</span></div></div>
+                            <div><p className="text-[8px] font-semibold uppercase tracking-[.12em] text-blue-600">AI review complete</p><h3 className="mt-1 text-[17px] font-semibold text-slate-950">{testScore.correct} of {testScore.total} correct</h3><p className="mt-1 text-[10px] leading-5 text-slate-500">Your answer highlights and sample answers are shown below.</p></div>
+                          </motion.div>
+                        ) : null}
                         {generatedViewNodes.map((node, index) => {
                           const items = splitStudyItems(node.data.body);
                           const options = items.filter((item) => /^[A-D][.)]\s/i.test(item));
@@ -1708,7 +1803,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                               <p className="mt-2 text-[10px] leading-5 text-slate-600">{shortPrompt}</p>
                               <div className="mt-4 space-y-2">
                                 {options.map((option) => (
-                                  <button key={option} type="button" onClick={() => setPracticeSelections((current) => ({ ...current, [node.id]: option }))} className={cn("w-full rounded-xl border px-3 py-2.5 text-left text-[10px] transition-colors", practiceSelections[node.id] === option ? "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50")}>{option}</button>
+                                  <button key={option} type="button" onClick={() => setPracticeSelections((current) => ({ ...current, [node.id]: option }))} className={cn("w-full rounded-xl border px-3 py-2.5 text-left text-[10px] transition-colors", practiceSelections[node.id] === option ? testScore && mark ? mark.correct ? "border-emerald-500 bg-emerald-50 text-emerald-800" : "border-rose-500 bg-rose-50 text-rose-800" : "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50")}>{option}</button>
                                 ))}
                               </div>
                               <textarea
@@ -1718,39 +1813,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                                 placeholder="Short-answer response..."
                                 className="mt-4 min-h-16 w-full resize-none rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-[10px] outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
                               />
-                              <div className="mt-3 flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={async () => {
-                                    const answer = [practiceSelections[node.id], testAnswers[node.id]].filter(Boolean).join("\n");
-                                    if (!answer.trim()) return;
-                                    try {
-                                      const response = await fetch("/api/study/ask", {
-                                        method: "POST",
-                                        headers: { "Content-Type": "application/json" },
-                                        body: JSON.stringify({
-                                          question: `Mark this student answer. Reply with CORRECT or INCORRECT on the first line, then one sentence of feedback.\nQuestion: ${node.data.title}\nExpected material:\n${node.data.body}\nStudent answer:\n${answer}`,
-                                          mode: "answer",
-                                          scope: "workspace",
-                                          context: buildGraphContext().slice(0, 8),
-                                        }),
-                                      });
-                                      const payload = await response.json() as { answer?: string };
-                                      const text = payload.answer || "";
-                                      setTestMarks((current) => ({
-                                        ...current,
-                                        [node.id]: { correct: /^correct/i.test(text.trim()), feedback: text },
-                                      }));
-                                    } catch (cause) {
-                                      setNotice(cause instanceof Error ? cause.message : String(cause));
-                                    }
-                                  }}
-                                  className="rounded-full bg-slate-950 px-3.5 py-2 text-[9px] font-semibold text-white"
-                                >
-                                  Mark with AI
-                                </button>
-                                {mark ? <span className={cn("text-[9px] font-semibold", mark.correct ? "text-emerald-600" : "text-rose-600")}>{mark.correct ? "Correct" : "Needs work"}{mark.feedback ? ` · ${mark.feedback.slice(0, 120)}` : ""}</span> : null}
-                              </div>
+                              {mark ? <div className={cn("mt-4 rounded-[14px] border p-3", mark.correct ? "border-emerald-200 bg-emerald-50/70" : "border-rose-200 bg-rose-50/70")}><p className={cn("text-[9px] font-semibold", mark.correct ? "text-emerald-700" : "text-rose-700")}>{mark.correct ? "Correct answer" : "Needs another look"}</p><div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_150px]"><div><p className="text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">Your answer</p><p className={cn("mt-1 whitespace-pre-wrap rounded-lg border px-2.5 py-2 text-[9px] leading-4", mark.correct ? "border-emerald-200 bg-emerald-100/70 text-emerald-900" : "border-rose-200 bg-rose-100/70 text-rose-900")}>{[practiceSelections[node.id], testAnswers[node.id]].filter(Boolean).join("\n") || "No answer submitted"}</p><p className="mt-2 text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">Sample answer</p><p className="mt-1 whitespace-pre-wrap text-[9px] leading-4 text-slate-600">{mark.feedback?.replace(/^\s*(?:CORRECT|INCORRECT)\s*/i, "").trim() || "Review the connected source material."}</p></div><aside className="rounded-lg border border-white/80 bg-white/70 p-2.5"><p className="text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">Clyra's comment</p><p className="mt-1 text-[9px] leading-4 text-slate-600">{mark.correct ? "Clear and grounded." : "Look for the key idea in the source."}</p></aside></div></div> : null}
                             </article>
                           );
                         })}
@@ -1917,7 +1980,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
           ) : null}
         </AnimatePresence>
 
-        <div className="absolute inset-x-3 bottom-4 z-30 mx-auto flex max-w-[720px] justify-center">
+        {studyView === "nodes" ? <div className="absolute inset-x-3 bottom-4 z-30 mx-auto flex max-w-[720px] justify-center">
           <motion.nav
             layout
             className="flex items-center gap-1 rounded-full border border-slate-200 bg-white p-2 shadow-[0_18px_50px_rgba(15,23,42,.1)]"
@@ -1945,13 +2008,13 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                         className={cn("group/tool relative grid h-10 w-10 place-items-center rounded-full transition-colors", canvasTool === tool.id ? "bg-slate-100 text-slate-900" : "text-slate-500 hover:bg-slate-50 hover:text-slate-800")}
                       >
                         <Icon className="h-4 w-4" />
-                        <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[8px] font-medium text-white opacity-0 transition-opacity group-hover/tool:opacity-100">{tool.label}</span>
+                        <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[8px] font-medium text-white opacity-0 transition-opacity group-hover/tool:opacity-100">{tool.label} - {tool.id === "select" ? "select nodes" : tool.id === "pan" ? "move the canvas" : "remove links"}</span>
                       </button>
                     );
                   })}
                   <button type="button" onClick={() => void flowInstance?.fitView({ duration: 320, padding: 0.28 })} title="Fit canvas" aria-label="Fit canvas" className="group/tool relative grid h-10 w-10 place-items-center rounded-full text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-800">
                     <Maximize2 className="h-4 w-4" />
-                    <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[8px] font-medium text-white opacity-0 transition-opacity group-hover/tool:opacity-100">Fit canvas</span>
+                    <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[8px] font-medium text-white opacity-0 transition-opacity group-hover/tool:opacity-100">Fit - frame all nodes</span>
                   </button>
                 </motion.div>
               ) : null}
@@ -1971,8 +2034,8 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
               aria-label={commandDockOpen ? "Close ask" : "Ask Clyra"}
               className={cn("group/tool relative grid h-10 w-10 place-items-center rounded-full text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-800", commandDockOpen && "bg-slate-100 text-slate-900")}
             >
-              <Sparkles className="h-4 w-4" />
-              <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[8px] font-medium text-white opacity-0 transition-opacity group-hover/tool:opacity-100">{commandDockOpen ? "Close ask" : "Ask Clyra"}</span>
+              {commandDockOpen ? <X className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+              <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[8px] font-medium text-white opacity-0 transition-opacity group-hover/tool:opacity-100">{commandDockOpen ? "Close - hide Ask Clyra" : "Ask Clyra - build from your prompt"}</span>
             </button>
 
             <AnimatePresence initial={false}>
@@ -2008,7 +2071,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
               ) : null}
             </AnimatePresence>
           </motion.nav>
-        </div>
+        </div> : null}
       </main>
       {notice ? <button type="button" onClick={() => setNotice("")} className="absolute bottom-24 left-1/2 z-50 max-w-[80%] -translate-x-1/2 rounded-[14px] border border-red-200 bg-[#fffefa] px-4 py-3 text-[8px] text-red-600 shadow-[0_12px_34px_rgba(48,52,58,.1)]">{notice}</button> : null}
     </div>
