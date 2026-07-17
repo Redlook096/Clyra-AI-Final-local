@@ -954,19 +954,19 @@ function WouldRatherPreview({
 function MessagePreview({
   project,
   visible,
-  typingSide,
   isPlaying = false,
   playbackMs = 0,
+  windowStart = 0,
 }: {
   project: FakeTextProject;
   visible: number;
-  typingSide: "left" | "right" | null;
   isPlaying?: boolean;
   playbackMs?: number;
+  windowStart?: number;
 }) {
   const gameplayVideo = useRef<HTMLVideoElement | null>(null);
-  const shown = project.messages.slice(0, visible);
-  const floatingHeight = `${Math.min(78, 20 + Math.max(0, visible) * 8 + (typingSide ? 5 : 0))}%`;
+  const shown = project.messages.slice(windowStart, visible);
+  const floatingHeight = `${Math.min(78, 20 + Math.max(0, shown.length) * 8)}%`;
   const panelGeometry = project.layout === "full_chat"
     ? { left: "0%", top: "0%", width: "100%", height: "100%", radius: "0px", headerHeight: "12%" }
     : project.layout === "chat_gameplay"
@@ -1047,18 +1047,6 @@ function MessagePreview({
                   <span className="relative">{message.text}</span>
                 </motion.div>
               ))}
-              {typingSide ? (
-                <motion.div
-                  key="typing"
-                  initial={{ opacity: 0, y: 4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  className={cn("flex w-fit items-center gap-1 rounded-full px-3 py-2", typingSide === "right" ? "ml-auto" : "")}
-                  style={{ backgroundColor: typingSide === "right" ? palette.outgoing : palette.incoming }}
-                >
-                  {[0, 1, 2].map((index) => <motion.span key={index} className="h-1 w-1 rounded-full bg-white/75" animate={{ y: [0, -2, 0] }} transition={{ repeat: Infinity, duration: 0.7, delay: index * 0.1 }} />)}
-                </motion.div>
-              ) : null}
             </AnimatePresence>
           </div>
       </motion.div>
@@ -1329,6 +1317,7 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
   const [selectedId, setSelectedId] = useState(project.type === "would_rather" ? project.rounds[0]?.id || "" : project.messages[0]?.id || "");
   const [playing, setPlaying] = useState(false);
   const [visibleMessages, setVisibleMessages] = useState(project.type === "fake_text_story" ? project.messages.length : 0);
+  const [messageWindowStart, setMessageWindowStart] = useState(0);
   const [typingSide, setTypingSide] = useState<"left" | "right" | null>(null);
   const [previewRound, setPreviewRound] = useState(0);
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -1379,6 +1368,7 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
     setTypingSide(null);
     setCountdown(null);
     setWouldRatherPhase("second");
+    setMessageWindowStart(0);
   }, []);
 
   const playPreview = async () => {
@@ -1472,14 +1462,12 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
         }
       } else {
         setVisibleMessages(0);
+        setMessageWindowStart(0);
         for (let index = 0; index < project.messages.length; index += 1) {
           const message = project.messages[index]!;
           setSelectedId(message.id);
-          setTypingSide(message.side);
-          await waitFor(message.typingSeconds * 1_000 / project.playbackRate, controller.signal);
-          setTypingSide(null);
+          if (index > 0 && index % 6 === 0) setMessageWindowStart(index);
           setVisibleMessages(index + 1);
-          await waitFor(120, controller.signal);
           if (message.narration) {
             const voice = project.participants.find((participant) => participant.id === message.side)?.voice || "Ryan";
             const speech = await playCreatorSpeech(message.text, voice, controller.signal);
@@ -1528,8 +1516,8 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
       const message = project.messages[index]!;
       const local = value - active.startMs;
       setSelectedId(message.id);
-      setVisibleMessages(local >= message.typingSeconds * 1_000 ? index + 1 : index);
-      setTypingSide(local < message.typingSeconds * 1_000 ? message.side : null);
+      setMessageWindowStart(Math.floor(index / 6) * 6);
+      setVisibleMessages(index + 1);
     }
   };
 
@@ -1556,6 +1544,7 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
         replace(next as typeof project);
         setSelectedId(next.type === "would_rather" ? next.rounds[0]?.id || "" : next.messages[0]?.id || "");
         setVisibleMessages(next.type === "fake_text_story" ? next.messages.length : 0);
+        setMessageWindowStart(0);
       }
       setShowAiBrief(false);
     } catch (cause) {
@@ -1633,7 +1622,7 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
 
   const preview = project.type === "would_rather"
     ? <WouldRatherPreview project={project} round={project.rounds[Math.min(previewRound, project.rounds.length - 1)]!} phase={wouldRatherPhase} countdown={countdown} revealed={revealed} />
-    : <MessagePreview project={project} visible={visibleMessages} typingSide={typingSide} isPlaying={playing} playbackMs={currentTime} />;
+    : <MessagePreview project={project} visible={visibleMessages} windowStart={messageWindowStart} isPlaying={playing} playbackMs={currentTime} />;
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-white text-[#111318]">
@@ -1783,7 +1772,7 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
             }}
             className="ml-auto flex h-[58px] min-w-[145px] items-center justify-center gap-3 rounded-full bg-[#4169f6] px-7 text-[18px] font-medium text-white shadow-[0_10px_22px_rgba(65,105,246,.25)] transition-[transform,background-color] hover:bg-[#3158ea] active:scale-[.98]"
           >
-            {templateSteps.indexOf(step) >= templateSteps.length - 1 ? "Render video" : "Next"}
+            {templateSteps.indexOf(step) >= templateSteps.length - 1 ? "Render video" : "Continue"}
             {templateSteps.indexOf(step) >= templateSteps.length - 1 ? <Download className="h-5 w-5" /> : <ArrowDown className="h-5 w-5 -rotate-90" />}
           </button>
         </div>
@@ -1806,6 +1795,7 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
     canRedo,
   } = useCreatorDocument(initial);
   const [selectedId, setSelectedId] = useState(() => project.type === "would_rather" ? project.rounds[0]?.id || "" : project.type === "fake_text_story" ? project.messages[0]?.id || "" : project.id);
+  const [messageWindowStart, setMessageWindowStart] = useState(0);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("style");
   const [messagePanel, setMessagePanel] = useState<"messages" | "participants">("messages");
   const [playing, setPlaying] = useState(false);
@@ -1842,6 +1832,7 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
     setTypingSide(null);
     setCountdown(null);
     setWouldRatherPhase("second");
+    setMessageWindowStart(0);
   }, []);
 
   const resetPreview = useCallback(() => {
@@ -1910,14 +1901,12 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
         }
       } else if (project.type === "fake_text_story") {
         setVisibleMessages(0);
+        setMessageWindowStart(0);
         for (let index = 0; index < project.messages.length; index += 1) {
           const message = project.messages[index];
           setSelectedId(message.id);
-          setTypingSide(message.side);
-          await waitFor(message.typingSeconds * 1_000 / project.playbackRate, controller.signal);
-          setTypingSide(null);
+          if (index > 0 && index % 6 === 0) setMessageWindowStart(index);
           setVisibleMessages(index + 1);
-          await waitFor(150, controller.signal);
           if (message.narration) {
             const voice = project.participants.find((participant) => participant.id === message.side)?.voice || "Ryan";
             const speech = await playCreatorSpeech(message.text, voice, controller.signal);
@@ -2198,7 +2187,7 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
   const preview = project.type === "would_rather" && project.rounds.length ? (
     <WouldRatherPreview project={project} round={project.rounds[Math.min(previewRound, project.rounds.length - 1)]} phase={wouldRatherPhase} countdown={countdown} revealed={revealed} />
   ) : project.type === "fake_text_story" ? (
-    <MessagePreview project={project} visible={visibleMessages} typingSide={typingSide} isPlaying={playing} />
+    <MessagePreview project={project} visible={visibleMessages} windowStart={messageWindowStart} isPlaying={playing} />
   ) : project.type === "story_video" ? (
     <StoryPreview project={project} />
   ) : null;
@@ -2292,8 +2281,7 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
         </>
       ) : project.type === "fake_text_story" && activeMessage ? (
         <>
-          <label className="block text-[9px] font-semibold text-slate-500">Typing duration · {activeMessage.typingSeconds.toFixed(1)}s<input type="range" min="0" max="6" step="0.1" value={activeMessage.typingSeconds} onChange={(event) => edit((draft) => { if (draft.type === "fake_text_story") draft.messages[activeMessageIndex].typingSeconds = Number(event.target.value); })} className="mt-2 w-full accent-slate-950" /></label>
-          <label className="block text-[9px] font-semibold text-slate-500">Pause after message · {activeMessage.pauseSeconds.toFixed(1)}s<input type="range" min="0" max="3" step="0.1" value={activeMessage.pauseSeconds} onChange={(event) => edit((draft) => { if (draft.type === "fake_text_story") draft.messages[activeMessageIndex].pauseSeconds = Number(event.target.value); })} className="mt-2 w-full accent-slate-950" /></label>
+          <label className="block text-[9px] font-semibold text-slate-500">Pause after TTS · {activeMessage.pauseSeconds.toFixed(1)}s<input type="range" min="0.1" max="3" step="0.1" value={activeMessage.pauseSeconds} onChange={(event) => edit((draft) => { if (draft.type === "fake_text_story") draft.messages[activeMessageIndex].pauseSeconds = Number(event.target.value); })} className="mt-2 w-full accent-slate-950" /></label>
           <label className="block text-[9px] font-semibold text-slate-500">Playback speed · {project.playbackRate.toFixed(1)}x<input type="range" min="0.6" max="1.8" step="0.1" value={project.playbackRate} onChange={(event) => edit((draft) => { if (draft.type === "fake_text_story") draft.playbackRate = Number(event.target.value); })} className="mt-2 w-full accent-slate-950" /></label>
         </>
       ) : (

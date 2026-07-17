@@ -265,7 +265,7 @@ export function creatorProjectDuration(project: CreatorProject) {
   if (project.type === "fake_text_story") {
     return project.messages.reduce((sum, message) => {
       const speech = message.narration ? Math.max(850, message.text.split(/\s+/).length * 310) : 0;
-      return sum + message.typingSeconds * 1_000 + message.pauseSeconds * 1_000 + speech;
+      return sum + message.pauseSeconds * 1_000 + speech;
     }, 0);
   }
   return Math.max(3_000, `${project.title} ${project.body}`.split(/\s+/).length * 320);
@@ -284,9 +284,9 @@ export function creatorTimeline(project: CreatorProject): CreatorTimelineItem[] 
   } else if (project.type === "fake_text_story") {
     for (const [index, message] of project.messages.entries()) {
       const speech = message.narration ? Math.max(850, message.text.split(/\s+/).length * 310) : 0;
-      const durationMs = message.typingSeconds * 1_000 + message.pauseSeconds * 1_000 + speech;
+      const durationMs = message.pauseSeconds * 1_000 + speech;
       items.push({ id: message.id, label: `Message ${index + 1}`, track: "visual", startMs: cursor, durationMs, color: message.side === "right" ? "#0a84ff" : "#475569" });
-      if (message.narration) items.push({ id: `${message.id}-voice`, label: "Voice", track: "voice", startMs: cursor + message.typingSeconds * 1_000, durationMs: speech, color: "#14b8a6" });
+      if (message.narration) items.push({ id: `${message.id}-voice`, label: "Voice", track: "voice", startMs: cursor, durationMs: speech, color: "#14b8a6" });
       cursor += durationMs;
     }
   } else {

@@ -232,6 +232,23 @@ function questionParts(body = "") {
   return { question: question.replace(/^Question:\s*/i, "").trim(), answer: answer.trim() };
 }
 
+function explicitQuestionNotes(allNodes: StudyNode[], allEdges: StudyEdge[]) {
+  const sections = allNodes
+    .filter((node) => node.data.kind === "question")
+    .map((node) => {
+      const parsed = questionParts(node.data.body);
+      if (!parsed.question || !parsed.answer) return null;
+      const attachedIds = connectedNodeIds(node.id, allEdges);
+      const sources = allNodes
+        .filter((candidate) => attachedIds.has(candidate.id) && candidate.data.kind === "source")
+        .map((candidate) => candidate.data.title || candidate.data.sourceLabel || candidate.data.sourceUrl)
+        .filter(Boolean);
+      return `### ${parsed.question}\n\n${parsed.answer}${sources.length ? `\n\nSource: ${sources.join(", ")}` : ""}`;
+    })
+    .filter(Boolean);
+  return sections.length ? `\n\n## Questions and Answers\n\n${sections.join("\n\n")}` : "";
+}
+
 function prioritizeGraphContext(allNodes: StudyNode[], allEdges: StudyEdge[], maxItems = 32): GraphContextItem[] {
   const nodeItems = allNodes
     .filter((node) => node.data.kind !== "flashcards" && node.data.kind !== "quiz" && node.data.kind !== "study-plan")
@@ -1147,13 +1164,13 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
       const response = await fetch("/api/study/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, mode: "summary", scope: "workspace", context }) });
       const payload = await response.json() as { ok?: boolean; answer?: string; error?: string };
       if (!response.ok || !payload.answer) throw new Error(payload.error || "Could not generate notes");
-      setNotesContent(payload.answer);
+      setNotesContent(`${payload.answer.trim()}${explicitQuestionNotes(nodes, edges)}`);
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setNotesLoading(false);
     }
-  }, [buildGraphContext, notesLoading, studyLocked]);
+  }, [buildGraphContext, edges, nodes, notesLoading, studyLocked]);
 
   const answerQuestionNode = useCallback(async (nodeId: string, rawQuestion: string) => {
     const question = rawQuestion.trim();

@@ -488,6 +488,7 @@ function drawMessageVideo(
   panelHeight: number,
   theme: MessageTheme,
   layout: MessageLayout,
+  windowStart = 0,
   typingSide?: "left" | "right" | null,
 ) {
   const colors = messageVideoStyle(theme);
@@ -561,7 +562,7 @@ function drawMessageVideo(
 
   context.font = "400 25px -apple-system, BlinkMacSystemFont, sans-serif";
   context.textAlign = "left";
-  const shown = messages.slice(0, visible).map((message) => {
+  const shown = messages.slice(windowStart, visible).map((message) => {
     const lines = wrapText(context, message.text, 430).slice(0, 2);
     const bubbleWidth = Math.min(470, Math.max(94, ...lines.map((line) => context.measureText(line).width + 34)));
     const bubbleHeight = Math.max(49, lines.length * 29 + 18);
@@ -637,7 +638,7 @@ export async function renderMessageStoryVideo(options: { name: string; messages:
     const layout = options.layout || "floating_phone";
     let currentHeight = 178;
     let currentVisible = 0;
-    let currentTyping: "left" | "right" | null = null;
+    let currentWindowStart = 0;
     const drawCurrentFrame = () => drawMessageVideo(
       setup.context,
       background,
@@ -647,7 +648,7 @@ export async function renderMessageStoryVideo(options: { name: string; messages:
       currentHeight,
       theme,
       layout,
-      currentTyping,
+      currentWindowStart,
     );
     drawCurrentFrame();
     if (backgroundVideo) backgroundTimer = window.setInterval(drawCurrentFrame, 1_000 / 30);
@@ -655,21 +656,15 @@ export async function renderMessageStoryVideo(options: { name: string; messages:
     for (let index = 0; index < options.messages.length; index += 1) {
       throwIfCancelled(options.signal);
       const message = options.messages[index];
-      const typingDuration = Math.max(0, Math.min(8, message.typingSeconds ?? 0.8)) * 1_000;
-      if (typingDuration > 0) {
-        currentVisible = index;
-        currentTyping = message.side;
-        drawCurrentFrame();
-        await cancellableDelay(typingDuration, options.signal);
-      }
-      currentTyping = null;
+      if (index > 0 && index % 6 === 0) currentWindowStart = index;
       currentVisible = index + 1;
-      const targetHeight = Math.min(520, 178 + (index + 1) * 58);
+      const targetHeight = Math.min(520, 178 + (index - currentWindowStart + 1) * 58);
+      const startHeight = currentHeight;
       const started = performance.now();
       while (performance.now() - started < 220) {
         throwIfCancelled(options.signal);
         const progress = Math.min(1, (performance.now() - started) / 220);
-        currentHeight += (targetHeight - currentHeight) * (1 - Math.pow(1 - progress, 3));
+        currentHeight = startHeight + (targetHeight - startHeight) * (1 - Math.pow(1 - progress, 3));
         drawCurrentFrame();
         await cancellableDelay(16, options.signal);
       }
