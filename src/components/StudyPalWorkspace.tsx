@@ -291,6 +291,52 @@ function splitStudyItems(body: string) {
   return body.split(/\n(?=\s*(?:\d+[.)]|[-*])\s+)/).map((item) => item.replace(/^\s*(?:\d+[.)]|[-*])\s*/, "").trim()).filter(Boolean);
 }
 
+type ParsedQuizQuestion = { id: string; question: string; options: string[]; shortAnswer: boolean; correctOption?: string; expectedAnswer?: string };
+
+function parseQuizQuestions(body: string, nodeId: string): ParsedQuizQuestion[] {
+  const normalized = body
+    .replace(/\r/g, " ")
+    .replace(/\*\*/g, "")
+    .replace(/__+/g, "")
+    .replace(/###/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const answerKeyMatches = [...normalized.matchAll(/\banswer key\b/gi)];
+  const answerKeyIndex = answerKeyMatches.length ? answerKeyMatches[answerKeyMatches.length - 1]!.index || -1 : -1;
+  const quiz = (answerKeyIndex >= 0 ? normalized.slice(0, answerKeyIndex) : normalized).trim();
+  const answerKey = answerKeyIndex >= 0 ? normalized.slice(answerKeyIndex) : "";
+  const questions: ParsedQuizQuestion[] = [];
+  const numbered = [...quiz.matchAll(/(?:^|\s)(\d+)[.)]\s+/g)];
+  numbered.forEach((match, index) => {
+    const start = (match.index || 0) + match[0].length;
+    const end = index + 1 < numbered.length ? numbered[index + 1]!.index || quiz.length : quiz.length;
+    const item = quiz.slice(start, end).trim();
+    if (!item) return;
+    const optionMatches = [...item.matchAll(/(?:^|\s)([A-D])[.)]\s+/gi)];
+    const firstOption = optionMatches[0];
+    const question = (firstOption ? item.slice(0, firstOption.index || 0) : item)
+      .replace(/^(?:Practice Quiz|Short Answer)\s*/i, "")
+      .replace(/^\((?:Multiple Choice|Short Answer)\)\s*/i, "")
+      .trim();
+      const options = optionMatches.map((option, optionIndex) => {
+      const optionStart = (option.index || 0) + option[0].length;
+      const optionEnd = optionIndex + 1 < optionMatches.length ? optionMatches[optionIndex + 1]!.index || item.length : item.length;
+      return `${option[1]!.toUpperCase()}) ${item.slice(optionStart, optionEnd).trim().replace(/\s+---\s*$/, "")}`;
+    }).filter((option) => option.length > 3);
+    if (question.length < 12) return;
+    const keyMatch = answerKey.match(new RegExp(`(?:^|\\s)${match[1]}[.)]\\s*(?:([A-D])[.)]\\s*)?([\\s\\S]*?)(?=\\s+\\d+[.)]\\s*(?:[A-D][.)]\\s*)|$)`, "i"));
+    questions.push({
+      id: `${nodeId}-${match[1]}`,
+      question,
+      options,
+      shortAnswer: /\bshort answer\b/i.test(item) || options.length === 0,
+      correctOption: keyMatch?.[1]?.toUpperCase(),
+      expectedAnswer: keyMatch?.[2]?.trim(),
+    });
+  });
+  return questions;
+}
+
 function cleanStudyText(value: string) {
   return value
     .replace(/\*\*|__/g, "")
@@ -613,7 +659,7 @@ function WorkspaceDashboard({ workspaces, onChange, onOpen }: { workspaces: Stud
   );
 }
 
-function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible }: { workspace: StudyWorkspace; onBack: () => void; onPersist: (workspace: StudyWorkspace) => void; globalTabsVisible: boolean }) {
+function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible, agentPrompt = "" }: { workspace: StudyWorkspace; onBack: () => void; onPersist: (workspace: StudyWorkspace) => void; globalTabsVisible: boolean; agentPrompt?: string }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<StudyNode>(workspace.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<StudyEdge>(workspace.edges);
   const [resources, setResources] = useState(workspace.resources);
@@ -661,6 +707,7 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible }: { work
   const redoRef = useRef<Array<{ nodes: StudyNode[]; edges: StudyEdge[] }>>([]);
   const autoAnsweredQuestionsRef = useRef(new Set<string>());
   const backgroundStudyKeyRef = useRef("");
+  const agentPromptStartedRef = useRef(false);
 
   const selected = nodes.find((node) => node.id === selectedId);
   const readyResourceCount = resources.filter((resource) => resource.status === "ready").length;
@@ -1050,21 +1097,34 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible }: { work
         .filter((line) => {
           if (line.length < 12 || line.length > 220) return false;
           if (/^(here(?:'s| is)|below|sure|okay|i(?:'| a)ve|this (?:is|map)|study[- ]map foundation)/i.test(line)) return false;
-          return /:/.test(line) || line.split(/\s+/).length <= 10 || /^\d+\./.test(line);
+          const detail = line.split(/:\s*/).slice(1).join(":").trim();
+          return detail.length >= 16;
         })
         .slice(0, 4);
       const questionSection = request.match(/Questions?\s*:\s*(.*?)(?:\s+Sources?\s*:|$)/is)?.[1] || "";
       const requestedQuestions = Array.from(questionSection.matchAll(/[^?\n]{12,180}?\?/g))
         .map((match) => match[0]!.trim())
         .filter((question) => !/^https?:/i.test(question));
-      while (branches.length < 4) {
-        branches.push(["Core ideas and vocabulary", "Evidence and worked examples", "Common misconceptions", "Questions to practise"][branches.length]!);
+      const fallbackBranches = [
+        "Core ideas and vocabulary: Define the source's central terms and the framework it uses.",
+        "Evidence and examples: Separate the speaker's evidence from personal opinion or anecdote.",
+        "Important concepts: Capture the concepts that explain how the source's argument works.",
+        "Questions to practise: Turn the source's claims into short questions for active recall.",
+      ];
+      for (const fallback of fallbackBranches) {
+        if (branches.length >= 4) break;
+        branches.push(fallback);
       }
       const rootId = starter?.id || safeId();
       const rootPosition = starter?.position || { x: 360, y: 220 };
       const kinds: NodeKind[] = ["concept", "evidence", "note", "question"];
       const childNodes = branches.map((branch, index) => {
-        const [heading, ...rest] = branch.split(/:\s*/);
+        let [heading, ...rest] = branch.split(/:\s*/);
+        if (/^(?:branch|node) title$/i.test(heading) && rest.length) {
+          const [nestedHeading, ...nestedRest] = rest.join(": ").split(/:\s*/);
+          heading = nestedHeading || heading;
+          rest = nestedRest;
+        }
         return {
           id: safeId(),
           type: "study" as const,
@@ -1142,6 +1202,14 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible }: { work
       setAsking(false);
     }
   };
+
+  useEffect(() => {
+    const request = agentPrompt.trim();
+    if (!request || agentPromptStartedRef.current) return;
+    agentPromptStartedRef.current = true;
+    setWelcomeOpen(true);
+    void buildFromPrompt(request);
+  }, [agentPrompt]);
 
   const ask = async (
     mode: "answer" | "summary" | "flashcards" | "quiz" | "plan" = "answer",
@@ -1363,6 +1431,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
       const payload = await response.json() as { ok?: boolean; answer?: string; error?: string };
       if (!response.ok || !payload.answer) throw new Error(payload.error || "Could not generate notes");
       setNotesContent(compactStudyMarkdown(`${payload.answer.trim()}${explicitQuestionNotes(nodes, edges)}`));
+      setNotice("");
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -1492,14 +1561,14 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
   const generatedViewKind: NodeKind | null = studyView === "flashcards" ? "flashcards" : studyView === "test" ? "quiz" : null;
   const generatedViewNodes = generatedViewKind ? nodes.filter((node) => node.data.kind === generatedViewKind) : [];
   const gradeTest = async () => {
-    if (!generatedViewNodes.length || testSubmitting) return;
+    if (!testQuestions.length || testSubmitting) return;
     setTestSubmitting(true);
     setTestScore(null);
     let correct = 0;
-    for (const node of generatedViewNodes) {
-      const answer = [practiceSelections[node.id], testAnswers[node.id]].filter(Boolean).join("\n");
+    for (const question of testQuestions) {
+      const answer = [practiceSelections[question.id], testAnswers[question.id]].filter(Boolean).join("\n");
       if (!answer.trim()) {
-        setTestMarks((current) => ({ ...current, [node.id]: { correct: false, feedback: "No answer submitted. Compare your response with the source-grounded material below." } }));
+        setTestMarks((current) => ({ ...current, [question.id]: { correct: false, feedback: "No answer submitted. Compare your response with the source-grounded material below." } }));
         continue;
       }
       try {
@@ -1507,7 +1576,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            question: `Mark this student answer. Reply with CORRECT or INCORRECT on the first line, then concise feedback and a line beginning Sample answer:.\nQuestion: ${node.data.title}\nExpected material:\n${node.data.body}\nStudent answer:\n${answer}`,
+            question: `Mark this student answer. Reply with CORRECT or INCORRECT on the first line, then concise feedback and a line beginning Sample answer:.\nQuestion: ${question.question}\nExpected material:\n${question.options.join(" ")}\nStudent answer:\n${answer}`,
             mode: "answer",
             scope: "workspace",
             context: buildGraphContext().slice(0, 8),
@@ -1515,16 +1584,27 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
         });
         const payload = await response.json() as { answer?: string };
         const feedback = payload.answer || "The answer could not be graded.";
-        const isCorrect = /^correct\b/i.test(feedback.trim());
+        const selectedLetter = practiceSelections[question.id]?.trim().charAt(0).toUpperCase();
+        const deterministicChoice = question.correctOption ? selectedLetter === question.correctOption : undefined;
+        const expectedWords = (question.expectedAnswer || "").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length >= 5);
+        const answerWordsHit = expectedWords.filter((word) => answer.toLowerCase().includes(word)).length;
+        const deterministicShort = question.shortAnswer && expectedWords.length > 0
+          ? answerWordsHit >= Math.min(2, expectedWords.length)
+          : undefined;
+        const isCorrect = deterministicChoice ?? deterministicShort ?? /^correct\b/i.test(feedback.trim());
         if (isCorrect) correct += 1;
-        setTestMarks((current) => ({ ...current, [node.id]: { correct: isCorrect, feedback } }));
+        setTestMarks((current) => ({ ...current, [question.id]: { correct: isCorrect, feedback } }));
       } catch (cause) {
         setNotice(cause instanceof Error ? cause.message : String(cause));
       }
     }
-    setTestScore({ correct, total: generatedViewNodes.length });
+    setTestScore({ correct, total: testQuestions.length });
     setTestSubmitting(false);
   };
+  const testQuestions = useMemo(
+    () => generatedViewNodes.flatMap((node) => parseQuizQuestions(node.data.body, node.id)),
+    [generatedViewNodes],
+  );
   const activeFlashDeck = useMemo(() => {
     if (!generatedViewNodes.length || studyView !== "flashcards") return null;
     return generatedViewNodes.find((node) => node.id === selectedId)
@@ -1866,33 +1946,31 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
                             <div><p className="text-[8px] font-semibold uppercase tracking-[.12em] text-blue-600">AI review complete</p><h3 className="mt-1 text-[17px] font-semibold text-slate-950">{testScore.correct} of {testScore.total} correct</h3><p className="mt-1 text-[10px] leading-5 text-slate-500">Your answer highlights and sample answers are shown below.</p></div>
                           </motion.div>
                         ) : null}
-                        {generatedViewNodes.map((node, index) => {
-                          const items = splitStudyItems(node.data.body);
-                          const options = items.filter((item) => /^[A-D][.)]\s/i.test(item)).map(cleanStudyText);
-                          const shortPrompt = cleanStudyText(items.find((item) => !/^[A-D][.)]\s/i.test(item)) || node.data.title);
-                          const mark = testMarks[node.id];
+                        {testQuestions.map((question, index) => {
+                          const mark = testMarks[question.id];
                           return (
-                            <article key={node.id} className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-[0_10px_30px_rgba(15,23,42,.05)]">
+                            <article key={question.id} className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-[0_10px_30px_rgba(15,23,42,.05)]">
                               <p className="text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">Question {index + 1}</p>
-                              <h3 className="mt-2 text-[14px] font-semibold text-slate-900">{cleanStudyText(node.data.title)}</h3>
-                              <p className="mt-2 text-[10px] leading-5 text-slate-600">{shortPrompt}</p>
+                              <h3 className="mt-2 text-[14px] font-semibold text-slate-900">{cleanStudyText(question.question)}</h3>
                               <div className="mt-4 space-y-2">
-                                {options.map((option) => (
-                                  <button key={option} type="button" onClick={() => setPracticeSelections((current) => ({ ...current, [node.id]: option }))} className={cn("w-full rounded-xl border px-3 py-2.5 text-left text-[10px] transition-colors", practiceSelections[node.id] === option ? testScore && mark ? mark.correct ? "border-emerald-500 bg-emerald-50 text-emerald-800" : "border-rose-500 bg-rose-50 text-rose-800" : "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50")}>{option}</button>
+                                {question.options.map((option) => (
+                                  <button key={option} type="button" onClick={() => setPracticeSelections((current) => ({ ...current, [question.id]: option }))} className={cn("w-full rounded-xl border px-3 py-2.5 text-left text-[10px] transition-colors", testScore && mark && question.correctOption && option.startsWith(`${question.correctOption})`) ? "border-emerald-500 bg-emerald-50 text-emerald-800" : testScore && mark && practiceSelections[question.id] === option && !mark.correct ? "border-rose-500 bg-rose-50 text-rose-800" : practiceSelections[question.id] === option ? "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50")}>{cleanStudyText(option)}</button>
                                 ))}
                               </div>
-                              <textarea
-                                aria-label={`Short answer ${index + 1}`}
-                                value={testAnswers[node.id] || ""}
-                                onChange={(event) => setTestAnswers((current) => ({ ...current, [node.id]: event.target.value }))}
-                                placeholder="Short-answer response..."
-                                className="mt-4 min-h-16 w-full resize-none rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-[10px] outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
-                              />
-                              {mark ? <div className={cn("mt-4 rounded-[14px] border p-3", mark.correct ? "border-emerald-200 bg-emerald-50/70" : "border-rose-200 bg-rose-50/70")}><p className={cn("text-[9px] font-semibold", mark.correct ? "text-emerald-700" : "text-rose-700")}>{mark.correct ? "Correct answer" : "Needs another look"}</p><div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_150px]"><div><p className="text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">Your answer</p><p className={cn("mt-1 whitespace-pre-wrap rounded-lg border px-2.5 py-2 text-[9px] leading-4", mark.correct ? "border-emerald-200 bg-emerald-100/70 text-emerald-900" : "border-rose-200 bg-rose-100/70 text-rose-900")}>{[practiceSelections[node.id], testAnswers[node.id]].filter(Boolean).join("\n") || "No answer submitted"}</p><p className="mt-2 text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">Sample answer</p><p className="mt-1 whitespace-pre-wrap text-[9px] leading-4 text-slate-600">{mark.feedback?.replace(/^\s*(?:CORRECT|INCORRECT)\s*/i, "").trim() || "Review the connected source material."}</p></div><aside className="rounded-lg border border-white/80 bg-white/70 p-2.5"><p className="text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">Clyra's comment</p><p className="mt-1 text-[9px] leading-4 text-slate-600">{mark.correct ? "Clear and grounded." : "Look for the key idea in the source."}</p></aside></div></div> : null}
+                              {question.shortAnswer ? (
+                                <textarea
+                                  aria-label={`Short answer ${index + 1}`}
+                                  value={testAnswers[question.id] || ""}
+                                  onChange={(event) => setTestAnswers((current) => ({ ...current, [question.id]: event.target.value }))}
+                                  placeholder="Short-answer response..."
+                                  className="mt-4 min-h-16 w-full resize-none rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-[10px] outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+                                />
+                              ) : null}
+                              {mark ? <div className={cn("mt-4 rounded-[14px] border p-3", mark.correct ? "border-emerald-200 bg-emerald-50/70" : "border-rose-200 bg-rose-50/70")}><p className={cn("text-[9px] font-semibold", mark.correct ? "text-emerald-700" : "text-rose-700")}>{mark.correct ? "Correct answer" : "Needs another look"}</p><div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_150px]"><div><p className="text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">Your answer</p><p className={cn("mt-1 whitespace-pre-wrap rounded-lg border px-2.5 py-2 text-[9px] leading-4", mark.correct ? "border-emerald-200 bg-emerald-100/70 text-emerald-900" : "border-rose-200 bg-rose-100/70 text-rose-900")}>{[practiceSelections[question.id], testAnswers[question.id]].filter(Boolean).join("\n") || "No answer submitted"}</p><p className="mt-2 text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">Sample answer</p><p className="mt-1 whitespace-pre-wrap text-[9px] leading-4 text-slate-600">{mark.feedback?.replace(/^\s*(?:CORRECT|INCORRECT)\s*/i, "").trim() || "Review the connected source material."}</p></div><aside className="rounded-lg border border-white/80 bg-white/70 p-2.5"><p className="text-[8px] font-semibold uppercase tracking-[.12em] text-slate-400">Clyra's comment</p><p className="mt-1 text-[9px] leading-4 text-slate-600">{mark.correct ? "Clear and grounded." : "Look for the key idea in the source."}</p></aside></div></div> : null}
                             </article>
                           );
                         })}
-                        {!generatedViewNodes.length ? <p className="py-16 text-center text-[11px] text-slate-400">Connect sources to generate a test.</p> : null}
+                        {!testQuestions.length ? <p className="py-16 text-center text-[11px] text-slate-400">Connect sources to generate a test.</p> : null}
                       </div>
                     )}
                   </div>
@@ -2157,14 +2235,24 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
 
 }
 
-export default function StudyPalWorkspace({ globalTabsVisible = false }: { globalTabsVisible?: boolean }) {
+export default function StudyPalWorkspace({ globalTabsVisible = false, agentPrompt = "" }: { globalTabsVisible?: boolean; agentPrompt?: string }) {
   const [workspaces, setWorkspaces] = useState<StudyWorkspace[]>(readWorkspaces);
   const [activeId, setActiveId] = useState("");
+  const agentWorkspaceStartedRef = useRef(false);
   useEffect(() => {
     const timer = window.setTimeout(() => localStorage.setItem(STORAGE_KEY, JSON.stringify(workspaces.slice(0, 40))), 250);
     return () => window.clearTimeout(timer);
   }, [workspaces]);
+  useEffect(() => {
+    const request = agentPrompt.trim();
+    if (!request || agentWorkspaceStartedRef.current) return;
+    agentWorkspaceStartedRef.current = true;
+    const workspace = newWorkspace("Live study research");
+    workspace.description = "A live agent workspace grounded in the supplied source.";
+    setWorkspaces((current) => [workspace, ...current]);
+    setActiveId(workspace.id);
+  }, [agentPrompt]);
   const active = workspaces.find((workspace) => workspace.id === activeId);
   const persist = useCallback((next: StudyWorkspace) => setWorkspaces((current) => current.map((workspace) => workspace.id === next.id ? next : workspace)), []);
-  return active ? <StudyCanvas key={active.id} workspace={active} onBack={() => setActiveId("")} onPersist={persist} globalTabsVisible={globalTabsVisible} /> : <WorkspaceDashboard workspaces={workspaces} onChange={setWorkspaces} onOpen={setActiveId} />;
+  return active ? <StudyCanvas key={active.id} workspace={active} onBack={() => setActiveId("")} onPersist={persist} globalTabsVisible={globalTabsVisible} agentPrompt={agentPrompt} /> : <WorkspaceDashboard workspaces={workspaces} onChange={setWorkspaces} onOpen={setActiveId} />;
 }

@@ -160,6 +160,7 @@ type AttachedAppAgent = {
   label: string;
   status: AppAgentStatus;
   summary: string;
+  instruction?: string;
   previewUrl?: string;
   control?: "ai" | "user";
   paused?: boolean;
@@ -382,7 +383,7 @@ function AppAgentCard({
   const [iframeReady, setIframeReady] = useState(false);
   const [revealPreview, setRevealPreview] = useState(false);
   const origin = typeof window === "undefined" ? "http://localhost:3000" : window.location.origin;
-  const source = `${origin}/?embedTool=${encodeURIComponent(agent.id)}&agentPreview=1`;
+  const source = `${origin}/?embedTool=${encodeURIComponent(agent.id)}&agentPreview=1${agent.id === "study" && agent.instruction ? `&agentPrompt=${encodeURIComponent(agent.instruction)}` : ""}`;
   const running = agent.status === "running" || agent.status === "queued";
   const ready = agent.status === "ready";
   const glow = running || ready || selected;
@@ -3165,6 +3166,7 @@ Please analyze the code you just wrote and fix this error.`;
                 id: agent.id,
                 label: agent.label,
                 status: "queued" as const,
+                instruction: userText,
                 summary: `Queued with this message: ${userText}`,
               })),
             }
@@ -5166,7 +5168,7 @@ Please analyze the code you just wrote and fix this error.`;
                             </div>
                           </div>
                         }>
-                          <StudyPalWorkspace globalTabsVisible={workflowTabsHoverReveal} />
+                          <StudyPalWorkspace globalTabsVisible={workflowTabsHoverReveal} agentPrompt={new URLSearchParams(window.location.search).get("agentPrompt") || ""} />
                         </Suspense>
                       ) : creatorMode ? (
                         <Suspense fallback={null}>
