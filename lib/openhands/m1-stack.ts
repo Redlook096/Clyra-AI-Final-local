@@ -96,6 +96,29 @@ function freePort(port: number) {
   }
 }
 
+async function stopStaleM1Launchers() {
+  try {
+    const output = execSync("ps -axo pid=,command=", { encoding: "utf8" });
+    const pids = output
+      .split("\n")
+      .map((line) => {
+        const match = line.trim().match(/^(\d+)\s+(.*)$/);
+        return match && match[2].includes("agent-canvas/start.py --skip-install") ? Number(match[1]) : 0;
+      })
+      .filter((pid) => pid > 0 && pid !== process.pid && pid !== process.ppid);
+    for (const pid of pids) {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        // A process can disappear between discovery and termination.
+      }
+    }
+    if (pids.length) await delay(900);
+  } catch {
+    // Process inspection is best-effort; port cleanup below remains authoritative.
+  }
+}
+
 export async function ensureM1Stack(): Promise<{
   uiUrl: string;
   agentUrl: string;
@@ -129,6 +152,7 @@ export async function ensureM1Stack(): Promise<{
       console.log(
         `[m1] freeing :${M1_UI_PORT}, :${M1_AGENT_PORT}, and companion ports for full Vibe Coder M1`,
       );
+      await stopStaleM1Launchers();
       freePort(M1_UI_PORT);
       freePort(M1_AGENT_PORT);
       for (const port of M1_EXTRA_PORTS) freePort(port);
@@ -150,7 +174,8 @@ export async function ensureM1Stack(): Promise<{
         starting = null;
       });
 
-      const deadline = Date.now() + 240_000;
+      const startupTimeout = Math.max(15_000, Number(process.env.CLYRA_M1_START_TIMEOUT_MS || 45_000));
+      const deadline = Date.now() + startupTimeout;
       while (Date.now() < deadline) {
         if (m1Process?.exitCode != null) {
           throw new Error(

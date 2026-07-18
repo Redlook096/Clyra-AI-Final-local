@@ -35,6 +35,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "../lib/utils";
+import { describeControls } from "../lib/agentController";
 import { ShiningText } from "./ui/shining-text";
 import { MarkdownMessageContent } from "./MarkdownMessageContent";
 
@@ -402,6 +403,30 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default", onEngage
   const canReviewPlan = Boolean(state.planMd) && state.planMode;
   const planReady = canReviewPlan && state.fileQueue.length > 0 && planReadyDelayPassed;
   const thinkingIsResting = state.stage === "complete" || (state.planMode && planReady);
+
+  useEffect(() => {
+    const bridge = {
+      snapshot: () => ({
+        route: window.location.pathname,
+        workspace: "vibe",
+        activeTab: designSession ? "design" : state.stage === "idle" ? "welcome" : "build",
+        projectId: state.projectId === "project-advanced-vibe" ? undefined : state.projectId,
+        projectName: activeProjectName,
+        buildStatus: m1LaunchError ? "failed" : state.stage,
+        previewReady: state.preview.status === "ready" || m1IframeReady,
+        loading: m1Launching || state.stage === "task-created" || state.stage === "generating-file",
+        notifications: [],
+        errors: m1LaunchError || state.error ? [m1LaunchError || state.error || ""] : [],
+        controls: describeControls(document),
+        scroll: { x: window.scrollX, y: window.scrollY, width: window.innerWidth, height: window.innerHeight },
+        capturedAt: Date.now(),
+      }),
+    };
+    window.__CLYRA_AGENT_BRIDGE__ = bridge;
+    return () => {
+      if (window.__CLYRA_AGENT_BRIDGE__ === bridge) delete window.__CLYRA_AGENT_BRIDGE__;
+    };
+  }, [activeProjectName, designSession, m1IframeReady, m1LaunchError, m1Launching, state.error, state.preview.status, state.projectId, state.stage]);
 
   useEffect(() => {
     if (state.stage !== "idle") onEngaged?.();
@@ -957,7 +982,7 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default", onEngage
             <textarea value={promptInput} onChange={(event) => setPromptInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submitDesignRevision(); } }} rows={1} placeholder={`Refine the ${designSession.style} direction…`} className="max-h-24 min-h-9 min-w-0 flex-1 resize-none bg-transparent py-2 text-[12px] font-medium leading-5 text-slate-800 outline-none placeholder:text-slate-400" />
             <button type="button" onClick={() => setDesignSession(null)} className="h-9 shrink-0 rounded-full px-3 text-[10px] font-semibold text-slate-400 hover:bg-slate-100 hover:text-slate-700">Cancel</button>
             <button type="submit" disabled={!promptInput.trim()} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-slate-950 text-white transition-transform active:scale-95 disabled:bg-slate-200 disabled:text-slate-400"><ArrowUp className="h-4 w-4" /></button>
-            <button type="button" onClick={approveDesignAndBuild} className="h-9 shrink-0 rounded-full bg-blue-600 px-4 text-[10px] font-semibold text-white shadow-[0_8px_20px_rgba(37,99,235,.22)] transition-[background-color,transform] hover:bg-blue-700 active:scale-[.98]">Use this design</button>
+            <button data-agent-id="vibe-use-design" type="button" onClick={approveDesignAndBuild} className="h-9 shrink-0 rounded-full bg-blue-600 px-4 text-[10px] font-semibold text-white shadow-[0_8px_20px_rgba(37,99,235,.22)] transition-[background-color,transform] hover:bg-blue-700 active:scale-[.98]">Use this design</button>
           </div>
         </form>
       </motion.div>
@@ -2825,6 +2850,7 @@ export function Composer({
       {!planApprovalActive ? (
         <>
           <textarea
+            data-agent-id="vibe-request-input"
             ref={textareaRef}
             value={value}
             onChange={(event) => {
@@ -2856,6 +2882,7 @@ export function Composer({
             <div className="flex shrink-0 items-center gap-1.5">
               <ModeDropdown mode={mode as any} onChange={onModeChange as any} />
               <button
+                data-agent-id="vibe-send-request"
                 type="button"
                 disabled={isGenerating || isPaused ? false : disabled}
                 onClick={() => {

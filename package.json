@@ -20,7 +20,8 @@
     "test:voice": "tsx tools/voice-unit-tests.ts",
     "test:browser": "tsx tools/openbrowser-e2e.ts",
     "test:creator": "tsx tools/creator-unit-tests.ts",
-    "test:clipper": "tsx tools/clipper-unit-tests.ts"
+    "test:clipper": "tsx tools/clipper-unit-tests.ts",
+    "test:agent-controller": "tsx tools/agent-controller-unit-tests.ts"
   },
   "dependencies": {
     "@cline/sdk": "^0.0.52",

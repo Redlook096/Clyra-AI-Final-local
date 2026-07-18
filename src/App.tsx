@@ -79,6 +79,7 @@ import {
 } from "./components/ui/document-card";
 import { GradientWaveText } from "./components/GradientWaveText";
 import { AppLauncher } from "./components/AppLauncher";
+import { AgentControlledPreview } from "./components/AgentControlledPreview";
 import type { CreatorMode } from "./components/CreatorStudioWorkspace";
 import { VoiceCallOverlay } from "./components/voice/VoiceCallOverlay";
 import { VoiceWaveIcon } from "./components/voice/VoiceWaveIcon";
@@ -376,10 +377,15 @@ function AppAgentGlyph({ id, className = "h-4 w-4" }: { id: AppAgentId; classNam
 function AppAgentCard({
   agent,
   selected,
+  messageId,
 }: {
   agent: AttachedAppAgent;
   selected: boolean;
+  messageId: string;
 }) {
+  if (agent.id === "vibe") {
+    return <AgentControlledPreview agent={agent} messageId={messageId} />;
+  }
   const [iframeReady, setIframeReady] = useState(false);
   const [revealPreview, setRevealPreview] = useState(false);
   const origin = typeof window === "undefined" ? "http://localhost:3000" : window.location.origin;
@@ -388,7 +394,7 @@ function AppAgentCard({
   const ready = agent.status === "ready";
   const glow = running || ready || selected;
   // Shrink live workspace into the card so full UI (chrome + content) fits.
-  const previewScale = agent.id === "browse" ? 0.58 : agent.id === "vibe" ? 0.5 : 0.54;
+  const previewScale = agent.id === "browse" ? 0.58 : 0.54;
 
   useEffect(() => {
     setIframeReady(false);
@@ -508,10 +514,12 @@ function AppAgentFlowPanel({
   agents,
   selectedAgent,
   onSelect,
+  messageId,
 }: {
   agents?: AttachedAppAgent[];
   selectedAgent: AppAgentId | null;
   onSelect: (id: AppAgentId) => void;
+  messageId: string;
 }) {
   const agentList = agents || [];
   const [activePreview, setActivePreview] = useState<AppAgentId>(selectedAgent || agentList[0]?.id || "vibe");
@@ -565,6 +573,7 @@ function AppAgentFlowPanel({
           <AppAgentCard
             agent={activeAgent}
             selected={selectedAgent === activeAgent.id}
+            messageId={messageId}
           />
         </motion.div>
       </AnimatePresence>
@@ -2822,10 +2831,11 @@ Please analyze the code you just wrote and fix this error.`;
       return { status: "ready", action: "Mapped study sources", summary: String(payload.answer || "Study plan prepared.").slice(0, 360) };
     }
     if (agentId === "vibe") {
-      const response = await fetch("/api/vibe/m1-launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: cleanPrompt, planMode: false, continueExisting: false }) });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload?.error || "Vibe Coder could not start the build");
-      return { status: "running", action: "Building in Vibe Coder", summary: `Vibe Coder is building the requested workspace${payload.projectId ? ` in project ${String(payload.projectId).slice(0, 28)}` : ""}. Watch the live preview or take over anytime.` };
+      return {
+        status: "running",
+        action: "Preparing Vibe Coder",
+        summary: "Clyra is controlling the live Vibe workspace and will verify the real build before reporting completion.",
+      };
     }
     if (agentId === "fake-text" || agentId === "would-rather") {
       const response = await fetch("/api/creator/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: agentId === "fake-text" ? "fake_text_story" : "would_rather", prompt: cleanPrompt, count: agentId === "fake-text" ? 8 : 5, tone: "engaging" }) });
@@ -5455,6 +5465,7 @@ Please analyze the code you just wrote and fix this error.`;
                                           onContentChange={handleDocumentChange}
                                         />
                                         <AppAgentFlowPanel
+                                          messageId={message.id}
                                           agents={message.appAgents}
                                           selectedAgent={selectedAgent?.messageId === message.id ? selectedAgent.agentId : null}
                                           onSelect={(agentId) => {

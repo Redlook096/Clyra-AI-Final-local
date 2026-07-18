@@ -47,13 +47,23 @@ export function registerClineRoutes(app: import("express").Application) {
   app.post("/api/vibe/m1-launch", async (req, res) => {
     try {
       const { prompt, projectId, planMode, continueExisting } = req.body ?? {};
-      const result = await launchM1Conversation({
-        prompt: typeof prompt === "string" ? prompt : undefined,
-        projectId: typeof projectId === "string" ? projectId : undefined,
-        planMode: !!planMode,
-        continueExisting: !!continueExisting,
-      });
-      res.json(result);
+      let timeout: NodeJS.Timeout | undefined;
+      try {
+        const result = await Promise.race([
+          launchM1Conversation({
+            prompt: typeof prompt === "string" ? prompt : undefined,
+            projectId: typeof projectId === "string" ? projectId : undefined,
+            planMode: !!planMode,
+            continueExisting: !!continueExisting,
+          }),
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => reject(new Error("Vibe Coder did not become ready within 45 seconds. Check the M1 stack and retry.")), 45_000);
+          }),
+        ]);
+        res.json(result);
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
     } catch (error) {
       console.error("[m1-launch]", error);
       res.status(500).json({
