@@ -29,6 +29,7 @@ import {
   Scissors,
   ArrowUpIcon,
   Check,
+  Copy,
   ChevronRight,
   FileUp,
   Folder,
@@ -43,9 +44,11 @@ import {
   Pencil,
   Play,
   Search,
+  Share2,
   Settings,
   SquarePen,
   Trash2,
+  Volume2,
   X,
   XIcon,
   Edit2,
@@ -77,7 +80,6 @@ import {
   DocumentCardUI,
   type DocumentRewriteRequest,
 } from "./components/ui/document-card";
-import { GradientWaveText } from "./components/GradientWaveText";
 import { AppLauncher } from "./components/AppLauncher";
 import { AgentControlledPreview } from "./components/AgentControlledPreview";
 import type { CreatorMode } from "./components/CreatorStudioWorkspace";
@@ -646,21 +648,7 @@ function extractWeatherLocation(text: string): string | null {
 }
 
 function UserMessageText({ text }: { text: string }) {
-  return (
-    <div className="clyra-chat-user-text">
-      <GradientWaveText
-        align="left"
-        speed={1.55}
-        bottomOffset={8}
-        bandGap={4}
-        bandCount={8}
-        className="clyra-chat-user-gradient"
-        ariaLabel={text}
-      >
-        {text}
-      </GradientWaveText>
-    </div>
-  );
+  return <div className="clyra-chat-user-text">{text}</div>;
 }
 
 const AnimatedMessage = ({
@@ -1370,6 +1358,14 @@ export default function App() {
   const [editingChatId, setEditingChatId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [value, setValue] = useState("");
+  const [chatDrafts, setChatDrafts] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("clyra-chat-drafts") || "{}") as Record<string, string>;
+    } catch {
+      return {};
+    }
+  });
+  const skipDraftPersistRef = useRef(false);
   const canSendMessage = Boolean(value.trim() || selectedCommand || selectedAppAgents.length);
   const [attachments, setAttachments] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1380,6 +1376,23 @@ export default function App() {
   const [isInputExpanded, setIsInputExpanded] = useState(false);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const inputContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("clyra-chat-drafts", JSON.stringify(chatDrafts));
+    } catch {
+      // Draft persistence is an enhancement; messaging must still work without storage.
+    }
+  }, [chatDrafts]);
+
+  useEffect(() => {
+    if (skipDraftPersistRef.current) {
+      skipDraftPersistRef.current = false;
+      return;
+    }
+    const draftKey = currentChatId || "new";
+    setChatDrafts((current) => current[draftKey] === value ? current : { ...current, [draftKey]: value });
+  }, [currentChatId, value]);
 
   const isAiResponding = messages.some((m) => m.isStreaming || m.isThinking);
   const isExpanded =
@@ -1394,7 +1407,7 @@ export default function App() {
     // Keep expanded min-height while focused/expanded so clearing text
     // does not visually collapse the composer.
     minHeight: isExpanded ? 50 : 40,
-    maxHeight: 96,
+    maxHeight: 200,
   });
 
   useEffect(() => {
@@ -1529,6 +1542,7 @@ export default function App() {
   const programmaticScrollRef = useRef(false);
   const scrollRafRef = useRef<number | null>(null);
   const lastScrollTopRef = useRef(0);
+  const [showScrollToLatest, setShowScrollToLatest] = useState(false);
 
   useEffect(() => {
     setIsSearching(searchQuery.length > 0);
@@ -1627,8 +1641,11 @@ export default function App() {
 
   const openChatSession = useCallback(
     (chat: ChatSession) => {
+      setChatDrafts((current) => ({ ...current, [currentChatId || "new"]: value }));
+      skipDraftPersistRef.current = true;
       setCurrentChatId(chat.id);
       setMessages(chat.messages);
+      setValue(chatDrafts[chat.id] || "");
       setSelectedCommand(null);
       setClipInitialUrl("");
       setActiveWorkspaceTab(isVibeChat(chat) ? "vibe" : "chat");
@@ -1673,7 +1690,7 @@ export default function App() {
         }
       }, 120);
     },
-    [isVibeChat],
+    [chatDrafts, currentChatId, isVibeChat, value],
   );
 
   const handleChatSelect = useCallback(
@@ -1687,8 +1704,11 @@ export default function App() {
   );
 
   const handleNewChat = useCallback(() => {
+    setChatDrafts((current) => ({ ...current, [currentChatId || "new"]: value }));
+    skipDraftPersistRef.current = true;
     setMessages([]);
     setCurrentChatId(null);
+    setValue(chatDrafts.new || "");
     setSelectedCommand(null);
     setActiveWorkspaceTab("chat");
     setWorkspaceChromeEngaged(false);
@@ -1697,7 +1717,7 @@ export default function App() {
     setVibePreviewFiles(null);
     setIsSidebarOpen(false);
     setSearchQuery("");
-  }, []);
+  }, [chatDrafts.new, currentChatId, value]);
 
   const showVibeLivePreview =
     !!vibePreviewFiles &&
@@ -1736,6 +1756,7 @@ export default function App() {
       const nearBottom = gap < 96;
       chatNearBottomRef.current = nearBottom;
       if (nearBottom) userPinnedAwayRef.current = false;
+      setShowScrollToLatest(!nearBottom && messages.length > 0);
     };
 
     const onScroll = () => {
@@ -1749,6 +1770,7 @@ export default function App() {
       if (scrollingUp && gap > 96) {
         userPinnedAwayRef.current = true;
         chatNearBottomRef.current = false;
+        setShowScrollToLatest(true);
         return;
       }
       markNearBottom();
@@ -1759,6 +1781,7 @@ export default function App() {
       if (gap > 96) {
         userPinnedAwayRef.current = true;
         chatNearBottomRef.current = false;
+        setShowScrollToLatest(true);
       }
     };
 
@@ -4058,6 +4081,8 @@ Please analyze the code you just wrote and fix this error.`;
   const emptyStateSubtitle = isVibeWorkspace
     ? ""
     : "What can I help you with today?";
+  const activeChat = chats.find((chat) => chat.id === currentChatId);
+  const activeChatTitle = activeChat?.title || "New conversation";
   const workflowTabs: Array<{
     id: WorkspaceTabId;
     label: string;
@@ -4163,22 +4188,22 @@ Please analyze the code you just wrote and fix this error.`;
     icon: React.ComponentType<{ className?: string }>;
   }> = [
     {
-      baseLabel: "Plan a launch",
-      skeletonLabel: "[for a new product]",
+      baseLabel: "Continue Study Pal",
+      skeletonLabel: "[with a research question]",
       prompt:
-        "Help me create a crisp launch plan with priorities, risks, and next actions.",
+        "Help me turn my research into a concise study plan with key questions and next actions.",
       icon: Check,
     },
     {
-      baseLabel: "Refine an idea",
-      skeletonLabel: "[for a mobile app]",
-      prompt: "Help me refine this idea into a polished product concept:",
+      baseLabel: "Summarise recent notes",
+      skeletonLabel: "[into the essentials]",
+      prompt: "Summarise my recent notes into the essential ideas, decisions, and next steps:",
       icon: MessageCircleDashed,
     },
     {
-      baseLabel: "Draft something",
-      skeletonLabel: "[like a blog post]",
-      prompt: "Write a concise, professional draft for:",
+      baseLabel: "Start a coding project",
+      skeletonLabel: "[with a clear brief]",
+      prompt: "Help me define a focused coding project with a clear build brief:",
       icon: SquarePen,
     },
   ];
@@ -4479,17 +4504,7 @@ Please analyze the code you just wrote and fix this error.`;
               </div>
               <div className="px-1 flex flex-col gap-1">
                 <button
-                  onClick={() => {
-                    setMessages([]);
-                    setCurrentChatId(null);
-                    setSelectedCommand(null);
-                    setActiveWorkspaceTab("chat");
-                    setClipInitialUrl("");
-                    setVibePreviewMessageId(null);
-                    setVibePreviewFiles(null);
-                    setIsSidebarOpen(false);
-                    setSearchQuery("");
-                  }}
+                  onClick={handleNewChat}
                   className="clyra-sidebar-action w-full flex items-center gap-3 px-2 py-2 rounded-lg text-slate-700 transition-colors font-medium text-[13.5px]"
                 >
                   <SquarePen className="w-4 h-4 stroke-[2]" />
@@ -4688,6 +4703,7 @@ Please analyze the code you just wrote and fix this error.`;
             <div className="scrollbar-none min-h-0 flex-1 overflow-y-auto flex flex-col p-2 space-y-3">
               {filteredStandardChats.length > 0 ? (
                 <div className="flex flex-col gap-0.5">
+                  <p className="px-3 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">Recent conversations</p>
                   <AnimatePresence mode="popLayout">
                     {filteredStandardChats.map((chat) => {
                       const matchedMessage = searchQuery
@@ -4854,7 +4870,7 @@ Please analyze the code you just wrote and fix this error.`;
         </motion.aside>
         )}
 
-        <div className="clyra-main-surface relative z-10 flex min-h-0 min-w-0 flex-1 flex-col bg-white sm:border-transparent">
+        <div className={cn("clyra-main-surface relative z-10 flex min-h-0 min-w-0 flex-1 flex-col bg-white sm:border-transparent", activeWorkspaceTab === "chat" && "clyra-chat-page")}>
           <AnimatePresence>
             {showSidebarControls && !isSidebarOpen && (
               <motion.button
@@ -5346,12 +5362,29 @@ Please analyze the code you just wrote and fix this error.`;
                       ) : (
                         <div
                           className={cn(
-                            "relative flex min-h-0 flex-1 w-full overflow-hidden z-0 max-w-3xl mx-auto",
+                            "relative flex min-h-0 flex-1 w-full flex-col overflow-hidden z-0 max-w-3xl mx-auto",
                             showWorkspaceLivePreview
                               ? "px-3 sm:px-4 pt-6 sm:pt-8"
                               : "px-5 sm:px-8 pt-8 sm:pt-10",
                           )}
                         >
+                          {activeWorkspaceTab === "chat" ? (
+                            <header className="clyra-conversation-header shrink-0" aria-label="Conversation controls">
+                              <div className="min-w-0">
+                                <input
+                                  aria-label="Conversation title"
+                                  value={activeChatTitle}
+                                  onChange={(event) => setChats((current) => current.map((chat) => chat.id === currentChatId ? { ...chat, title: event.target.value || "New conversation" } : chat))}
+                                  className="clyra-conversation-title"
+                                />
+                                <span className="clyra-conversation-mode">Clyra · Balanced</span>
+                              </div>
+                              <button type="button" className="clyra-header-icon" aria-label="Copy conversation link" title="Copy conversation link" onClick={() => {
+                                void navigator.clipboard?.writeText(window.location.href);
+                                setToastMessage("Conversation link copied");
+                              }}><Share2 className="h-4 w-4" /></button>
+                            </header>
+                          ) : null}
                           <div
                             className={cn(
                               "clyra-visible-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden transition-opacity duration-700",
@@ -5422,6 +5455,7 @@ Please analyze the code you just wrote and fix this error.`;
                                             : "#1e293b",
                                       }}
                                     >
+                                      <span className="clyra-assistant-mark" aria-hidden="true"><span /></span>
                                       <div
                                         className={cn(
                                           "clyra-assistant-message",
@@ -5473,6 +5507,20 @@ Please analyze the code you just wrote and fix this error.`;
                                             openAttachedAppAgent(agentId);
                                           }}
                                         />
+                                        {!message.isThinking && !message.isStreaming && message.content ? (
+                                          <div className="clyra-message-actions" aria-label="Assistant message actions">
+                                            <button type="button" onClick={() => {
+                                              void navigator.clipboard?.writeText(message.content);
+                                              setToastMessage("Response copied");
+                                            }} aria-label="Copy response" title="Copy response"><Copy className="h-3.5 w-3.5" /></button>
+                                            <button type="button" onClick={() => {
+                                              if ("speechSynthesis" in window) {
+                                                window.speechSynthesis.cancel();
+                                                window.speechSynthesis.speak(new SpeechSynthesisUtterance(message.content));
+                                              }
+                                            }} aria-label="Read response aloud" title="Read aloud"><Volume2 className="h-3.5 w-3.5" /></button>
+                                          </div>
+                                        ) : null}
                                       </div>
                                     </div>
                                   )}
@@ -5480,6 +5528,29 @@ Please analyze the code you just wrote and fix this error.`;
                               );
                             })}
                           </div>
+                          <AnimatePresence>
+                            {showScrollToLatest ? (
+                              <motion.button
+                                type="button"
+                                aria-label="Scroll to latest message"
+                                initial={{ opacity: 0, y: 6 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: 6 }}
+                                transition={{ duration: 0.18 }}
+                                onClick={() => {
+                                  const container = document.getElementById("chat-container");
+                                  if (!container) return;
+                                  userPinnedAwayRef.current = false;
+                                  chatNearBottomRef.current = true;
+                                  setShowScrollToLatest(false);
+                                  container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+                                }}
+                                className="clyra-scroll-latest"
+                              >
+                                Latest <span aria-hidden="true">↓</span>
+                              </motion.button>
+                            ) : null}
+                          </AnimatePresence>
                         </div>
                       )}
                       <AnimatePresence initial={false}>
@@ -6023,16 +6094,16 @@ Please analyze the code you just wrote and fix this error.`;
                                         ? "placeholder:text-slate-500"
                                         : "placeholder:text-slate-400",
                                       isExpanded
-                                        ? "min-h-[50px] max-h-[96px] py-3 px-1"
-                                        : "min-h-[40px] max-h-[96px] py-2 px-1",
-                                      "clyra-visible-scrollbar transition-[height,min-height,max-height,padding,opacity,transform] duration-[1100ms] ease-[cubic-bezier(0.16,1,0.3,1)]",
+                                        ? "min-h-[52px] max-h-[200px] py-3 px-1"
+                                        : "min-h-[42px] max-h-[200px] py-2 px-1",
+                                      "clyra-visible-scrollbar transition-[height,min-height,max-height,padding,opacity,transform] duration-200 ease-out",
                                       isFadingInText
                                         ? "opacity-0 translate-y-1 scale-[0.99]"
                                         : introState !== "complete"
                                           ? "opacity-0 translate-y-2 scale-[0.98]"
                                           : "opacity-100 translate-y-0 scale-100",
                                     )}
-                                    style={{ maxHeight: "96px" }}
+                                    style={{ maxHeight: "200px" }}
                                   />
                                   {!isExpanded && (
                                     <motion.button

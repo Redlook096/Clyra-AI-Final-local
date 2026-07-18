@@ -2058,6 +2058,253 @@ body,
   filter: none !important;
 }
 
+/* Chat-only foundation: quiet, compact, and independent from the live workspaces. */
+.clyra-chat-page {
+  --chat-bg: #fbfbfa;
+  --chat-surface: #ffffff;
+  --chat-border: #e7e7e4;
+  --chat-text: #18212f;
+  --chat-muted: #697386;
+  --chat-accent: #496a95;
+  --chat-shadow: 0 10px 30px rgba(24, 33, 47, 0.055);
+  background: var(--chat-bg) !important;
+  color: var(--chat-text);
+}
+
+.clyra-chat-page .clyra-sidebar-panel {
+  border-radius: 14px;
+  border-color: var(--chat-border);
+  background: var(--chat-surface);
+  box-shadow: 0 8px 24px rgba(24, 33, 47, 0.045);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.clyra-chat-page .clyra-sidebar-action:hover,
+.clyra-chat-page .clyra-sidebar-footer:hover,
+.clyra-chat-page .clyra-sidebar-search:hover,
+.clyra-chat-page .clyra-sidebar-search:focus,
+.clyra-chat-page .clyra-sidebar-input:focus,
+.clyra-chat-page .clyra-sidebar-close:hover {
+  border-color: transparent;
+  background: #f4f6f8;
+  box-shadow: none;
+}
+
+.clyra-chat-page .clyra-sidebar-action--active {
+  background: #edf2f7;
+  box-shadow: inset 0 0 0 1px rgba(73, 106, 149, 0.08);
+}
+
+.clyra-chat-page .clyra-chat-quick-actions {
+  gap: 7px;
+}
+
+.clyra-chat-page .clyra-chat-chip {
+  border-radius: 10px;
+  border-color: var(--chat-border);
+  background: var(--chat-surface);
+  box-shadow: none;
+  padding: 8px 10px;
+  color: #465366;
+  transition: border-color 180ms ease, background 180ms ease, transform 180ms ease;
+}
+
+.clyra-chat-page .clyra-chat-chip:hover {
+  border-color: #cdd5df;
+  background: #f8fafc;
+  box-shadow: none;
+  transform: translateY(-1px);
+}
+
+.clyra-conversation-header {
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--chat-border);
+  background: color-mix(in srgb, var(--chat-bg) 92%, transparent);
+  padding: 8px 2px 9px;
+}
+
+.clyra-conversation-title {
+  display: block;
+  width: min(440px, 56vw);
+  border: 0;
+  background: transparent;
+  color: var(--chat-text);
+  font: 600 14px/1.35 ui-sans-serif, system-ui, sans-serif;
+  outline: none;
+}
+
+.clyra-conversation-title:focus {
+  border-radius: 5px;
+  box-shadow: 0 0 0 3px rgba(73, 106, 149, 0.13);
+}
+
+.clyra-conversation-mode {
+  display: block;
+  margin-top: 1px;
+  color: var(--chat-muted);
+  font-size: 11px;
+}
+
+.clyra-header-icon,
+.clyra-message-actions button {
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #7d8795;
+  transition: background 180ms ease, color 180ms ease;
+}
+
+.clyra-header-icon {
+  width: 32px;
+  height: 32px;
+}
+
+.clyra-header-icon:hover,
+.clyra-message-actions button:hover {
+  background: #f1f4f7;
+  color: var(--chat-text);
+}
+
+.clyra-chat-page #chat-container {
+  padding: 30px 2px 112px;
+  scroll-behavior: auto;
+}
+
+.clyra-chat-page .clyra-chat-user-bubble {
+  max-width: min(72%, 620px) !important;
+  border: 1px solid #e4e7eb !important;
+  border-radius: 14px !important;
+  background: #f2f4f6 !important;
+  padding: 10px 13px !important;
+  color: var(--chat-text) !important;
+  animation: clyra-user-bubble-appear 180ms ease-out both;
+}
+
+.clyra-chat-page .clyra-chat-user-text {
+  color: var(--chat-text);
+  font-weight: 500;
+  line-height: 1.55;
+}
+
+.clyra-chat-page .clyra-assistant-mark {
+  width: 24px;
+  height: 24px;
+  flex-basis: 24px;
+  margin-top: 3px;
+  border: 1px solid #dfe4ea;
+  background: radial-gradient(circle at 32% 28%, #d8f4f4, transparent 34%), linear-gradient(135deg, #476384, #87a1b9);
+  box-shadow: none;
+}
+
+.clyra-chat-page .clyra-assistant-mark span {
+  width: 6px;
+  height: 6px;
+  box-shadow: none;
+}
+
+.clyra-chat-page .clyra-assistant-message {
+  max-width: 100%;
+  color: var(--chat-text);
+}
+
+.clyra-message-actions {
+  display: flex;
+  height: 26px;
+  align-items: center;
+  gap: 2px;
+  margin-top: 7px;
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+
+.clyra-assistant-message:hover .clyra-message-actions,
+.clyra-assistant-message:focus-within .clyra-message-actions {
+  opacity: 1;
+}
+
+.clyra-message-actions button {
+  width: 26px;
+  height: 26px;
+}
+
+.clyra-scroll-latest {
+  position: absolute;
+  right: 10px;
+  bottom: 16px;
+  z-index: 3;
+  border: 1px solid #dfe4e9;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: var(--chat-shadow);
+  color: #4b5b70;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 10px;
+}
+
+.clyra-chat-page .clyra-composer-transition {
+  max-width: 860px;
+}
+
+.clyra-chat-page .input-wrapper:not(.loading) {
+  min-height: 58px;
+  border-color: #dfe4e9 !important;
+  border-radius: 14px !important;
+  background: #fff !important;
+  box-shadow: 0 8px 24px rgba(24, 33, 47, 0.06) !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  transition: border-color 200ms ease, box-shadow 200ms ease, padding 240ms ease !important;
+}
+
+.clyra-chat-page .input-wrapper:focus-within {
+  border-color: #b8c7d8 !important;
+  box-shadow: 0 0 0 3px rgba(73, 106, 149, 0.11), 0 8px 24px rgba(24, 33, 47, 0.06) !important;
+}
+
+.clyra-chat-page .input-wrapper.loading::before,
+.clyra-chat-page .input-wrapper.loading::after {
+  display: none;
+}
+
+.clyra-chat-page .input-wrapper textarea {
+  font-size: 15px !important;
+  line-height: 1.5 !important;
+}
+
+.clyra-chat-page .clyra-prompt-ghost {
+  background: none;
+  color: #8b96a5;
+  -webkit-text-fill-color: #8b96a5;
+  animation: none;
+}
+
+@media (max-width: 760px) {
+  .clyra-chat-page .clyra-conversation-header {
+    margin-inline: 2px;
+  }
+
+  .clyra-chat-page .clyra-chat-user-bubble {
+    max-width: 86% !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clyra-chat-page *,
+  .clyra-chat-page *::before,
+  .clyra-chat-page *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}
+
 /* Opaque color pulse — text stays fully readable (no clip-to-text washout). */
 .clyra-shimmer-text {
   display: inline-block;
