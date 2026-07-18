@@ -251,7 +251,7 @@ const DOWNLOADS_PATH = path.join(PROFILE_ROOT, "downloads");
 const MAX_OPEN_TABS = Number(process.env.CLYRA_BROWSER_MAX_TABS || 8);
 const MAX_AGENT_STEPS = Number(process.env.CLYRA_BROWSER_MAX_STEPS || 48);
 const MAX_OBSERVATION_CHARS = Number(process.env.CLYRA_BROWSER_MAX_OBSERVATION_CHARS || 30_000);
-const HOME_URL = "http://127.0.0.1:3000/api/openbrowser/new-tab";
+const HOME_URL = `http://127.0.0.1:${Number(process.env.PORT) || 3000}/api/openbrowser/new-tab`;
 
 const DEFAULT_SETTINGS: BrowserSettings = {
   defaultSearchEngine: "bing",
