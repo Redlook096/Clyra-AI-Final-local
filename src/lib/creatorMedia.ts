@@ -1,4 +1,5 @@
 export const CREATOR_VOICES = [
+  "Max",
   "Ryan",
   "Aiden",
   "Aaron",
@@ -42,7 +43,7 @@ export function isCreatorVoice(value: unknown): value is CreatorVoice {
   return typeof value === "string" && (CREATOR_VOICES as readonly string[]).includes(value);
 }
 
-export function resolveCreatorVoice(value: unknown, fallback: CreatorVoice = "Ryan"): CreatorVoice {
+export function resolveCreatorVoice(value: unknown, fallback: CreatorVoice = "Max"): CreatorVoice {
   return isCreatorVoice(value) ? value : fallback;
 }
 

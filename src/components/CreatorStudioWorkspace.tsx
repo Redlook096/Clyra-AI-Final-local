@@ -116,6 +116,7 @@ const MODE_META: Record<CreatorMode, {
 };
 
 const VOICES: Array<{ id: CreatorVoice; name: string; detail: string }> = [
+  { id: "Max", name: "Max", detail: "Clear, warm and natural" },
   { id: "Ryan", name: "Ryan", detail: "Warm, grounded and conversational" },
   { id: "Aiden", name: "Aiden", detail: "Bright, relaxed and expressive" },
   { id: "Aaron", name: "Aaron", detail: "Steady, clear and confident" },
@@ -1407,23 +1408,24 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
             controller.signal,
             trackSpeech(WOULD_RATHER_PHASE_CLOCK.promptEnd, WOULD_RATHER_PHASE_CLOCK.firstEntranceEnd),
           );
-          await waitForProgress(
-            WOULD_RATHER_PHASE_CLOCK.firstSpeechEnd - WOULD_RATHER_PHASE_CLOCK.firstEntranceEnd,
-            controller.signal,
-            trackSpeech(WOULD_RATHER_PHASE_CLOCK.firstEntranceEnd, WOULD_RATHER_PHASE_CLOCK.firstSpeechEnd),
-          );
+          const firstSpeech = await playCreatorSpeech(round.left, project.voice, controller.signal);
+          setEngine(firstSpeech.engine);
           await waitForProgress(
             WOULD_RATHER_PHASE_CLOCK.firstHoldEnd - WOULD_RATHER_PHASE_CLOCK.firstSpeechEnd,
             controller.signal,
             trackSpeech(WOULD_RATHER_PHASE_CLOCK.firstSpeechEnd, WOULD_RATHER_PHASE_CLOCK.firstHoldEnd),
           );
           setWouldRatherPhase("or");
+          const orSpeech = await playCreatorSpeech("Or", project.voice, controller.signal);
+          setEngine(orSpeech.engine);
           await waitForProgress(
             WOULD_RATHER_PHASE_CLOCK.orEnd - WOULD_RATHER_PHASE_CLOCK.firstHoldEnd,
             controller.signal,
             trackSpeech(WOULD_RATHER_PHASE_CLOCK.firstHoldEnd, WOULD_RATHER_PHASE_CLOCK.orEnd),
           );
           setWouldRatherPhase("second");
+          const secondSpeech = await playCreatorSpeech(round.right, project.voice, controller.signal);
+          setEngine(secondSpeech.engine);
           await waitForProgress(
             WOULD_RATHER_PHASE_CLOCK.secondEntranceEnd - WOULD_RATHER_PHASE_CLOCK.orEnd,
             controller.signal,
@@ -1879,11 +1881,16 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
           await waitFor(WOULD_RATHER_PHASE_CLOCK.promptEnd, controller.signal);
           setWouldRatherPhase("first");
           await waitFor(WOULD_RATHER_PHASE_CLOCK.firstEntranceEnd - WOULD_RATHER_PHASE_CLOCK.promptEnd, controller.signal);
-          await waitFor(WOULD_RATHER_PHASE_CLOCK.firstSpeechEnd - WOULD_RATHER_PHASE_CLOCK.firstEntranceEnd, controller.signal);
+          const firstSpeech = await playCreatorSpeech(round.left, project.voice, controller.signal);
+          setEngine(firstSpeech.engine);
           await waitFor(WOULD_RATHER_PHASE_CLOCK.firstHoldEnd - WOULD_RATHER_PHASE_CLOCK.firstSpeechEnd, controller.signal);
           setWouldRatherPhase("or");
+          const orSpeech = await playCreatorSpeech("Or", project.voice, controller.signal);
+          setEngine(orSpeech.engine);
           await waitFor(WOULD_RATHER_PHASE_CLOCK.orEnd - WOULD_RATHER_PHASE_CLOCK.firstHoldEnd, controller.signal);
           setWouldRatherPhase("second");
+          const secondSpeech = await playCreatorSpeech(round.right, project.voice, controller.signal);
+          setEngine(secondSpeech.engine);
           await waitFor(WOULD_RATHER_PHASE_CLOCK.secondEntranceEnd - WOULD_RATHER_PHASE_CLOCK.orEnd, controller.signal);
           await waitFor(WOULD_RATHER_PHASE_CLOCK.timerStart - WOULD_RATHER_PHASE_CLOCK.secondEntranceEnd, controller.signal);
           setWouldRatherPhase("countdown");

@@ -19,6 +19,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   Archive,
+  ArrowUpIcon,
   BookOpen,
   Check,
   CircleHelp,
@@ -52,8 +53,8 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../lib/utils";
-import { MarkdownMessageContent } from "./MarkdownMessageContent";
 import { DocumentCardUI } from "./ui/document-card";
+import { AnimatedMessage, UserMessageText } from "../App";
 
 type ResourceKind = "web" | "youtube" | "document" | "image" | "text";
 type NodeKind = "source" | "note" | "concept" | "claim" | "evidence" | "question" | "summary" | "flashcards" | "quiz" | "study-plan";
@@ -98,7 +99,16 @@ type StudyWorkspace = {
   edges: StudyEdge[];
   resources: StudyResource[];
   notesContent?: string;
-  conversations: Array<{ id: string; role: "user" | "assistant"; text: string; citations?: string[] }>;
+  conversations: Array<{
+    id: string;
+    role: "user" | "assistant";
+    text: string;
+    citations?: string[];
+    tool?: "search" | "youtube";
+    isThinking?: boolean;
+    isStreaming?: boolean;
+    searchSources?: string[];
+  }>;
 };
 
 const STORAGE_KEY = "clyra.study-pal.workspaces.v1";
@@ -112,6 +122,7 @@ const StudyNodeActions = createContext<{
   answerQuestionNode: (nodeId: string, question: string) => void;
   workspaceName: string;
   workspaceDescription: string;
+  selectedNodeIds: string[];
 } | null>(null);
 
 const nodeStyles: Record<NodeKind, { label: string; accent: string; surface: string; icon: typeof FileText }> = {
@@ -425,6 +436,7 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
   const isSourceAnalysing = data.kind === "source" && data.sourceStatus === "processing";
   const isTyping = data.tags?.includes("ai-typing");
   const question = data.kind === "question" ? questionParts(data.body) : null;
+  const selectedForChat = selected || actions?.selectedNodeIds.includes(id);
   
   // Get workspace context for starter node
   const workspaceName = actions?.workspaceName || "";
@@ -455,7 +467,7 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
           "relative overflow-visible rounded-[20px] border bg-[#fffefa] shadow-[0_12px_34px_rgba(34,39,45,.07)] transition-[border-color,box-shadow,transform] duration-150",
           isGhost && "min-h-[180px] border-blue-300 bg-white/70 shadow-[0_0_0_4px_rgba(59,130,246,.10),0_0_34px_rgba(37,99,235,.28)]",
           (isAnswering || isSourceAnalysing) && "border-blue-400 shadow-[0_0_0_6px_rgba(59,130,246,.2),0_0_48px_rgba(37,99,235,.42)]",
-          selected ? "border-[#111318] shadow-[0_0_0_4px_rgba(17,19,24,.08),0_16px_38px_rgba(34,39,45,.09)]" : "border-[#dfe2e6]",
+          selectedForChat ? "border-blue-500 shadow-[0_0_0_5px_rgba(59,130,246,.18),0_16px_38px_rgba(34,39,45,.12)]" : "border-[#dfe2e6]",
         )}
         animate={isAnswering || isSourceAnalysing ? {
           boxShadow: [
@@ -466,6 +478,15 @@ function StudyNodeCard({ id, data, selected }: NodeProps<StudyNode>) {
         } : undefined}
         transition={isAnswering || isSourceAnalysing ? { duration: 1.55, repeat: Infinity, ease: "easeInOut" } : undefined}
       >
+        {selectedForChat ? (
+          <motion.div
+            initial={{ opacity: 0, y: 4, scale: 0.94 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            className="pointer-events-none absolute -right-2 -top-3 z-30 flex items-center gap-1 rounded-full border border-blue-200 bg-white px-2 py-1 text-[8px] font-semibold text-blue-700 shadow-[0_6px_16px_rgba(37,99,235,.16)]"
+          >
+            <Sparkles className="h-2.5 w-2.5" /> Selected for Clyra
+          </motion.div>
+        ) : null}
         {isGhost ? (
           <motion.span
             className="pointer-events-none absolute inset-0 rounded-[20px] border border-blue-300/70"
@@ -659,23 +680,22 @@ function WorkspaceDashboard({ workspaces, onChange, onOpen }: { workspaces: Stud
   );
 }
 
-function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible, agentPrompt = "" }: { workspace: StudyWorkspace; onBack: () => void; onPersist: (workspace: StudyWorkspace) => void; globalTabsVisible: boolean; agentPrompt?: string }) {
+function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible: _globalTabsVisible, agentPrompt = "" }: { workspace: StudyWorkspace; onBack: () => void; onPersist: (workspace: StudyWorkspace) => void; globalTabsVisible: boolean; agentPrompt?: string }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<StudyNode>(workspace.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<StudyEdge>(workspace.edges);
   const [resources, setResources] = useState(workspace.resources);
-  const [conversations, setConversations] = useState<Array<{ id: string; role: "user" | "assistant"; text: string; citations?: string[] }>>([]);
+  const [conversations, setConversations] = useState<StudyWorkspace["conversations"]>(workspace.conversations || []);
   const [name, setName] = useState(workspace.name);
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [sourceInput, setSourceInput] = useState("");
   const [addingSource, setAddingSource] = useState(false);
-  const [prompt, setPrompt] = useState("");
   const [chatDraft, setChatDraft] = useState("");
   const [asking, setAsking] = useState(false);
   const [notice, setNotice] = useState("");
-  const [composerMode, setComposerMode] = useState<"ask" | "source">("ask");
-  const [studyView, setStudyView] = useState<"nodes" | "notes" | "flashcards" | "test" | "chat">("nodes");
+  const [sideChatTool, setSideChatTool] = useState<"ask" | "search" | "youtube">("ask");
+  const [studyView, setStudyView] = useState<"nodes" | "notes" | "flashcards" | "test">("nodes");
   const [studyViewDirection, setStudyViewDirection] = useState(1);
-  const [hoveredStudyTab, setHoveredStudyTab] = useState<"nodes" | "notes" | "flashcards" | "test" | "chat" | null>(null);
+  const [hoveredStudyTab, setHoveredStudyTab] = useState<"nodes" | "notes" | "flashcards" | "test" | null>(null);
   const [notesContent, setNotesContent] = useState(workspace.notesContent || "");
   const [notesLoading, setNotesLoading] = useState(false);
   const [flashLoading, setFlashLoading] = useState(false);
@@ -689,7 +709,6 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible, agentPro
   const [nodeMenuQuery, setNodeMenuQuery] = useState("");
   const [nodeMenuIndex, setNodeMenuIndex] = useState(0);
   const [canvasTool, setCanvasTool] = useState<"select" | "pan" | "cut">("pan");
-  const [commandDockOpen, setCommandDockOpen] = useState(false);
   const [welcomeOpen, setWelcomeOpen] = useState(true);
   const [agentCursor, setAgentCursor] = useState<{ x: number; y: number; label: string } | null>(null);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<StudyNode, StudyEdge> | null>(null);
@@ -708,8 +727,11 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible, agentPro
   const autoAnsweredQuestionsRef = useRef(new Set<string>());
   const backgroundStudyKeyRef = useRef("");
   const agentPromptStartedRef = useRef(false);
+  const sideChatInputRef = useRef<HTMLTextAreaElement | null>(null);
 
+  const selectedId = selectedNodeIds.at(-1) || "";
   const selected = nodes.find((node) => node.id === selectedId);
+  const selectedNodes = nodes.filter((node) => selectedNodeIds.includes(node.id));
   const readyResourceCount = resources.filter((resource) => resource.status === "ready").length;
   const studyLocked = readyResourceCount === 0;
 
@@ -817,7 +839,7 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible, agentPro
     capture();
     const copyId = safeId();
     setNodes((current) => [...current, { ...structuredClone(original), id: copyId, selected: false, position: { x: original.position.x + 36, y: original.position.y + 36 } }]);
-    setSelectedId(copyId);
+    setSelectedNodeIds([copyId]);
   }, [capture, nodes, setNodes]);
 
   useEffect(() => {
@@ -885,7 +907,7 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible, agentPro
         ...studyEdgeStyle(kind === "flashcards" ? "generates" : kind === "quiz" ? "tests" : "derived from"),
       }, current));
     }
-    setSelectedId(id);
+    setSelectedNodeIds([id]);
     return id;
   };
 
@@ -930,7 +952,7 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible, agentPro
         ...studyEdgeStyle(edgeLabel),
       }, current));
     }
-    setSelectedId(id);
+    setSelectedNodeIds([id]);
     setPendingConnection(null);
   };
 
@@ -959,7 +981,6 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible, agentPro
       resource.status = "ready";
       setResources((current) => current.map((item) => item.id === resource.id ? { ...resource } : item));
       addNode("source", resource.title, resource.content.slice(0, 480), resource);
-      setComposerMode("ask");
     } catch (cause) {
       resource.status = "failed";
       resource.error = cause instanceof Error ? cause.message : String(cause);
@@ -1063,6 +1084,7 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible, agentPro
         request.match(/https?:\/\/[^\s)\]}>,]+/gi)?.map((url) => url.replace(/[.,;:!?]+$/, "")) || [],
       ));
       const researchContext: GraphContextItem[] = [];
+      let researchedResource: StudyResource | null = null;
       for (const url of sourceUrls) {
         if (/youtu(?:be\.com|\.be)/i.test(url)) {
           try {
@@ -1076,7 +1098,17 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible, agentPro
         const searchResponse = await fetch("/api/research/web-search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: request, maxResults: 6, fetchTop: 3 }) });
         const searchPayload = await searchResponse.json() as { ok?: boolean; analysisPrompt?: string; urls?: string[] };
         if (searchResponse.ok && searchPayload.ok && searchPayload.analysisPrompt) {
-          researchContext.push({ id: `research-${safeId()}`, title: "Web research", body: searchPayload.analysisPrompt.slice(0, 12_000), source: (searchPayload.urls || []).slice(0, 6).join(", ") || "Web search" });
+          const urls = (searchPayload.urls || []).map(String).filter(Boolean).slice(0, 6);
+          researchedResource = {
+            id: safeId(),
+            kind: "web",
+            title: `Web research: ${request.slice(0, 62)}`,
+            content: searchPayload.analysisPrompt.slice(0, 12_000),
+            status: "ready",
+            createdAt: Date.now(),
+          };
+          setResources((current) => [researchedResource!, ...current]);
+          researchContext.push({ id: researchedResource.id, title: researchedResource.title, body: researchedResource.content, source: urls.join(", ") || "Web search" });
         }
       } catch { /* Study Pal can still use the supplied URL or brief. */ }
       const response = await fetch("/api/study/ask", {
@@ -1169,6 +1201,23 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible, agentPro
         const edgeLabel = ["breaks into", "supported by", "remember", "raises"][index] || "connects to";
         await revealGeneratedNode(node, node.data, rootId, edgeLabel);
       }
+      if (researchedResource) {
+        const researchSourceNode: StudyNode = {
+          id: safeId(),
+          type: "study",
+          position: { x: rootPosition.x - 420, y: rootPosition.y + 110 },
+          data: {
+            kind: "source",
+            title: researchedResource.title,
+            body: researchedResource.content.slice(0, 480),
+            resourceId: researchedResource.id,
+            sourceLabel: researchedResource.title,
+            sourceMode: "web",
+            sourceStatus: "ready",
+          },
+        };
+        await revealGeneratedNode(researchSourceNode, researchSourceNode.data, rootId, "researched from");
+      }
       for (let index = 0; index < sourceUrls.length; index += 1) {
         const url = sourceUrls[index]!;
         const sourceNode: StudyNode = {
@@ -1191,7 +1240,7 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible, agentPro
         await ingestNodeUrl(sourceNode.id, url);
       }
       setConversations((current) => [...current, { id: safeId(), role: "assistant", text: `I built a four-branch foundation${sourceUrls.length ? ` and connected ${sourceUrls.length} source${sourceUrls.length === 1 ? "" : "s"}` : ""}. You can now verify or expand any selected branch.`, citations: payload.citations }]);
-      setSelectedId(rootId);
+      setSelectedNodeIds([rootId]);
       window.setTimeout(() => void flowInstance?.fitView({ duration: 520, padding: 0.18 }), 50);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
@@ -1216,7 +1265,7 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible, agentPro
     overrideQuestion = "",
     options?: { anchorId?: string | null },
   ) => {
-    const question = overrideQuestion.trim() || prompt.trim() || (
+    const question = overrideQuestion.trim() || (
       mode === "summary" ? "Summarise the selected evidence."
         : mode === "flashcards" ? "Create exactly 5 concise flashcards as numbered Q/A pairs."
           : mode === "quiz" ? "Create a practice quiz with multiple choice and short answer."
@@ -1232,7 +1281,6 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible, agentPro
       if (starter) {
         capture();
         updateNode(starter.id, { body: question });
-        setPrompt("");
         setNotice("Your brief is saved. Add a source to ground an AI answer.");
       }
       return;
@@ -1266,7 +1314,6 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible, agentPro
       ? `${question}\n\nIMPORTANT: Only use nodes connected to the selected branch. Ignore unrelated workspace content.`
       : question;
     setAsking(true);
-    setPrompt("");
     setConversations((current) => [...current, { id: safeId(), role: "user", text: scopedQuestion }]);
     try {
       const response = await fetch("/api/study/ask", {
@@ -1313,11 +1360,137 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible, agentPro
     }
   };
 
-  const submitChatDraft = async () => {
-    const value = chatDraft.trim();
-    if (!value || asking) return;
+  const submitSideChat = async () => {
+    const question = chatDraft.trim();
+    if (!question || asking) return;
+
+    // Map-building requests are actions, not just questions. Route them through
+    // the researched planner so the reply arrives with an actual populated map.
+    if (/\bbrainstorm\b|\bmind ?map\b|\b(?:make|create|build|add|generate)\b.*\b(nodes?|ideas?|branches?|map)\b|\b(nodes?|ideas?|branches?)\b.*\b(?:make|create|build|generate)\b/i.test(question)) {
+      setChatDraft("");
+      await buildFromPrompt(question);
+      return;
+    }
+
+    const tool = sideChatTool;
+    const assistantId = safeId();
     setChatDraft("");
-    await ask("answer", value);
+    setNotice("");
+    setAsking(true);
+    setConversations((current) => [...current, {
+      id: safeId(),
+      role: "user",
+      text: question,
+      tool: tool === "ask" ? undefined : tool,
+    }]);
+    setConversations((current) => [...current, {
+      id: assistantId,
+      role: "assistant",
+      text: "",
+      isThinking: true,
+      isStreaming: true,
+      tool: tool === "ask" ? undefined : tool,
+    }]);
+
+    try {
+      let researchContext: GraphContextItem[] = [];
+      let citations: string[] | undefined;
+      let studyQuestion = question;
+      const scopedContexts = selectedNodeIds.flatMap((nodeId) => enrichGraphContext(buildScopedGraphContext(nodes, edges, nodeId).context, nodes, resources));
+      const workspaceContext = selectedNodeIds.length
+        ? Array.from(new Map(scopedContexts.map((item) => [item.id, item])).values())
+        : buildGraphContext();
+      const nodesToGround = selectedNodes.length ? selectedNodes : nodes;
+      const hasUsableContext = nodesToGround.some((node) => cleanStudyText(node.data.body || "").length >= 100);
+      // A plain question should still feel useful in a fresh workspace. We also
+      // reach for live research when the wording explicitly asks for current context.
+      const shouldAutoSearch = tool === "ask" && (
+        !hasUsableContext
+        || /\b(latest|current|today|recent|new research|look up|online|web search)\b/i.test(question)
+      );
+
+      if (tool === "search" || shouldAutoSearch) {
+        if (shouldAutoSearch) {
+          setConversations((current) => current.map((message) => message.id === assistantId ? { ...message, tool: "search" } : message));
+        }
+        const response = await fetch("/api/research/web-search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: question, maxResults: 6, fetchTop: 3 }),
+        });
+        const payload = await response.json() as { ok?: boolean; analysisPrompt?: string; urls?: string[]; error?: { message?: string } };
+        if (!response.ok || !payload.ok || !payload.analysisPrompt) throw new Error(payload.error?.message || "Web search could not find enough readable research");
+        const urls = (payload.urls || []).map(String).filter(Boolean).slice(0, 6);
+        const resource: StudyResource = {
+          id: safeId(),
+          kind: "web",
+          title: `Web search: ${question.slice(0, 62)}`,
+          content: payload.analysisPrompt.slice(0, 12_000),
+          status: "ready",
+          createdAt: Date.now(),
+        };
+        setResources((current) => [resource, ...current]);
+        addNode("source", resource.title, resource.content.slice(0, 480), resource);
+        researchContext = [{ id: resource.id, title: resource.title, body: resource.content, source: urls.join(", ") || "Web search" }];
+        citations = urls;
+        setConversations((current) => current.map((message) => message.id === assistantId ? { ...message, searchSources: urls } : message));
+        studyQuestion = `Answer this using the fresh web research, and identify any uncertainty: ${question}`;
+      } else if (tool === "youtube") {
+        const url = question.match(/https?:\/\/[^\s]+|(?:youtu\.be|youtube\.com)\/[^\s]+/i)?.[0];
+        if (!url || !youtubeVideoId(url)) throw new Error("Paste a valid YouTube URL, then add an optional question after it.");
+        const questionWithoutUrl = question.replace(url, "").trim();
+        const response = await fetch("/api/research/youtube", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url, preferredLanguages: ["en"], question: questionWithoutUrl || "Summarise the video for this study workspace." }),
+        });
+        const payload = await response.json() as { ok?: boolean; analysisPrompt?: string; full_text?: string; metadata?: { title?: string }; error?: { message?: string } };
+        const content = String(payload.analysisPrompt || payload.full_text || "").trim();
+        if (!response.ok || !payload.ok || !content) throw new Error(payload.error?.message || "The YouTube transcript was unavailable");
+        const resource: StudyResource = {
+          id: safeId(),
+          kind: "youtube",
+          title: payload.metadata?.title || "YouTube analysis",
+          url,
+          content: content.slice(0, 14_000),
+          status: "ready",
+          createdAt: Date.now(),
+        };
+        setResources((current) => [resource, ...current]);
+        addNode("source", resource.title, resource.content.slice(0, 480), resource);
+        researchContext = [{ id: resource.id, title: resource.title, body: resource.content, source: url }];
+        citations = [url];
+        studyQuestion = questionWithoutUrl || "Give me a concise, source-grounded study summary of this video.";
+      } else {
+        researchContext = workspaceContext;
+      }
+
+      const response = await fetch("/api/study/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: studyQuestion,
+          mode: "answer",
+          scope: selectedNodeIds.length ? "connected" : "workspace",
+          context: tool === "ask" && !shouldAutoSearch ? researchContext : [...workspaceContext, ...researchContext],
+        }),
+      });
+      const payload = await response.json() as { ok?: boolean; answer?: string; citations?: string[]; error?: string };
+      if (!response.ok || !payload.answer) throw new Error(payload.error || "Study Pal could not answer");
+      setConversations((current) => current.map((message) => message.id === assistantId ? {
+        ...message,
+        text: payload.answer!,
+        isThinking: false,
+        isStreaming: false,
+        citations: payload.citations?.length ? payload.citations : citations,
+      } : message));
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setNotice(message);
+      setConversations((current) => current.map((entry) => entry.id === assistantId ? { ...entry, text: message, isThinking: false, isStreaming: false } : entry));
+    } finally {
+      setAsking(false);
+    }
   };
 
   useEffect(() => {
@@ -1341,42 +1514,14 @@ function StudyCanvas({ workspace, onBack, onPersist, globalTabsVisible, agentPro
       });
   }, [asking, nodes, readyResourceCount, resources, studyLocked]);
 
-  const submitDock = async () => {
-    const value = prompt.trim();
-    if (!value || asking || addingSource) return;
-    setPrompt("");
-    if (composerMode === "source") {
-      await ingestUrl(value);
-      return;
-    }
-    if (studyLocked) {
-      await buildFromPrompt(value);
-      return;
-    }
-    const anchor = selectedId || nodes.find((node) => node.data.kind === "source")?.id || nodes[0]?.id;
-    const anchorNode = nodes.find((node) => node.id === anchor);
-    const position = anchorNode
-      ? { x: anchorNode.position.x + 360, y: anchorNode.position.y + 24 }
-      : { x: 520, y: 260 };
-    const questionNode: StudyNode = {
-      id: safeId(),
-      type: "study",
-      position,
-      data: { kind: "question", title: "Question", body: value },
-    };
-    await revealGeneratedNode(questionNode, questionNode.data, anchor || undefined, "asks");
-    setSelectedId(questionNode.id);
-    await answerQuestionNode(questionNode.id, value);
-  };
-
   const openStudyView = (view: typeof studyView) => {
-    const studyViews = ["nodes", "notes", "flashcards", "test", "chat"] as const;
+    const studyViews = ["nodes", "notes", "flashcards", "test"] as const;
     const currentIndex = studyViews.indexOf(studyView);
     const nextIndex = studyViews.indexOf(view);
     if (currentIndex !== nextIndex) setStudyViewDirection(nextIndex > currentIndex ? 1 : -1);
     setStudyView(view);
     if (view === "nodes") return;
-    if (view !== "chat" && studyLocked) {
+    if (studyLocked) {
       setNotice("Add a ready source to generate this study view.");
       return;
     }
@@ -1664,7 +1809,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
           data: { relationship: "grounded in" },
         }, current));
       }
-      setSelectedId(id);
+      setSelectedNodeIds([id]);
       setPendingConnection(null);
       setNodeMenuQuery("");
       return;
@@ -1702,7 +1847,8 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
     <div className="relative h-full min-h-0 overflow-hidden bg-[#f5f3ef] text-[#30343a]">
       <input ref={fileInput} type="file" multiple accept=".txt,.md,.csv,.json,.pdf,image/*" className="hidden" onChange={(event) => void ingestFiles(event.target.files)} />
       <main ref={canvasRef} className="absolute inset-0 overflow-hidden">
-        <StudyNodeActions.Provider value={{ buildFromPrompt: (value) => void buildFromPrompt(value), capture, updateNode, duplicateNode, ingestNodeUrl: (nodeId, url) => void ingestNodeUrl(nodeId, url), answerQuestionNode: (nodeId, question) => void answerQuestionNode(nodeId, question), workspaceName: name, workspaceDescription: workspace.description }}>
+        <div className={cn("absolute inset-0", studyView === "nodes" && "lg:right-[372px]")}>
+          <StudyNodeActions.Provider value={{ buildFromPrompt: (value) => void buildFromPrompt(value), capture, updateNode, duplicateNode, ingestNodeUrl: (nodeId, url) => void ingestNodeUrl(nodeId, url), answerQuestionNode: (nodeId, question) => void answerQuestionNode(nodeId, question), workspaceName: name, workspaceDescription: workspace.description, selectedNodeIds }}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -1712,14 +1858,21 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onConnectEnd={finishConnection}
-            onNodeClick={(_, node) => setSelectedId(node.id)}
+            onNodeClick={(event, node) => {
+              const additive = event.metaKey || event.ctrlKey || event.shiftKey;
+              if (!additive) {
+                setSelectedNodeIds([node.id]);
+                return;
+              }
+              setSelectedNodeIds((current) => current.includes(node.id) ? current.filter((id) => id !== node.id) : [...current, node.id]);
+            }}
             onNodeDragStart={capture}
             onEdgeClick={(_, edge) => {
               if (canvasTool !== "cut") return;
               capture();
               setEdges((current) => current.filter((item) => item.id !== edge.id));
             }}
-            onPaneClick={() => { setSelectedId(""); setPendingConnection(null); setNodeMenuQuery(""); }}
+            onPaneClick={() => { setSelectedNodeIds([]); setPendingConnection(null); setNodeMenuQuery(""); }}
             panOnDrag={canvasTool === "pan"}
             nodesDraggable={canvasTool !== "pan"}
             selectionOnDrag={canvasTool === "select"}
@@ -1736,7 +1889,8 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
           >
             <Background color="#d6d2cb" gap={28} size={1.15} />
           </ReactFlow>
-        </StudyNodeActions.Provider>
+          </StudyNodeActions.Provider>
+        </div>
 
         {studyLocked && !nodes.length ? (
           <section className="pointer-events-none absolute inset-0 z-10 grid place-items-center px-6 pb-24 pt-20">
@@ -1744,7 +1898,7 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
               <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-slate-950 text-white"><FolderOpen className="h-5 w-5" /></div>
               <h2 className="mt-5 text-[18px] font-semibold text-slate-950">Add your first source</h2>
               <p className="mx-auto mt-2 max-w-[320px] text-[10px] leading-5 text-slate-500">Study Pal stays empty until it has something grounded to work from. Add a file, paste text, or connect a webpage or YouTube video.</p>
-              <button type="button" onClick={() => { setComposerMode("source"); setCommandDockOpen(true); }} className="mt-5 inline-flex h-10 items-center gap-2 rounded-xl bg-slate-950 px-4 text-[9px] font-semibold text-white transition-colors hover:bg-slate-800"><Plus className="h-3.5 w-3.5" />Add a source</button>
+              <button type="button" onClick={() => { setSideChatTool("search"); window.setTimeout(() => sideChatInputRef.current?.focus(), 0); }} className="mt-5 inline-flex h-10 items-center gap-2 rounded-xl bg-slate-950 px-4 text-[9px] font-semibold text-white transition-colors hover:bg-slate-800"><Globe2 className="h-3.5 w-3.5" />Search the web</button>
             </div>
           </section>
         ) : null}
@@ -1755,19 +1909,101 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
               initial={{ opacity: 0, y: -8, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -6, scale: 0.98 }}
-              className="pointer-events-auto absolute left-5 top-[76px] z-20 w-[min(332px,calc(100vw-40px))] overflow-hidden rounded-[20px] border border-white/90 bg-white/94 shadow-[0_20px_60px_rgba(15,23,42,.14)] backdrop-blur-xl"
+              className="pointer-events-auto absolute left-5 top-[76px] z-20 w-[min(300px,calc(100vw-40px))] overflow-hidden rounded-[20px] border border-slate-200/80 bg-white/94 shadow-[0_18px_48px_rgba(15,23,42,.10)] backdrop-blur-xl"
             >
-              <div className="flex items-start gap-3 border-b border-slate-100 bg-gradient-to-r from-blue-50 via-white to-white px-4 py-3.5">
-                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-slate-950 text-white shadow-[0_8px_18px_rgba(15,23,42,.14)]"><Sparkles className="h-4 w-4" /></span>
-                <div className="min-w-0 pr-5"><p className="text-[8px] font-semibold uppercase tracking-[.14em] text-blue-600">Study Pal guide</p><h2 className="mt-1 text-[14px] font-semibold text-slate-950">Build a connected map</h2></div>
+              <div className="border-b border-slate-100 px-4 pb-3.5 pt-4">
+                <div className="min-w-0 pr-5"><p className="text-[8px] font-semibold uppercase tracking-[.14em] text-slate-400">Study Pal</p><h2 className="mt-1 text-[15px] font-semibold tracking-[-.02em] text-slate-950">Research, connected.</h2></div>
                 <button type="button" onClick={() => setWelcomeOpen(false)} aria-label="Close workspace welcome" title="Close" className="absolute right-2.5 top-2.5 grid h-7 w-7 place-items-center rounded-full text-slate-400 transition-colors hover:bg-white hover:text-slate-700"><X className="h-3.5 w-3.5" /></button>
               </div>
-              <div className="p-4"><p className="text-[9px] leading-4 text-slate-500">Add a source, connect a question, and let Clyra carry the evidence into every study view.</p>
-                <div className="mt-4 space-y-2"><div className="flex items-center gap-3 rounded-xl border border-blue-100 bg-blue-50/60 px-3 py-2.5"><span className="grid h-6 w-6 place-items-center rounded-full bg-blue-600 text-[9px] font-bold text-white">1</span><div><p className="text-[9px] font-semibold text-slate-800">Add a source</p><p className="text-[8px] text-slate-500">Web, YouTube, or a file</p></div></div><div className="flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-2.5"><span className="grid h-6 w-6 place-items-center rounded-full bg-white text-[9px] font-bold text-slate-700 shadow-sm">2</span><div><p className="text-[9px] font-semibold text-slate-800">Connect the ideas</p><p className="text-[8px] text-slate-500">Drag from a node handle</p></div></div><div className="flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-2.5"><span className="grid h-6 w-6 place-items-center rounded-full bg-white text-[9px] font-bold text-slate-700 shadow-sm">3</span><div><p className="text-[9px] font-semibold text-slate-800">Ask Clyra</p><p className="text-[8px] text-slate-500">Answers update the map</p></div></div></div>
+              <div className="p-4"><p className="text-[9px] leading-4 text-slate-500">Bring together the sources and ideas that matter. Clyra keeps each answer grounded in your workspace.</p>
+                <div className="mt-4 grid grid-cols-3 border-t border-slate-100 pt-3"><div><p className="text-[8px] font-semibold text-slate-400">01</p><p className="mt-1 text-[9px] font-semibold text-slate-800">Source</p></div><div className="border-l border-slate-100 pl-3"><p className="text-[8px] font-semibold text-slate-400">02</p><p className="mt-1 text-[9px] font-semibold text-slate-800">Connect</p></div><div className="border-l border-slate-100 pl-3"><p className="text-[8px] font-semibold text-slate-400">03</p><p className="mt-1 text-[9px] font-semibold text-slate-800">Ask</p></div></div>
               </div>
             </motion.aside>
           ) : null}
         </AnimatePresence>
+
+        {studyView === "nodes" ? (
+          <aside className="clyra-chat-page study-side-chat absolute bottom-4 right-4 top-[76px] z-30 flex w-[min(350px,calc(100vw-32px))] flex-col overflow-hidden rounded-[24px] border border-white/90 bg-white/94 shadow-[0_20px_60px_rgba(15,23,42,.14)] backdrop-blur-xl">
+            <div className="flex items-center gap-3 border-b border-slate-100 bg-gradient-to-r from-blue-50 via-white to-white px-4 py-3.5">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-slate-950 text-white shadow-[0_8px_18px_rgba(15,23,42,.14)]"><Sparkles className="h-4 w-4" /></span>
+              <div className="min-w-0"><p className="text-[8px] font-semibold uppercase tracking-[.14em] text-blue-600">Clyra</p><h2 className="mt-1 text-[14px] font-semibold text-slate-950">Study workspace</h2></div>
+              {selectedNodes.length ? (
+                <div className="ml-auto flex max-w-[166px] items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-[8px] font-semibold text-blue-700" title={selectedNodes.length > 1 ? `Clyra is prioritising ${selectedNodes.length} selected nodes` : `Clyra is prioritising ${cleanStudyText(selected?.data.title || "this node")}`}>
+                  <Sparkles className="h-2.5 w-2.5 shrink-0" />
+                  <span className="truncate">{selectedNodes.length > 1 ? `${selectedNodes.length} nodes selected` : cleanStudyText(selected?.data.title || "Selected node")}</span>
+                  <button type="button" onClick={() => setSelectedNodeIds([])} aria-label="Clear selected node context" className="-mr-0.5 grid h-3.5 w-3.5 shrink-0 place-items-center rounded-full hover:bg-blue-100"><X className="h-2.5 w-2.5" /></button>
+                </div>
+              ) : <span className="ml-auto rounded-full bg-slate-100 px-2 py-1 text-[8px] font-semibold text-slate-500">Whole map</span>}
+            </div>
+
+            {selectedNodes.length ? <div className="border-b border-blue-100 bg-blue-50/60 px-4 py-2 text-[8px] font-medium text-blue-700">Clyra will prioritise {selectedNodes.length > 1 ? `${selectedNodes.length} selected nodes and their connected evidence.` : "this node and its connected evidence."}</div> : null}
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+              {!conversations.length ? (
+                <div className="flex h-full min-h-[240px] flex-col items-center justify-center text-center">
+                  <span className="grid h-12 w-12 place-items-center rounded-2xl bg-slate-950 text-white shadow-[0_12px_28px_rgba(15,23,42,.16)]"><Sparkles className="h-5 w-5" /></span>
+                  <h3 className="mt-4 text-[16px] font-semibold tracking-[-.02em] text-slate-950">Hi there, I&apos;m Clyra</h3>
+                  <p className="mt-1 max-w-[220px] text-[10px] leading-5 text-slate-500">Ask about this map, or bring in fresh web research and YouTube transcripts.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {conversations.map((msg) => (
+                    <div key={msg.id} className={cn("flex", msg.role === "user" ? "justify-end clyra-user-message-entry" : "justify-start")}>
+                      {msg.role === "user" ? (
+                        <div className="clyra-chat-user-bubble px-5 py-3.5 max-w-[85%] border border-slate-200/70 whitespace-pre-wrap shadow-none" data-invert-ignore="true">
+                          <UserMessageText text={msg.text} />
+                        </div>
+                      ) : (
+                        <div className="clyra-assistant-message w-full px-1 py-1 text-slate-700" data-invert-ignore="true">
+                          <AnimatedMessage
+                            messageId={msg.id}
+                            content={msg.text}
+                            isThinking={msg.isThinking}
+                            isStreaming={msg.isStreaming}
+                            thinkingMode={msg.tool === "youtube" ? "youtube" : msg.tool === "search" ? "search" : "thinking"}
+                            searchSources={msg.searchSources}
+                            markdownSupport
+                            codeHighlighting
+                            assistantKind="chat"
+                            fontSizeClass="text-[11px] leading-5"
+                          />
+                          {msg.citations?.length ? <div className="mt-2 flex flex-wrap gap-1">{msg.citations.slice(0, 4).map((citation, index) => <a key={`${citation}-${index}`} href={citation.startsWith("http") ? citation : undefined} target="_blank" rel="noreferrer" className="max-w-full truncate rounded-md bg-blue-50 px-1.5 py-1 text-[8px] text-blue-700 hover:bg-blue-100">[{index + 1}] {citation}</a>)}</div> : null}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="study-side-chat-composer clyra-composer-transition border-t border-slate-100 bg-white/90 pt-2">
+              <div className="clyra-composer-tools flex px-3" aria-label="Study chat tools">
+                <button type="button" onClick={() => { setSideChatTool(sideChatTool === "search" ? "ask" : "search"); window.setTimeout(() => sideChatInputRef.current?.focus(), 0); }} className={cn("inline-flex items-center gap-1.5 border px-2.5 text-[8px] font-semibold", sideChatTool === "search" ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-500")}><Globe2 className="h-3 w-3" />Web search</button>
+                <button type="button" onClick={() => { setSideChatTool(sideChatTool === "youtube" ? "ask" : "youtube"); window.setTimeout(() => sideChatInputRef.current?.focus(), 0); }} className={cn("inline-flex items-center gap-1.5 border px-2.5 text-[8px] font-semibold", sideChatTool === "youtube" ? "border-rose-200 bg-rose-50 text-rose-700" : "border-slate-200 text-slate-500")}><Youtube className="h-3 w-3" />YouTube analyse</button>
+              </div>
+              <motion.div
+                className="input-wrapper clyra-composer-expanded relative mx-auto w-full cursor-text overflow-visible border bg-white/80 p-1.5 backdrop-blur-xl transition-[background-color,border-color,padding,box-shadow,border-radius] duration-[560ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ type: "tween", ease: [0.16, 1, 0.3, 1], duration: 0.58 }}
+              >
+                <div className="px-3 py-1">
+                  <textarea
+                    ref={sideChatInputRef}
+                    value={chatDraft}
+                    onChange={(event) => setChatDraft(event.target.value)}
+                    onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitSideChat(); } }}
+                    placeholder={sideChatTool === "search" ? "Search the web…" : sideChatTool === "youtube" ? "Paste a YouTube link…" : "Ask Clyra anything…"}
+                    rows={2}
+                    aria-label="Ask Clyra anything"
+                    className="min-h-[68px] max-h-[160px] min-w-0 flex-1 resize-none overflow-y-auto overflow-x-hidden bg-transparent px-1 py-2.5 text-[15px] leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 transition-[height,min-height,max-height,padding,opacity,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                  />
+                </div>
+                <div className="clyra-composer-expanded-content flex justify-end px-2 pb-1 pt-0"><motion.button type="button" onClick={() => void submitSideChat()} disabled={!chatDraft.trim() || asking} aria-label="Send message" whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white shadow-sm transition-all hover:bg-slate-800 disabled:opacity-35"><ArrowUpIcon className="h-[18px] w-[18px]" /></motion.button></div>
+              </motion.div>
+            </div>
+          </aside>
+        ) : null}
 
         <AnimatePresence mode="wait">
           {studyView !== "nodes" ? (
@@ -1786,38 +2022,6 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
               className={cn("absolute inset-0 z-[12] bg-[#f7f8fa] px-4 pt-24 sm:px-5", studyView === "notes" ? "overflow-hidden pb-4" : "overflow-y-auto pb-32")}
             >
               <div className={cn("mx-auto max-w-[1180px]", studyView === "notes" && "flex h-full min-h-0 max-w-[1180px] flex-col")}>
-                {studyView === "chat" ? (
-                  <div className="grid min-h-full gap-6 lg:grid-cols-[minmax(0,1fr)_280px]">
-                    <div className="flex min-h-[calc(100vh-150px)] flex-col">
-                      <div className="mb-5 flex items-end justify-between"><div><p className="text-[9px] font-semibold uppercase tracking-[.14em] text-blue-600">Study Pal chat</p><h2 className="mt-1 text-[26px] font-semibold tracking-[-.025em] text-slate-950">Ask about your map</h2><p className="mt-1 text-[10px] text-slate-500">Fresh conversation, grounded in the connected nodes.</p></div></div>
-                      <div className="flex-1 space-y-5">
-                        {conversations.map((msg) => (
-                          <div key={msg.id} className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
-                            <div className={cn("max-w-[88%]", msg.role === "user" ? "clyra-chat-user-bubble rounded-[24px] rounded-br-md border border-slate-200/70 bg-slate-950 px-5 py-3.5 text-white shadow-none" : "clyra-assistant-message max-w-[94%] px-1 py-2 text-slate-700")}>
-                              <p className={cn("text-[8px] font-semibold uppercase tracking-[.12em]", msg.role === "user" ? "text-slate-300" : "text-blue-600")}>{msg.role === "user" ? "You" : "Clyra"}</p>
-                              {msg.role === "assistant" ? <MarkdownMessageContent content={msg.text} codePresentation="soft" /> : <p className="mt-2 whitespace-pre-wrap text-[11px] leading-5">{cleanStudyText(msg.text)}</p>}
-                              {msg.citations && msg.citations.length > 0 ? <div className="mt-2 flex flex-wrap gap-1">{msg.citations.map((citation, idx) => <span key={idx} className="text-[8px] text-blue-600">[{idx + 1}] {citation}</span>)}</div> : null}
-                            </div>
-                          </div>
-                        ))}
-                        {!conversations.length ? <p className="py-16 text-center text-[11px] text-slate-400">Ask Clyra about the sources and connections in your map.</p> : null}
-                      </div>
-                      <div className="input-wrapper sticky bottom-0 z-20 mt-6 flex items-end gap-2 rounded-[26px] border border-slate-200/80 bg-white/90 p-2 shadow-[0_18px_50px_rgba(15,23,42,.10)] backdrop-blur-xl">
-                        <textarea value={chatDraft} onChange={(event) => setChatDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitChatDraft(); } }} placeholder="Ask Clyra anything..." rows={1} className="min-h-10 max-h-28 min-w-0 flex-1 resize-none rounded-[20px] bg-transparent px-3 py-2.5 text-[11px] leading-5 text-slate-800 outline-none placeholder:text-slate-400" aria-label="Ask Clyra anything..." />
-                        <button type="button" onClick={() => void submitChatDraft()} disabled={!chatDraft.trim() || asking} aria-label="Send message" className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-slate-950 text-white transition-transform hover:-translate-y-0.5 disabled:opacity-35"><Send className="h-4 w-4" /></button>
-                      </div>
-                    </div>
-                    <aside className="h-fit rounded-[22px] border border-slate-200/90 bg-white p-5 shadow-[0_16px_44px_rgba(15,23,42,.07)]">
-                      <div className="flex items-start justify-between gap-3"><div><p className="text-[8px] font-semibold uppercase tracking-[.14em] text-blue-600">Live context</p><h3 className="mt-1 text-[15px] font-semibold text-slate-950">Connected map</h3></div><span className="grid h-8 w-8 place-items-center rounded-full bg-blue-50 text-blue-600"><Sparkles className="h-3.5 w-3.5" /></span></div>
-                      <p className="mt-3 rounded-xl bg-slate-50 p-3 text-[9px] leading-4 text-slate-500">{nodeContext.attached ? "Focused on the selected node and its connected path." : "Using the whole workspace until you select a node."}</p>
-                      <div className="mt-5 space-y-3">
-                        {nodeContext.contextNodes.slice(0, 6).map((node) => <div key={node.id} className="rounded-xl border border-slate-100 bg-white p-3"><p className="text-[9px] font-semibold text-slate-700">{cleanStudyText(node.data.title || node.data.kind)}</p><p className="mt-1 line-clamp-3 text-[8px] leading-4 text-slate-400">{cleanStudyText(node.data.body || node.data.sourceUrl || "Empty node")}</p></div>)}
-                        {!nodeContext.contextNodes.length ? <p className="text-[9px] text-slate-400">No nodes selected yet.</p> : null}
-                      </div>
-                      <div className="mt-5 border-t border-slate-100 pt-4"><p className="text-[8px] font-semibold uppercase tracking-[.14em] text-slate-400">Sources</p><div className="mt-2 space-y-2">{nodeContext.sourceNodes.slice(0, 4).map((node) => <p key={node.id} className="truncate text-[8px] text-blue-600">{cleanStudyText(node.data.title || node.data.sourceUrl || "Source")}</p>)}</div></div>
-                    </aside>
-                  </div>
-                ) : null}
                 {studyView === "notes" ? (
                   <div className="flex h-full min-h-0 flex-col">
                     <div className="mb-4 flex shrink-0 items-end justify-between">
@@ -1982,9 +2186,9 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
 
         <button type="button" onClick={onBack} className="absolute left-4 top-4 z-30 flex h-10 items-center gap-2 rounded-[14px] border border-[#dedbd5] bg-[#fffefa]/95 px-3.5 text-[9px] font-semibold shadow-[0_8px_24px_rgba(48,52,58,.06)] transition-[background,transform] hover:bg-white active:scale-[.98]"><LayoutGrid className="h-4 w-4" />Workspaces</button>
         <motion.div
-          className="clyra-workflow-tabs absolute left-1/2 top-4 z-30 flex -translate-x-1/2 items-center rounded-full border border-slate-200/80 bg-white/95 p-1 shadow-[0_10px_32px_rgba(15,23,42,.10)] backdrop-blur-xl sm:top-6"
-          initial={{ y: -14, opacity: 0 }}
-          animate={{ y: globalTabsVisible ? 48 : 0, opacity: 1 }}
+          className="clyra-workflow-tabs absolute bottom-4 left-4 z-30 flex items-center rounded-full border border-slate-200/80 bg-white/95 p-1 shadow-[0_10px_32px_rgba(15,23,42,.10)] backdrop-blur-xl"
+          initial={{ y: 14, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
           transition={{ type: "spring", stiffness: 360, damping: 32, mass: 0.35 }}
           style={{ position: "absolute" }}
           onPointerLeave={() => setHoveredStudyTab(null)}
@@ -1994,14 +2198,14 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
               <motion.div
                 className="clyra-workflow-tab__hover pointer-events-none absolute bottom-1 top-1 rounded-full"
                 initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1, x: `${(["nodes", "notes", "flashcards", "test", "chat"] as const).indexOf(hoveredStudyTab) * 100}%` }}
+                animate={{ opacity: 1, scale: 1, x: `${(["nodes", "notes", "flashcards", "test"] as const).indexOf(hoveredStudyTab) * 100}%` }}
                 exit={{ opacity: 0, scale: 0.95 }}
                 transition={{ type: "spring", stiffness: 520, damping: 38, mass: 0.2 }}
-                style={{ left: 4, width: "calc((100% - 8px) / 5)" }}
+                style={{ left: 4, width: "calc((100% - 8px) / 4)" }}
               />
             ) : null}
           </AnimatePresence>
-          {(["nodes", "notes", "flashcards", "test", "chat"] as const).map((view) => (
+          {(["nodes", "notes", "flashcards", "test"] as const).map((view) => (
             <button
               key={view}
               type="button"
@@ -2014,11 +2218,12 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
               )}
             >
               {studyView === view ? <motion.span layoutId="study-tab" className="absolute inset-0 -z-10 rounded-full bg-white shadow-sm" transition={{ type: "spring", stiffness: 520, damping: 38 }} /> : null}
-              {view === "nodes" ? "Canvas" : view === "notes" ? "Notes" : view === "flashcards" ? "Flashcards" : view === "test" ? "Test" : "Chat"}
+              {view === "nodes" ? "Canvas" : view === "notes" ? "Notes" : view === "flashcards" ? "Flashcards" : "Test"}
             </button>
           ))}
         </motion.div>
         <div className="absolute right-4 top-4 z-30 flex items-center rounded-[14px] border border-[#dedbd5] bg-[#fffefa]/95 p-1 shadow-[0_8px_24px_rgba(48,52,58,.06)]">
+          <button type="button" onClick={() => addNode("note", "", "")} title="Add blank note" aria-label="Add blank note" className="grid h-8 w-8 place-items-center rounded-[10px] text-slate-500 hover:bg-[#efede8]"><NotebookPen className="h-3.5 w-3.5" /></button>
           <button type="button" onClick={undo} title="Undo" className="grid h-8 w-8 place-items-center rounded-[10px] text-slate-500 hover:bg-[#efede8]"><Undo2 className="h-3.5 w-3.5" /></button>
           <button type="button" onClick={redo} title="Redo" className="grid h-8 w-8 place-items-center rounded-[10px] text-slate-500 hover:bg-[#efede8]"><Redo2 className="h-3.5 w-3.5" /></button>
           <button type="button" onClick={exportWorkspace} title="Export workspace" className="grid h-8 w-8 place-items-center rounded-[10px] text-slate-500 hover:bg-[#efede8]"><Upload className="h-3.5 w-3.5 rotate-180" /></button>
@@ -2133,100 +2338,14 @@ Follow a clean notes layout with ## headings and short paragraphs.`;
           ) : null}
         </AnimatePresence>
 
-        {studyView === "nodes" ? <div className="absolute inset-x-3 bottom-4 z-30 mx-auto flex max-w-[720px] justify-center">
-          <motion.nav
-            layout
-            className="flex items-center gap-1 rounded-full border border-slate-200 bg-white p-2 shadow-[0_18px_50px_rgba(15,23,42,.1)]"
-            transition={{ type: "spring", stiffness: 480, damping: 36, mass: 0.35 }}
-          >
-            <AnimatePresence initial={false}>
-              {!commandDockOpen ? (
-                <motion.div
-                  key="tools"
-                  initial={{ opacity: 0, width: 0 }}
-                  animate={{ opacity: 1, width: "auto" }}
-                  exit={{ opacity: 0, width: 0 }}
-                  transition={{ duration: 0.18 }}
-                  className="flex items-center gap-1 overflow-hidden"
-                >
-                  {([{ id: "select", label: "Select", icon: MousePointer2 }, { id: "pan", label: "Pan", icon: Hand }, { id: "cut", label: "Cut connection", icon: Scissors }] as const).map((tool) => {
-                    const Icon = tool.icon;
-                    return (
-                      <button
-                        key={tool.id}
-                        type="button"
-                        onClick={() => setCanvasTool(tool.id)}
-                        title={tool.label}
-                        aria-label={tool.label}
-                        className={cn("group/tool relative grid h-10 w-10 place-items-center rounded-full transition-colors", canvasTool === tool.id ? "bg-slate-100 text-slate-900" : "text-slate-500 hover:bg-slate-50 hover:text-slate-800")}
-                      >
-                        <Icon className="h-4 w-4" />
-                        <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[8px] font-medium text-white opacity-0 transition-opacity group-hover/tool:opacity-100">{tool.label} - {tool.id === "select" ? "select nodes" : tool.id === "pan" ? "move the canvas" : "remove links"}</span>
-                      </button>
-                    );
-                  })}
-                  <button type="button" onClick={() => void flowInstance?.fitView({ duration: 320, padding: 0.28 })} title="Fit canvas" aria-label="Fit canvas" className="group/tool relative grid h-10 w-10 place-items-center rounded-full text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-800">
-                    <Maximize2 className="h-4 w-4" />
-                    <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[8px] font-medium text-white opacity-0 transition-opacity group-hover/tool:opacity-100">Fit - frame all nodes</span>
-                  </button>
-                </motion.div>
-              ) : null}
-            </AnimatePresence>
-
-            <button
-              type="button"
-              onClick={() => {
-                if (commandDockOpen) {
-                  setCommandDockOpen(false);
-                } else {
-                  setCommandDockOpen(true);
-                  setComposerMode("ask");
-                }
-              }}
-              title={commandDockOpen ? "Close ask" : "Ask Clyra"}
-              aria-label={commandDockOpen ? "Close ask" : "Ask Clyra"}
-              className={cn("group/tool relative grid h-10 w-10 place-items-center rounded-full text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-800", commandDockOpen && "bg-slate-100 text-slate-900")}
-            >
-              {commandDockOpen ? <X className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
-              <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[8px] font-medium text-white opacity-0 transition-opacity group-hover/tool:opacity-100">{commandDockOpen ? "Close - hide Ask Clyra" : "Ask Clyra - build from your prompt"}</span>
-            </button>
-
-            <AnimatePresence initial={false}>
-              {commandDockOpen ? (
-                <motion.div
-                  key="ask"
-                  initial={{ opacity: 0, width: 0 }}
-                  animate={{ opacity: 1, width: "min(560px, calc(100vw - 96px))" }}
-                  exit={{ opacity: 0, width: 0 }}
-                  transition={{ type: "spring", stiffness: 420, damping: 34, mass: 0.35 }}
-                  className="flex min-w-0 items-center gap-1 overflow-hidden"
-                >
-                  {asking || addingSource ? (
-                    <div className="flex min-h-10 flex-1 items-center px-2">
-                      <div className="agent-soft-shimmer h-4 w-full rounded-full bg-slate-100" />
-                    </div>
-                  ) : (
-                    <>
-                      <div className="relative min-w-0 flex-1">
-                        <motion.span className="pointer-events-none absolute inset-x-3 top-1/2 h-5 -translate-y-1/2 overflow-hidden rounded-full opacity-70" animate={{ backgroundPosition: ["-160% 0", "220% 0", "-160% 0"] }} transition={{ repeat: Infinity, duration: 2.6, ease: "easeInOut" }} style={{ backgroundImage: "linear-gradient(90deg, transparent, rgba(96,165,250,.26), transparent)", backgroundSize: "60% 100%", backgroundRepeat: "no-repeat" }} />
-                        <textarea
-                          value={prompt}
-                          onChange={(event) => setPrompt(event.target.value)}
-                          onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitDock(); } }}
-                          placeholder="Ask Clyra..."
-                          rows={1}
-                          className="relative z-10 min-h-9 max-h-16 w-full resize-none rounded-full border border-slate-200 bg-slate-50/90 px-3 py-2 text-[10px] leading-5 text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-100/60"
-                        />
-                      </div>
-                      <button type="button" onClick={() => void submitDock()} disabled={!prompt.trim()} title="Send" aria-label="Send" className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-35">
-                        <Send className="h-4 w-4" />
-                      </button>
-                    </>
-                  )}
-                </motion.div>
-              ) : null}
-            </AnimatePresence>
-          </motion.nav>
+        {studyView === "nodes" ? <div className="absolute inset-x-3 bottom-4 z-30 flex justify-center lg:left-0 lg:right-[372px]">
+          <nav className="flex items-center gap-1 rounded-full border border-slate-200 bg-white p-2 shadow-[0_18px_50px_rgba(15,23,42,.1)]">
+            {([{ id: "select", label: "Select", icon: MousePointer2 }, { id: "pan", label: "Pan", icon: Hand }, { id: "cut", label: "Cut connection", icon: Scissors }] as const).map((tool) => {
+              const Icon = tool.icon;
+              return <button key={tool.id} type="button" onClick={() => setCanvasTool(tool.id)} title={tool.label} aria-label={tool.label} className={cn("group/tool relative grid h-10 w-10 place-items-center rounded-full transition-colors", canvasTool === tool.id ? "bg-slate-100 text-slate-900" : "text-slate-500 hover:bg-slate-50 hover:text-slate-800")}><Icon className="h-4 w-4" /></button>;
+            })}
+            <button type="button" onClick={() => void flowInstance?.fitView({ duration: 320, padding: 0.28 })} title="Fit canvas" aria-label="Fit canvas" className="grid h-10 w-10 place-items-center rounded-full text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-800"><Maximize2 className="h-4 w-4" /></button>
+          </nav>
         </div> : null}
       </main>
       {notice ? <button type="button" onClick={() => setNotice("")} className="absolute bottom-24 left-1/2 z-50 max-w-[80%] -translate-x-1/2 rounded-[14px] border border-red-200 bg-[#fffefa] px-4 py-3 text-[8px] text-red-600 shadow-[0_12px_34px_rgba(48,52,58,.1)]">{notice}</button> : null}

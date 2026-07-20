@@ -21,8 +21,6 @@ type PreviewAgent = {
   action?: string;
 };
 
-type Cursor = { x: number; y: number; label: string; clicking?: boolean } | null;
-
 const TERMINAL_STATES = new Set<AgentControllerState>(["completed", "failed", "cancelled"]);
 
 function wait(ms: number) {
@@ -44,7 +42,7 @@ export function AgentControlledPreview({ agent, messageId }: { agent: PreviewAge
   const [iframeReady, setIframeReady] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [fullScreen, setFullScreen] = useState(false);
-  const [cursor, setCursor] = useState<Cursor>(null);
+  const [isHovered, setIsHovered] = useState(false);
   const [task, setTask] = useState<AgentControllerTask>(() => readAgentTask(taskStorageKey) || createAgentTask(taskStorageKey, agent.id, agent.instruction || agent.label));
 
   const commit = useCallback((next: AgentControllerTask) => {
@@ -57,7 +55,6 @@ export function AgentControlledPreview({ agent, messageId }: { agent: PreviewAge
     const restored = readAgentTask(taskStorageKey) || createAgentTask(taskStorageKey, agent.id, agent.instruction || agent.label);
     cancelledRef.current = false;
     setTask(restored);
-    setCursor(null);
   }, [agent.id, agent.instruction, agent.label, taskStorageKey]);
 
   useEffect(() => {
@@ -86,15 +83,11 @@ export function AgentControlledPreview({ agent, messageId }: { agent: PreviewAge
     return { frame, document: frame.contentDocument, window: frame.contentWindow };
   }, []);
 
-  const moveTo = useCallback(async (target: HTMLElement, label: string, clicking = false) => {
-    const { frame, window: childWindow } = getFrameDocument();
-    const host = frame.getBoundingClientRect();
-    const rect = target.getBoundingClientRect();
-    const x = host.left + (rect.left + rect.width / 2) * (host.width / Math.max(childWindow.innerWidth, 1));
-    const y = host.top + (rect.top + rect.height / 2) * (host.height / Math.max(childWindow.innerHeight, 1));
-    setCursor({ x, y, label, clicking });
+  const moveTo = useCallback(async (_target: HTMLElement, _label: string, clicking = false) => {
+    // The agent operates the same-origin preview directly; timing preserves a
+    // readable handoff without drawing a decorative cursor over the workspace.
     await wait(clicking ? 120 : 170);
-  }, [getFrameDocument]);
+  }, []);
 
   const ensureRunnable = useCallback((current: AgentControllerTask) => {
     if (cancelledRef.current || current.state === "cancelled") throw new Error("Stopped by user");
@@ -161,9 +154,7 @@ export function AgentControlledPreview({ agent, messageId }: { agent: PreviewAge
       current = updateTaskStep(current, "request", "complete");
       current = updateTaskStep(current, "build", "active");
       current = commit(current);
-      current = await click(current, "[data-agent-id='vibe-send-request']", "Send request", "The request starts a design session");
-      current = await waitFor(current, "[data-agent-id='vibe-use-design']", "Design approval", 45000);
-      current = await click(current, "[data-agent-id='vibe-use-design']", "Use this design", "The real build is started");
+      current = await click(current, "[data-agent-id='vibe-send-request']", "Send request", "The real build is started");
       current = record(current, { type: "wait_for_build", target: "Vibe build", expected: "A real build state or recoverable error", actual: "Build request sent", verified: true }, "waiting", "Monitoring the real build");
       current = updateTaskStep(current, "build", "complete");
       current = updateTaskStep(current, "preview", "active");
@@ -179,7 +170,6 @@ export function AgentControlledPreview({ agent, messageId }: { agent: PreviewAge
           current = updateTaskStep(current, "verify", "complete");
           current = updateTaskStep(current, "save", "complete");
           commit({ ...current, state: "completed", currentAction: "Build verified", completionEvidence: ["Vibe Coder reported a ready preview or complete build."], activity: [...current.activity, "Build verified"].slice(-12) });
-          setCursor(null);
           return;
         }
         await wait(350);
@@ -189,7 +179,6 @@ export function AgentControlledPreview({ agent, messageId }: { agent: PreviewAge
       const message = error instanceof Error ? error.message : "The workspace stopped unexpectedly.";
       if (message === "Paused for user control" || message === "Stopped by user") return;
       commit({ ...current, state: "failed", currentAction: "Needs attention", error: message, activity: [...current.activity, `Needs attention: ${message}`].slice(-12) });
-      setCursor(null);
     } finally {
       runnerRef.current = false;
     }
@@ -202,7 +191,6 @@ export function AgentControlledPreview({ agent, messageId }: { agent: PreviewAge
   const changeState = (state: AgentControllerState, action: string) => {
     const next = { ...task, state, currentAction: action, error: state === "planning" ? undefined : task.error, manualControl: state === "user_controlling", activity: [...task.activity, action].slice(-12) };
     commit(next);
-    if (state === "user_controlling" || state === "paused_by_user" || state === "cancelled") setCursor(null);
   };
 
   const origin = typeof window === "undefined" ? "http://localhost:3000" : window.location.origin;
@@ -211,33 +199,40 @@ export function AgentControlledPreview({ agent, messageId }: { agent: PreviewAge
   const running = !TERMINAL_STATES.has(task.state) && task.state !== "paused_by_user" && !manual;
 
   return (
-    <article className={cn("relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,.08)]", fullScreen && "fixed inset-4 z-[100] rounded-2xl") }>
-      <div className="flex h-11 items-center gap-2 border-b border-slate-200/80 bg-white px-3">
-        <span className={cn("h-2 w-2 rounded-full", task.state === "completed" ? "bg-emerald-500" : task.state === "failed" ? "bg-amber-500" : "bg-blue-500") } />
-        <span className="min-w-0 flex-1 truncate text-xs font-medium text-slate-700">{task.currentAction || agent.action || agent.label}</span>
-        <button type="button" aria-label={expanded ? "Hide activity" : "Show activity"} onClick={() => setExpanded((value) => !value)} className="rounded-md p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"><ChevronDown className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-180")} /></button>
-        <button type="button" aria-label="Fullscreen preview" onClick={() => setFullScreen((value) => !value)} className="rounded-md p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"><Expand className="h-3.5 w-3.5" /></button>
-        {fullScreen ? <button type="button" aria-label="Exit fullscreen preview" onClick={() => setFullScreen(false)} className="rounded-md p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"><X className="h-3.5 w-3.5" /></button> : null}
-      </div>
+    <motion.article
+      layout
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      className={cn("agent-controlled-preview relative overflow-hidden bg-white", fullScreen && "fixed inset-4 z-[100]")}
+      transition={{ type: "spring", stiffness: 340, damping: 34, mass: .7 }}
+    >
       <AnimatePresence initial={false}>
-        {expanded ? <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden border-b border-slate-100 bg-slate-50 px-3 py-2">
+        {expanded ? <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="agent-preview-activity overflow-hidden px-4 py-3">
           <ol className="space-y-1 text-[11px] text-slate-500">{task.plan.map((step) => <li key={step.id} className="flex items-center gap-2"><span className={cn("h-1.5 w-1.5 rounded-full", step.status === "complete" ? "bg-emerald-500" : step.status === "active" ? "bg-blue-500" : "bg-slate-300")} />{step.label}</li>)}</ol>
           {task.error ? <p className="mt-2 text-[11px] text-amber-700">{task.error}</p> : null}
         </motion.div> : null}
       </AnimatePresence>
-      <div className="relative h-[min(58vh,500px)] min-h-[320px] overflow-hidden bg-slate-50">
+      <div className="relative h-[min(58vh,500px)] min-h-[320px] overflow-hidden rounded-[18px] bg-slate-50">
         {!iframeReady ? <div className="agent-soft-shimmer absolute inset-0 z-10" /> : null}
         <iframe ref={iframeRef} title={`${agent.label} live workspace`} src={source} onLoad={() => setIframeReady(true)} className={cn("h-full w-full border-0 bg-white", manual ? "pointer-events-auto" : "pointer-events-none")} />
-        {cursor && running ? <motion.div aria-hidden="true" className="pointer-events-none fixed z-[110]" initial={false} animate={{ left: cursor.x, top: cursor.y, scale: cursor.clicking ? 0.92 : 1 }} transition={{ type: "spring", stiffness: 540, damping: 38, mass: 0.45 }}><MousePointer2 className="h-5 w-5 fill-slate-900 text-white drop-shadow-md" /><span className="sr-only">{cursor.label}</span></motion.div> : null}
+        <div className="agent-preview-status"><span className={cn("h-1.5 w-1.5 rounded-full", task.state === "completed" ? "bg-emerald-500" : task.state === "failed" ? "bg-amber-500" : "bg-blue-500")} />{task.currentAction || agent.action || agent.label}</div>
+        <AnimatePresence>
+          {(isHovered || expanded || fullScreen) ? <motion.div initial={{ opacity: 0, y: -5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} className="agent-preview-controls">
+            <button type="button" aria-label={expanded ? "Hide activity" : "Show activity"} onClick={() => setExpanded((value) => !value)}><ChevronDown className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-180")} /></button>
+            <button type="button" aria-label={fullScreen ? "Exit fullscreen preview" : "Fullscreen preview"} onClick={() => setFullScreen((value) => !value)}>{fullScreen ? <X className="h-3.5 w-3.5" /> : <Expand className="h-3.5 w-3.5" />}</button>
+          </motion.div> : null}
+        </AnimatePresence>
       </div>
-      <div className="flex items-center gap-1 border-t border-slate-200 bg-white px-3 py-2">
+      <AnimatePresence>
+      {(isHovered || task.state === "failed" || task.state === "paused_by_user" || manual) ? <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }} className="agent-preview-footer flex items-center gap-1 px-3 py-2">
         {task.state === "completed" ? <span className="mr-auto inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-700"><Check className="h-3.5 w-3.5" />Build verified</span> : <span className="mr-auto text-[11px] text-slate-500">{manual ? "You are controlling this workspace" : task.state === "paused_by_user" ? "Agent paused" : "Live workspace"}</span>}
         {task.state === "failed" ? <button type="button" onClick={() => { cancelledRef.current = false; changeState("planning", "Retrying from the live workspace"); }} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100"><RotateCcw className="h-3 w-3" />Retry</button> : null}
         {task.state === "paused_by_user" ? <button type="button" onClick={() => changeState("planning", "Agent resumed") } className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100"><Play className="h-3 w-3" />Resume</button> : null}
         {manual ? <button type="button" onClick={() => changeState("planning", "Agent resumed from your current workspace") } className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100"><RotateCcw className="h-3 w-3" />Return control</button> : <button type="button" disabled={TERMINAL_STATES.has(task.state)} onClick={() => changeState("user_controlling", "You took control") } className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-40"><MousePointer2 className="h-3 w-3" />Take control</button>}
         {running ? <button type="button" aria-label="Pause agent" onClick={() => changeState("paused_by_user", "Agent paused") } className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100"><Pause className="h-3.5 w-3.5" /></button> : null}
         {!TERMINAL_STATES.has(task.state) ? <button type="button" aria-label="Stop agent" onClick={() => { cancelledRef.current = true; changeState("cancelled", "Stopped by user"); }} className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100"><Square className="h-3 w-3" /></button> : null}
-      </div>
-    </article>
+      </motion.div> : null}
+      </AnimatePresence>
+    </motion.article>
   );
 }

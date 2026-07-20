@@ -25,27 +25,34 @@
 
       .clyra-boot-card {
         width: min(280px, calc(100vw - 48px));
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
         text-align: center;
       }
 
-      .clyra-boot-orb {
-        width: 72px;
-        height: 72px;
-        margin: 0 auto;
+      .clyra-boot-track {
+        width: min(250px, 100%);
+        height: 5px;
+        overflow: hidden;
         border-radius: 999px;
-        background:
-          radial-gradient(circle at 30% 35%, #9ff3ff 0, transparent 32%),
-          radial-gradient(circle at 68% 28%, #8b5cf6 0, transparent 38%),
-          radial-gradient(circle at 54% 72%, #38bdf8 0, transparent 42%),
-          #64748b;
-        box-shadow: 0 24px 70px rgba(99, 102, 241, 0.22);
-        animation: clyra-boot-pulse 1.8s ease-in-out infinite;
+        background: #e9eef5;
+      }
+
+      .clyra-boot-fill {
+        width: 42%;
+        height: 100%;
+        border-radius: inherit;
+        background: #0f172a;
+        animation: clyra-boot-progress 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
       }
 
       .clyra-boot-copy {
-        margin: 14px 0 0;
+        margin: 0;
         color: #64748b;
-        font-size: 13px;
+        font-size: 12px;
+        font-weight: 500;
         line-height: 1.5;
       }
 
@@ -62,27 +69,20 @@
         padding: 10px 16px;
       }
 
-      @keyframes clyra-boot-pulse {
-        0%,
-        100% {
-          transform: scale(1);
-          opacity: 0.88;
-        }
-        50% {
-          transform: scale(1.04);
-          opacity: 1;
-        }
+      @keyframes clyra-boot-progress {
+        from { transform: translateX(-118%); }
+        to { transform: translateX(238%); }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .clyra-boot-fill { animation: none; transform: none; }
       }
     </style>
   </head>
   <body>
-    <div id="root">
-      <div class="clyra-boot-fallback" role="status" aria-live="polite" aria-label="Loading Clyra">
-        <div class="clyra-boot-card">
-          <div class="clyra-boot-orb" aria-hidden="true"></div>
-        </div>
-      </div>
-    </div>
+    <!-- BootIntroOverlay is the single loading experience. Keep the root empty
+         so a second pre-React progress animation never flashes beforehand. -->
+    <div id="root"></div>
     <script>
       window.addEventListener(
         "error",
@@ -104,14 +104,10 @@
             target.src || target.href || target.getAttribute("src") || target.getAttribute("href") || "unknown",
           );
 
-          root.innerHTML =
-            '<div class="clyra-boot-fallback" role="alert">' +
-            '<div class="clyra-boot-card">' +
-            '<div class="clyra-boot-orb" aria-hidden="true"></div>' +
-            '<p class="clyra-boot-copy">Clyra did not finish loading. Reloading usually fixes this after the dev server finishes rebuilding.</p>' +
-            '<button class="clyra-boot-reload" type="button" onclick="window.location.reload()">Reload Clyra</button>' +
-            "</div>" +
-            "</div>";
+          // Vite can briefly miss a module while rebuilding a large chunk.
+          // Keep the existing boot surface intact so React can still mount on
+          // the next successful module request instead of replacing the app
+          // with a permanent false failure screen.
         },
         true,
       );

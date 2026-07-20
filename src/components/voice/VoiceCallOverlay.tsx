@@ -10,9 +10,12 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowUpIcon,
+  Camera,
+  CameraOff,
   MessageSquareText,
   Mic,
   MicOff,
+  MonitorUp,
   Pencil,
   PhoneOff,
   Sparkles,
@@ -23,6 +26,7 @@ import { cn } from "../../lib/utils";
 import type { VoiceStatus, VoiceTurn } from "../../hooks/useVoiceCall";
 
 type LeftMenuMode = "closed" | "chooser" | "type" | "summary";
+type CallMediaMode = "none" | "camera" | "screen";
 
 const TYPE_DOCK_COLLAPSED_PX = 48;
 const TYPE_DOCK_EXPANDED_PX = 320;
@@ -259,7 +263,15 @@ export function VoiceCallOverlay({
 }) {
   const [menu, setMenu] = useState<LeftMenuMode>("closed");
   const [draft, setDraft] = useState("");
+  const [mediaMode, setMediaMode] = useState<CallMediaMode>("none");
+  const [mediaError, setMediaError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const mediaPreviewRef = useRef<HTMLVideoElement>(null);
+  // A display/camera picker can resolve after the user has ended the call.
+  // Keep a monotonically increasing request id so a late grant is immediately
+  // stopped instead of leaving the operating-system capture indicator on.
+  const mediaRequestIdRef = useRef(0);
 
   const meterActive =
     !muted &&
@@ -278,12 +290,102 @@ export function VoiceCallOverlay({
     setDraft("");
   };
 
+  const stopMedia = () => {
+    mediaRequestIdRef.current += 1;
+    const stream = mediaStreamRef.current;
+    for (const track of stream?.getTracks() ?? []) {
+      track.enabled = false;
+      track.stop();
+    }
+    mediaStreamRef.current = null;
+    if (mediaPreviewRef.current) {
+      mediaPreviewRef.current.pause();
+      mediaPreviewRef.current.srcObject = null;
+      mediaPreviewRef.current.removeAttribute("src");
+    }
+    setMediaMode("none");
+    setMediaError(null);
+  };
+
+  const startMedia = async (nextMode: Exclude<CallMediaMode, "none">) => {
+    setMediaError(null);
+    const requestId = mediaRequestIdRef.current + 1;
+    mediaRequestIdRef.current = requestId;
+    for (const track of mediaStreamRef.current?.getTracks() ?? []) {
+      track.enabled = false;
+      track.stop();
+    }
+    try {
+      const stream = nextMode === "camera"
+        ? await navigator.mediaDevices.getUserMedia({
+            video: {
+              width: { ideal: 960 },
+              height: { ideal: 540 },
+              frameRate: { ideal: 24, min: 20, max: 30 },
+              facingMode: "user",
+            },
+            audio: false,
+          })
+        : await navigator.mediaDevices.getDisplayMedia({
+            video: {
+              frameRate: { ideal: 15, max: 30 },
+              ...({ selfBrowserSurface: "exclude", surfaceSwitching: "include" } as MediaTrackConstraints),
+            },
+            audio: false,
+          });
+      // The picker may resolve after ending the call, changing media modes, or
+      // closing the overlay. Do not retain that late stream.
+      if (requestId !== mediaRequestIdRef.current) {
+        for (const track of stream.getTracks()) {
+          track.enabled = false;
+          track.stop();
+        }
+        return;
+      }
+      mediaStreamRef.current = stream;
+      const [videoTrack] = stream.getVideoTracks();
+      if (videoTrack) {
+        videoTrack.addEventListener("ended", () => {
+          if (mediaStreamRef.current === stream) stopMedia();
+        }, { once: true });
+      }
+      setMediaMode(nextMode);
+      setMenu("closed");
+      requestAnimationFrame(() => {
+        if (!mediaPreviewRef.current) return;
+        mediaPreviewRef.current.srcObject = stream;
+        void mediaPreviewRef.current.play().catch(() => undefined);
+      });
+    } catch (cause) {
+      if (requestId !== mediaRequestIdRef.current) return;
+      const name = cause instanceof DOMException ? cause.name : "";
+      setMediaError(
+        name === "NotAllowedError"
+          ? `${nextMode === "camera" ? "Camera" : "Screen sharing"} permission was not granted.`
+          : `Could not start ${nextMode === "camera" ? "the camera" : "screen sharing"}.`,
+      );
+      setMediaMode("none");
+    }
+  };
+
   useEffect(() => {
     if (!open) {
       setMenu("closed");
       setDraft("");
+      stopMedia();
     }
+    // Media tracks are intentionally tied to the call overlay lifecycle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  useEffect(() => () => stopMedia(), []);
+
+  useEffect(() => {
+    const stream = mediaStreamRef.current;
+    if (!stream || !mediaPreviewRef.current) return;
+    mediaPreviewRef.current.srcObject = stream;
+    void mediaPreviewRef.current.play().catch(() => undefined);
+  }, [mediaMode]);
 
   useEffect(() => {
     if (menu === "type") {
@@ -318,6 +420,11 @@ export function VoiceCallOverlay({
     }
   };
 
+  const endCall = () => {
+    stopMedia();
+    onEnd();
+  };
+
   void onUpdateUserMessage;
   void onResendUserMessage;
 
@@ -332,6 +439,44 @@ export function VoiceCallOverlay({
           transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
           className="fixed inset-0 z-[220] flex flex-col items-center justify-center overflow-hidden bg-white/90 backdrop-blur-[12px]"
         >
+          <AnimatePresence initial={false}>
+            {mediaMode !== "none" ? (
+              <motion.aside
+                key={mediaMode}
+                initial={{ opacity: 0, x: 18, y: -8, scale: 0.94, filter: "blur(8px)" }}
+                animate={{ opacity: 1, x: 0, y: 0, scale: 1, filter: "blur(0px)" }}
+                exit={{ opacity: 0, x: 12, scale: 0.96, filter: "blur(5px)" }}
+                transition={{ duration: 0.42, ease: [0.16, 1, 0.3, 1] }}
+                className="clyra-call-media-preview"
+              >
+                <div className="clyra-call-media-preview__frame">
+                  <video
+                    ref={mediaPreviewRef}
+                    autoPlay
+                    muted
+                    playsInline
+                    className={cn(
+                      "h-full w-full object-cover",
+                      mediaMode === "camera" && "-scale-x-100",
+                    )}
+                  />
+                  <div className="clyra-call-media-preview__sheen" />
+                </div>
+                <div className="absolute right-2 top-2 z-10">
+                  <button type="button" onClick={stopMedia} className="grid h-7 w-7 place-items-center rounded-full border border-white/35 bg-slate-950/65 text-white shadow-sm backdrop-blur-md transition-[background-color,transform] duration-200 hover:scale-105 hover:bg-slate-950/85" aria-label={`Stop ${mediaMode === "camera" ? "camera" : "screen sharing"}`}>
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </motion.aside>
+            ) : null}
+          </AnimatePresence>
+
+          {mediaError ? (
+            <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} className="absolute right-6 top-6 z-[270] max-w-[280px] rounded-2xl border border-rose-100 bg-white/95 px-3 py-2 text-[11px] font-medium text-rose-600 shadow-lg backdrop-blur-xl">
+              {mediaError}
+            </motion.div>
+          ) : null}
+
           {/* Normal voice call stage — stays put while typing */}
           <motion.div
             initial={{ opacity: 0, y: 28, scale: 0.94 }}
@@ -418,7 +563,7 @@ export function VoiceCallOverlay({
             </div>
           </motion.div>
 
-          {/* Chooser — Type | Summary */}
+          {/* Permission-controlled media chooser */}
           <AnimatePresence>
             {menu === "chooser" ? (
               <motion.div
@@ -435,20 +580,19 @@ export function VoiceCallOverlay({
                     onClick={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
-                      setMenu("type");
-                      setDraft("");
+                      void startMedia("camera");
                     }}
                     className="group relative flex w-full items-center gap-3 rounded-[20px] px-3 py-3 text-left transition-[background-color,transform] duration-200 hover:-translate-y-0.5 hover:bg-slate-50/95 active:scale-[0.982]"
                   >
                     <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-950 text-white shadow-[0_9px_22px_rgba(15,23,42,0.15)] transition-transform duration-300 group-hover:scale-[1.04]">
-                      <Pencil className="h-4 w-4" />
+                      <Camera className="h-4 w-4" />
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block text-[13px] font-semibold text-slate-900">
-                        Type
+                        Show camera
                       </span>
                       <span className="mt-0.5 block text-[11.5px] leading-snug text-slate-400">
-                        Send a quick written reply
+                        Let Clyra see what you show
                       </span>
                     </span>
                   </button>
@@ -457,19 +601,19 @@ export function VoiceCallOverlay({
                     onClick={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
-                      setMenu("summary");
+                      void startMedia("screen");
                     }}
                     className="group flex w-full items-center gap-3 rounded-[20px] px-3 py-3 text-left transition-[background-color,transform] duration-200 hover:-translate-y-0.5 hover:bg-slate-50/95 active:scale-[0.982]"
                   >
                     <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200/75 bg-white text-slate-700 shadow-[0_8px_22px_rgba(15,23,42,0.055)] transition-transform duration-200 group-hover:scale-[1.03]">
-                      <Sparkles className="h-4 w-4" />
+                      <MonitorUp className="h-4 w-4" />
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block text-[13px] font-semibold text-slate-900">
-                        Summary
+                        Share screen
                       </span>
                       <span className="mt-0.5 block text-[11.5px] leading-snug text-slate-400">
-                        View the live call recap
+                        Share a tab, window, or display
                       </span>
                     </span>
                   </button>
@@ -540,7 +684,7 @@ export function VoiceCallOverlay({
             ) : null}
           </AnimatePresence>
 
-          {/* Bottom dock: 3 buttons ↔ expanding type bar (search-dock style) */}
+          {/* Bottom dock: call controls ↔ expanding type bar. */}
           <motion.div
             initial={{ opacity: 0, y: 36 }}
             animate={{
@@ -623,18 +767,25 @@ export function VoiceCallOverlay({
                     animate={{ scale: 1, opacity: 1 }}
                     exit={{ scale: 0.92, opacity: 0 }}
                     transition={{ type: "spring", stiffness: 320, damping: 28 }}
-                    className="grid w-full max-w-[280px] grid-cols-3 items-center justify-items-center"
+                    className="grid w-full max-w-[352px] grid-cols-4 items-center justify-items-center"
                   >
                     <CallControlButton
-                      label="Type or summary"
+                      label={mediaMode === "none" ? "Camera or screen sharing" : "Change camera or screen sharing"}
                       onClick={() =>
                         setMenu((m) =>
                           m === "chooser" || m === "summary" ? "closed" : "chooser",
                         )
                       }
-                      active={menu === "chooser" || menu === "summary"}
+                      active={menu === "chooser" || mediaMode !== "none"}
                     >
-                      <MessageSquareText className="h-5 w-5" />
+                      {mediaMode === "none" ? <Camera className="h-5 w-5" /> : <CameraOff className="h-5 w-5" />}
+                    </CallControlButton>
+
+                    <CallControlButton
+                      label="Type a message"
+                      onClick={() => setMenu("type")}
+                    >
+                      <Pencil className="h-5 w-5" />
                     </CallControlButton>
 
                     <CallControlButton
@@ -645,7 +796,7 @@ export function VoiceCallOverlay({
                       {muted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
                     </CallControlButton>
 
-                    <CallControlButton label="End voice call" onClick={onEnd} danger>
+                    <CallControlButton label="End voice call" onClick={endCall} danger>
                       <PhoneOff className="h-5 w-5" />
                     </CallControlButton>
                   </motion.div>

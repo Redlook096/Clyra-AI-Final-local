@@ -130,11 +130,25 @@ Do not add extra commentary. Keep it to one short spoken sentence.`;
         );
         await sleep(Math.max(8, CHUNK_MS * 0.55));
       }
+      // The production client normally lets VAD endpoint the turn. Explicitly
+      // flush the fixture too so an audio-file test cannot hang if its trailing
+      // silence falls just below a machine's current energy threshold.
+      ws.send(JSON.stringify({ type: "flush", sessionId: session.sessionId }));
     });
 
-    ws.on("message", (raw) => {
-      const msg = JSON.parse(String(raw));
+    ws.on("message", (raw, isBinary) => {
       const now = Date.now();
+      // Voice output is streamed as binary PCM packets. Treat the first
+      // packet as first-audio instead of attempting to JSON-parse it (which
+      // made this real end-to-end check crash as soon as Async Voice replied).
+      if (isBinary) {
+        if (marks.firstTts == null) {
+          marks.firstTts = now;
+          console.log(`first_tts +${now - (marks.firstLlmToken || now)}ms after_first_token`);
+        }
+        return;
+      }
+      const msg = JSON.parse(raw.toString());
       if (msg.type === "pipeline_mode") {
         marks.mode = msg.mode;
         console.log(`mode=${msg.mode}`);

@@ -3,7 +3,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ChevronRight } from "lucide-react";
-import { ShiningText } from "@/components/ShiningText";
+import {
+  ShiningBrainIcon,
+  ShiningText,
+  ThinkingDots,
+} from "@/components/ShiningText";
 import { cn } from "@/lib/utils";
 
 const MAX_BODY_PX = 168;
@@ -46,8 +50,8 @@ export function VibeThoughtPanel({
   const notifiedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
-  const shiningDelayRef = useRef(120 + Math.random() * 100);
-  const holdMs = Math.min(5200, Math.max(2400, 1800 + body.length * 9));
+  const shiningDelayRef = useRef(3000 + Math.min(1800, body.length * 3));
+  const holdMs = 1000;
 
   useEffect(() => {
     if (archived) {
@@ -57,7 +61,7 @@ export function VibeThoughtPanel({
     }
   }, [archived, body.length]);
 
-  // Shining → typing transition after random delay.
+  // Give the live thinking state enough room to register before revealing its detail.
   useEffect(() => {
     if (archived) return;
     if (!active || phase !== "shining") return;
@@ -166,18 +170,37 @@ export function VibeThoughtPanel({
       <div className="flex items-center gap-2 py-0.5" aria-live="polite">
         {showLiveLabel ? (
           <>
-            <motion.span
-              className="flex shrink-0 text-slate-400"
-              animate={{ rotate: open ? 90 : 0 }}
-              transition={chevronSpring}
-            >
-              <ChevronRight className="h-4 w-4" aria-hidden />
-            </motion.span>
+            <AnimatePresence initial={false} mode="wait">
+              {phase === "shining" ? (
+                <motion.span
+                  key="brain"
+                  initial={{ opacity: 0, scale: 0.84 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.84 }}
+                  transition={{ duration: 0.18 }}
+                  className="flex shrink-0"
+                >
+                  <ShiningBrainIcon />
+                </motion.span>
+              ) : (
+                <motion.span
+                  key="chevron"
+                  initial={{ opacity: 0, rotate: 0 }}
+                  animate={{ opacity: 1, rotate: open ? 90 : 0 }}
+                  exit={{ opacity: 0, rotate: 0 }}
+                  transition={chevronSpring}
+                  className="flex shrink-0 text-slate-400"
+                >
+                  <ChevronRight className="h-4 w-4" aria-hidden />
+                </motion.span>
+              )}
+            </AnimatePresence>
             <ShiningText
               text="Thinking"
               preset="thinkingChat"
               className="text-[13px] font-medium"
             />
+            <ThinkingDots />
           </>
         ) : (
           <button

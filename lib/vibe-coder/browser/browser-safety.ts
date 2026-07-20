@@ -4,6 +4,11 @@ export class BrowserSafety {
    * or executing harmful JS payloads.
    */
   static isSafeUrl(url: string): boolean {
-    return url.startsWith("http://localhost") || url.startsWith("http://127.0.0.1");
+    try {
+      const parsed = new URL(url);
+      return ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+    } catch {
+      return false;
+    }
   }
 }

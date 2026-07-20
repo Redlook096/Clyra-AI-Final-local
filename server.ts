@@ -1216,6 +1216,24 @@ async function startServer() {
 
   app.use(express.json({ limit: "2mb" }));
 
+  // The restored Vibe Coder runs in Clyra's localhost iframe on :8000. Give
+  // only that local surface access to the managed-browser API so its visible
+  // Browser tab can stream and control Clyra's persistent Playwright page.
+  app.use("/api/openbrowser", (req, res, next) => {
+    const origin = String(req.headers.origin || "");
+    if (/^http:\/\/(?:127\.0\.0\.1|localhost):8000$/.test(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+    }
+    if (req.method === "OPTIONS") {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok" });
   });
@@ -1734,6 +1752,9 @@ async function startServer() {
       res.status(400).json({ ok: false, error: { message: "A valid browser-control command is required" } });
       return;
     }
+    // Do not queue this behind a screenshot/action operation. The UI applies
+    // this authoritative agent state immediately, so takeover visibly stops
+    // the cursor before the next browser action is considered.
     res.json({ ok: true, agent: setManagedBrowserAgentControl(command) });
   });
 
@@ -1948,64 +1969,22 @@ async function startServer() {
       return;
     }
     const scan = req.body?.scan ?? (await scanProject());
-    const route = classifyVibeRequest(prompt);
-    
-    // Initialize Deep Coding Engine
-    const tracker = new DeepCodingModeTracker(prompt);
-    const report = tracker.getReport();
-    
-    const budget = new DeepWorkBudgetTracker(report.complexity);
-    const coder = new MultiPassCoder();
-    const taskPlanner = new TaskGroupPlanner();
-    const filePlanner = new FileSpecPlanner();
-
-    // Run passes
-    await coder.runPass("project_scan", { scan });
-    tracker.markGatePassed("hasProjectScan");
-    budget.recordAction("completedScans");
-
-    await coder.runPass("architecture_pass", { prompt });
-    tracker.markGatePassed("hasArchitecturePass");
-    budget.recordAction("completedArchitecturePasses");
-
     let markdown = buildPlanMarkdown(prompt, scan);
-    
-    // Generate task groups using TaskGroupPlanner based on deep coding constraints
-    const generatedGroups = await taskPlanner.generateTaskGroups(markdown, report.complexity);
-    tracker.markGatePassed("hasTaskGroups");
-    
-    let taskGraph = generatedGroups.map(g => ({
-      id: g.id,
-      name: g.name,
-      description: g.purpose
-    }));
-
-    // Generate starter files (Mocked for Deep Coding)
-    const fileSpecs = await filePlanner.generateFileSpecs(generatedGroups[0]?.purpose || "main");
-    let starterFiles = buildStarterFiles(prompt, prompt.replace(/\s+/g, " ").slice(0, 48) || "Clyra Vibe Project");
-
-    // We simulate creating enough files to satisfy the budget
-    for (let i = 0; i < report.minimumTaskGroups; i++) {
-       budget.recordAction("completedTaskGroups");
-       tracker.incrementTaskGroups();
-    }
-    
-    // Add extra files if it's a serious build to pass the minimum files threshold
-    if (report.enabled) {
-      for (let i = Object.keys(starterFiles).length; i < report.minimumMeaningfulFiles; i++) {
-        starterFiles[`src/components/GeneratedComponent${i}.tsx`] = `export default function GeneratedComponent${i}() { return <div />; }`;
-      }
-      for (const file of Object.keys(starterFiles)) {
-        tracker.incrementFiles();
-      }
-      tracker.markGatePassed("hasMultiFileGeneration");
-    }
+    let taskGraph = [
+      { id: "inspect", name: "Inspect the repository", description: "Confirm the current stack, conventions, and relevant files before editing." },
+      { id: "implement", name: "Implement the requested experience", description: "Create or revise only the files required by the approved objective." },
+      { id: "validate", name: "Validate and repair", description: "Run framework-aware checks, preview the project, and repair failures before completion." },
+    ];
 
     // Try generating actual code with existing LLM integration
     const apiKey = process.env.DEEPSEEK_API_KEY;
-    if (apiKey) {
+    // The legacy remote plan generator can take an unbounded amount of time
+    // and blocks the UI before M1 is even allowed to inspect the workspace.
+    // Keep it as an explicit compatibility switch only; the default plan is
+    // immediate and the M1 runtime revises it after real inspection.
+    if (apiKey && process.env.CLYRA_ENABLE_LEGACY_PLAN_MODEL === "true") {
       try {
-        console.log(`Generating Vibe Coder plan via deepseek-reasoner... (Deep Coding Mode: ${report.enabled ? "ON" : "OFF"}, Complexity: ${report.complexity})`);
+            console.log("Generating an inspected Vibe Coder plan via deepseek-reasoner...");
         const response = await fetch("https://api.deepseek.com/chat/completions", {
           method: "POST",
           headers: {
@@ -2020,12 +1999,8 @@ async function startServer() {
                 content: `You are an expert AI software architect building a premium React application for Clyra Vibe Coder.
 Respond ONLY with a valid JSON object matching this exact schema:
 {
-  "markdown": "A detailed plan.md document detailing Goal, Requirements, Execution Gates, etc.",
-  "taskGraph": [ { "id": "T1", "name": "Task name", "description": "Details" } ],
-  "starterFiles": {
-    "src/App.tsx": "React component code with premium minimal UI, glassy effects, and polished layouts.",
-    "src/styles.css": "CSS code for the UI..."
-  }
+  "markdown": "A detailed living plan.md document detailing inspected findings, requirements, risks, implementation steps, validation and acceptance criteria.",
+  "taskGraph": [ { "id": "T1", "name": "Task name", "description": "Details" } ]
 }
 Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the raw JSON object starting with { and ending with }.`
               },
@@ -2046,7 +2021,6 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
           
           if (result.markdown) markdown = result.markdown;
           if (result.taskGraph && Array.isArray(result.taskGraph)) taskGraph = result.taskGraph;
-          if (result.starterFiles) starterFiles = result.starterFiles;
           console.log("Successfully generated dynamic plan from DeepSeek Reasoner.");
         } else {
           console.error("DeepSeek generation failed:", await response.text());
@@ -2056,29 +2030,24 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
       }
     }
     
-    // Finalize deep coding passes
-    tracker.markGatePassed("hasPlan");
-    budget.recordAction("completedPlanQualityPasses");
-
     const planQuality = scorePlanQuality(markdown, taskGraph.length);
     const buildConfidence = estimateBuildConfidence({
       planQuality: planQuality.score,
       hasPreviewPlan: markdown.includes("Live Preview Plan"),
       hasCheckpointPlan: markdown.includes("Checkpoint"),
-      riskLevel: route.intensity === "deep" ? "medium" : "safe",
+      riskLevel: "medium",
     });
 
     res.json({
       title: prompt.replace(/\s+/g, " ").slice(0, 80),
-      summary: `Clyra will build ${prompt.replace(/\s+/g, " ")} as a saved, preview-ready project with real files, a plan.md, checkpoints, validation notes, and a polished UI.`,
+      summary: `Clyra inspected the current project and prepared a living plan for ${prompt.replace(/\s+/g, " ")}. Implementation begins only after approval.`,
       markdown,
       taskGraph,
       scan,
-      smartRoute: route,
+      smartRoute: { mode: "runtime", label: "Runtime-backed plan" },
       planQuality,
       buildConfidence,
-      starterFiles,
-      deepCodingReport: tracker.getReport() // Expose report to the client
+      starterFiles: {},
     });
   });
 
@@ -2234,6 +2203,8 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
   app.post("/api/vibe/write-plan", async (req, res) => {
     const projectId = safeProjectId(String(req.body?.projectId ?? ""));
     const plan = String(req.body?.plan ?? "");
+    // Planning is an artifact, not a fake implementation pass. The agent is
+    // responsible for inspecting and editing the real workspace after approval.
     const files = (req.body?.files ?? {}) as Record<string, string>;
     const taskGraph = req.body?.taskGraph ?? [];
     const metadata = await readProjectMetadata(projectId);
@@ -2244,6 +2215,10 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
 
     const root = projectRoot(projectId);
     await fs.writeFile(path.join(root, "plan.md"), plan, "utf8");
+    // The M1 workspace is the generated `files` directory. Keep a copy of the
+    // reviewed plan inside that boundary so the agent never needs `../` access.
+    await fs.mkdir(path.join(root, "files"), { recursive: true });
+    await fs.writeFile(path.join(root, "files", "PLAN.md"), plan, "utf8");
     const packageManager = existsSync(path.join(process.cwd(), "pnpm-lock.yaml"))
       ? "pnpm"
       : existsSync(path.join(process.cwd(), "yarn.lock"))
@@ -2263,8 +2238,8 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
     });
     await writeJson(path.join(root, ".agent", "task-graph.json"), taskGraph);
     await writeJson(path.join(root, ".agent", "agent-state.json"), {
-      status: "building",
-      activeTask: "T4",
+      status: "awaiting_runtime",
+      activeTask: "plan-approved",
       gates: {
         projectScanned: true,
         planGenerated: true,
@@ -2281,60 +2256,39 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
       sourceOfTruth: "plan.md",
       lastSuccessfulCheckpoint: "checkpoint-initial",
       knownProblemFiles: [],
-      recentEdits: Object.keys(files),
+      recentEdits: [],
       updatedAt: now,
     });
     await writeJson(path.join(root, ".agent", "pending-patches.json"), []);
     await writeJson(
       path.join(root, ".agent", "applied-patches.json"),
-      Object.keys(files).map((file) => ({
-        file,
-        type: file === "plan.md" ? "plan" : "create",
-        appliedAt: now,
-      })),
+      [],
     );
-    for (const [relative, content] of Object.entries(files)) {
-      const cleanRelative = relative.replace(/^\/+/, "").replace(/\.\./g, "");
-      const target = path.join(root, "files", cleanRelative);
-      await ensureDir(path.dirname(target));
-      await fs.writeFile(target, content, "utf8");
-    }
     const updated = {
       ...metadata,
-      status: "Ready" as const,
+      status: "Building" as const,
       updatedAt: now,
-      lastBuildStatus: "ready",
-      lastReviewStatus: "passed",
+      lastBuildStatus: "awaiting_runtime",
+      lastReviewStatus: "pending",
     };
     await writeJson(path.join(root, "metadata.json"), updated);
-    void captureProjectThumbnail(projectId).catch((error) => {
-      console.warn("Failed to capture Vibe project thumbnail", error);
-    });
     await writeJson(path.join(root, ".agent", "review-results.json"), {
-      status: "passed",
-      reviewer: "Review Agent",
+      status: "pending",
+      reviewer: "Runtime validation",
       checkedAt: now,
-      checks: [
-        "plan.md saved",
-        "AGENTS.md saved",
-        "project files saved",
-        "checkpoint exists",
-        "preview-ready files exist",
-        "rollback path recorded",
-      ],
+      checks: ["plan.md saved", "runtime validation pending"],
       issues: [],
     });
     await writeJson(path.join(root, ".agent", "build-summary.json"), {
-      status: "Ready",
-      completedAt: now,
-      filesChanged: Object.keys(files),
-      validation: "Core files saved; app-level validation runs in Clyra before delivery.",
-      preview: "Preview runner will start this project on open.",
-      rollback: "checkpoint-initial",
+      status: "Awaiting runtime",
+      filesChanged: [],
+      validation: "The coding runtime will run framework-aware validation before delivery.",
+      preview: "Preview starts after the agent creates a runnable project.",
+      rollback: "runtime checkpoint will be created immediately before the agent turn",
     });
     await fs.writeFile(
       path.join(root, "logs", "validation.log"),
-      `[${now}] Validation queued locally. Core files saved.\n`,
+      `[${now}] Plan saved. Runtime validation pending. Ignored ${Object.keys(files).length} synthetic starter-file proposal(s).\n`,
       "utf8",
     );
     res.json({ project: updated, files: await listProjectFiles(projectId) });
@@ -2626,19 +2580,30 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
     void ensureVoicePipelineWorker();
-    if (process.env.DISABLE_VIBE_SERVER !== "true" && process.env.SKIP_M1_WARMUP !== "true") {
-      // Warm Vibe Coder M1 in the background so the first project open is instant.
-      void import("./lib/openhands/m1-stack")
-        .then(({ warmupM1StackInBackground }) => {
-          warmupM1StackInBackground();
-        })
-        .catch((error) => {
-          console.warn("[m1] failed to schedule warmup:", error);
-        });
-    }
+    // Launch the persistent Playwright context while the app is booting, not
+    // when the user first opens Browser. Restored third-party tabs can take a
+    // moment to settle; prewarming keeps the workspace responsive on entry.
+    setTimeout(() => {
+      void getManagedBrowserState().catch((error) => {
+        console.warn("[browser] background warmup did not complete:", error instanceof Error ? error.message : error);
+      });
+    }, 350);
+    // Start the static M1 stack alongside Clyra so the global boot sequence
+    // absorbs its cold start and Vibe opens without a second loading screen.
+    // CLYRA_M1_WARMUP=0 remains the explicit low-resource opt-out.
+    void import("./lib/openhands/m1-stack")
+      .then(({ warmupM1StackInBackground }) => {
+        warmupM1StackInBackground();
+      })
+      .catch((error) => {
+        console.warn("[m1] failed to schedule warmup:", error);
+      });
   });
 
-  if (process.env.DISABLE_VIBE_SERVER !== "true") {
+  // Legacy sandbox previews are no longer part of the production M1 path.
+  // Starting a second Vite service by default wastes memory and can collide
+  // with another Clyra window. Keep it available only for explicit legacy use.
+  if (process.env.ENABLE_LEGACY_VIBE_SERVER === "true") {
     startVibeServer(VIBE_PORT).catch((error) => {
       console.error("Failed to start Vibe sandbox server:", error);
     });

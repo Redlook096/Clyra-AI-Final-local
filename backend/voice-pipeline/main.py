@@ -165,10 +165,13 @@ class SessionState:
 @app.on_event("startup")
 async def startup() -> None:
     _ = _vad.backend
-    # Keep the API available immediately. STT loads lazily on first microphone
-    # audio; concurrently importing CTranslate2 and PyTorch crashes some Intel
-    # macOS OpenMP runtimes.
-    asyncio.create_task(asyncio.to_thread(get_tts_runtime().warm))
+    # Voice Call now receives its spoken output from Async/Max in the Node
+    # gateway. Do not warm the legacy PyTorch TTS runtime beside CTranslate2 on
+    # startup: on macOS that competing OpenMP load can terminate the STT worker
+    # as soon as a microphone turn arrives. It remains available only for an
+    # explicitly requested local-pipeline TTS integration.
+    if os.getenv("VOICE_PIPELINE_WARM_LOCAL_TTS", "").lower() in {"1", "true", "yes"}:
+        asyncio.create_task(asyncio.to_thread(get_tts_runtime().warm))
 
 
 @app.get("/health")
@@ -200,7 +203,11 @@ def stt(req: SttRequest) -> JSONResponse:
         started = time.perf_counter()
         pcm = base64.b64decode(req.audio)
         audio = pcm16_bytes_to_f32(pcm)
-        tr = StreamingTranscriber(sample_rate=req.sampleRate, model_name=req.model)
+        # This diagnostic endpoint is part of the same worker as Voice Call.
+        # Never let a client select an arbitrary Whisper model here: a single
+        # `large-v3` request can evict the warm, low-latency call model on a
+        # CPU laptop and take the whole microphone service down.
+        tr = StreamingTranscriber(sample_rate=req.sampleRate, model_name=config.STT_MODEL)
         text, conf, lang = tr._transcribe_window(audio)
         return JSONResponse(
             {

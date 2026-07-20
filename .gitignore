@@ -6,6 +6,7 @@ coverage/
 *.log
 .env*
 !.env.example
+_reference/
 vibe-sandbox/
 vendor/opencode/
 tmp/

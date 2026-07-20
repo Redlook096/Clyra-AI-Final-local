@@ -1,6 +1,11 @@
 import { ClineAdapter } from "./cline-adapter";
 import { OpenHandsAdapter } from "../openhands/openhands-adapter";
-import { launchM1Conversation } from "../openhands/m1-launch";
+import {
+  controlM1Runtime,
+  getM1RuntimeEvents,
+  getM1RuntimeSnapshot,
+  launchM1Conversation,
+} from "../openhands/m1-launch";
 import { getM1Paths } from "../openhands/m1-stack";
 import { VibeCoderEvent } from "./cline-events";
 import { randomUUID } from "node:crypto";
@@ -44,6 +49,61 @@ function useClineHarness() {
 }
 
 export function registerClineRoutes(app: import("express").Application) {
+  app.get("/api/vibe/runtime/:projectId", async (req, res) => {
+    try {
+      const projectId = safeProjectId(req.params.projectId);
+      const after = Math.max(0, Number(req.query.after || 0));
+      const [snapshot, events] = await Promise.all([
+        getM1RuntimeSnapshot(projectId),
+        getM1RuntimeEvents(projectId, after),
+      ]);
+      res.json({ snapshot, events });
+    } catch (error) {
+      res.status(404).json({ error: error instanceof Error ? error.message : "Runtime not found" });
+    }
+  });
+
+  app.get("/api/vibe/runtime/:projectId/events", async (req, res) => {
+    const projectId = safeProjectId(req.params.projectId);
+    const after = Math.max(0, Number(req.query.after || 0));
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    let cursor = after;
+    const flush = async () => {
+      try {
+        const events = await getM1RuntimeEvents(projectId, cursor);
+        for (const event of events) {
+          cursor = event.sequence;
+          res.write(`id: ${event.sequence}\ndata: ${JSON.stringify(event)}\n\n`);
+        }
+      } catch (error) {
+        res.write(`event: error\ndata: ${JSON.stringify({ error: error instanceof Error ? error.message : "Runtime stream failed" })}\n\n`);
+      }
+    };
+    await flush();
+    const timer = setInterval(() => void flush(), 1_000);
+    req.on("close", () => clearInterval(timer));
+  });
+
+  app.post("/api/vibe/runtime/:projectId/control", async (req, res) => {
+    try {
+      const command = String(req.body?.command || "");
+      if (!["pause", "resume", "cancel", "steer"].includes(command)) {
+        res.status(400).json({ error: "A valid runtime command is required." });
+        return;
+      }
+      const snapshot = await controlM1Runtime(
+        safeProjectId(req.params.projectId),
+        command as "pause" | "resume" | "cancel" | "steer",
+        typeof req.body?.message === "string" ? req.body.message : undefined,
+      );
+      res.json({ snapshot });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Runtime control failed" });
+    }
+  });
+
   app.post("/api/vibe/m1-launch", async (req, res) => {
     try {
       const { prompt, projectId, planMode, continueExisting } = req.body ?? {};
@@ -57,7 +117,11 @@ export function registerClineRoutes(app: import("express").Application) {
             continueExisting: !!continueExisting,
           }),
           new Promise<never>((_, reject) => {
-            timeout = setTimeout(() => reject(new Error("Vibe Coder did not become ready within 45 seconds. Check the M1 stack and retry.")), 45_000);
+            // A warmed stack responds promptly, but the first local M1 launch
+            // can spend close to a minute installing and starting uvx. Match
+            // the stack's cold-start window so the user sees one continuous
+            // workspace transition rather than a false error after 20 seconds.
+            timeout = setTimeout(() => reject(new Error("Vibe Coder is still starting. Please try again in a moment.")), 100_000);
           }),
         ]);
         res.json(result);
@@ -85,7 +149,11 @@ export function registerClineRoutes(app: import("express").Application) {
       }
       try {
         const agent = await fetch(`${paths.agentUrl}/server_info`, {
-          signal: AbortSignal.timeout(1200),
+          // A busy local agent-server can take a couple of seconds to answer
+          // this informational probe while it is flushing a tool result. Do
+          // not show Vibe as unavailable just because a short health timeout
+          // raced an active build.
+          signal: AbortSignal.timeout(5_000),
         });
         agentReady = agent.ok;
       } catch {

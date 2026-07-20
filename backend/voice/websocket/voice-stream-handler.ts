@@ -3,11 +3,12 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { nextSemanticPhrase, normalizeSpokenText } from "../../../src/lib/voiceSpeech";
 import { encodeVoicePcmPacket } from "../../../src/lib/voicePcmPacket";
 import { buildVoiceSystemPrompt } from "../../../lib/clyraVoicePrompt";
+import { AsyncVoiceSession } from "../async/async-voice-session";
+import { AsyncSttSession } from "../async/async-stt-session";
 import { loadVoiceConfig } from "../config";
 import { voiceMetrics } from "../metrics/voice-metrics";
 import {
   probeVoicePipeline,
-  synthesizeViaPipeline,
   VoicePipelineClient,
 } from "../pipeline/client";
 import { voiceSessions } from "../session/voice-session-manager";
@@ -34,6 +35,12 @@ type ActiveSocket = {
   generation: number;
   responseId: string;
   phraseSeq: number;
+  asyncVoice: AsyncVoiceSession | null;
+  asyncStt: AsyncSttSession | null;
+  asyncSttSpeechAt: number;
+  asyncSttFlushTimer: ReturnType<typeof setTimeout> | null;
+  asyncContextId: string | null;
+  ttsFormatSent: boolean;
 };
 
 const sockets = new Map<string, ActiveSocket>();
@@ -42,8 +49,6 @@ const sockets = new Map<string, ActiveSocket>();
 const BARGE_HOLD_MS = Number(process.env.VOICE_BARGE_HOLD_MS ?? 700);
 const TTS_FLUSH_MS = Number(process.env.VOICE_TTS_FLUSH_MS ?? 120);
 
-/** Skip slow pipeline probes after a recent failure. */
-let pipelineTtsUnavailableUntil = 0;
 let pipelineHealthCache: { ok: boolean; at: number } = { ok: false, at: 0 };
 
 function send(ws: WebSocket, message: VoiceServerMessage) {
@@ -148,45 +153,30 @@ async function speakText(
 ): Promise<boolean> {
   const spoken = normalizeSpokenText(text);
   if (!spoken || signal.aborted) return false;
-  if (Date.now() < pipelineTtsUnavailableUntil) return false;
-
   try {
-    const started = Date.now();
-    const { chunks, sampleRate } = await synthesizeViaPipeline(spoken, signal);
-    // Empty audio is reported to the client. Browser TTS is an explicit
-    // operator-enabled emergency mode, never a silent engine substitution.
-    // Do NOT start a cooldown; that silenced multi-sentence replies.
-    if (!chunks.length) return false;
-    if (active.ttsSeq === 0) {
+    const config = loadVoiceConfig();
+    const contextId = active.asyncContextId || active.responseId;
+    if (!active.asyncVoice || !contextId) return false;
+    if (!active.ttsFormatSent) {
       send(active.ws, {
         type: "tts_format",
         sessionId: active.sessionId,
         responseId: active.responseId,
         generation: active.generation,
-        sampleRate,
+        sampleRate: config.asyncSampleRate,
         codec: "pcm16",
       });
+      active.ttsFormatSent = true;
     }
-    const phraseSequence = active.phraseSeq++;
-    for (const chunk of chunks) {
-      if (signal.aborted) return false;
-      const packet = encodeVoicePcmPacket(Buffer.from(chunk, "base64"), {
-        sessionId: active.sessionId,
-        responseId: active.responseId,
-        generation: active.generation,
-        sampleRate,
-        sequence: active.ttsSeq++,
-        phraseSequence,
-      });
-      if (active.ws.readyState === active.ws.OPEN) active.ws.send(packet, { binary: true });
-    }
-    voiceMetrics.record(active.sessionId, "tts_chunk", Date.now() - started);
+    // Start the first complete phrase immediately, then keep appending later
+    // phrases to the same provider context.  Forcing every partial phrase can
+    // make Flash finalise a context mid-answer and truncate playback.
+    await active.asyncVoice.sendText(contextId, spoken, active.phraseSeq === 0);
+    active.phraseSeq += 1;
     return true;
   } catch (error) {
-    // Short cooldown only for transport/HTTP failures, not empty audio.
-    pipelineTtsUnavailableUntil = Date.now() + 2_000;
     console.warn(
-      "[voice] pipeline TTS failed:",
+      "[voice] Async TTS failed:",
       error instanceof Error ? error.message : error,
     );
     return false;
@@ -215,6 +205,8 @@ async function handleFinalTranscript(sessionId: string, ws: WebSocket, text: str
   active.phraseSeq = 0;
   active.generation += 1;
   active.responseId = `${sessionId}-${active.generation}-${Date.now()}`;
+  active.asyncContextId = active.responseId;
+  active.ttsFormatSent = false;
   const { signal } = active.aborted;
 
   const session = voiceSessions.get(sessionId);
@@ -250,7 +242,7 @@ async function handleFinalTranscript(sessionId: string, ws: WebSocket, text: str
       const ok = await speakText(active, chunk.text, signal);
       if (ok) active.spokenChars = chunk.nextIndex;
       else {
-        // Empty/failed Chatterbox output stops this response's TTS attempts.
+        // Empty/failed Async output stops this response's TTS attempts.
         pipelineTtsSkipped = true;
         break;
       }
@@ -321,6 +313,15 @@ async function handleFinalTranscript(sessionId: string, ws: WebSocket, text: str
   await flushChain;
 
   if (!signal.aborted) {
+    if (active.asyncVoice && active.asyncContextId) {
+      await active.asyncVoice.closeContext(active.asyncContextId).catch((error) => {
+        send(ws, {
+          type: "error",
+          sessionId,
+          message: error instanceof Error ? error.message : "Async voice output failed",
+        });
+      });
+    }
     send(ws, { type: "tts_done", sessionId, responseId: active.responseId, generation: active.generation });
     // Keep playbackHold until client reports playback_done — prevents echo barges.
     voiceSessions.update(sessionId, { status: "speaking" });
@@ -383,6 +384,50 @@ async function attachPipeline(active: ActiveSocket) {
   }
 }
 
+function pcmHasSpeech(base64: string) {
+  const pcm = Buffer.from(base64, "base64");
+  if (pcm.length < 4) return false;
+  let total = 0;
+  const samples = Math.floor(pcm.length / 2);
+  for (let index = 0; index < pcm.length - 1; index += 2) {
+    const value = pcm.readInt16LE(index) / 32768;
+    total += value * value;
+  }
+  return Math.sqrt(total / samples) > 0.014;
+}
+
+function resetAsyncStt(active: ActiveSocket) {
+  if (active.asyncSttFlushTimer) clearTimeout(active.asyncSttFlushTimer);
+  active.asyncSttFlushTimer = null;
+  active.asyncStt?.close();
+  active.asyncStt = null;
+  active.asyncSttSpeechAt = 0;
+}
+
+function attachAsyncStt(active: ActiveSocket, config: ReturnType<typeof loadVoiceConfig>) {
+  if (!config.asyncApiKey || !config.asyncSttEnabled) return false;
+  active.pipelineMode = true;
+  const createTurn = () => new AsyncSttSession({
+    apiKey: config.asyncApiKey,
+    modelId: config.asyncSttModel,
+    sampleRate: config.sampleRate,
+    onPartial: (text) => {
+      voiceMetrics.record(active.sessionId, "stt_partial", 0);
+      send(active.ws, { type: "transcript_partial", sessionId: active.sessionId, text });
+    },
+    onFinal: (text) => {
+      voiceMetrics.record(active.sessionId, "stt_final", 0);
+      resetAsyncStt(active);
+      void handleFinalTranscript(active.sessionId, active.ws, text);
+    },
+    onError: (message) => {
+      if (!active.busy) console.warn("[voice] Async STT:", message);
+    },
+  });
+  active.asyncStt = createTurn();
+  return true;
+}
+
 function attachSocketHandlers(sessionId: string, ws: WebSocket) {
   const config = loadVoiceConfig();
   const aborted = new AbortController();
@@ -401,11 +446,50 @@ function attachSocketHandlers(sessionId: string, ws: WebSocket) {
     generation: 0,
     responseId: "",
     phraseSeq: 0,
+    asyncVoice: null,
+    asyncStt: null,
+    asyncSttSpeechAt: 0,
+    asyncSttFlushTimer: null,
+    asyncContextId: null,
+    ttsFormatSent: false,
   };
+  active.asyncVoice = new AsyncVoiceSession({
+    apiKey: config.asyncApiKey,
+    modelId: config.asyncModel,
+    fallbackModelId: config.asyncFallbackModel,
+    voiceId: config.asyncVoiceId,
+    sampleRate: config.asyncSampleRate,
+    language: "en",
+    onAudio: (chunk) => {
+      const current = sockets.get(sessionId);
+      if (!current || current !== active || chunk.contextId !== current.asyncContextId) return;
+      if (current.aborted.signal.aborted || current.ws.readyState !== current.ws.OPEN) return;
+      const packet = encodeVoicePcmPacket(Buffer.from(chunk.audio, "base64"), {
+        sessionId,
+        responseId: current.responseId,
+        generation: current.generation,
+        sampleRate: config.asyncSampleRate,
+        sequence: current.ttsSeq++,
+        phraseSequence: current.phraseSeq,
+      });
+      current.ws.send(packet, { binary: true });
+      if (current.ttsSeq === 1) voiceMetrics.record(sessionId, "tts_chunk", 0);
+    },
+    onError: (message) => {
+      send(ws, { type: "error", sessionId, message: `Voice output: ${message}` });
+    },
+  });
   sockets.set(sessionId, active);
 
   void (async () => {
-    await attachPipeline(active);
+    void active.asyncVoice?.connect().catch((error) => {
+      send(ws, {
+        type: "error",
+        sessionId,
+        message: error instanceof Error ? error.message : "Async voice could not connect.",
+      });
+    });
+    if (!attachAsyncStt(active, config)) await attachPipeline(active);
     send(ws, {
       type: "ready",
       sessionId,
@@ -452,17 +536,21 @@ function attachSocketHandlers(sessionId: string, ws: WebSocket) {
     if (message.type === "mute") {
       voiceSessions.update(sessionId, { muted: message.muted });
       current.pipeline?.setMuted(message.muted);
+      if (message.muted) resetAsyncStt(current);
       return;
     }
 
     if (message.type === "barge_in") {
+      if (current.asyncContextId) current.asyncVoice?.cancelContext(current.asyncContextId);
       current.aborted.abort();
       current.generation += 1;
       current.busy = false;
       current.playbackHold = false;
       current.bargeSpeechMs = 0;
       current.pendingBargeText = null;
+      current.asyncContextId = null;
       current.pipeline?.bargeIn();
+      resetAsyncStt(current);
       voiceMetrics.record(sessionId, "barge_in", BARGE_HOLD_MS);
       send(ws, { type: "barge_in", sessionId });
       voiceSessions.update(sessionId, { status: "listening" });
@@ -491,12 +579,44 @@ function attachSocketHandlers(sessionId: string, ws: WebSocket) {
       if (current.playbackHold || current.busy) {
         return;
       }
-      current.pipeline?.sendAudio(message.data, message.seq);
+      if (current.asyncStt) {
+        const speech = pcmHasSpeech(message.data);
+        if (speech) {
+          current.asyncSttSpeechAt = Date.now();
+          if (current.asyncSttFlushTimer) clearTimeout(current.asyncSttFlushTimer);
+          current.asyncSttFlushTimer = null;
+        } else if (current.asyncSttSpeechAt && !current.asyncSttFlushTimer) {
+          current.asyncSttFlushTimer = setTimeout(() => {
+            const turn = current.asyncStt;
+            if (!turn || current.busy || current.playbackHold) return;
+            void turn.flush().then((text) => {
+              if (text) return;
+              resetAsyncStt(current);
+              attachAsyncStt(current, config);
+            });
+          }, 620);
+        }
+        void current.asyncStt.sendPcm(message.data).catch((error) => {
+          console.warn("[voice] Async STT streaming failed:", error instanceof Error ? error.message : error);
+          resetAsyncStt(current);
+          attachPipeline(current).catch(() => undefined);
+        });
+      } else {
+        current.pipeline?.sendAudio(message.data, message.seq);
+      }
       return;
     }
 
     if (message.type === "flush") {
-      current.pipeline?.flush();
+      if (current.asyncStt) {
+        const turn = current.asyncStt;
+        void turn.flush().then((text) => {
+          if (!text && current.asyncStt === turn) {
+            resetAsyncStt(current);
+            attachAsyncStt(current, config);
+          }
+        });
+      } else current.pipeline?.flush();
       return;
     }
   });
@@ -504,6 +624,8 @@ function attachSocketHandlers(sessionId: string, ws: WebSocket) {
   ws.on("close", () => {
     aborted.abort();
     active.pipeline?.close();
+    active.asyncVoice?.close();
+    resetAsyncStt(active);
     sockets.delete(sessionId);
     voiceSessions.end(sessionId);
     voiceMetrics.clear(sessionId);
@@ -534,6 +656,8 @@ export function closeVoiceSocket(sessionId: string) {
   if (!active) return;
   active.aborted.abort();
   active.pipeline?.close();
+  active.asyncVoice?.close();
+  resetAsyncStt(active);
   active.ws.close();
   sockets.delete(sessionId);
 }

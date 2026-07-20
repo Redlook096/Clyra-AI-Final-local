@@ -1,5 +1,5 @@
 import type express from "express";
-import { probeVoicePipeline, synthesizeViaPipeline } from "../voice/pipeline/client";
+import { loadVoiceConfig } from "../voice/config";
 
 const MAX_PENDING = 8;
 const REQUEST_TIMEOUT_MS = 180_000;
@@ -9,6 +9,7 @@ let pending = 0;
 let cacheBytes = 0;
 
 const CREATOR_VOICES = [
+  "Max",
   "Ryan",
   "Aiden",
   "Aaron",
@@ -44,10 +45,10 @@ type CachedSpeech = {
 
 const speechCache = new Map<string, CachedSpeech>();
 
-function resolveVoice(value: unknown): CreatorVoiceName {
-  return typeof value === "string" && (CREATOR_VOICES as readonly string[]).includes(value)
-    ? value as CreatorVoiceName
-    : "Ryan";
+function resolveVoice(_value: unknown): CreatorVoiceName {
+  // Creator exports deliberately use the same verified Async voice as calls.
+  // Keeping the request field makes saved legacy projects backward compatible.
+  return "Max";
 }
 
 function readCachedSpeech(key: string) {
@@ -111,22 +112,18 @@ function pcm16Wav(pcm: Buffer, sampleRate: number) {
 }
 
 export function registerCreatorTtsRoutes(app: express.Express) {
-  app.get("/api/creator/tts/health", async (_req, res) => {
-    const health = await probeVoicePipeline();
-    if (!health.ok) {
-      res.status(503).json({ ok: false, engine: "chatterbox-turbo", error: "Shared voice worker is unavailable" });
+  app.get("/api/creator/tts/health", (_req, res) => {
+    const config = loadVoiceConfig();
+    if (!config.asyncApiKey) {
+      res.status(503).json({ ok: false, engine: "async", error: "Async Voice API is not configured" });
       return;
     }
-    const runtime = health.detail?.tts_runtime as Record<string, unknown> | undefined;
     res.json({
       ok: true,
-      engine: runtime?.active_engine || "chatterbox-turbo",
-      requestedEngine: runtime?.requested_engine || "chatterbox-turbo",
-      model: "ResembleAI/chatterbox-turbo",
-      voices: [...CREATOR_VOICES],
+      engine: "async",
+      model: config.asyncModel,
+      voices: ["Max"],
       queueDepth: pending,
-      degraded: Boolean(runtime?.degraded),
-      warning: runtime?.degraded ? runtime?.reason : undefined,
     });
   });
 
@@ -137,7 +134,12 @@ export function registerCreatorTtsRoutes(app: express.Express) {
       res.status(400).json({ error: "Text must contain 1 to 600 characters" });
       return;
     }
-    const cacheKey = `${voice}\u0000${text}`;
+    const config = loadVoiceConfig();
+    if (!config.asyncApiKey || !config.asyncVoiceId) {
+      res.status(503).json({ error: "Async Voice API is not configured" });
+      return;
+    }
+    const cacheKey = `${voice}\u0000${config.asyncModel}\u0000${text}`;
     const cached = readCachedSpeech(cacheKey);
     if (cached) {
       sendSpeech(res, cached, voice, "HIT");
@@ -153,17 +155,41 @@ export function registerCreatorTtsRoutes(app: express.Express) {
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     req.once("aborted", () => controller.abort());
     try {
-      const result = await synthesizeViaPipeline(text, controller.signal, {
-        voice,
-        timeoutMs: REQUEST_TIMEOUT_MS,
-      });
-      const pcm = Buffer.concat(result.chunks.map((chunk) => Buffer.from(chunk, "base64")));
-      if (!pcm.length) throw new Error("Chatterbox returned no audio");
-      const audio = pcm16Wav(pcm, result.sampleRate);
-      const durationMs = Math.round(pcm.length / 2 / result.sampleRate * 1_000);
-      const speech = { audio, durationMs, engine: result.engine, warning: result.warning };
+      const startedAt = performance.now();
+      const requestSpeech = (modelId: string) => fetch("https://api.async.com/text_to_speech/streaming", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": config.asyncApiKey,
+            version: "v1",
+          },
+          body: JSON.stringify({
+            model_id: modelId,
+            transcript: text,
+            voice: { mode: "id", id: config.asyncVoiceId },
+            output_format: {
+              container: "raw",
+              encoding: "pcm_s16le",
+              sample_rate: config.asyncSampleRate,
+            },
+            language: "en",
+          }),
+          signal: controller.signal,
+        });
+      let response = await requestSpeech(config.asyncModel);
+      if (!response.ok && config.asyncFallbackModel && config.asyncFallbackModel !== config.asyncModel) {
+        response = await requestSpeech(config.asyncFallbackModel);
+      }
+      if (!response.ok) {
+        throw new Error(`Async narration failed (${response.status})`);
+      }
+      const pcm = Buffer.from(await response.arrayBuffer());
+      if (!pcm.length) throw new Error("Async narration returned no audio");
+      const audio = pcm16Wav(pcm, config.asyncSampleRate);
+      const durationMs = Math.round(pcm.length / 2 / config.asyncSampleRate * 1_000);
+      const speech = { audio, durationMs, engine: `async:${response.headers.get("x-async-model") || config.asyncModel}` };
       cacheSpeech(cacheKey, speech);
-      sendSpeech(res, speech, voice, "MISS", result.ms);
+      sendSpeech(res, speech, voice, "MISS", performance.now() - startedAt);
     } catch (error) {
       const message = controller.signal.aborted ? "Narration was cancelled" : error instanceof Error ? error.message : String(error);
       if (!res.headersSent) res.status(controller.signal.aborted ? 499 : 503).json({ error: message });

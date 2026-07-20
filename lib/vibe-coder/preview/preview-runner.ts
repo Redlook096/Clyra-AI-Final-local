@@ -42,52 +42,6 @@ function updateStatus(state: RunnerState, status: PreviewStatus) {
   };
 }
 
-async function writeIfMissing(file: string, content: string) {
-  if (existsSync(file)) return;
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, content, "utf8");
-}
-
-async function preparePreviewProject(projectPath: string, projectName: string) {
-  await fs.mkdir(path.join(projectPath, "src"), { recursive: true });
-  await writeIfMissing(
-    path.join(projectPath, "src", "main.tsx"),
-    `import React from "react";\nimport { createRoot } from "react-dom/client";\nimport App from "./App";\n\ncreateRoot(document.getElementById("root")!).render(\n  <React.StrictMode>\n    <App />\n  </React.StrictMode>,\n);\n`,
-  );
-  await writeIfMissing(
-    path.join(projectPath, "index.html"),
-    `<!doctype html>\n<html lang="en">\n  <head>\n    <meta charset="UTF-8" />\n    <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n    <title>${projectName}</title>\n  </head>\n  <body>\n    <div id="root"></div>\n    <script type="module" src="/src/main.tsx"></script>\n  </body>\n</html>\n`,
-  );
-  await writeIfMissing(
-    path.join(projectPath, "package.json"),
-    `${JSON.stringify(
-      {
-        name: projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "clyra-vibe-preview",
-        version: "0.0.0",
-        private: true,
-        type: "module",
-        scripts: {
-          dev: "vite",
-          build: "vite build",
-          preview: "vite preview",
-        },
-        dependencies: {
-          "@vitejs/plugin-react": "^5.0.4",
-          vite: "^6.2.0",
-          typescript: "~5.8.2",
-          react: "^19.0.0",
-          "react-dom": "^19.0.0",
-          "lucide-react": "^0.546.0",
-          "framer-motion": "^12.38.0",
-        },
-        devDependencies: {},
-      },
-      null,
-      2,
-    )}\n`,
-  );
-}
-
 function serialise(state: RunnerState): PreviewSession {
   return { ...state.session };
 }
@@ -163,10 +117,28 @@ export async function startDevServer({
     existing.process.kill();
   }
 
-  await preparePreviewProject(projectPath, projectName);
-  const packageManager = detectPackageManager(projectPath);
-  const script = await detectDevScript(projectPath);
-  if (!script) {
+  const hasPackageJson = existsSync(path.join(projectPath, "package.json"));
+  const hasHtmlEntry = existsSync(path.join(projectPath, "index.html"));
+  if (!hasHtmlEntry) {
+    const session: PreviewSession = {
+      projectId,
+      projectPath,
+      packageManager: "npm",
+      devCommand: "missing",
+      status: "build_failed",
+      lastError: {
+        title: "Preview files are incomplete",
+        message: "The agent has not yet created an index.html entry point, so Clyra cannot start a preview.",
+      },
+    };
+    const state = { session, logs: [] };
+    addLog(state, "error", session.lastError!.message);
+    sessions.set(projectId, state);
+    return session;
+  }
+  const packageManager = hasPackageJson ? detectPackageManager(projectPath) : "npm";
+  const script = hasPackageJson ? await detectDevScript(projectPath) : null;
+  if (hasPackageJson && !script) {
     const session: PreviewSession = {
       projectId,
       projectPath,
@@ -190,7 +162,7 @@ export async function startDevServer({
     projectId,
     projectPath,
     packageManager,
-    devCommand: `${script.scriptName}: ${script.command}`,
+    devCommand: script ? `${script.scriptName}: ${script.command}` : "static HTML: vite",
     port,
     url: `http://127.0.0.1:${port}`,
     status: "starting",
@@ -198,7 +170,13 @@ export async function startDevServer({
   };
   const state: RunnerState = { session, logs: [] };
   sessions.set(projectId, state);
-  addLog(state, "info", `Detected ${packageManager} and script "${script.scriptName}".`);
+  addLog(
+    state,
+    "info",
+    script
+      ? `Detected ${packageManager} and script "${script.scriptName}".`
+      : "Detected a dependency-free static HTML project.",
+  );
   addLog(state, "info", `Starting preview on port ${port}.`);
 
   const child = spawn(

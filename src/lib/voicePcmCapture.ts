@@ -52,6 +52,7 @@ export class VoicePcmCapturer {
   private seq = 0;
   private muted = false;
   private ownsStream = true;
+  private ownsContext = true;
   private onChunk: PcmChunkHandler;
   private onLevel: PcmLevelHandler | null;
   private targetRate: number;
@@ -74,7 +75,7 @@ export class VoicePcmCapturer {
     this.onLevel = onLevel;
   }
 
-  async start(existingStream?: MediaStream | null) {
+  async start(existingStream?: MediaStream | null, existingContext?: AudioContext | null) {
     if (existingStream && existingStream.active) {
       this.stream = existingStream;
       this.ownsStream = false;
@@ -90,8 +91,12 @@ export class VoicePcmCapturer {
       });
       this.ownsStream = true;
     }
-    // Prefer native device rate; resample in JS only when needed.
-    this.ctx = new AudioContext();
+    // Reuse the context created directly from the call-button gesture. A
+    // second context created after WebSocket.onopen can remain suspended.
+    this.ctx = existingContext && existingContext.state !== "closed"
+      ? existingContext
+      : new AudioContext();
+    this.ownsContext = this.ctx !== existingContext;
     if (this.ctx.state === "suspended") await this.ctx.resume();
     this.source = this.ctx.createMediaStreamSource(this.stream);
     // ~128ms @ 16k / ~42ms @ 48k — responsive meter + low capture latency.
@@ -151,7 +156,7 @@ export class VoicePcmCapturer {
       this.stream?.getTracks().forEach((t) => t.stop());
     }
     this.stream = null;
-    if (this.ctx && this.ctx.state !== "closed") {
+    if (this.ownsContext && this.ctx && this.ctx.state !== "closed") {
       void this.ctx.close();
     }
     this.ctx = null;

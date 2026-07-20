@@ -16,6 +16,13 @@ export type VoiceConfig = {
   llmBaseUrl: string;
   llmApiKey: string;
   llmModel: string;
+  asyncApiKey: string;
+  asyncModel: string;
+  asyncFallbackModel: string;
+  asyncVoiceId: string;
+  asyncSampleRate: number;
+  asyncSttEnabled: boolean;
+  asyncSttModel: string;
 };
 
 export function loadVoiceConfig(): VoiceConfig {
@@ -45,6 +52,16 @@ export function loadVoiceConfig(): VoiceConfig {
     llmBaseUrl,
     llmApiKey,
     llmModel,
+    asyncApiKey: process.env.ASYNC_API_KEY ?? "",
+    asyncModel: process.env.ASYNC_TTS_MODEL ?? "async_flash_v1.5",
+    asyncFallbackModel: process.env.ASYNC_TTS_FALLBACK_MODEL ?? "async_flash_v1.5",
+    asyncVoiceId: process.env.ASYNC_VOICE_ID ?? "e0f39dc4-f691-4e78-bba5-5c636692cc04",
+    asyncSampleRate: Number(process.env.ASYNC_TTS_SAMPLE_RATE ?? 44100),
+    // Async TTS is production-validated. Keep its separate streaming ASR
+    // transport opt-in until it has completed its provider handshake; the
+    // local/browser pipeline remains the reliable default for microphone input.
+    asyncSttEnabled: process.env.ASYNC_STT_ENABLED === "true",
+    asyncSttModel: process.env.ASYNC_STT_MODEL ?? "async_asr_v1.0",
   };
 }
 
@@ -55,6 +72,8 @@ export function voiceConfigPublic(config: VoiceConfig) {
     chunkMs: config.chunkMs,
     sttModel: config.sttModel,
     ttsVoice: config.ttsVoice,
+    ttsProvider: "async",
+    ttsModel: config.asyncModel,
     transport: config.livekitUrl ? "livekit" : "websocket",
   };
 }

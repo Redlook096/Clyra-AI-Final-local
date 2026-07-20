@@ -110,7 +110,11 @@ class TtsRuntime:
         self._voice_conditionals: Dict[str, object] = {}
         self.status = RuntimeStatus(
             requested_engine=config.TTS_ENGINE,
-            device=_torch_device(),
+            # Keep importing this compatibility module side-effect free. Voice
+            # Call uses Async/Max now, and importing PyTorch only to report a
+            # device conflicts with Faster-Whisper's CTranslate2 OpenMP runtime
+            # on macOS before local TTS is ever requested.
+            device="cpu",
             reference=self._reference,
         )
 
@@ -135,7 +139,13 @@ class TtsRuntime:
             started = time.perf_counter()
             self.status.profile = self._profile()
             requested = config.TTS_ENGINE.lower()
-            if requested not in ("auto", "", "chatterbox", "chatterbox-turbo"):
+            # Voice Call owns TTS through Async Flash/Max. Loading the legacy
+            # Chatterbox stack in this STT worker can crash its native runtime
+            # on macOS (and take microphone transcription down with it), so it
+            # is an explicit opt-in for the separate local/creator path only.
+            if os.getenv("VOICE_ENABLE_LOCAL_CHATTERBOX", "false").lower() != "true":
+                self.status.reason = "local Chatterbox disabled; Voice Call uses Async Flash/Max"
+            elif requested not in ("auto", "", "chatterbox", "chatterbox-turbo"):
                 self.status.reason = f"unsupported engine '{requested}'; Clyra requires chatterbox-turbo"
             else:
                 try:

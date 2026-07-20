@@ -1,9 +1,0 @@
-{
-  "id": "checkpoint-before-code",
-  "label": "Before Code Mode edits",
-  "createdAt": "2026-07-01T06:09:26.042Z",
-  "files": [
-    "PLAN.md",
-    "implementation_plan.md"
-  ]
-}

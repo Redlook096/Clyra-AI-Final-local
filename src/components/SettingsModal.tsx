@@ -85,9 +85,9 @@ const orbThemes: Array<{ id: OrbColorTheme; label: string; gradient: string }> =
 ];
 
 const voicePresets = [
-  { id: "calm", label: "Ryan · Calm", detail: "Warm and measured", voice: "Ryan", rate: 0.88, pitch: 0.98, volume: 0.9 },
-  { id: "natural", label: "Ryan · Natural", detail: "Balanced conversation", voice: "Ryan", rate: 0.94, pitch: 1.03, volume: 0.96 },
-  { id: "bright", label: "Aiden · Bright", detail: "Clear with more energy", voice: "Aiden", rate: 1.02, pitch: 1.1, volume: 0.92 },
+  { id: "calm", label: "Max · Calm", detail: "Warm and measured", voice: "Max", rate: 0.88, pitch: 0.98, volume: 0.9 },
+  { id: "natural", label: "Max · Natural", detail: "Balanced conversation", voice: "Max", rate: 0.94, pitch: 1.03, volume: 0.96 },
+  { id: "bright", label: "Max · Bright", detail: "Clear with more energy", voice: "Max", rate: 1.02, pitch: 1.1, volume: 0.92 },
 ] as const;
 
 const modelPresets = [
@@ -322,7 +322,7 @@ export function SettingsModal({
           voice: preset.voice,
         }),
       });
-      if (!response.ok) throw new Error("Chatterbox preview is unavailable");
+      if (!response.ok) throw new Error("Async Voice preview is unavailable");
       const url = URL.createObjectURL(await response.blob());
       const audio = new Audio(url);
       audio.playbackRate = preset.rate;
@@ -529,38 +529,40 @@ export function SettingsModal({
                         <div className="py-4">
                           <p className="text-[13.5px] font-semibold text-slate-950">Orb palette</p>
                           <p className="mt-0.5 text-[12.5px] text-slate-500">Choose the live orb used across chat and voice.</p>
-                          <div className="mt-4 grid grid-cols-[36px_minmax(0,1fr)_36px] items-center gap-2">
-                            <button type="button" onClick={() => rotateOrb(-1)} aria-label="Previous orb palette" className="grid h-9 w-9 place-items-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-[border-color,color,transform] hover:scale-[1.04] hover:border-slate-300 hover:text-slate-950"><ChevronLeft className="h-4 w-4" /></button>
-                            <div className="relative h-[176px] overflow-hidden rounded-lg border border-slate-200/80 bg-[linear-gradient(180deg,rgba(248,250,252,.85),rgba(255,255,255,.96))]">
-                              <AnimatePresence mode="popLayout" initial={false}>
-                                <motion.div
-                                  key={orbColorTheme}
-                                  initial={{ opacity: 0, x: 24, scale: 0.94 }}
-                                  animate={{ opacity: 1, x: 0, scale: 1 }}
-                                  exit={{ opacity: 0, x: -24, scale: 0.94 }}
-                                  transition={QUICK_SPRING}
-                                  className="absolute inset-0 grid place-items-center"
-                                >
-                                  <div className="absolute left-1 top-1/2 -translate-y-1/2 scale-[0.52] opacity-25 blur-[.15px]">
-                                    <AiOrb colorTheme={orbThemes[(selectedOrbIndex - 1 + orbThemes.length) % orbThemes.length]!.id} introActive={false} />
-                                  </div>
-                                  <div className="relative z-10 flex flex-col items-center">
-                                    <div className="h-[116px] w-[150px] overflow-visible">
-                                      <AiOrb colorTheme={orbColorTheme} introActive={false} />
-                                    </div>
-                                    <span className="-mt-2 text-[12px] font-semibold text-slate-950">{orbThemes[selectedOrbIndex]?.label}</span>
-                                  </div>
-                                  <div className="absolute right-1 top-1/2 -translate-y-1/2 scale-[0.52] opacity-25 blur-[.15px]">
-                                    <AiOrb colorTheme={orbThemes[(selectedOrbIndex + 1) % orbThemes.length]!.id} introActive={false} />
-                                  </div>
-                                </motion.div>
-                              </AnimatePresence>
+                          <div className="clyra-orb-carousel mt-4 grid grid-cols-[30px_minmax(0,1fr)_30px] items-center gap-1">
+                            <button type="button" onClick={() => rotateOrb(-1)} aria-label="Previous orb palette" className="grid h-8 w-8 place-items-center rounded-full text-slate-300 transition-[color,transform] duration-300 hover:-translate-x-0.5 hover:text-slate-700"><ChevronLeft className="h-5 w-5" /></button>
+                            <div className="relative h-[144px] overflow-visible">
+                              {orbThemes.map((preset, index) => {
+                                let offset = index - selectedOrbIndex;
+                                if (offset > orbThemes.length / 2) offset -= orbThemes.length;
+                                if (offset < -orbThemes.length / 2) offset += orbThemes.length;
+                                const isActive = offset === 0;
+                                return (
+                                  <motion.button
+                                    key={preset.id}
+                                    type="button"
+                                    onClick={() => setOrbColorTheme(preset.id)}
+                                    aria-label={`Select ${preset.label} orb`}
+                                    aria-pressed={isActive}
+                                    initial={false}
+                                    animate={{
+                                      x: offset * 54,
+                                      y: Math.abs(offset) * 7,
+                                      scale: isActive ? 1 : Math.max(0.48, 0.8 - Math.abs(offset) * 0.1),
+                                      opacity: isActive ? 1 : Math.max(0.26, 0.76 - Math.abs(offset) * 0.14),
+                                      zIndex: 10 - Math.abs(offset),
+                                    }}
+                                    transition={{ type: "spring", stiffness: 330, damping: 31, mass: 0.62 }}
+                                    className="absolute left-1/2 top-1/2 grid h-[96px] w-[96px] -translate-x-1/2 -translate-y-1/2 place-items-center outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                                  >
+                                    <span className="pointer-events-none block h-full w-full"><AiOrb colorTheme={preset.id} introActive={false} /></span>
+                                  </motion.button>
+                                );
+                              })}
                             </div>
-                            <button type="button" onClick={() => rotateOrb(1)} aria-label="Next orb palette" className="grid h-9 w-9 place-items-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-[border-color,color,transform] hover:scale-[1.04] hover:border-slate-300 hover:text-slate-950"><ChevronRight className="h-4 w-4" /></button>
+                            <button type="button" onClick={() => rotateOrb(1)} aria-label="Next orb palette" className="grid h-8 w-8 place-items-center rounded-full text-slate-300 transition-[color,transform] duration-300 hover:translate-x-0.5 hover:text-slate-700"><ChevronRight className="h-5 w-5" /></button>
                           </div>
-                          <div className="mt-3 flex justify-center gap-1.5">
-                            {orbThemes.map((preset) => <button key={preset.id} type="button" onClick={() => setOrbColorTheme(preset.id)} aria-label={`Select ${preset.label} orb`} className={cn("h-1.5 rounded-full transition-[width,background-color]", preset.id === orbColorTheme ? "w-5 bg-slate-950" : "w-1.5 bg-slate-200 hover:bg-slate-400")} />)}
-                          </div>
+                          <p className="-mt-1 text-center text-[13px] font-semibold text-slate-950">{orbThemes[selectedOrbIndex]?.label}</p>
                         </div>
                       </>
                     ) : null}
@@ -639,7 +641,7 @@ export function SettingsModal({
                         </div>
                         {voicePreviewState !== "idle" ? (
                           <p className={cn("-mt-1 text-[11px] font-medium", voicePreviewState === "error" ? "text-rose-500" : "text-blue-600")}>
-                            {voicePreviewState === "loading" ? "Preparing Chatterbox preview…" : "Chatterbox preview is unavailable. Check the shared voice worker."}
+                            {voicePreviewState === "loading" ? "Preparing Max voice preview…" : "Async Voice preview is unavailable. Check your server configuration."}
                           </p>
                         ) : null}
                         <RangeControl

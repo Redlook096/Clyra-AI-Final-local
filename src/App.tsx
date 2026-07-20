@@ -13,6 +13,7 @@ import React, {
   useCallback,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   motion,
   AnimatePresence,
@@ -48,6 +49,9 @@ import {
   Settings,
   SquarePen,
   Trash2,
+  RotateCcw,
+  ThumbsDown,
+  ThumbsUp,
   Volume2,
   X,
   XIcon,
@@ -57,7 +61,7 @@ import {
 import { cn } from "./lib/utils";
 import { SettingsModal } from "./components/SettingsModal";
 import { ChatSearchModal } from "./components/ChatSearchModal";
-import { ShiningBrainIcon, ShiningText } from "./components/ShiningText";
+import { ShiningBrainIcon, ShiningText, ThinkingDots } from "./components/ShiningText";
 import {
   YoutubeScanEmbed,
   extractYoutubeVideoId,
@@ -70,11 +74,14 @@ import {
 } from "./components/WeatherDiagramCard";
 import {
   CLYRA_CHAT_SYSTEM_PROMPT,
+  CLYRA_ENGLISH_LANGUAGE_CONTRACT,
   CLYRA_NOTES_MODE_CONTRACT,
   wantsNotesMode,
 } from "./lib/clyraChatPrompt";
 import { BlurredStaggerStream } from "@/components/ui/blurred-stagger-text";
-import { TextBlurIn } from "@/components/ui/text-blur-in";
+import { TextFadeIn } from "@/components/ui/text-fade-in";
+import { TextLoop } from "@/components/core/text-loop";
+import { StatusTextReveal } from "@/components/core/status-text-reveal";
 import { MarkdownMessageContent } from "./components/MarkdownMessageContent";
 import {
   DocumentCardUI,
@@ -92,6 +99,13 @@ import { VibeLivePreviewPanel } from "./components/vibe/VibeLivePreviewPanel";
 import { buildLocalVibeFallbackResponse } from "./lib/buildLocalVibeFallback";
 import { VIBE_CURSOR_AGENT_SYSTEM_PROMPT } from "./lib/vibeAgentConstants";
 import { extractVibeFilesFromContent } from "./lib/parseVibeAgentContent";
+import {
+  describeControls,
+  type AgentBridge,
+  type AgentBridgeAction,
+  type AgentBridgeActionResult,
+  type AgentBridgeSnapshot,
+} from "./lib/agentController";
 
 const AIClipper = lazy(() => 
   import("./components/AIClipper").catch(() => ({
@@ -105,8 +119,7 @@ const AIClipper = lazy(() =>
     )
   }))
 );
-const VibeCoderWorkspace = lazy(() => 
-  import("./components/VibeCoderWorkspace").catch(() => ({
+const loadVibeCoderWorkspace = () => import("./components/VibeCoderWorkspace").catch(() => ({
     default: () => (
       <div className="flex items-center justify-center min-h-screen bg-slate-50">
         <div className="text-center">
@@ -115,8 +128,42 @@ const VibeCoderWorkspace = lazy(() =>
         </div>
       </div>
     )
-  }))
-);
+  }));
+const VibeCoderWorkspace = lazy(loadVibeCoderWorkspace);
+let vibeBootPreparation: Promise<void> | null = null;
+
+async function waitForM1Readiness(timeoutMs = 40_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch("/api/vibe/m1-status", { cache: "no-store" });
+      if (response.ok) {
+        const status = await response.json() as { ready?: boolean; uiUrl?: string };
+        if (status.ready) {
+          if (status.uiUrl) window.sessionStorage.setItem("clyra-m1-ui-url", status.uiUrl);
+          return;
+        }
+      }
+    } catch {
+      // The stack is still coming online. The next bounded probe will retry.
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 450));
+  }
+}
+
+function prepareVibeForBoot() {
+  if (vibeBootPreparation) return vibeBootPreparation;
+  vibeBootPreparation = (async () => {
+    const warmup = fetch("/api/vibe/m1-warmup", { method: "POST" }).catch(() => null);
+    await Promise.allSettled([
+      loadVibeCoderWorkspace(),
+      warmup,
+      fetch("/api/vibe/projects"),
+    ]);
+    await waitForM1Readiness();
+  })();
+  return vibeBootPreparation;
+}
 const WebBrowserWorkspace = lazy(() => 
   import("./components/WebBrowserWorkspace").catch(() => ({
     default: () => (
@@ -248,6 +295,87 @@ function readStoredString(key: string, fallback = "") {
   }
 }
 
+function formatRecentUpdate(updatedAt: number) {
+  const elapsedMinutes = Math.max(0, Math.round((Date.now() - updatedAt) / 60_000));
+  if (elapsedMinutes < 1) return "Updated just now";
+  if (elapsedMinutes < 60) return `Updated ${elapsedMinutes} min ago`;
+  const elapsedHours = Math.round(elapsedMinutes / 60);
+  if (elapsedHours < 24) return `Updated ${elapsedHours}h ago`;
+  return `Updated ${Math.round(elapsedHours / 24)}d ago`;
+}
+
+type BootOverlayState =
+  | "booting"
+  | "orb_up"
+  | "progress"
+  | "progress_complete"
+  | "complete";
+
+function BootIntroOverlay({
+  state,
+  progress,
+}: {
+  state: BootOverlayState;
+  progress: number;
+}) {
+  const isComplete = state === "progress_complete";
+
+  return (
+    <motion.div
+      className="clyra-boot-overlay"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: isComplete ? 0.72 : 0.32, ease: [0.16, 1, 0.3, 1] }}
+    >
+      <motion.div
+        className="clyra-boot-overlay__content"
+        initial={{ opacity: 0, y: 8, filter: "blur(5px)" }}
+        animate={state === "booting" ? { opacity: 0, y: 8, filter: "blur(5px)" } : { opacity: 1, y: 0, filter: "blur(0px)" }}
+        transition={{ duration: 0.62, ease: [0.16, 1, 0.3, 1] }}
+      >
+        <AnimatePresence initial={false}>
+          {(state === "progress" || isComplete) && (
+            <motion.div
+              className={cn("clyra-boot-progress", isComplete && "clyra-boot-progress--complete")}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <div className="clyra-boot-progress__track">
+                <motion.div
+                  className="clyra-boot-progress__fill"
+                  initial={false}
+                  animate={{ scaleX: progress }}
+                  transition={{ duration: isComplete ? 0.42 : 2.8, ease: [0.22, 1, 0.36, 1] }}
+                />
+              </div>
+              {isComplete ? (
+                <motion.span
+                  className="clyra-boot-progress__label"
+                  initial={{ opacity: 0, y: 3 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.34, ease: [0.22, 1, 0.36, 1] }}
+                >
+                  Clyra is ready
+                </motion.span>
+              ) : (
+                <TextLoop className="clyra-boot-progress__label" interval={1550}>
+                  <span>Getting your workspace ready</span>
+                  <span>Loading your conversations</span>
+                  <span>Preparing your tools</span>
+                  <span>Almost ready</span>
+                </TextLoop>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 /** Standard chat: shimmer until the model emits answer text (`content`), then hide so stagger can print it. */
 function ChatThinkingLabel({
   thinkingMode = "thinking",
@@ -256,6 +384,7 @@ function ChatThinkingLabel({
   thinkingMode?: "thinking" | "youtube" | "search" | "weather";
   searchSources?: string[];
 }) {
+  const [wavePhase, setWavePhase] = useState<"reveal" | "settle" | "shimmer">("reveal");
   const label =
     thinkingMode === "youtube"
       ? "Analyzing YouTube"
@@ -270,30 +399,33 @@ function ChatThinkingLabel({
     .filter(Boolean)
     .slice(0, 6);
 
+  const waveIconClass = cn(
+    "clyra-status-wave-icon",
+    `clyra-status-wave-icon--${wavePhase}`,
+  );
+
   return (
-    <div className="flex flex-wrap items-center gap-2" aria-live="polite">
+    <div className="clyra-thinking-status flex flex-wrap items-center gap-2" aria-live="polite">
       {thinkingMode === "youtube" ? (
-        <span className="relative inline-flex items-center justify-center" aria-hidden>
-          <motion.span
-            className="absolute inset-0 rounded-full bg-red-500/15"
-            animate={{ scale: [1, 1.35, 1], opacity: [0.55, 0.15, 0.55] }}
-            transition={{ repeat: Infinity, duration: 1.6, ease: "easeInOut" }}
-          />
-          <Youtube className="relative h-[16px] w-[16px] text-[#ff0033]" strokeWidth={2} />
+        <span className={waveIconClass} aria-hidden>
+          <Youtube className="h-[16px] w-[16px] text-[#ff0033]" strokeWidth={2} />
         </span>
       ) : thinkingMode === "search" ? (
-        <motion.span
-          className="inline-flex"
-          animate={{ rotate: [0, 12, -8, 0] }}
-          transition={{ repeat: Infinity, duration: 2.2, ease: "easeInOut" }}
-          aria-hidden
-        >
+        <span className={waveIconClass} aria-hidden>
           <Globe className="h-[15px] w-[15px] text-slate-500" strokeWidth={1.75} />
-        </motion.span>
+        </span>
       ) : (
-        <ShiningBrainIcon />
+        <span className={waveIconClass} aria-hidden>
+          <ShiningBrainIcon />
+        </span>
       )}
-      <ShiningText text={label} preset="thinkingChat" />
+      <StatusTextReveal
+        className="clyra-thinking-wave"
+        text={label}
+        ariaLabel={label}
+        onPhaseChange={setWavePhase}
+      />
+      {thinkingMode === "thinking" ? <ThinkingDots /> : null}
       {thinkingMode === "search" ? (
         <span className="ml-0.5 flex items-center gap-1.5">
           <AnimatePresence initial={false}>
@@ -492,17 +624,6 @@ function AppAgentCard({
                     />
                   </div>
                 </motion.div>
-                {running && iframeReady ? (
-                  <div className="pointer-events-none absolute inset-0">
-                    <motion.div
-                      className="absolute left-[38%] top-[42%] flex items-center gap-2"
-                      animate={{ opacity: [0.7, 1, 0.7] }}
-                      transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
-                    >
-                      <MousePointer2 className="h-5 w-5 fill-blue-500 text-blue-700 drop-shadow-md" />
-                    </motion.div>
-                  </div>
-                ) : null}
               </div>
             </div>
           </motion.div>
@@ -647,11 +768,16 @@ function extractWeatherLocation(text: string): string | null {
   return null;
 }
 
-function UserMessageText({ text }: { text: string }) {
+export function UserMessageText({ text }: { text: string }) {
   return <div className="clyra-chat-user-text">{text}</div>;
 }
 
-const AnimatedMessage = ({
+// Streaming can replace the assistant row while its first text chunk arrives.
+// Keep the thinking start outside the row component so the visual handoff still
+// honours its minimum dwell instead of blinking away on that replacement.
+const chatThinkingStartedAt = new Map<string, number>();
+
+export const AnimatedMessage = ({
   messageId,
   content,
   isThinking,
@@ -694,6 +820,57 @@ const AnimatedMessage = ({
   documentMode?: "notes";
 }) => {
   const isVibe = assistantKind === "vibe";
+  const [holdingThinking, setHoldingThinking] = useState(false);
+  const thinkingStartedAtRef = useRef<number | null>(null);
+  const thinkingKey = messageId || "anonymous-assistant-message";
+  const awaitingFirstAnswer =
+    !isVibe && content.length === 0 && (!!isThinking || !!isStreaming);
+  const minimumThinkingMs =
+    thinkingMode === "youtube" || thinkingMode === "search"
+      ? 4600
+      : thinkingMode === "weather"
+        ? 3600
+        : 3200;
+  const persistedThinkingStart = chatThinkingStartedAt.get(thinkingKey);
+  const shouldKeepThinkingForDwell =
+    !isVibe &&
+    content.length > 0 &&
+    persistedThinkingStart != null &&
+    Date.now() - persistedThinkingStart < minimumThinkingMs;
+
+  // Let the shared thinking cue breathe long enough to feel intentional. Once
+  // text arrives it hands over cleanly to the response reveal instead of blinking
+  // out between two adjacent renders.
+  useEffect(() => {
+    if (isVibe) return;
+    if (awaitingFirstAnswer) {
+      if (thinkingStartedAtRef.current == null) {
+        const startedAt = chatThinkingStartedAt.get(thinkingKey) ?? Date.now();
+        thinkingStartedAtRef.current = startedAt;
+        chatThinkingStartedAt.set(thinkingKey, startedAt);
+      }
+      setHoldingThinking(true);
+      return;
+    }
+
+    const startedAt = thinkingStartedAtRef.current ?? chatThinkingStartedAt.get(thinkingKey);
+    if (startedAt == null) {
+      setHoldingThinking(false);
+      return;
+    }
+
+    thinkingStartedAtRef.current = startedAt;
+    setHoldingThinking(true);
+    const elapsed = Date.now() - startedAt;
+    const timer = window.setTimeout(() => {
+      thinkingStartedAtRef.current = null;
+      chatThinkingStartedAt.delete(thinkingKey);
+      setHoldingThinking(false);
+    }, Math.max(0, minimumThinkingMs - elapsed));
+
+    return () => window.clearTimeout(timer);
+  }, [awaitingFirstAnswer, isVibe, minimumThinkingMs, thinkingKey]);
+
   const showYoutubeScan =
     thinkingMode === "youtube" &&
     !!youtubeVideoId &&
@@ -761,10 +938,67 @@ const AnimatedMessage = ({
   const shouldRenderMarkdown =
     markdownSupport && hasMarkdownStructure && !useDocumentUI;
   const showThinking =
-    !isVibe && content.length === 0 && (!!isThinking || !!isStreaming);
-  const showAnswer = content.length > 0 && !suppressVibeAnswerBody;
+    !isVibe && (awaitingFirstAnswer || holdingThinking || shouldKeepThinkingForDwell);
+  const showAnswer =
+    content.length > 0 &&
+    !suppressVibeAnswerBody &&
+    (!holdingThinking || isVibe) &&
+    !shouldKeepThinkingForDwell;
   const useCompletedBlurReveal =
     !isVibe && !isStreaming && !useDocumentUI && !shouldRenderMarkdown;
+  const answerBody = isVibe ? (
+    <VibeAgentMessageBody
+      key={messageId ?? "vibe-body"}
+      messageId={messageId}
+      content={content}
+      isStreaming={!!isStreaming}
+      fontSizeClass={fontSizeClass}
+      isLastAssistant={!!isLastAssistant}
+      onVibePreviewReady={onVibePreviewReady}
+    />
+  ) : useDocumentUI ? (
+    <>
+      {preamble && (
+        <MarkdownMessageContent
+          content={preamble}
+          codeHighlighting={!!codeHighlighting}
+          codePresentation="default"
+        />
+      )}
+      <DocumentCardUI
+        content={docContent}
+        isStreaming={!!isStreaming}
+        isEmail={isEmail}
+        onRewriteRequest={onDocumentRewriteRequest}
+        onContentChange={(newContent) => {
+          if (onContentChange && messageId) {
+            onContentChange(
+              messageId,
+              preamble ? `${preamble}\n\n${newContent}` : newContent,
+            );
+          }
+        }}
+        className={cn(preamble ? "mt-4" : "mt-1", fontSizeClass)}
+      />
+    </>
+  ) : shouldRenderMarkdown ? (
+    <MarkdownMessageContent
+      content={content}
+      codeHighlighting={!!codeHighlighting}
+      codePresentation="default"
+    />
+  ) : useCompletedBlurReveal ? (
+    <TextFadeIn className={cn("font-medium leading-relaxed text-inherit", fontSizeClass)} by="character">
+      {content}
+    </TextFadeIn>
+  ) : (
+    <BlurredStaggerStream
+      text={content}
+      isStreaming={!!isStreaming}
+      className={cn("text-inherit", fontSizeClass)}
+    />
+  );
+  const hasInlineStatusCard = Boolean(youtubeVideoId || weather);
   return (
     <div
       className={cn(
@@ -772,19 +1006,31 @@ const AnimatedMessage = ({
         fontSizeClass,
       )}
     >
-      <AnimatePresence initial={false} mode="wait">
+      <AnimatePresence initial={false} mode="sync">
         {showThinking ? (
           <motion.div
             key="thinking"
-            initial={{ opacity: 0, y: 3 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -3 }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
+            initial={{ opacity: 0, y: 0, filter: "blur(4px)" }}
+            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+            exit={{ opacity: 0, y: 0, scale: 0.992, filter: "blur(3px)", clipPath: "inset(0 0 0 100% round 8px)" }}
+            transition={{ duration: 0.36, ease: [0.22, 1, 0.36, 1] }}
           >
             <ChatThinkingLabel
               thinkingMode={thinkingMode}
               searchSources={searchSources}
             />
+          </motion.div>
+        ) : showAnswer && !hasInlineStatusCard ? (
+          <motion.div
+            key="answer"
+            className={cn("markdown-body", isVibe && "markdown-body--vibe")}
+            data-invert-ignore
+            initial={{ opacity: 0, y: 0, scale: 0.992, filter: "blur(4px)" }}
+            animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
+            transition={{ duration: 0.42, ease: [0.16, 1, 0.3, 1] }}
+          >
+            {answerBody}
+            {thinkingMode === "search" ? <SearchSourcesFooter urls={searchSources} /> : null}
           </motion.div>
         ) : null}
       </AnimatePresence>
@@ -792,72 +1038,15 @@ const AnimatedMessage = ({
         <YoutubeScanEmbed videoId={youtubeVideoId} active={showYoutubeScan} />
       ) : null}
       {weather ? <WeatherDiagramCard weather={weather} /> : null}
-      {showAnswer ? (
+      {showAnswer && hasInlineStatusCard ? (
         <motion.div
-          className={cn("markdown-body mt-1", isVibe && "markdown-body--vibe")}
+          className={cn("markdown-body", isVibe && "markdown-body--vibe")}
           data-invert-ignore
-          initial={{ opacity: 0, y: 4 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+          initial={{ opacity: 0, y: 0, scale: 0.992, filter: "blur(5px)" }}
+          animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
+          transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
         >
-          {isVibe ? (
-            <VibeAgentMessageBody
-              key={messageId ?? "vibe-body"}
-              messageId={messageId}
-              content={content}
-              isStreaming={!!isStreaming}
-              fontSizeClass={fontSizeClass}
-              isLastAssistant={!!isLastAssistant}
-              onVibePreviewReady={onVibePreviewReady}
-            />
-          ) : useDocumentUI ? (
-            <>
-              {preamble && (
-                <MarkdownMessageContent
-                  content={preamble}
-                  codeHighlighting={!!codeHighlighting}
-                  codePresentation="default"
-                />
-              )}
-              <DocumentCardUI
-                content={docContent}
-                isStreaming={!!isStreaming}
-                isEmail={isEmail}
-                onRewriteRequest={onDocumentRewriteRequest}
-                onContentChange={(newContent) => {
-                  if (onContentChange && messageId) {
-                    onContentChange(
-                      messageId,
-                      preamble ? `${preamble}\n\n${newContent}` : newContent,
-                    );
-                  }
-                }}
-                className={cn(preamble ? "mt-4" : "mt-1", fontSizeClass)}
-              />
-            </>
-          ) : shouldRenderMarkdown ? (
-            <MarkdownMessageContent
-              content={content}
-              codeHighlighting={!!codeHighlighting}
-              codePresentation="default"
-            />
-          ) : useCompletedBlurReveal ? (
-            <TextBlurIn
-              className={cn(
-                "font-medium leading-relaxed text-inherit",
-                fontSizeClass,
-              )}
-              by="word"
-            >
-              {content}
-            </TextBlurIn>
-          ) : (
-            <BlurredStaggerStream
-              text={content}
-              isStreaming={!!isStreaming}
-              className={cn("text-inherit", fontSizeClass)}
-            />
-          )}
+          {answerBody}
           {thinkingMode === "search" ? (
             <SearchSourcesFooter urls={searchSources} />
           ) : null}
@@ -925,14 +1114,25 @@ function useAutoResizeTextarea({
   return { textareaRef, adjustHeight };
 }
 
-interface CommandSuggestion {
-  id: AppAgentId;
+interface CommandSuggestionBase {
   icon: (isActive: boolean) => React.ReactNode;
   label: string;
   description: string;
   prefix: string;
   workspace: WorkspaceTabId;
 }
+
+interface BuiltInCommandSuggestion extends CommandSuggestionBase {
+  id: "youtube" | "search";
+  kind: "command";
+}
+
+interface AppSuggestion extends CommandSuggestionBase {
+  id: AppAgentId;
+  kind: "app";
+}
+
+type CommandSuggestion = BuiltInCommandSuggestion | AppSuggestion;
 
 interface TextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
   containerClassName?: string;
@@ -1055,72 +1255,6 @@ export default function App() {
     appAgents?: AttachedAppAgent[];
   }
 
-  // Warm Vibe Coder M1 as soon as Clyra loads — before opening the Vibe tab.
-  useEffect(() => {
-    let cancelled = false;
-    let pollTimer: number | undefined;
-    let prefetchFrame: HTMLIFrameElement | null = null;
-
-    const prefetchUi = (uiUrl: string) => {
-      if (prefetchFrame || typeof document === "undefined") return;
-      prefetchFrame = document.createElement("iframe");
-      prefetchFrame.src = `${uiUrl.replace(/\/$/, "")}/conversations`;
-      prefetchFrame.title = "Vibe Coder warmup";
-      prefetchFrame.setAttribute("aria-hidden", "true");
-      prefetchFrame.tabIndex = -1;
-      Object.assign(prefetchFrame.style, {
-        position: "fixed",
-        width: "1px",
-        height: "1px",
-        left: "-9999px",
-        top: "0",
-        opacity: "0",
-        pointerEvents: "none",
-        border: "0",
-      });
-      document.body.appendChild(prefetchFrame);
-    };
-
-    const warm = async () => {
-      try {
-        await fetch("/api/vibe/m1-warmup", { method: "POST" });
-      } catch {
-        // ignore — server may still be starting
-      }
-      if (cancelled) return;
-
-      const check = async () => {
-        try {
-          const res = await fetch("/api/vibe/m1-status");
-          const data = (await res.json()) as {
-            ready?: boolean;
-            uiReady?: boolean;
-            uiUrl?: string;
-          };
-          if (data.uiUrl && (data.uiReady || data.ready)) {
-            prefetchUi(String(data.uiUrl));
-          }
-          if (data.ready || cancelled) return;
-        } catch {
-          // keep polling
-        }
-        if (!cancelled) {
-          pollTimer = window.setTimeout(() => {
-            void check();
-          }, 4000);
-        }
-      };
-      void check();
-    };
-
-    void warm();
-    return () => {
-      cancelled = true;
-      if (pollTimer) window.clearTimeout(pollTimer);
-      prefetchFrame?.remove();
-    };
-  }, []);
-
   interface ChatSession {
     id: string;
     title: string;
@@ -1132,35 +1266,195 @@ export default function App() {
   }
 
   const [selectedCommand, setSelectedCommand] =
-    useState<CommandSuggestion | null>(null);
-  const [selectedAppAgents, setSelectedAppAgents] = useState<CommandSuggestion[]>([]);
+    useState<BuiltInCommandSuggestion | AppSuggestion | null>(null);
+  const [selectedAppAgents, setSelectedAppAgents] = useState<AppSuggestion[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<{ messageId: string; agentId: AppAgentId } | null>(null);
   const [activeWorkspaceTab, setActiveWorkspaceTab] =
     useState<WorkspaceTabId>(() => readEmbeddedWorkspace());
   const [isEmbeddedToolPreview] = useState(
     () => typeof window !== "undefined" && new URLSearchParams(window.location.search).has("embedTool"),
   );
+
+  // Preview agents operate against this exact, visible same-origin workspace.
+  // The bridge deliberately exposes semantic controls and verified DOM actions
+  // instead of a second hidden page or a simulated cursor.
+  useEffect(() => {
+    if (!isEmbeddedToolPreview) return;
+
+    const snapshot = (): AgentBridgeSnapshot => ({
+      route: `${window.location.pathname}${window.location.search}`,
+      workspace: activeWorkspaceTab,
+      activeTab: activeWorkspaceTab,
+      loading: false,
+      notifications: [],
+      errors: [],
+      controls: describeControls(document),
+      scroll: {
+        x: window.scrollX,
+        y: window.scrollY,
+        width: window.innerWidth,
+        height: window.innerHeight,
+      },
+      capturedAt: Date.now(),
+    });
+
+    const findControl = (ref: string) => {
+      const byId = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-agent-id], [data-testid]"),
+      ).find((element) => element.dataset.agentId === ref || element.dataset.testid === ref);
+      if (byId) return byId;
+
+      return Array.from(document.querySelectorAll<HTMLElement>(
+        "button, input, textarea, select, [role=button], [role=tab], [contenteditable=true]",
+      )).find((element) =>
+        [element.getAttribute("aria-label"), element.getAttribute("title"), element.textContent?.trim()]
+          .filter(Boolean)
+          .some((value) => value === ref),
+      ) || null;
+    };
+
+    const act = (action: AgentBridgeAction): AgentBridgeActionResult => {
+      const before = snapshot();
+      const beforeId = String(before.capturedAt);
+      let success = false;
+      let changed = false;
+      let message = "";
+
+      try {
+        if (action.type === "navigate") {
+          const destination = new URL(action.url, window.location.href);
+          if (destination.origin !== window.location.origin) throw new Error("Navigation must stay inside this workspace.");
+          window.location.assign(destination.href);
+          success = true;
+          changed = true;
+        } else {
+          const element = action.type === "scroll" && !action.ref ? null : findControl("ref" in action && action.ref ? action.ref : "");
+          if (action.type !== "scroll" || action.ref) {
+            if (!element) throw new Error("The requested control is no longer available.");
+            if (element.matches("[disabled], [aria-disabled=true]")) throw new Error("The requested control is disabled.");
+          }
+
+          if (action.type === "click") {
+            element!.scrollIntoView({ block: "center", behavior: "smooth" });
+            element!.click();
+            success = true;
+            changed = true;
+          } else if (action.type === "focus") {
+            element!.focus();
+            success = document.activeElement === element;
+            changed = success;
+          } else if (action.type === "type") {
+            const field = element as HTMLInputElement | HTMLTextAreaElement | HTMLElement;
+            if (!(field instanceof HTMLInputElement) && !(field instanceof HTMLTextAreaElement) && !field.isContentEditable) {
+              throw new Error("The requested control does not accept text.");
+            }
+            field.focus();
+            const previous = field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement
+              ? field.value
+              : field.textContent || "";
+            const nextValue = action.clearFirst ? action.text : `${previous}${action.text}`;
+            if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) {
+              const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value");
+              descriptor?.set?.call(field, nextValue);
+              field.dispatchEvent(new Event("input", { bubbles: true }));
+              field.dispatchEvent(new Event("change", { bubbles: true }));
+            } else {
+              field.textContent = nextValue;
+              field.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: action.text }));
+            }
+            success = true;
+            changed = previous !== nextValue;
+          } else if (action.type === "press") {
+            const target = element || document.activeElement || document.body;
+            target.dispatchEvent(new KeyboardEvent("keydown", { key: action.key, bubbles: true }));
+            target.dispatchEvent(new KeyboardEvent("keyup", { key: action.key, bubbles: true }));
+            success = true;
+            changed = true;
+          } else if (action.type === "scroll") {
+            const target = element || document.scrollingElement || document.documentElement;
+            const delta = (action.amount ?? 480) * (action.direction === "down" ? 1 : -1);
+            const beforeTop = target instanceof HTMLElement ? target.scrollTop : window.scrollY;
+            if (target instanceof HTMLElement) target.scrollBy({ top: delta, behavior: "smooth" });
+            else window.scrollBy({ top: delta, behavior: "smooth" });
+            success = true;
+            changed = beforeTop !== (target instanceof HTMLElement ? target.scrollTop : window.scrollY) || delta !== 0;
+          }
+        }
+      } catch (error) {
+        message = error instanceof Error ? error.message : "The action could not be completed.";
+      }
+
+      const after = snapshot();
+      return { success, changed, beforeSnapshotId: beforeId, afterSnapshotId: String(after.capturedAt), message: message || undefined };
+    };
+
+    const bridge: AgentBridge = { snapshot, act };
+    window.__CLYRA_AGENT_BRIDGE__ = bridge;
+    return () => {
+      if (window.__CLYRA_AGENT_BRIDGE__ === bridge) delete window.__CLYRA_AGENT_BRIDGE__;
+    };
+  }, [activeWorkspaceTab, isEmbeddedToolPreview]);
   const [isAppLauncherOpen, setIsAppLauncherOpen] = useState(false);
   const [workspaceChromeEngaged, setWorkspaceChromeEngaged] = useState(isEmbeddedToolPreview);
-  const [workflowTabsHoverReveal, setWorkflowTabsHoverReveal] = useState(false);
-  const [workflowTabsHintVisible, setWorkflowTabsHintVisible] = useState(false);
-  const workflowTabsWasVisibleRef = useRef(false);
-  const workflowTabsHintTimerRef = useRef<number | null>(null);
-  const workflowTabsHoverHideTimerRef = useRef<number | null>(null);
+  const m1WorkspaceFrameRef = useRef<HTMLIFrameElement>(null);
+  const [m1WorkspacePath, setM1WorkspacePath] = useState("/");
+  const m1ShellReadyRef = useRef(false);
+  const pendingM1NavigationRef = useRef<{
+    type: string;
+    path: string;
+    targetOrigin: string;
+  } | null>(null);
+
+  useEffect(() => {
+    const handleM1Navigation = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        type?: string;
+        path?: string;
+        targetOrigin?: string;
+      }>).detail;
+      if (detail?.type !== "clyra-m1-navigate" || !detail.path) return;
+      pendingM1NavigationRef.current = {
+        type: detail.type,
+        path: detail.path,
+        targetOrigin: detail.targetOrigin || "http://127.0.0.1:8000",
+      };
+      // Navigate the iframe declaratively as well as posting a message. The
+      // M1 root route is intentionally sparse, and a message sent before its
+      // router listener mounts previously left the entire Vibe surface white.
+      setM1WorkspacePath(detail.path);
+      m1WorkspaceFrameRef.current?.contentWindow?.postMessage(
+        { type: detail.type, path: detail.path },
+        pendingM1NavigationRef.current.targetOrigin,
+      );
+    };
+    const handleM1Message = (event: MessageEvent) => {
+      if (event.origin !== "http://127.0.0.1:8000") return;
+      if (event.data?.type === "clyra-m1-shell-ready") {
+        m1ShellReadyRef.current = true;
+        const pending = pendingM1NavigationRef.current;
+        if (pending) {
+          m1WorkspaceFrameRef.current?.contentWindow?.postMessage(
+            { type: pending.type, path: pending.path },
+            pending.targetOrigin,
+          );
+        }
+      } else if (
+        event.data?.type === "clyra-m1-ready" &&
+        typeof event.data.conversationId === "string"
+      ) {
+        m1WorkspaceFrameRef.current.dataset.conversationId =
+          event.data.conversationId;
+      }
+    };
+    window.addEventListener("clyra:m1-navigate", handleM1Navigation);
+    window.addEventListener("message", handleM1Message);
+    return () => {
+      window.removeEventListener("clyra:m1-navigate", handleM1Navigation);
+      window.removeEventListener("message", handleM1Message);
+    };
+  }, []);
   const [workspaceTransitionDirection, setWorkspaceTransitionDirection] =
     useState<number>(0);
-
-  const revealWorkflowTabs = () => {
-    if (workflowTabsHoverHideTimerRef.current) window.clearTimeout(workflowTabsHoverHideTimerRef.current);
-    setWorkflowTabsHoverReveal(true);
-  };
-  const hideWorkflowTabsSoon = () => {
-    if (workflowTabsHoverHideTimerRef.current) window.clearTimeout(workflowTabsHoverHideTimerRef.current);
-    workflowTabsHoverHideTimerRef.current = window.setTimeout(() => {
-      setWorkflowTabsHoverReveal(false);
-      workflowTabsHoverHideTimerRef.current = null;
-    }, 180);
-  };
 
   const containerMouseX = useMotionValue(0);
   const magneticTargetX = useTransform(containerMouseX, (mouseX) => {
@@ -1260,80 +1554,53 @@ export default function App() {
     | "booting"
     | "orb_up"
     | "progress"
-    | "input_circle"
-    | "input_expand"
     | "progress_complete"
     | "complete";
   const [introState, setIntroState] = useState<IntroState>("booting");
-  const [introProgressText, setIntroProgressText] = useState("INITIALIZING");
   const [introProgress, setIntroProgress] = useState(0);
-  const [progressDuration] = useState(() => 2.4 + Math.random() * 1.4);
-  const introBusy =
+  const isBootOverlayVisible =
     introState === "booting" ||
     introState === "orb_up" ||
     introState === "progress" ||
     introState === "progress_complete";
-  const introPreExpand =
-    introBusy || introState === "input_circle";
 
   useEffect(() => {
-    if (
-      typeof document !== "undefined" &&
-      document.visibilityState === "hidden"
-    ) {
-      setIntroState("complete");
-      setIntroProgress(1);
-      return;
-    }
-
     let cancelled = false;
-    let raf = 0;
     const wait = (ms: number) =>
       new Promise<void>((resolve) => {
         window.setTimeout(resolve, ms);
       });
 
     const run = async () => {
-      setIntroState("orb_up");
-      await wait(720);
+      // Put the heavier optional workspace work behind Clyra's own boot UI so
+      // opening Vibe later feels immediate instead of starting a cold stack.
+      const vibePreparation = prepareVibeForBoot();
+      await wait(140);
       if (cancelled) return;
 
       setIntroState("progress");
-      setIntroProgress(0);
-      setIntroProgressText("INITIALIZING");
+      setIntroProgress(0.08);
+      await wait(40);
+      if (cancelled) return;
+      setIntroProgress(0.9);
 
-      const startedAt = performance.now();
-      const durationMs = progressDuration * 1000;
-      const animate = (now: number) => {
-        if (cancelled) return;
-        const ratio = Math.min(1, (now - startedAt) / durationMs);
-        setIntroProgress(ratio);
-        if (ratio < 0.28) setIntroProgressText("INITIALIZING");
-        else if (ratio < 0.58) setIntroProgressText("LOADING");
-        else if (ratio < 0.86) setIntroProgressText("PREPARING");
-        else setIntroProgressText("READY");
-        if (ratio < 1) raf = requestAnimationFrame(animate);
-      };
-      raf = requestAnimationFrame(animate);
-
-      await Promise.all([
-        wait(durationMs),
+      const minimumVisibleMs = 2_650;
+      // Core UI readiness stays authoritative. Warming the optional coding
+      // environment may be slow on first launch, so it gets a bounded window
+      // rather than making the primary Chat boot appear frozen indefinitely.
+      const systemReady = Promise.all([
         document.fonts?.ready?.catch(() => undefined) ?? Promise.resolve(),
+        Promise.race([vibePreparation, wait(8_000)]),
+        wait(420),
       ]);
+      await Promise.all([systemReady, wait(minimumVisibleMs)]);
       if (cancelled) return;
 
       setIntroProgress(1);
-      setIntroProgressText("READY");
+      await wait(440);
+      if (cancelled) return;
       setIntroState("progress_complete");
-      await wait(260);
-      if (cancelled) return;
-
-      setIntroState("input_circle");
-      await wait(360);
-      if (cancelled) return;
-
-      setIntroState("input_expand");
-      await wait(780);
+      await wait(720);
       if (cancelled) return;
 
       setIntroState("complete");
@@ -1343,9 +1610,8 @@ export default function App() {
     void run();
     return () => {
       cancelled = true;
-      if (raf) cancelAnimationFrame(raf);
     };
-  }, [progressDuration]);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -1375,6 +1641,12 @@ export default function App() {
   const [recentCommand, setRecentCommand] = useState<string | null>(null);
   const [isInputExpanded, setIsInputExpanded] = useState(false);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [resumingChatId, setResumingChatId] = useState<string | null>(null);
+  const [feedbackMenu, setFeedbackMenu] = useState<{ messageId: string; sentiment: "up" | "down" } | null>(null);
+  const [feedbackText, setFeedbackText] = useState("");
+  const sendMessageRef = useRef<(() => Promise<void>) | null>(null);
+  const regenerationRef = useRef<{ messageId: string; userMessageId: string } | null>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1395,7 +1667,78 @@ export default function App() {
   }, [currentChatId, value]);
 
   const isAiResponding = messages.some((m) => m.isStreaming || m.isThinking);
+  const scrollToLatest = useCallback(() => {
+    const container = document.getElementById("chat-container");
+    if (!container) return;
+    if (jumpScrollRafRef.current != null) {
+      cancelAnimationFrame(jumpScrollRafRef.current);
+    }
+    userPinnedAwayRef.current = false;
+    chatNearBottomRef.current = true;
+    programmaticScrollRef.current = true;
+    setShowScrollToLatest(false);
+    const start = container.scrollTop;
+    const target = Math.max(0, container.scrollHeight - container.clientHeight);
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const startedAt = performance.now();
+    const duration = reducedMotion ? 0 : 520;
+
+    const finish = () => {
+      container.scrollTop = target;
+      lastScrollTopRef.current = target;
+      programmaticScrollRef.current = false;
+      jumpScrollRafRef.current = null;
+    };
+
+    if (duration === 0 || Math.abs(target - start) < 2) {
+      finish();
+      return;
+    }
+
+    const animate = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - progress, 4);
+      container.scrollTop = start + (target - start) * eased;
+      lastScrollTopRef.current = container.scrollTop;
+      if (progress < 1) {
+        jumpScrollRafRef.current = requestAnimationFrame(animate);
+      } else {
+        finish();
+      }
+    };
+    jumpScrollRafRef.current = requestAnimationFrame(animate);
+  }, []);
+
+  const followLatest = useCallback(() => {
+    const container = document.getElementById("chat-container");
+    if (!container || scrollRafRef.current != null) return;
+
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    programmaticScrollRef.current = true;
+
+    const follow = () => {
+      const target = Math.max(0, container.scrollHeight - container.clientHeight);
+      const distance = target - container.scrollTop;
+      if (reducedMotion || Math.abs(distance) < 0.75) {
+        container.scrollTop = target;
+        lastScrollTopRef.current = target;
+        programmaticScrollRef.current = false;
+        scrollRafRef.current = null;
+        return;
+      }
+
+      // A small proportional step is cheaper than repeatedly starting native
+      // smooth-scroll animations for every streamed chunk, and keeps the
+      // latest response continuously above the composer.
+      container.scrollTop += distance * 0.24;
+      lastScrollTopRef.current = container.scrollTop;
+      scrollRafRef.current = requestAnimationFrame(follow);
+    };
+
+    scrollRafRef.current = requestAnimationFrame(follow);
+  }, []);
   const isExpanded =
+    messages.length > 0 ||
     isComposerFocused ||
     isInputExpanded ||
     attachments.length > 0 ||
@@ -1416,6 +1759,9 @@ export default function App() {
 
   const pendingDocumentRewriteRef = useRef<DocumentRewriteRequest | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const toggleSidebar = useCallback(() => {
+    setIsSidebarOpen((open) => !open);
+  }, []);
   const [isRephrasingMode, setIsRephrasingMode] = useState(false);
   const [rewritePhase, setRewritePhase] = useState<"ready" | "applying">(
     "ready",
@@ -1523,7 +1869,7 @@ export default function App() {
     conversationId: currentChatId,
     enabled: true,
     chatHistory: voiceChatHistory,
-    systemPrompt: systemPrompt,
+    systemPrompt: `${systemPrompt.trim() || CLYRA_CHAT_SYSTEM_PROMPT}\n\n${CLYRA_ENGLISH_LANGUAGE_CONTRACT}`,
     temperature,
     speechRate: voiceRate,
     speechPitch: voicePitch,
@@ -1541,6 +1887,7 @@ export default function App() {
   const userPinnedAwayRef = useRef(false);
   const programmaticScrollRef = useRef(false);
   const scrollRafRef = useRef<number | null>(null);
+  const jumpScrollRafRef = useRef<number | null>(null);
   const lastScrollTopRef = useRef(0);
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
 
@@ -1703,6 +2050,18 @@ export default function App() {
     [chats, openChatSession],
   );
 
+  const resumeRecentChat = useCallback(
+    (chat: ChatSession) => {
+      if (resumingChatId) return;
+      setResumingChatId(chat.id);
+      window.setTimeout(() => {
+        openChatSession(chat);
+        window.setTimeout(() => setResumingChatId(null), 420);
+      }, 120);
+    },
+    [openChatSession, resumingChatId],
+  );
+
   const handleNewChat = useCallback(() => {
     setChatDrafts((current) => ({ ...current, [currentChatId || "new"]: value }));
     skipDraftPersistRef.current = true;
@@ -1717,6 +2076,14 @@ export default function App() {
     setVibePreviewFiles(null);
     setIsSidebarOpen(false);
     setSearchQuery("");
+    // The conversation rail is conditionally removed for the welcome screen.
+    // Reset its bookkeeping now so a new first message starts from a clean,
+    // visible position instead of inheriting the prior conversation's scroll.
+    chatNearBottomRef.current = true;
+    userPinnedAwayRef.current = false;
+    programmaticScrollRef.current = false;
+    lastScrollTopRef.current = 0;
+    setShowScrollToLatest(false);
   }, [chatDrafts.new, currentChatId, value]);
 
   const showVibeLivePreview =
@@ -1803,19 +2170,7 @@ export default function App() {
     if (!el || messages.length === 0) return;
     if (userPinnedAwayRef.current || !chatNearBottomRef.current) return;
 
-    if (scrollRafRef.current != null) {
-      cancelAnimationFrame(scrollRafRef.current);
-    }
-    scrollRafRef.current = requestAnimationFrame(() => {
-      programmaticScrollRef.current = true;
-      // Instant follow while streaming — avoids stacked smooth scrolls fighting the user.
-      el.scrollTop = el.scrollHeight;
-      lastScrollTopRef.current = el.scrollTop;
-      requestAnimationFrame(() => {
-        programmaticScrollRef.current = false;
-      });
-      scrollRafRef.current = null;
-    });
+    followLatest();
 
     return () => {
       if (scrollRafRef.current != null) {
@@ -1823,7 +2178,7 @@ export default function App() {
         scrollRafRef.current = null;
       }
     };
-  }, [chatScrollSignature, autoScroll, messages.length, showVibeLivePreview]);
+  }, [chatScrollSignature, autoScroll, messages.length, showVibeLivePreview, followLatest]);
 
   useEffect(() => {
     if (toastMessage) {
@@ -1924,7 +2279,26 @@ export default function App() {
 
   const commandSuggestions: CommandSuggestion[] = useMemo(() => [
     {
+      id: "youtube",
+      kind: "command",
+      icon: () => <Youtube className="h-4 w-4" />,
+      label: "YouTube analyzer",
+      description: "Analyze a video and answer from its transcript",
+      prefix: "/youtube",
+      workspace: "chat",
+    },
+    {
+      id: "search",
+      kind: "command",
+      icon: () => <Search className="h-4 w-4" />,
+      label: "Web search",
+      description: "Research current information from the web",
+      prefix: "/search",
+      workspace: "chat",
+    },
+    {
       id: "vibe",
+      kind: "app",
       icon: (isActive) => (
         <div className="relative flex items-center justify-center w-[18px] text-slate-700">
           <svg
@@ -1961,6 +2335,7 @@ export default function App() {
     },
     {
       id: "study",
+      kind: "app",
       icon: (isActive) => (
         <div className="relative flex items-center justify-center w-full h-full text-slate-700">
           <motion.div
@@ -1978,6 +2353,7 @@ export default function App() {
     },
     {
       id: "browse",
+      kind: "app",
       icon: (isActive) => (
         <div className="relative flex h-full w-full items-center justify-center text-slate-700">
           <motion.div
@@ -1999,6 +2375,7 @@ export default function App() {
     },
     {
       id: "fake-text",
+      kind: "app",
       icon: (isActive) => (
         <div className="relative flex items-center justify-center w-full h-full text-slate-700">
           <motion.div
@@ -2020,6 +2397,7 @@ export default function App() {
     },
     {
       id: "would-rather",
+      kind: "app",
       icon: (isActive) => (
         <div className="relative flex items-center justify-center w-full h-full text-slate-700">
           <motion.div animate={isActive ? { scale: [1, 1.1, 1] } : { scale: 1 }} transition={{ repeat: Infinity, duration: 1.45, ease: "easeInOut" }}>
@@ -2034,6 +2412,7 @@ export default function App() {
     },
     {
       id: "clip",
+      kind: "app",
       icon: (isActive) => (
         <div className="relative flex items-center justify-center w-full h-full text-slate-700">
           <motion.div
@@ -3013,7 +3392,7 @@ Please analyze the code you just wrote and fix this error.`;
       if (rawUserText) setWorkspaceChromeEngaged(true);
       const vibeCommand = rawUserText.match(/^\/vibe(?:\s+(.+))?$/i);
       const clipCommand = rawUserText.match(/^\/clip(?:\s+(.+))?$/i);
-      const browseCommand = rawUserText.match(/^\/browse(?:\s+(.+))?$/i);
+      const browseCommand = rawUserText.match(/^\/(?:browse|browser)(?:\s+(.+))?$/i);
       const youtubeCommand = rawUserText.match(/^\/youtube(?:\s+(.+))?$/i);
       const searchCommand = rawUserText.match(/^\/search(?:\s+(.+))?$/i);
       if (userCommandId === "clip" || clipCommand) {
@@ -3034,7 +3413,8 @@ Please analyze the code you just wrote and fix this error.`;
         return;
       }
 
-      if (userCommandId === "browse" || browseCommand) {
+      const browserTask = browseCommand?.[1]?.trim() ?? "";
+      if ((userCommandId === "browse" || browseCommand) && !browserTask) {
         setSelectedCommand(null);
         setActiveWorkspaceTab("browser");
         setValue("");
@@ -3042,6 +3422,14 @@ Please analyze the code you just wrote and fix this error.`;
         setRecentCommand(null);
         setShowCommandPalette(false);
         return;
+      }
+      if (browserTask) {
+        const browserAgent = commandSuggestions.find(
+          (command): command is AppSuggestion => command.kind === "app" && command.id === "browse",
+        );
+        if (browserAgent && !attachedAgentCommands.some((agent) => agent.id === "browse")) {
+          attachedAgentCommands.push(browserAgent);
+        }
       }
 
       const detectedYoutubeUrl = extractYoutubeUrl(rawUserText);
@@ -3130,6 +3518,7 @@ Please analyze the code you just wrote and fix this error.`;
           : "");
 
       const userText =
+        browserTask ||
         vibeCommand?.[1]?.trim() ||
         (isWeatherMode
           ? weatherCommand?.[1]?.trim() ||
@@ -3147,6 +3536,9 @@ Please analyze the code you just wrote and fix this error.`;
       setValue("");
       setSelectedCommand(null);
       setSelectedAppAgents([]);
+      setIsComposerFocused(false);
+      setIsInputExpanded(false);
+      textareaRef.current?.blur();
       adjustHeight(true);
       setRecentCommand(null);
 
@@ -3158,7 +3550,10 @@ Please analyze the code you just wrote and fix this error.`;
       }
 
       const currentMessages = messages;
-      const userMsgId = Date.now().toString();
+      const regeneration = regenerationRef.current;
+      const isRegeneration = regeneration != null;
+      regenerationRef.current = null;
+      const userMsgId = regeneration?.userMessageId ?? Date.now().toString();
       const aiMsgId = (Date.now() + 1).toString();
 
       const isVibeMode = userCommandId === "vibe" || Boolean(vibeCommand);
@@ -3176,7 +3571,7 @@ Please analyze the code you just wrote and fix this error.`;
           priorYoutube?.youtubeVideoId ||
           undefined
         : undefined;
-      setActiveWorkspaceTab(isVibeMode ? "vibe" : "chat");
+      setActiveWorkspaceTab(isVibeMode ? "vibe" : browserTask ? "browser" : "chat");
       const userMessage: Message = {
         id: userMsgId,
         role: "user",
@@ -3205,7 +3600,11 @@ Please analyze the code you just wrote and fix this error.`;
             }
           : {}),
       };
-      const nextMessages = [...currentMessages, userMessage, assistantMessage];
+      // Regeneration keeps the original user bubble exactly where it was. Only
+      // its completed answer is replaced by a fresh thinking/streaming row.
+      const nextMessages = isRegeneration
+        ? [...currentMessages, assistantMessage]
+        : [...currentMessages, userMessage, assistantMessage];
 
       chatNearBottomRef.current = true;
       userPinnedAwayRef.current = false;
@@ -3249,9 +3648,8 @@ Please analyze the code you just wrote and fix this error.`;
 
       setTimeout(() => {
         const chatContainer = document.getElementById("chat-container");
-        if (chatContainer && autoScroll) {
+        if (chatContainer && autoScroll && !userPinnedAwayRef.current) {
           chatNearBottomRef.current = true;
-          userPinnedAwayRef.current = false;
           chatContainer.scrollTo({
             top: chatContainer.scrollHeight,
             behavior: "smooth",
@@ -3895,9 +4293,21 @@ Please analyze the code you just wrote and fix this error.`;
               ? systemPrompt.trim()
               : CLYRA_CHAT_SYSTEM_PROMPT;
 
+          let feedbackGuidance = "";
+          try {
+            const feedback = JSON.parse(localStorage.getItem("clyra-response-feedback") || "[]") as Array<{ sentiment?: string; detail?: string }>;
+            const recentFeedback = feedback.slice(-8).map((item) => `${item.sentiment === "up" ? "Helpful" : "Improve"}: ${item.detail || ""}`).filter(Boolean);
+            if (recentFeedback.length) {
+              feedbackGuidance = `\n\nUser response preferences from earlier chats (apply when relevant):\n${recentFeedback.join("\n")}`;
+            }
+          } catch {
+            // Preferences are optional and must never block a response.
+          }
+
+          const languageContract = `\n\n${CLYRA_ENGLISH_LANGUAGE_CONTRACT}`;
           const finalPrompt = wantsNotesMode(userText)
-            ? `${basePrompt}\n\n${CLYRA_NOTES_MODE_CONTRACT}`
-            : basePrompt;
+            ? `${basePrompt}${languageContract}${feedbackGuidance}\n\n${CLYRA_NOTES_MODE_CONTRACT}`
+            : `${basePrompt}${languageContract}${feedbackGuidance}`;
 
           await streamOpenAI(
             finalPrompt,
@@ -3969,6 +4379,8 @@ Please analyze the code you just wrote and fix this error.`;
     }
   };
 
+  sendMessageRef.current = handleSendMessage;
+
   const handleComposerPrimaryAction = (
     event?: React.MouseEvent<HTMLButtonElement> | React.PointerEvent<HTMLButtonElement>,
   ) => {
@@ -3980,6 +4392,33 @@ Please analyze the code you just wrote and fix this error.`;
     }
     void voiceCall.startCall();
   };
+
+  const regenerateResponse = useCallback((messageId: string) => {
+    const index = messages.findIndex((message) => message.id === messageId);
+    const userMessage = index > 0 ? messages.slice(0, index).reverse().find((message) => message.role === "user") : null;
+    if (!userMessage) return;
+    regenerationRef.current = { messageId, userMessageId: userMessage.id };
+    setMessages((current) => current.slice(0, current.findIndex((message) => message.id === messageId)));
+    setValue(userMessage.content);
+    setIsInputExpanded(true);
+    requestAnimationFrame(() => {
+      const chatContainer = document.getElementById("chat-container");
+      chatContainer?.scrollTo({ top: chatContainer.scrollHeight, behavior: "smooth" });
+      window.setTimeout(() => void sendMessageRef.current?.(), 110);
+    });
+  }, [messages]);
+
+  const captureResponseFeedback = useCallback((messageId: string, sentiment: "up" | "down", detail: string) => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("clyra-response-feedback") || "[]") as unknown[];
+      localStorage.setItem("clyra-response-feedback", JSON.stringify([...saved, { messageId, sentiment, detail: detail.trim(), savedAt: Date.now() }].slice(-50)));
+    } catch {
+      // Feedback is optional; chat continues if browser storage is unavailable.
+    }
+    setFeedbackMenu(null);
+    setFeedbackText("");
+    setToastMessage(sentiment === "up" ? "Thanks — saved for future responses" : "Thanks — saved for future improvements");
+  }, []);
 
   /** Start voice on pointerdown so framer-motion whileTap scale can't cancel the click. */
   const handleComposerVoicePointerDown = (
@@ -4011,12 +4450,23 @@ Please analyze the code you just wrote and fix this error.`;
   const selectCommandSuggestion = (index: number) => {
     const selectedCmd = commandSuggestions[index];
     if (!selectedCmd) return;
+    if (selectedCmd.kind === "command") {
+      setSelectedCommand(selectedCmd);
+      // The selected-tool chip owns the command state. Leave the composer
+      // clean so users can write the actual request without a visible prefix.
+      setValue("");
+      setSelectedAppAgents([]);
+      setIsCommandPalettePinned(false);
+      setShowCommandPalette(false);
+      setIsInputExpanded(true);
+      window.setTimeout(() => textareaRef.current?.focus(), 50);
+      return;
+    }
     setSelectedAppAgents((current) => current.some((agent) => agent.id === selectedCmd.id) ? current.filter((agent) => agent.id !== selectedCmd.id) : [...current, selectedCmd]);
     setSelectedCommand(null);
     setClipInitialUrl("");
-    setValue("");
-    setIsCommandPalettePinned(false);
-    setShowCommandPalette(false);
+    setIsCommandPalettePinned(true);
+    setShowCommandPalette(true);
     setIsInputExpanded(true);
     setTimeout(() => {
       if (textareaRef.current) {
@@ -4069,6 +4519,7 @@ Please analyze the code you just wrote and fix this error.`;
             : "chat");
   const activeInputCommand =
     selectedCommand && selectedCommand.id !== "vibe" ? selectedCommand : null;
+  const recentChat = chats.find((chat) => chat.title.trim() && chat.messages.length > 0) ?? null;
   const inputPlaceholder = isVibeWorkspace
     ? "Tell the coding agent what to build..."
     : "Ask Clyra anything...";
@@ -4095,28 +4546,10 @@ Please analyze the code you just wrote and fix this error.`;
   const workflowTabsRestingVisible =
     !isCreatorWorkspace &&
     !isBrowserWorkspace &&
-    !isStudyWorkspace &&
-    !workspaceChromeEngaged &&
-    messages.length === 0;
+    !isStudyWorkspace;
   const showWorkflowTabs =
     !isEmbeddedToolPreview &&
-    (workflowTabsRestingVisible || workflowTabsHoverReveal);
-
-  useEffect(() => {
-    const wasVisible = workflowTabsWasVisibleRef.current;
-    workflowTabsWasVisibleRef.current = showWorkflowTabs;
-    if (!wasVisible || showWorkflowTabs || isEmbeddedToolPreview) return;
-    setWorkflowTabsHintVisible(true);
-    if (workflowTabsHintTimerRef.current) window.clearTimeout(workflowTabsHintTimerRef.current);
-    workflowTabsHintTimerRef.current = window.setTimeout(() => {
-      setWorkflowTabsHintVisible(false);
-      workflowTabsHintTimerRef.current = null;
-    }, 2_000);
-  }, [isEmbeddedToolPreview, showWorkflowTabs]);
-
-  useEffect(() => () => {
-    if (workflowTabsHintTimerRef.current) window.clearTimeout(workflowTabsHintTimerRef.current);
-  }, []);
+    (activeWorkspaceTab === "chat" || workflowTabsRestingVisible);
   const sidebarWidthPx = 272;
   const sidebarClearancePx = sidebarWidthPx + 24;
   const effectiveWorkspaceViewport =
@@ -4131,20 +4564,7 @@ Please analyze the code you just wrote and fix this error.`;
     : showWorkspaceLivePreview
       ? Math.min(effectiveWorkspaceViewport, 1180)
       : Math.min(768, Math.max(0, effectiveWorkspaceViewport - 32));
-  const naturalContentGap = Math.max(
-    0,
-    (viewportWidth - centeredContentWidth) / 2,
-  );
-  const sidebarAvoidShift =
-    isSidebarOpen &&
-    showSidebarControls &&
-    viewportWidth >= 760 &&
-    naturalContentGap < sidebarClearancePx
-      ? Math.min(
-          sidebarClearancePx - naturalContentGap,
-          sidebarWidthPx * 0.52,
-        )
-      : 0;
+  const sidebarAvoidShift = 0;
 
   useEffect(() => {
     if (!showSidebarControls) {
@@ -4181,32 +4601,30 @@ Please analyze the code you just wrote and fix this error.`;
     }),
   };
 
+  const recentUserRequest = recentChat?.messages.find((message) => message.role === "user")?.content.trim();
   const chatQuickActions: Array<{
     baseLabel: string;
     skeletonLabel: string;
     prompt: string;
     icon: React.ComponentType<{ className?: string }>;
-  }> = [
-    {
-      baseLabel: "Continue Study Pal",
-      skeletonLabel: "[with a research question]",
-      prompt:
-        "Help me turn my research into a concise study plan with key questions and next actions.",
-      icon: Check,
-    },
-    {
-      baseLabel: "Summarise recent notes",
-      skeletonLabel: "[into the essentials]",
-      prompt: "Summarise my recent notes into the essential ideas, decisions, and next steps:",
-      icon: MessageCircleDashed,
-    },
-    {
-      baseLabel: "Start a coding project",
-      skeletonLabel: "[with a clear brief]",
-      prompt: "Help me define a focused coding project with a clear build brief:",
-      icon: SquarePen,
-    },
-  ];
+    destination?: "chat" | "vibe" | "browser" | "study";
+  }> = recentChat?.kind === "vibe"
+    ? [
+        { baseLabel: "Refine your project", skeletonLabel: "[what should change?]", prompt: `Continue building ${recentChat.title}. Next, `, icon: Code2, destination: "vibe" },
+        { baseLabel: "Build a calculator", skeletonLabel: "[features and style]", prompt: "Build a polished calculator with a history panel and keyboard support. Add ", icon: SquarePen, destination: "vibe" },
+        { baseLabel: "Research first", skeletonLabel: "[what should we investigate?]", prompt: "", icon: Globe, destination: "browser" },
+      ]
+    : [
+        {
+          baseLabel: recentUserRequest ? "Build on your last idea" : "Plan a study topic",
+          skeletonLabel: "[what should happen next?]",
+          prompt: recentUserRequest ? `Continue helping me with: ${recentUserRequest}\n\nNext, ` : "Help me make a focused study plan about ",
+          icon: Check,
+          destination: "chat",
+        },
+        { baseLabel: "Build a calculator", skeletonLabel: "[features and style]", prompt: "Build a polished calculator with a history panel and keyboard support. Add ", icon: SquarePen, destination: "vibe" },
+        { baseLabel: "Open web research", skeletonLabel: "", prompt: "", icon: Globe, destination: "browser" },
+      ];
 
   const vibeQuickActions: Array<{
     label: string;
@@ -4312,11 +4730,11 @@ Please analyze the code you just wrote and fix this error.`;
   };
 
   useEffect(() => {
-    if (value.trim().length === 0 && !isVibeWorkspace) {
+    if (messages.length === 0 && value.trim().length === 0 && !isVibeWorkspace) {
       setIsInputExpanded(false);
       setActiveSkeletonText(null);
     }
-  }, [value, isVibeWorkspace]);
+  }, [messages.length, value, isVibeWorkspace]);
 
   const applyVibePrompt = (prompt: string) => {
     setActiveWorkspaceTab("vibe");
@@ -4430,26 +4848,28 @@ Please analyze the code you just wrote and fix this error.`;
           />
         ) : null}
       </AnimatePresence>
+      {typeof document !== "undefined" &&
+        createPortal(
+          <AnimatePresence>
+            {isBootOverlayVisible ? (
+              <BootIntroOverlay
+                state={introState}
+                progress={introProgress}
+              />
+            ) : null}
+          </AnimatePresence>,
+          document.body,
+        )}
       <motion.div
         className="clyra-app-shell h-dvh flex min-w-0 bg-white text-slate-900 font-sans selection:bg-slate-200 overflow-hidden scalable-container relative"
-        initial={{ opacity: 0, scale: 0.97, filter: "blur(12px)", y: 12 }}
-        animate={{ opacity: 1, scale: 1, filter: "blur(0px)", y: 0 }}
-        transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1], delay: 0.05 }}
+        initial={false}
       >
         {showSidebarControls && (
         <motion.aside
           aria-hidden={!isSidebarOpen}
           initial={false}
           animate={
-            introState !== "complete"
-              ? {
-                  x: 0,
-                  y: 18,
-                  scale: 1,
-                  opacity: 0,
-                  filter: "blur(0px)",
-                }
-              : isSidebarOpen
+            isSidebarOpen
                 ? {
                     x: 0,
                     y: 0,
@@ -4467,9 +4887,9 @@ Please analyze the code you just wrote and fix this error.`;
           }
           transition={{
             type: "tween",
-            duration: isSidebarOpen ? 0.58 : 0.34,
-            ease: isSidebarOpen ? [0.18, 1, 0.25, 1] : [0.22, 1, 0.36, 1],
-            opacity: { duration: isSidebarOpen ? 0.58 : 0 },
+            duration: 0.42,
+            ease: [0.22, 1, 0.36, 1],
+            opacity: { duration: 0.2 },
             filter: { duration: 0 },
             scale: { duration: 0 },
           }}
@@ -4492,8 +4912,7 @@ Please analyze the code you just wrote and fix this error.`;
                 {isSidebarOpen && (
                   <button
                     type="button"
-                    onPointerDown={() => setIsSidebarOpen(false)}
-                    onClick={() => setIsSidebarOpen(false)}
+                    onClick={toggleSidebar}
                     aria-label="Close sidebar"
                     title="Close sidebar"
                     className="clyra-sidebar-close group relative flex h-9 w-9 items-center justify-center rounded-full text-slate-500 transition-[color,transform] duration-300 hover:scale-[1.04] hover:text-slate-900 active:scale-[0.94]"
@@ -4875,27 +5294,15 @@ Please analyze the code you just wrote and fix this error.`;
             {showSidebarControls && !isSidebarOpen && (
               <motion.button
                 type="button"
-                onClick={() => setIsSidebarOpen(true)}
+                onClick={toggleSidebar}
                 aria-label="Open sidebar"
-                aria-expanded={false}
+                aria-expanded={isSidebarOpen}
                 title="Open sidebar"
-                initial={
-                  introState !== "complete"
-                    ? { opacity: 0, scale: 0.96, y: 14 }
-                    : { opacity: 0, scale: 0.9, y: -8 }
-                }
-                animate={{
-                  opacity: introState === "complete" ? 1 : 0,
-                  scale: 1,
-                  y: introState === "complete" ? 0 : 14,
-                }}
+                initial={false}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9, y: -8 }}
-                transition={
-                  introState !== "complete"
-                    ? { duration: 0.7, ease: [0.16, 1, 0.3, 1] }
-                    : { duration: 0.24, ease: [0.22, 1, 0.36, 1] }
-                }
-                className="clyra-sidebar-toggle group fixed left-4 top-4 z-[180] flex h-11 w-11 items-center justify-center rounded-full border border-transparent bg-transparent text-slate-600 shadow-none transition-[color,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] hover:scale-[1.05] hover:text-slate-900 active:scale-[0.94] sm:top-6 sm:left-6"
+                transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+                className="clyra-sidebar-toggle group fixed left-4 top-4 z-[200] flex h-11 w-11 items-center justify-center rounded-full border border-transparent bg-transparent text-slate-600 shadow-none transition-[color,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] hover:scale-[1.05] hover:text-slate-900 active:scale-[0.94] sm:top-6 sm:left-6"
               >
                 <span className="pointer-events-none relative block h-[12px] w-[18px] opacity-95">
                   <span className="pointer-events-none absolute left-0 top-0 h-[2px] w-full rounded-full bg-current" />
@@ -4905,51 +5312,24 @@ Please analyze the code you just wrote and fix this error.`;
               </motion.button>
             )}
           </AnimatePresence>
-          {!isEmbeddedToolPreview ? (
-            <div
-              aria-hidden="true"
-              className="pointer-events-auto absolute left-1/2 top-0 z-[188] h-[88px] w-[min(390px,74vw)] -translate-x-1/2"
-              onPointerEnter={revealWorkflowTabs}
-              onPointerLeave={hideWorkflowTabsSoon}
-            />
-          ) : null}
-          <AnimatePresence>
-            {workflowTabsHintVisible && !showWorkflowTabs ? (
-              <motion.div
-                key="workflow-tabs-hint"
-                initial={{ opacity: 0, y: -5 }}
-                animate={{ opacity: 0.62, y: 0 }}
-                exit={{ opacity: 0, y: -4 }}
-                transition={{ duration: 0.18, ease: "easeOut" }}
-                className="pointer-events-none absolute left-1/2 top-1.5 z-[187] flex -translate-x-1/2 items-center gap-1 text-[9px] font-medium text-slate-400"
-              >
-                <span aria-hidden="true" className="text-[11px] leading-none">↑</span>
-                <span>Hover to switch workspace</span>
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
           <AnimatePresence initial={false}>
           {showWorkflowTabs ? (
           <motion.div
             key="workflow-tabs"
-            initial={{ opacity: 0, y: -18, scale: 0.97 }}
+            initial={false}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -14, scale: 0.98 }}
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="pointer-events-auto absolute inset-x-0 top-0 z-[190] h-[88px] overflow-visible"
-            onPointerEnter={revealWorkflowTabs}
-            onPointerLeave={hideWorkflowTabsSoon}
+            className="pointer-events-none absolute inset-x-0 top-0 z-[190] h-[88px] overflow-visible"
           >
             <motion.div
               className="pointer-events-auto absolute left-1/2 top-5 z-50 -translate-x-1/2 sm:top-6"
-              initial={introState !== "complete" ? { y: -50 } : false}
-              animate={{ y: introState === "complete" ? 0 : -50 }}
-              transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+              initial={false}
+              animate={{ y: 0 }}
             >
               <div
                 className={cn(
-                  "clyra-workflow-tabs relative transition-opacity duration-700",
-                  introState === "complete" ? "opacity-100" : "opacity-0",
+                  "clyra-workflow-tabs relative pointer-events-auto",
                   theme === "Dark" && "dark-tabs",
                 )}
                 role="tablist"
@@ -4961,7 +5341,6 @@ Please analyze the code you just wrote and fix this error.`;
                 }}
                 onMouseLeave={() => {
                   setHoveredWorkspaceTab(null);
-                  hideWorkflowTabsSoon();
                 }}
                 onBlur={(event) => {
                   if (
@@ -5018,7 +5397,13 @@ Please analyze the code you just wrote and fix this error.`;
                         handleWorkspaceTabChange(tabItem.id);
                       }}
                       onClick={() => handleWorkspaceTabChange(tabItem.id)}
-                      onMouseEnter={() => { revealWorkflowTabs(); setHoveredWorkspaceTab(tabItem.id); }}
+                      onMouseEnter={() => {
+                        setHoveredWorkspaceTab(tabItem.id);
+                        if (tabItem.id === "vibe") {
+                          void loadVibeCoderWorkspace();
+                          void fetch("/api/vibe/m1-warmup", { method: "POST" }).catch(() => undefined);
+                        }
+                      }}
                       onFocus={() => setHoveredWorkspaceTab(tabItem.id)}
                       className={cn(
                         "clyra-workflow-tab w-[105px] justify-center",
@@ -5040,10 +5425,9 @@ Please analyze the code you just wrote and fix this error.`;
             className="clyra-screen-stage relative flex min-h-0 min-w-0 flex-1 flex-col"
             animate={{ x: sidebarAvoidShift }}
             transition={{
-              type: "spring",
-              stiffness: 220,
-              damping: 34,
-              mass: 0.9,
+              type: "tween",
+              duration: 0.42,
+              ease: [0.22, 1, 0.36, 1],
             }}
             style={{
               willChange: "transform",
@@ -5061,9 +5445,26 @@ Please analyze the code you just wrote and fix this error.`;
               <div
                 className={cn(
                   "clyra-workspace-scene relative z-10 flex min-h-0 min-w-0 flex-col overflow-hidden",
+                  isSidebarOpen && showSidebarControls && "clyra-workspace-scene--sidebar-open",
                   keepWorkspacePreviewLayout && "border-r border-slate-200/70",
                 )}
               >
+                {/* The coding app owns a full-screen iframe.  Keeping it mounted
+                    behind Chat still allowed its independently-positioned shell
+                    to paint over the chat rail on some workspace transitions.
+                    Chat must not retain any Vibe DOM at all. */}
+                {isVibeWorkspace && workspaceChromeEngaged ? (
+                  <iframe
+                    ref={m1WorkspaceFrameRef}
+                    title="Vibe Coder workspace"
+                    src={`http://127.0.0.1:8000${m1WorkspacePath}${m1WorkspacePath.includes("?") ? "&" : "?"}clyraApiOrigin=${encodeURIComponent(window.location.origin)}`}
+                    tabIndex={workspaceChromeEngaged ? 0 : -1}
+                    aria-hidden={!workspaceChromeEngaged}
+                    loading="eager"
+                    allow="clipboard-read; clipboard-write; fullscreen"
+                    className="absolute inset-0 z-30 h-full w-full border-0 bg-white"
+                  />
+                ) : null}
                 {bgAnimEnabled && (
                   <div className="pointer-events-none absolute inset-[-20%] z-0 overflow-hidden clyra-fluid-bg-container">
                     <div
@@ -5142,16 +5543,14 @@ Please analyze the code you just wrote and fix this error.`;
                     >
                       {isVibeWorkspace ? (
                         <Suspense fallback={
-                          <div className="flex items-center justify-center min-h-screen bg-slate-50">
-                            <div className="text-center">
-                              <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-slate-400" />
-                              <p className="text-sm text-slate-600">Loading Vibe Coder...</p>
-                            </div>
-                          </div>
+                          <div className="h-full w-full bg-white" aria-hidden="true" />
                         }>
                           <VibeCoderWorkspace
                             orbColorTheme={orbColorTheme}
-                            onEngaged={() => setWorkspaceChromeEngaged(true)}
+                            // Clyra owns the live Vibe surface. M1 is the
+                            // execution backend, not a second full-screen UI
+                            // that can paint a blank iframe over this shell.
+                            onEngaged={() => setWorkspaceChromeEngaged(false)}
                           />
                         </Suspense>
                       ) : isClipWorkspace ? (
@@ -5194,7 +5593,7 @@ Please analyze the code you just wrote and fix this error.`;
                             </div>
                           </div>
                         }>
-                          <StudyPalWorkspace globalTabsVisible={workflowTabsHoverReveal} agentPrompt={new URLSearchParams(window.location.search).get("agentPrompt") || ""} />
+                          <StudyPalWorkspace globalTabsVisible={false} agentPrompt={new URLSearchParams(window.location.search).get("agentPrompt") || ""} />
                         </Suspense>
                       ) : creatorMode ? (
                         <Suspense fallback={null}>
@@ -5205,26 +5604,9 @@ Please analyze the code you just wrote and fix this error.`;
                         </Suspense>
                       ) : messages.length === 0 ? (
                         <motion.div
-                          initial={
-                            isWorkspaceSwitching
-                              ? false
-                              : {
-                                  opacity: 0,
-                                  y: 32,
-                                  scale: 0.982,
-                                }
-                          }
-                          animate={{
-                            opacity: 1,
-                            y: 0,
-                            scale: 1,
-                          }}
-                          transition={{
-                            duration: 0.82,
-                            ease: [0.18, 1, 0.25, 1],
-                          }}
+                          initial={false}
                           className={cn(
-                            "text-center space-y-3 mb-7 flex flex-col items-center max-w-3xl mx-auto w-full",
+                            "text-center space-y-3 mb-7 flex flex-col items-center max-w-[980px] mx-auto w-full",
                             showWorkspaceLivePreview
                               ? "px-3 sm:px-4"
                               : "px-5 sm:px-8",
@@ -5232,77 +5614,20 @@ Please analyze the code you just wrote and fix this error.`;
                         >
                           <motion.div
                             className="mb-2 flex w-full flex-col items-center justify-center relative transform-gpu"
-                            initial={
-                              isWorkspaceSwitching
-                                ? false
-                                : introState !== "complete"
-                                  ? { y: 44, opacity: 0 }
-                                  : false
-                            }
-                            animate={
-                              introState !== "booting"
-                                ? { y: 0, opacity: 1 }
-                                : { y: 44, opacity: 0 }
-                            }
-                            transition={{
-                              type: "tween",
-                              ease: [0.12, 0.78, 0.18, 1],
-                              duration: 1.26,
-                            }}
+                            initial={false}
                           >
-                            <AiOrb
-                              colorTheme={orbColorTheme}
-                              introActive={introState !== "complete"}
-                            />
-                            <AnimatePresence>
-                              {(introState === "progress" ||
-                                introState === "progress_complete") && (
-                                <motion.div
-                                  key="intro-progress"
-                                  initial={{ opacity: 0, y: 8 }}
-                                  animate={{ opacity: 1, y: 0 }}
-                                  exit={{ opacity: 0, y: -4 }}
-                                  transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-                                  className="mt-7 flex w-[min(220px,62vw)] flex-col items-center gap-2.5"
-                                >
-                                  <div className="h-[3px] w-full overflow-hidden rounded-full bg-slate-200/80">
-                                    <motion.div
-                                      className="h-full rounded-full bg-slate-700"
-                                      style={{ width: `${Math.round(introProgress * 100)}%` }}
-                                    />
-                                  </div>
-                                  <p className="text-[9px] font-semibold tracking-[0.18em] text-slate-400">
-                                    {introProgressText}
-                                  </p>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
+                            <AiOrb colorTheme={orbColorTheme} />
                           </motion.div>
                           <motion.h1
                             className="text-3xl sm:text-4xl font-semibold tracking-tight text-slate-800"
-                            animate={{
-                              opacity: introState === "complete" ? 1 : 0,
-                              y: introState === "complete" ? 0 : 18,
-                              scale: introState === "complete" ? 1 : 0.96,
-                            }}
-                            transition={{
-                              duration: 0.74,
-                              ease: [0.18, 1, 0.28, 1],
-                            }}
+                            initial={false}
                           >
                             {emptyStateTitle}
                           </motion.h1>
-                          <motion.div className="flex flex-col items-center">
+                          <motion.div className="flex w-full flex-col items-center">
                             <motion.p
                               className="text-slate-500 text-sm sm:text-base font-medium font-sans z-10 relative"
-                              animate={{
-                                opacity: introState === "complete" ? 1 : 0,
-                                y: introState === "complete" ? 0 : 14,
-                              }}
-                              transition={{
-                                duration: 0.72,
-                                ease: [0.18, 1, 0.28, 1],
-                              }}
+                              initial={false}
                             >
                               {emptyStateSubtitle}
                             </motion.p>
@@ -5310,45 +5635,28 @@ Please analyze the code you just wrote and fix this error.`;
                             {!isVibeWorkspace && (
                               <motion.div
                                 className="clyra-chat-quick-actions mt-4"
-                                initial="hidden"
-                                animate="visible"
-                                variants={{
-                                  hidden: { opacity: 0 },
-                                  visible: {
-                                    opacity: 1,
-                                    transition: {
-                                      staggerChildren: 0.12,
-                                      delayChildren: 0.2,
-                                    },
-                                  },
-                                }}
+                                initial={false}
                               >
                                 {chatQuickActions.map((action) => {
                                   const QuickIcon = action.icon;
 
                                   return (
                                     <motion.button
-                                      variants={{
-                                        hidden: { opacity: 0, y: 20 },
-                                        visible: {
-                                          opacity:
-                                            introState === "complete" ? 1 : 0,
-                                          y: introState === "complete" ? 0 : 20,
-                                          transition: {
-                                            duration: 0.7,
-                                            ease: [0.16, 1, 0.3, 1],
-                                          },
-                                        },
-                                      }}
+                                      initial={false}
                                       key={action.baseLabel}
                                       type="button"
                                       className="clyra-chat-chip group"
-                                      onClick={() =>
-                                        applyQuickPrompt(
-                                          action.prompt,
-                                          action.skeletonLabel,
-                                        )
-                                      }
+                                      onClick={() => {
+                                        if (action.destination === "vibe") {
+                                          applyVibePrompt(action.prompt);
+                                          return;
+                                        }
+                                        if (action.destination === "browser" || action.destination === "study") {
+                                          handleWorkspaceTabChange(action.destination);
+                                          return;
+                                        }
+                                        applyQuickPrompt(action.prompt, action.skeletonLabel);
+                                      }}
                                     >
                                       <QuickIcon className="h-3.5 w-3.5" />
                                       <span>{action.baseLabel}</span>
@@ -5362,36 +5670,14 @@ Please analyze the code you just wrote and fix this error.`;
                       ) : (
                         <div
                           className={cn(
-                            "relative flex min-h-0 flex-1 w-full flex-col overflow-hidden z-0 max-w-3xl mx-auto",
+                            "relative flex min-h-0 flex-1 w-full flex-col overflow-hidden z-0 max-w-5xl mx-auto",
                             showWorkspaceLivePreview
                               ? "px-3 sm:px-4 pt-6 sm:pt-8"
                               : "px-5 sm:px-8 pt-8 sm:pt-10",
                           )}
                         >
-                          {activeWorkspaceTab === "chat" ? (
-                            <header className="clyra-conversation-header shrink-0" aria-label="Conversation controls">
-                              <div className="min-w-0">
-                                <input
-                                  aria-label="Conversation title"
-                                  value={activeChatTitle}
-                                  onChange={(event) => setChats((current) => current.map((chat) => chat.id === currentChatId ? { ...chat, title: event.target.value || "New conversation" } : chat))}
-                                  className="clyra-conversation-title"
-                                />
-                                <span className="clyra-conversation-mode">Clyra · Balanced</span>
-                              </div>
-                              <button type="button" className="clyra-header-icon" aria-label="Copy conversation link" title="Copy conversation link" onClick={() => {
-                                void navigator.clipboard?.writeText(window.location.href);
-                                setToastMessage("Conversation link copied");
-                              }}><Share2 className="h-4 w-4" /></button>
-                            </header>
-                          ) : null}
                           <div
-                            className={cn(
-                              "clyra-visible-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden transition-opacity duration-700",
-                              introState === "complete"
-                                ? "opacity-100"
-                                : "opacity-0",
-                            )}
+                            className="clyra-visible-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden"
                             id="chat-container"
                           >
                             {messages.map((message) => {
@@ -5405,24 +5691,25 @@ Please analyze the code you just wrote and fix this error.`;
                                 message.role === "assistant" &&
                                 lastAssistantId != null &&
                                 message.id === lastAssistantId;
+                              const isFirstUserMessage =
+                                message.role === "user" &&
+                                message.id === firstUserMessageId;
                               return (
                                 <motion.div
                                   key={message.id}
-                                  initial={
-                                    isWorkspaceSwitching
-                                      ? false
-                                      : { opacity: 0, y: 15, scale: 0.98 }
-                                  }
+                                  initial={isWorkspaceSwitching || message.role === "user" ? false : { opacity: 0, y: 0, scale: 0.99 }}
                                   animate={{ opacity: 1, y: 0, scale: 1 }}
                                   transition={{
                                     type: "tween",
-                                    ease: [0.22, 1, 0.36, 1],
-                                    duration: 0.6,
+                                    // A long ease-out gives the bubble a visible glide,
+                                    // then lets it settle without a springy rebound.
+                                    ease: [0.16, 1, 0.3, 1],
+                                    duration: message.role === "user" ? (isFirstUserMessage ? 0.78 : 0.68) : 0.42,
                                   }}
                                   className={cn(
                                     "flex w-full",
                                     message.role === "user"
-                                      ? "justify-end"
+                                      ? "justify-end clyra-user-message-entry"
                                       : "justify-start",
                                   )}
                                 >
@@ -5431,7 +5718,7 @@ Please analyze the code you just wrote and fix this error.`;
                                       data-invert-ignore="true"
                                       className={cn(
                                         "clyra-chat-user-bubble px-5 py-3.5 rounded-[24px] max-w-[85%] sm:max-w-[75%] border border-slate-200/70 whitespace-pre-wrap shadow-none",
-                                        message.id === firstUserMessageId &&
+                                        isFirstUserMessage &&
                                           "clyra-chat-user-bubble--first",
                                         fontClass,
                                       )}
@@ -5455,10 +5742,10 @@ Please analyze the code you just wrote and fix this error.`;
                                             : "#1e293b",
                                       }}
                                     >
-                                      <span className="clyra-assistant-mark" aria-hidden="true"><span /></span>
                                       <div
                                         className={cn(
                                           "clyra-assistant-message",
+                                          isLastAssistant && "clyra-assistant-message--latest",
                                           message.assistantKind === "vibe" &&
                                             "clyra-assistant-message--vibe",
                                         )}
@@ -5508,11 +5795,17 @@ Please analyze the code you just wrote and fix this error.`;
                                           }}
                                         />
                                         {!message.isThinking && !message.isStreaming && message.content ? (
+                                          <>
                                           <div className="clyra-message-actions" aria-label="Assistant message actions">
                                             <button type="button" onClick={() => {
                                               void navigator.clipboard?.writeText(message.content);
+                                              setCopiedMessageId(message.id);
                                               setToastMessage("Response copied");
-                                            }} aria-label="Copy response" title="Copy response"><Copy className="h-3.5 w-3.5" /></button>
+                                              window.setTimeout(() => setCopiedMessageId((current) => current === message.id ? null : current), 1800);
+                                            }} aria-label="Copy response" title="Copy response">{copiedMessageId === message.id ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}</button>
+                                            <button type="button" onClick={() => regenerateResponse(message.id)} aria-label="Regenerate response" title="Regenerate response"><RotateCcw className="h-3.5 w-3.5" /></button>
+                                            <button type="button" onClick={() => { setFeedbackText(""); setFeedbackMenu({ messageId: message.id, sentiment: "up" }); }} aria-label="Helpful response" title="Helpful"><ThumbsUp className="h-3.5 w-3.5" /></button>
+                                            <button type="button" onClick={() => { setFeedbackText(""); setFeedbackMenu({ messageId: message.id, sentiment: "down" }); }} aria-label="Unhelpful response" title="Needs improvement"><ThumbsDown className="h-3.5 w-3.5" /></button>
                                             <button type="button" onClick={() => {
                                               if ("speechSynthesis" in window) {
                                                 window.speechSynthesis.cancel();
@@ -5520,6 +5813,29 @@ Please analyze the code you just wrote and fix this error.`;
                                               }
                                             }} aria-label="Read response aloud" title="Read aloud"><Volume2 className="h-3.5 w-3.5" /></button>
                                           </div>
+                                          <AnimatePresence initial={false}>
+                                            {feedbackMenu?.messageId === message.id ? (
+                                              <motion.form
+                                                className="clyra-feedback-menu"
+                                                initial={{ opacity: 0, y: -4, scale: 0.98 }}
+                                                animate={{ opacity: 1, y: 0, scale: 1 }}
+                                                exit={{ opacity: 0, y: -4, scale: 0.98 }}
+                                                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                                                onSubmit={(event) => {
+                                                  event.preventDefault();
+                                                  captureResponseFeedback(message.id, feedbackMenu.sentiment, feedbackText);
+                                                }}
+                                              >
+                                                <p>{feedbackMenu.sentiment === "up" ? "What worked well?" : "What could be improved?"}</p>
+                                                <div>
+                                                  <input autoFocus value={feedbackText} onChange={(event) => setFeedbackText(event.target.value)} placeholder="Optional note" aria-label="Response feedback" />
+                                                  <button type="submit">Save</button>
+                                                  <button type="button" aria-label="Close feedback" onClick={() => { setFeedbackMenu(null); setFeedbackText(""); }}><X className="h-3.5 w-3.5" /></button>
+                                                </div>
+                                              </motion.form>
+                                            ) : null}
+                                          </AnimatePresence>
+                                          </>
                                         ) : null}
                                       </div>
                                     </div>
@@ -5533,21 +5849,24 @@ Please analyze the code you just wrote and fix this error.`;
                               <motion.button
                                 type="button"
                                 aria-label="Scroll to latest message"
-                                initial={{ opacity: 0, y: 6 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: 6 }}
-                                transition={{ duration: 0.18 }}
-                                onClick={() => {
-                                  const container = document.getElementById("chat-container");
-                                  if (!container) return;
-                                  userPinnedAwayRef.current = false;
-                                  chatNearBottomRef.current = true;
-                                  setShowScrollToLatest(false);
-                                  container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+                                initial={{ opacity: 0, y: 10, scale: 0.94, filter: "blur(4px)" }}
+                                animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
+                                exit={{ opacity: 0, y: 8, scale: 0.96, filter: "blur(3px)" }}
+                                transition={{ duration: 0.34, ease: [0.16, 1, 0.3, 1] }}
+                                onPointerDown={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  scrollToLatest();
+                                }}
+                                onClick={(event) => {
+                                  // Pointer handling makes the button immediate; click keeps it keyboard-accessible.
+                                  if (event.detail !== 0) return;
+                                  event.preventDefault();
+                                  scrollToLatest();
                                 }}
                                 className="clyra-scroll-latest"
                               >
-                                Latest <span aria-hidden="true">↓</span>
+                                Scroll to latest <span aria-hidden="true">↓</span>
                               </motion.button>
                             ) : null}
                           </AnimatePresence>
@@ -5562,6 +5881,7 @@ Please analyze the code you just wrote and fix this error.`;
                           !isVibeWorkspace && (
                           <motion.div
                             key="composer"
+                            layout={false}
                             ref={inputContainerRef}
                             onClick={(event) => {
                               const target = event.target as HTMLElement | null;
@@ -5603,7 +5923,19 @@ Please analyze the code you just wrote and fix this error.`;
                             animate={{
                               opacity: 1,
                               x: 0,
-                              y: 0,
+                              // The composer is anchored to one bottom rail. Welcome
+                              // mode lifts it with a transform, so sending can animate
+                              // the complete distance without a layout-driven teleport.
+                              // The control shelf expands beneath the text field.
+                              // Offset the compact chat composer by the shelf height
+                              // so its top and side edges stay fixed while only its
+                              // lower border travels down into the bottom rail.
+                              y:
+                                messages.length > 0
+                                  ? isExpanded
+                                    ? 0
+                                    : -56
+                                  : -112,
                               scale: 1,
                             }}
                             exit={{
@@ -5613,22 +5945,28 @@ Please analyze the code you just wrote and fix this error.`;
                               pointerEvents: "none",
                             }}
                             transition={{
-                              type: "tween",
-                              duration: 0,
-                              ease: [0.22, 1, 0.36, 1],
+                              y: {
+                                // Match the lower-shelf height animation. Keeping
+                                // both on the same long ease-out curve makes the
+                                // field's top edge feel pinned while its lower edge
+                                // settles softly into the bottom rail.
+                                duration: 0.76,
+                                ease: [0.16, 1, 0.3, 1],
+                              },
+                              opacity: { duration: 0.28, ease: "easeOut" },
                             }}
                             style={{
                               transformStyle: "preserve-3d",
                               backfaceVisibility: "hidden",
                             }}
                             className={cn(
-                              "clyra-composer-transition w-full shrink-0 relative z-20 transition-all duration-[1100ms] max-w-3xl mx-auto",
+                              "clyra-composer-transition absolute inset-x-0 bottom-0 w-full z-20 max-w-3xl mx-auto",
                               showWorkspaceLivePreview
                                 ? "px-3 sm:px-4"
                                 : "px-5 sm:px-8",
                               messages.length === 0
-                                ? "pb-0 mb-8"
-                                : "pb-4 sm:pb-6 mb-3",
+                                ? "pb-5"
+                                : "pb-4 sm:pb-6",
                             )}
                           >
                             <AnimatePresence>
@@ -5667,76 +6005,51 @@ Please analyze the code you just wrote and fix this error.`;
                                 </motion.div>
                               )}
                             </AnimatePresence>
+                            {(messages.length > 0 || isExpanded) && !showCommandPalette ? (
+                              <div className="clyra-composer-tools" aria-label="Chat tools">
+                                <button
+                                  type="button"
+                                  onPointerDown={(event) => event.stopPropagation()}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setIsCommandPalettePinned(true);
+                                    setShowCommandPalette(true);
+                                    setActiveSuggestion(0);
+                                    setIsInputExpanded(true);
+                                  }}
+                                ><AppWindow className="h-4 w-4" /> Apps</button>
+                                <button
+                                  type="button"
+                                  onPointerDown={(event) => event.stopPropagation()}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    const searchCommand = commandSuggestions.find((command): command is BuiltInCommandSuggestion => command.id === "search");
+                                    if (!searchCommand) return;
+                                    setSelectedCommand(searchCommand);
+                                    // The tool chip carries the mode; keep the user's prompt clean.
+                                    setValue("");
+                                    setIsComposerFocused(true);
+                                    setIsInputExpanded(true);
+                                    window.setTimeout(() => textareaRef.current?.focus(), 0);
+                                  }}
+                                ><Globe className="h-4 w-4" /> Web search</button>
+                              </div>
+                            ) : null}
                             <motion.div
                               className={cn(
-                                "input-wrapper relative backdrop-blur-xl border transition-[background-color,border-color,padding,box-shadow,border-radius] duration-[1100ms] ease-[cubic-bezier(0.16,1,0.3,1)] cursor-text overflow-visible mx-auto z-[3]",
+                                "input-wrapper relative backdrop-blur-xl border transition-[background-color,border-color,padding,box-shadow,border-radius] duration-[560ms] ease-[cubic-bezier(0.22,1,0.36,1)] cursor-text overflow-visible mx-auto z-[3]",
                                 isVibeWorkspace && "clyra-vibe-composer",
+                                isExpanded && "clyra-composer-expanded",
                                 theme === "Dark"
                                   ? "bg-slate-200/90 border-slate-400/50"
                                   : "bg-white/80 border-slate-200/60",
                                 isExpanded ? "p-2 sm:p-3" : "p-1.5 sm:p-2",
                               )}
-                              initial={
-                                isWorkspaceSwitching
-                                  ? false
-                                  : introState !== "complete"
-                                    ? {
-                                        width: 48,
-                                        height: 48,
-                                        borderRadius: 24,
-                                        opacity: 0,
-                                        y: 20,
-                                      }
-                                    : false
-                              }
-                              animate={{
-                                width:
-                                  introPreExpand
-                                    ? 48
-                                    : "100%",
-                                height:
-                                  introPreExpand
-                                    ? 48
-                                    : "auto",
-                                borderRadius:
-                                  introPreExpand
-                                    ? 24
-                                    : isExpanded
-                                      ? 28
-                                      : 36,
-                                opacity:
-                                  introBusy
-                                    ? 0
-                                    : 1,
-                                y:
-                                  introBusy
-                                    ? 20
-                                    : 0,
-                              }}
-                              transition={
-                                introState !== "complete"
-                                  ? {
-                                      type: "tween",
-                                      ease: [0.16, 1, 0.3, 1],
-                                      duration: 1.05,
-                                    }
-                                  : {
-                                      type: "tween",
-                                      ease: [0.16, 1, 0.3, 1],
-                                      duration: 1.05,
-                                    }
-                              }
+                              initial={false}
                             >
                               <motion.div
                                 className="relative z-10 w-full h-full"
-                                initial={{ opacity: 0 }}
-                                animate={{
-                                  opacity:
-                                    introPreExpand
-                                      ? 0
-                                      : 1,
-                                }}
-                                transition={{ duration: 0.6, ease: "easeOut" }}
+                                initial={false}
                               >
                                 <AnimatePresence initial={false}>
                                   {selectedAgent ? (
@@ -5846,26 +6159,25 @@ Please analyze the code you just wrote and fix this error.`;
                                       <motion.div
                                         ref={commandPaletteRef}
                                         className={cn(
-                                          "absolute z-50 max-h-[240px] w-auto overflow-y-auto rounded-[28px] border border-slate-200 bg-white shadow-[0_22px_55px_rgba(15,23,42,0.16)] scrollbar-none transform-gpu origin-bottom",
-                                          "bottom-[calc(100%+10px)]",
+                                          "clyra-command-palette absolute z-50 max-h-[240px] w-auto overflow-y-auto rounded-[20px] border border-slate-200/90 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.12)] scrollbar-none transform-gpu origin-bottom",
+                                          "bottom-[calc(100%+16px)]",
                                           isExpanded
                                             ? "-left-2 -right-2 sm:-left-3 sm:-right-3"
                                             : "-left-1.5 -right-1.5 sm:-left-2 sm:-right-2",
                                         )}
-                                        initial={{ opacity: 0, y: 12, scale: 0.992 }}
+                                        initial={{ opacity: 0, y: 8, scale: 0.985 }}
                                         animate={{ opacity: 1, y: 0, scale: 1 }}
-                                        exit={{ opacity: 0, y: 8, scale: 0.992 }}
+                                        exit={{ opacity: 0, y: 5, scale: 0.99 }}
                                         transition={{
-                                          type: "spring",
-                                          stiffness: 560,
-                                          damping: 34,
-                                          mass: 0.65,
+                                          type: "tween",
+                                          duration: 0.24,
+                                          ease: [0.16, 1, 0.3, 1],
                                         }}
                                       >
                                         <div className="py-2.5">
-                                          <div className="flex items-center justify-between px-4 pb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                                            <span>App agents</span>
-                                            <span className="normal-case tracking-normal">{selectedAppAgents.length ? `${selectedAppAgents.length} selected` : "Select one or more"}</span>
+                                          <div className="clyra-command-palette__header flex items-center justify-between px-4 pb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                            <span>Commands</span>
+                                            <span className="normal-case tracking-normal">Use a command or add an app</span>
                                           </div>
                                           {filteredSuggestions.map(
                                             (suggestion, index) => {
@@ -5875,12 +6187,15 @@ Please analyze the code you just wrote and fix this error.`;
                                                     c.prefix ===
                                                     suggestion.prefix,
                                                 );
-                                              const isSelected = selectedAppAgents.some((agent) => agent.id === suggestion.id);
+                                              const isSelected = suggestion.kind === "app" && selectedAppAgents.some((agent) => agent.id === suggestion.id);
                                               return (
+                                                <React.Fragment key={suggestion.prefix}>
+                                                  {suggestion.kind === "app" && (index === 0 || filteredSuggestions[index - 1]?.kind !== "app") ? (
+                                                    <div className="px-4 pb-2 pt-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Apps</div>
+                                                  ) : null}
                                                 <motion.div
-                                                  key={suggestion.prefix}
                                                   className={cn(
-                                                    "flex cursor-pointer items-center gap-3 px-4 py-3 text-sm transition-colors",
+                                                    "clyra-command-option flex cursor-pointer items-center gap-3 px-4 py-3 text-sm transition-colors",
                                                     isSelected
                                                       ? "bg-blue-50 text-slate-900"
                                                       : activeSuggestion === index
@@ -5954,6 +6269,7 @@ Please analyze the code you just wrote and fix this error.`;
                                                   </div>
                                                   {isSelected ? <Check className="h-4 w-4 shrink-0 text-blue-600" /> : null}
                                                 </motion.div>
+                                                </React.Fragment>
                                               );
                                             },
                                           )}
@@ -6019,9 +6335,6 @@ Please analyze the code you just wrote and fix this error.`;
                                       whileTap={{ scale: 0.95 }}
                                       className={cn(
                                         "p-2 text-slate-500 hover:text-slate-800 rounded-full transition-all duration-700 flex items-center justify-center shrink-0",
-                                        introState === "complete"
-                                          ? "opacity-100"
-                                          : "opacity-0",
                                       )}
                                       aria-label="Attach files"
                                       title="Attach files"
@@ -6072,6 +6385,7 @@ Please analyze the code you just wrote and fix this error.`;
                                       const currentValue =
                                         event.currentTarget.value.trim();
                                       if (
+                                        messages.length === 0 &&
                                         !currentValue &&
                                         attachments.length === 0 &&
                                         !selectedCommand &&
@@ -6094,16 +6408,14 @@ Please analyze the code you just wrote and fix this error.`;
                                         ? "placeholder:text-slate-500"
                                         : "placeholder:text-slate-400",
                                       isExpanded
-                                        ? "min-h-[52px] max-h-[200px] py-3 px-1"
-                                        : "min-h-[42px] max-h-[200px] py-2 px-1",
-                                      "clyra-visible-scrollbar transition-[height,min-height,max-height,padding,opacity,transform] duration-200 ease-out",
+                                        ? "min-h-[46px] max-h-[160px] py-2.5 px-1"
+                                        : "min-h-[42px] max-h-[160px] py-2 px-1",
+                                      "clyra-visible-scrollbar transition-[height,min-height,max-height,padding,opacity,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
                                       isFadingInText
                                         ? "opacity-0 translate-y-1 scale-[0.99]"
-                                        : introState !== "complete"
-                                          ? "opacity-0 translate-y-2 scale-[0.98]"
-                                          : "opacity-100 translate-y-0 scale-100",
+                                        : "opacity-100 translate-y-0 scale-100",
                                     )}
-                                    style={{ maxHeight: "200px" }}
+                                    style={{ maxHeight: "160px" }}
                                   />
                                   {!isExpanded && (
                                     <motion.button
@@ -6122,9 +6434,6 @@ Please analyze the code you just wrote and fix this error.`;
                                       className={cn(
                                         "h-9 w-9 rounded-full transition-all duration-700 shrink-0 relative z-10",
                                         "flex items-center justify-center",
-                                        introState === "complete"
-                                          ? "opacity-100"
-                                          : "opacity-0",
                                         "bg-slate-900 text-white hover:bg-slate-800 shadow-sm",
                                       )}
                                     >
@@ -6169,10 +6478,22 @@ Please analyze the code you just wrote and fix this error.`;
                                   )}
                                 </AnimatePresence>
 
+                                <AnimatePresence initial={false}>
                                 {isExpanded && (
+                                  <motion.div
+                                    initial={{ height: 0, opacity: 0, scaleY: 0.92 }}
+                                    animate={{ height: "auto", opacity: 1, scaleY: 1 }}
+                                    exit={{ height: 0, opacity: 0, scaleY: 0.96 }}
+                                    transition={{
+                                      height: { duration: 0.72, ease: [0.22, 1, 0.36, 1] },
+                                      opacity: { duration: 0.2, ease: "easeOut" },
+                                      scaleY: { duration: 0.56, ease: [0.16, 1, 0.3, 1] },
+                                    }}
+                                    className="clyra-composer-expanded-content overflow-hidden"
+                                  >
                                   <div
                                     className={cn(
-                                      "flex items-center justify-between p-2 pt-0",
+                                      "flex items-center justify-between px-2 pb-1 pt-0",
                                     )}
                                   >
                                     <div className="flex items-center gap-1 sm:gap-2">
@@ -6237,7 +6558,7 @@ Please analyze the code you just wrote and fix this error.`;
                                               bounce: 0,
                                               duration: 0.3,
                                             }}
-                                            className="flex items-center gap-1.5 text-slate-700 px-2.5 py-1.5 rounded-full text-xs sm:text-sm font-semibold ml-1 hover:bg-slate-100/80 transition-colors cursor-default"
+                                            className="clyra-selected-tool-chip flex items-center gap-1.5 text-slate-700 px-2.5 py-1.5 rounded-full text-xs sm:text-sm font-semibold ml-1 transition-colors cursor-default"
                                           >
                                             <span className="opacity-70">
                                               {activeInputCommand.icon(false)}
@@ -6335,7 +6656,9 @@ Please analyze the code you just wrote and fix this error.`;
                                       </motion.button>
                                     </div>
                                   </div>
+                                  </motion.div>
                                 )}
+                                </AnimatePresence>
                               </motion.div>
                             </motion.div>
                           </motion.div>

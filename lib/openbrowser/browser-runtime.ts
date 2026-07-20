@@ -248,13 +248,18 @@ const PROFILE_PATH = path.join(PROFILE_ROOT, "profile.json");
 const AGENT_SESSION_PATH = path.join(PROFILE_ROOT, "agent-session.json");
 const USER_DATA_PATH = path.join(PROFILE_ROOT, "chromium-profile");
 const DOWNLOADS_PATH = path.join(PROFILE_ROOT, "downloads");
-const MAX_OPEN_TABS = Number(process.env.CLYRA_BROWSER_MAX_TABS || 8);
+// Keep enough room for real comparison work (result pages plus finalists)
+// without silently closing a user's existing tabs.
+const MAX_OPEN_TABS = Number(process.env.CLYRA_BROWSER_MAX_TABS || 12);
 const MAX_AGENT_STEPS = Number(process.env.CLYRA_BROWSER_MAX_STEPS || 48);
 const MAX_OBSERVATION_CHARS = Number(process.env.CLYRA_BROWSER_MAX_OBSERVATION_CHARS || 30_000);
-const HOME_URL = `http://127.0.0.1:${Number(process.env.PORT) || 3000}/api/openbrowser/new-tab`;
+// A new tab should feel like a browser new tab, not another copy of the local
+// Clyra surface.  Keeping this as a real page also gives the agent a useful,
+// immediately interactive starting point for browser tasks.
+const HOME_URL = "https://www.google.com/";
 
 const DEFAULT_SETTINGS: BrowserSettings = {
-  defaultSearchEngine: "bing",
+  defaultSearchEngine: "google",
   restoreTabs: true,
   saveHistory: true,
   showBookmarksBar: false,
@@ -486,6 +491,29 @@ async function tabStates() {
   }));
 }
 
+/**
+ * State polling drives the browser chrome far more often than a full page
+ * observation.  It still needs every real tab, otherwise the UI can claim
+ * there is a single tab while the persistent context is already at its cap.
+ * Keep this intentionally synchronous: hostname labels are enough until a
+ * normal action/observation refreshes full titles and favicons.
+ */
+function quickTabStates() {
+  return activePages().map((candidate) => {
+    const url = candidate.url();
+    let title = "New tab";
+    try { title = new URL(url).hostname.replace(/^www\./, "") || "New tab"; } catch { /* noop */ }
+    return {
+      id: tabId(candidate),
+      title,
+      url,
+      active: candidate === page,
+      loading: pageLoading.get(candidate) || false,
+      zoom: pageZoom.get(candidate) || 1,
+    } satisfies BrowserTabState;
+  });
+}
+
 function isRecordableUrl(url: string) {
   return /^https?:\/\//i.test(url) && !/\/api\/openbrowser\//.test(url) && !isInternalErrorUrl(url);
 }
@@ -513,7 +541,10 @@ async function wirePage(activePage: Page) {
   wiredPages.add(activePage);
   // tsx/esbuild can preserve helper calls inside serialized page callbacks.
   // Defining the no-op helper in every document keeps those callbacks portable.
-  await activePage.evaluate("globalThis.__name ||= ((target) => target)").catch(() => undefined);
+  // Do not block browser startup on background/restored tabs that are still
+  // loading. This helper is best-effort and must never hold the whole browser
+  // workspace behind one slow third-party page.
+  void activePage.evaluate("globalThis.__name ||= ((target) => target)").catch(() => undefined);
   tabId(activePage);
   pageZoom.set(activePage, 1);
   activePage.setDefaultTimeout(10_000);
@@ -796,7 +827,35 @@ async function navigationFlags(activePage: Page) {
   })).catch(() => ({ canGoBack: false, canGoForward: false }));
 }
 
-async function captureState(activePage: Page, options: { screenshot?: boolean } = {}): Promise<ManagedBrowserState> {
+async function captureState(activePage: Page, options: { screenshot?: boolean; fast?: boolean } = {}): Promise<ManagedBrowserState> {
+  if (options.fast) {
+    const currentProfile = await loadProfile();
+    const url = activePage.url();
+    let fallbackTitle = "New tab";
+    try { fallbackTitle = new URL(url).hostname.replace(/^www\./, "") || "New tab"; } catch { /* noop */ }
+    return {
+      url,
+      title: fallbackTitle,
+      frameVersion,
+      viewport: { ...VIEWPORT, scrollX: 0, scrollY: 0, pageHeight: VIEWPORT.height, zoom: pageZoom.get(activePage) || 1 },
+      loading: pageLoading.get(activePage) || false,
+      elements: [],
+      tabs: quickTabStates(),
+      activeTabId: tabId(activePage),
+      canGoBack: false,
+      canGoForward: false,
+      secure: url.startsWith("https://"),
+      zoom: pageZoom.get(activePage) || 1,
+      history: currentProfile.history.slice(0, 100),
+      bookmarks: currentProfile.bookmarks,
+      recentlyClosed: currentProfile.recentlyClosed,
+      downloads: currentProfile.downloads,
+      settings: currentProfile.settings,
+      agent: { status: agentStatus, paused: agentPaused, manualControl, task: activeTask || undefined },
+    };
+  }
+  // Startup must be responsive even when a restored third-party tab is still
+  // booting. A normal action path still performs the full observation.
   const observation = await inspectPage(activePage).catch(() => null);
   if (options.screenshot !== false) await captureFrame(activePage);
   const currentProfile = await loadProfile();
@@ -866,7 +925,9 @@ function isHighImpactTarget(action: BrowserAction, observation: StructuredObserv
   if (!("target" in action) || action.target == null) return false;
   const element = targetFromAction(action.target, observation);
   const text = `${element?.name || ""} ${element?.text || ""}`;
-  return /(?:buy now|place order|confirm purchase|send message|send email|post|publish|delete|remove account|change password|submit application|book now|cancel subscription|agree and submit)/i.test(text);
+  // Login/registration is also an explicit user boundary: the agent may read
+  // public pages but never starts an authentication flow on its own.
+  return /(?:sign in|log in|login|register|create account|buy now|place order|confirm purchase|send message|send email|post|publish|delete|remove account|change password|submit application|book now|cancel subscription|agree and submit)/i.test(text);
 }
 
 export function validateBrowserAction(action: BrowserAction, observation: StructuredObservation, source: "agent" | "user" = "agent") {
@@ -926,6 +987,98 @@ async function progressiveScrollTo(activePage: Page, destination: "top" | "botto
   await progressiveScroll(activePage, 0, delta, source);
 }
 
+function googleQueryForNavigation(destination: string) {
+  try {
+    const parsed = new URL(destination);
+    return `${parsed.hostname.replace(/^www\./, "")}${parsed.pathname !== "/" ? parsed.pathname : ""}`;
+  } catch {
+    return destination;
+  }
+}
+
+function isGoogleUrl(value: string) {
+  try {
+    return /(^|\.)google\.[a-z.]+$/i.test(new URL(value).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The agent should not make a requested destination appear out of nowhere.
+ * When a task starts on the normal Google new-tab page, this runs the same
+ * visible sequence a person would: focus the search field, type, wait for
+ * results, then choose the matching result.  It is deliberately separate
+ * from manual navigation, which should remain immediate.
+ */
+async function runAgentGoogleSearch(
+  activePage: Page,
+  query: string,
+  emit: (event: BrowserAgentEvent) => void,
+  step: number,
+  destination?: string,
+) {
+  if (!isGoogleUrl(activePage.url())) {
+    emit({ phase: "executing", message: "Opening Google to look up the destination", step });
+    await activePage.goto(HOME_URL, { waitUntil: "domcontentloaded" });
+    await activePage.waitForTimeout(360);
+  }
+
+  const searchField = activePage.locator('textarea[name="q"], input[name="q"]').first();
+  await searchField.waitFor({ state: "visible", timeout: 8_000 });
+  const fieldBox = await searchField.boundingBox();
+  const fieldCursor = fieldBox
+    ? { x: fieldBox.x + Math.min(26, fieldBox.width / 2), y: fieldBox.y + fieldBox.height / 2, kind: "type" as const, label: "Typing in Google search" }
+    : undefined;
+  emit({ phase: "executing", message: "Opening Google search", step, action: { type: "focus", target: { css: 'textarea[name="q"], input[name="q"]' } }, cursor: fieldCursor });
+  await moveAgentPointer(activePage, fieldCursor);
+  await searchField.click();
+  await searchField.press("ControlOrMeta+A");
+  await searchField.press("Backspace");
+  emit({ phase: "executing", message: `Typing ${query}`, step, action: { type: "type", target: { css: 'textarea[name="q"], input[name="q"]' }, text: query }, cursor: fieldCursor });
+  await searchField.pressSequentially(query, { delay: Math.max(34, Math.min(58, 48 - Math.floor(query.length / 14))) });
+  await activePage.waitForTimeout(180);
+  emit({ phase: "executing", message: "Searching Google", step, action: { type: "press", key: "Enter" }, cursor: fieldCursor });
+  await searchField.press("Enter");
+  await activePage.waitForTimeout(700);
+  await activePage.waitForLoadState("domcontentloaded").catch(() => undefined);
+
+  if (!destination) {
+    await recordHistory(activePage, query);
+    return;
+  }
+
+  const expectedHost = new URL(destination).hostname.replace(/^www\./, "").toLowerCase();
+  const matchingIndex = await activePage.locator("a").evaluateAll((anchors, expected) => {
+    for (let index = 0; index < anchors.length; index += 1) {
+      const anchor = anchors[index] as HTMLAnchorElement;
+      const rawHref = anchor.href || anchor.getAttribute("href") || "";
+      const text = `${anchor.textContent || ""} ${rawHref}`.toLowerCase();
+      if (text.includes(expected) && anchor.getBoundingClientRect().width > 0 && anchor.getBoundingClientRect().height > 0) return index;
+    }
+    return -1;
+  }, expectedHost);
+  if (matchingIndex >= 0) {
+    const result = activePage.locator("a").nth(matchingIndex);
+    const resultBox = await result.boundingBox();
+    const resultCursor = resultBox
+      ? { x: resultBox.x + Math.min(42, resultBox.width / 2), y: resultBox.y + resultBox.height / 2, kind: "click" as const, label: `Opening ${expectedHost}` }
+      : undefined;
+    emit({ phase: "executing", message: `Opening ${expectedHost} from Google`, step, action: { type: "click", target: { css: "a" } }, cursor: resultCursor });
+    await moveAgentPointer(activePage, resultCursor);
+    await activePage.waitForTimeout(120);
+    await result.click({ timeout: 8_000 });
+    await activePage.waitForLoadState("domcontentloaded").catch(() => undefined);
+  } else {
+    // Google occasionally hides results behind consent or experiment markup.
+    // Keep the visible search sequence, then use the requested public URL as
+    // a reliable recovery path rather than incorrectly claiming success.
+    emit({ phase: "recovering", message: `Google did not expose a direct ${expectedHost} result; opening the requested site`, step });
+    await activePage.goto(destination, { waitUntil: "domcontentloaded" });
+  }
+  await recordHistory(activePage, query);
+}
+
 async function executeAction(activePage: Page, action: BrowserAction, observation: StructuredObservation, source: "agent" | "user") {
   const currentProfile = await loadProfile();
   const target = "target" in action && action.target != null ? locatorForTarget(activePage, action.target, observation) : {};
@@ -970,8 +1123,10 @@ async function executeAction(activePage: Page, action: BrowserAction, observatio
             await target.locator.press("ControlOrMeta+A");
             await target.locator.press("Backspace");
           }
-          // Noticeable per-key delay so the live preview visibly types (~35–45ms).
-          const delay = action.text.length > 180 ? 28 : action.text.length > 80 ? 36 : 42;
+          // Keep keystrokes legible in the visible preview without making an
+          // ordinary search feel sluggish.  Playwright dispatches the real key
+          // events; this is never a cosmetic typing animation.
+          const delay = action.text.length > 180 ? 34 : action.text.length > 80 ? 42 : 50;
           await target.locator.pressSequentially(action.text, { delay });
         } else if (action.clearFirst !== false) await target.locator.fill(action.text);
         else await target.locator.pressSequentially(action.text, { delay: 0 });
@@ -1013,7 +1168,12 @@ async function executeAction(activePage: Page, action: BrowserAction, observatio
       const nextPage = await context!.newPage();
       await wirePage(nextPage);
       page = nextPage;
-      if (action.url) await nextPage.goto(normalizeBrowserInput(action.url, currentProfile.settings.defaultSearchEngine), { waitUntil: "domcontentloaded" });
+      await nextPage.goto(
+        action.url
+          ? normalizeBrowserInput(action.url, currentProfile.settings.defaultSearchEngine)
+          : HOME_URL,
+        { waitUntil: "domcontentloaded" },
+      );
       break;
     }
     case "switch_tab": {
@@ -1069,7 +1229,10 @@ type ActionVerification = { ok: boolean; summary: string; changed: boolean };
 
 async function verifyAction(action: BrowserAction, before: StructuredObservation, after: StructuredObservation): Promise<ActionVerification> {
   const changed = before.page.fingerprint !== after.page.fingerprint || before.viewport.scrollY !== after.viewport.scrollY || before.tabs.length !== after.tabs.length;
-  if (isInternalErrorUrl(after.page.url)) {
+  // Closing an inactive tab can legitimately reveal Chromium's retained
+  // new-tab/error surface. The lifecycle action itself is still verified by
+  // the tab count below, so do not let the destination page mask that result.
+  if (action.type !== "close_tab" && isInternalErrorUrl(after.page.url)) {
     return {
       ok: false,
       summary: "The destination opened a browser error page",
@@ -1187,18 +1350,37 @@ function publicActionError(message: string) {
 async function requestJson(apiKey: string, system: string, user: string, signal?: AbortSignal) {
   const baseUrl = String(process.env.OPENAI_BASE_URL || process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com").replace(/\/$/, "");
   const model = String(process.env.OPENAI_MODEL || process.env.DEEPSEEK_MODEL || "deepseek-chat");
-  const upstream = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model,
-      stream: false,
-      temperature: 0.08,
-      response_format: { type: "json_object" },
-      messages: [{ role: "system", content: system }, { role: "user", content: user }],
-    }),
-    signal,
-  });
+  const controller = new AbortController();
+  const abortFromCaller = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timeoutMs = Math.max(5_000, Number(process.env.CLYRA_BROWSER_REASONING_TIMEOUT_MS || 30_000));
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException("Browser reasoning timed out", "TimeoutError")),
+    timeoutMs,
+  );
+  let upstream: Response;
+  try {
+    upstream = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        stream: false,
+        temperature: 0.08,
+        response_format: { type: "json_object" },
+        messages: [{ role: "system", content: system }, { role: "user", content: user }],
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted && !signal?.aborted) {
+      throw new Error("Browser agent reasoning timed out. Please try again.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abortFromCaller);
+  }
   const payload = await upstream.json();
   if (!upstream.ok) throw new Error(payload?.error?.message || "Browser agent reasoning failed.");
   return String(payload?.choices?.[0]?.message?.content || "{}");
@@ -1299,6 +1481,60 @@ function isResearchTask(task: string) {
   return /find|research|compare|best|listings?|prices?|sources?|options?|products?|shops?|hotels?|flights?/i.test(task);
 }
 
+function localTaskOrigin(url: string) {
+  try {
+    const parsed = new URL(url);
+    return ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname)
+      ? parsed.origin
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The managed browser often starts on Clyra's local workspace. That must not
+ * turn every web-research request into a localhost-only task: commands such
+ * as “go to eBay” need to leave the app in order to do their job. Retain the
+ * local-origin guard only when the user has explicitly asked to exercise a
+ * local page or app.
+ */
+function taskExplicitlyTargetsLocalPage(task: string) {
+  return /\b(?:localhost|127\.0\.0\.1|local(?:host)?\s+(?:page|app|site|project)|this\s+local\s+(?:page|app|site|project))\b/i.test(task);
+}
+
+function actionLeavesLocalTaskScope(
+  action: BrowserAction,
+  observation: StructuredObservation,
+  scopeOrigin: string,
+) {
+  const isOutside = (url?: string) => {
+    if (!url) return false;
+    try {
+      return new URL(url, scopeOrigin).origin !== scopeOrigin;
+    } catch {
+      return true;
+    }
+  };
+  if (action.type === "navigate" || action.type === "open_tab") {
+    return isOutside(action.url);
+  }
+  if (action.type === "search") return true;
+  if (action.type === "switch_tab") {
+    const selected = action.tabId
+      ? observation.tabs.find((tab) => tab.id === action.tabId)
+      : action.tabIndex != null
+        ? observation.tabs[action.tabIndex]
+        : undefined;
+    return Boolean(selected && isOutside(selected.url));
+  }
+  if (["click", "double_click", "right_click"].includes(action.type)) {
+    const element = targetFromAction(action.target, observation);
+    return Boolean(element?.href && isOutside(element.href));
+  }
+  return false;
+}
+
 function researchRequirements(task: string) {
   if (!isResearchTask(task)) return { minimumSources: 0, minimumDetailPages: 0 };
   const numberWords: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
@@ -1342,7 +1578,10 @@ function wakeAgent() {
 }
 
 export function getManagedBrowserState() {
-  return serializeOperation(async () => captureState(await ensurePage()));
+  // The workspace fetches its preview image separately. Skipping a full JPEG
+  // capture here makes initial browser open and every idle state refresh much
+  // lighter, especially with several restored tabs.
+  return serializeOperation(async () => captureState(await ensurePage(), { screenshot: false, fast: true }));
 }
 
 export function getManagedBrowserObservation() {
@@ -1568,12 +1807,31 @@ export async function runManagedBrowserAgent(task: string, apiKey: string, optio
   let lastProgressMarker = "";
   let automaticErrorRecoveries = 0;
   let activePage = await serializeOperation(() => ensurePage());
+  const taskScopeOrigin = taskExplicitlyTargetsLocalPage(task)
+    ? localTaskOrigin(activePage.url())
+    : null;
   let finalMessage = "Task complete.";
   try {
     agentStatus = "planning";
     emit({ phase: "planning", message: "Building a task plan" });
+    const planningStartedAt = Date.now();
     const plan = await buildTaskPlan(task, apiKey, taskAbort.signal);
     emit({ phase: "planning", message: plan.steps[0]?.label || "Plan ready", plan, completedCriteria: 0, totalCriteria: plan.successCriteria.length });
+    // Let a completed plan register before the first visible browser action.
+    // Planning still happens in the background; this simply avoids a jarring
+    // "message → instant click" transition and gives the user time to see the
+    // task the controller actually intends to execute.
+    const planningDwellMs = Math.max(0, 3_050 - (Date.now() - planningStartedAt));
+    if (planningDwellMs) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, planningDwellMs);
+        taskAbort.signal.addEventListener("abort", () => {
+          clearTimeout(timer);
+          resolve();
+        }, { once: true });
+      });
+    }
+    if (taskAbort.signal.aborted) throw new DOMException("Task cancelled", "AbortError");
 
     for (let step = 1; step <= MAX_AGENT_STEPS; step += 1) {
       await waitWhilePaused(taskAbort.signal, emit);
@@ -1710,6 +1968,19 @@ export async function runManagedBrowserAgent(task: string, apiKey: string, optio
           return { message: `${candidate.question}\n\n${candidate.reason}`, steps: history, plan, facts, waitingForUser: true, state: await serializeOperation(() => captureState(activePage)) };
         }
         const before = await serializeOperation(() => inspectPage(activePage));
+        if (taskScopeOrigin && actionLeavesLocalTaskScope(candidate, before, taskScopeOrigin)) {
+          const message = `Blocked an out-of-scope browser action while completing the local task: ${candidate.type}.`;
+          failures.push(message);
+          history.push(`Step ${step}: ${message}`);
+          agentStatus = "recovering";
+          emit({
+            phase: "recovering",
+            message: "Staying on the local task page and choosing a visible in-scope control",
+            step,
+            action: candidate,
+          });
+          continue;
+        }
         const signature = `${before.page.fingerprint}|${JSON.stringify(candidate)}`;
         if ((failureCounts.get(signature) || 0) >= 2) {
           failures.push(`Skipped repeated failed action: ${JSON.stringify(candidate)}`);
@@ -1727,7 +1998,22 @@ export async function runManagedBrowserAgent(task: string, apiKey: string, optio
           const cursor = cursorForAction(action, before);
           agentStatus = "executing";
           emit({ phase: "executing", message: decision.reasoningSummary || finalMessage || `Running ${action.type}`, step, action, cursor, completedCriteria: completedCriteria.size, totalCriteria: plan.successCriteria.length, facts: facts.length });
-          await serializeOperation(() => executeAction(activePage, action, before, "agent"));
+          const agentDestination = action.type === "navigate"
+            ? normalizeBrowserInput(action.url, (await loadProfile()).settings.defaultSearchEngine)
+            : undefined;
+          const shouldUseVisibleGoogleFlow = Boolean(
+            (action.type === "search" || action.type === "navigate") &&
+            !taskExplicitlyTargetsLocalPage(task) &&
+            (action.type === "search" || (agentDestination && !isGoogleUrl(agentDestination))),
+          );
+          if (shouldUseVisibleGoogleFlow) {
+            const query = action.type === "search"
+              ? action.query
+              : googleQueryForNavigation(agentDestination!);
+            await serializeOperation(() => runAgentGoogleSearch(activePage, query, emit, step, agentDestination));
+          } else {
+            await serializeOperation(() => executeAction(activePage, action, before, "agent"));
+          }
           activePage = await serializeOperation(async () => page && !page.isClosed() ? page : await ensurePage());
           const after = await serializeOperation(() => inspectPage(activePage));
           if (/^https?:\/\//i.test(after.page.url)) {

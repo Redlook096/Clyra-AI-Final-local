@@ -129,8 +129,26 @@ export type AgentBridgeSnapshot = {
   capturedAt: number;
 };
 
+export type AgentBridgeAction =
+  | { type: "click"; ref: string }
+  | { type: "focus"; ref: string }
+  | { type: "type"; ref: string; text: string; clearFirst?: boolean }
+  | { type: "press"; key: string; ref?: string }
+  | { type: "scroll"; direction: "up" | "down"; amount?: number; ref?: string }
+  | { type: "navigate"; url: string };
+
+export type AgentBridgeActionResult = {
+  success: boolean;
+  changed: boolean;
+  beforeSnapshotId: string;
+  afterSnapshotId: string;
+  message?: string;
+};
+
 export type AgentBridge = {
   snapshot: () => AgentBridgeSnapshot;
+  act?: (action: AgentBridgeAction) => AgentBridgeActionResult;
+  cancel?: () => void;
 };
 
 declare global {

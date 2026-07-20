@@ -35,6 +35,7 @@ export function buildOpenHandsConversationPayload(options: {
   conversationId?: string;
   /** When false, open the workspace without injecting/running a user message. */
   includeInitialMessage?: boolean;
+  workspaceAlias?: string;
 }) {
   const conversationId = options.conversationId || randomUUID();
   const tools = DEFAULT_TOOL_NAMES.map((name) => ({ name, params: {} }));
@@ -59,6 +60,7 @@ export function buildOpenHandsConversationPayload(options: {
         system_message_suffix: buildClyraSystemMessageSuffix({
           planMode: options.planMode,
           prompt: options.prompt,
+          workspaceAlias: options.workspaceAlias,
         }),
       },
     },

@@ -131,6 +131,8 @@ export function useVoiceCall(options: {
   const wsRef = useRef<WebSocket | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
+  const micStartPromiseRef = useRef<Promise<MediaStream> | null>(null);
+  const micRequestIdRef = useRef(0);
   /** Playback-only context — never share with the mic meter graph. */
   const audioContextRef = useRef<AudioContext | null>(null);
   const meterContextRef = useRef<AudioContext | null>(null);
@@ -151,6 +153,10 @@ export function useVoiceCall(options: {
   const ttsGenerationRef = useRef(0);
   const ttsResponseHashRef = useRef(0);
   const assistantTextRef = useRef("");
+  // Keep text private until the server-owned Max stream is ready. This keeps
+  // the overlay in its composing state while TTS is still being generated.
+  const pendingAssistantTextRef = useRef("");
+  const ttsPlaybackStartedRef = useRef(false);
   const onTurnRef = useRef(options.onTurn);
   const chatHistoryRef = useRef(options.chatHistory ?? []);
   const systemPromptRef = useRef(options.systemPrompt ?? "");
@@ -276,6 +282,8 @@ export function useVoiceCall(options: {
     pendingSpeakTailRef.current = false;
     spokenCharsRef.current = 0;
     gotTtsChunkRef.current = false;
+    ttsPlaybackStartedRef.current = false;
+    pendingAssistantTextRef.current = "";
     ttsGenerationRef.current += 1;
     stopScheduledPlayback();
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
@@ -295,6 +303,9 @@ export function useVoiceCall(options: {
   }, [clearPlaybackResumeTimer, clearTtsWatchdog, stopScheduledPlayback]);
 
   const releaseCapture = useCallback(() => {
+    // Invalidate any in-flight permission request. A delayed browser response
+    // must not revive a stopped meter after mute/end-call.
+    micRequestIdRef.current += 1;
     stopMeter();
     stopRecognition();
     pcmCapturerRef.current?.stop();
@@ -308,6 +319,16 @@ export function useVoiceCall(options: {
     micLevelRef.current = 0;
     setMicLevel(0);
   }, [stopMeter, stopRecognition]);
+
+  const ensurePlaybackContext = useCallback(async () => {
+    if (!audioContextRef.current || audioContextRef.current.state === "closed") {
+      audioContextRef.current = new AudioContext();
+    }
+    const context = audioContextRef.current;
+    if (context.state === "suspended") await context.resume();
+    playbackTimeRef.current = Math.max(playbackTimeRef.current, context.currentTime);
+    return context;
+  }, []);
 
   const stopMic = useCallback(() => {
     releaseCapture();
@@ -359,12 +380,7 @@ export function useVoiceCall(options: {
     // Dedicated playback context at the device rate — never reuse the mic capture graph.
     // Chunks keep their native sampleRate in createBuffer so the browser resamples
     // cleanly (avoids robotic pitch / pops from forcing a mismatched context rate).
-    if (!audioContextRef.current || audioContextRef.current.state === "closed") {
-      audioContextRef.current = new AudioContext();
-      playbackTimeRef.current = audioContextRef.current.currentTime;
-    }
-    const ctx = audioContextRef.current;
-    if (ctx.state === "suspended") await ctx.resume();
+    const ctx = await ensurePlaybackContext();
     const pcm = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
     if (!pcm.length) return;
     const float32 = new Float32Array(pcm.length);
@@ -393,7 +409,7 @@ export function useVoiceCall(options: {
     const startAt = Math.max(ctx.currentTime + 0.005, playbackTimeRef.current);
     source.start(startAt);
     playbackTimeRef.current = startAt + audioBuffer.duration;
-  }, []);
+  }, [ensurePlaybackContext]);
 
   const sendUtterance = useCallback((text: string) => {
     const clean = text.trim();
@@ -428,6 +444,8 @@ export function useVoiceCall(options: {
     setAssistantText("");
     setStatus("thinking");
     gotTtsChunkRef.current = false;
+    ttsPlaybackStartedRef.current = false;
+    pendingAssistantTextRef.current = "";
 
     // Pause mic recognition while we think/speak so TTS doesn't re-trigger STT.
     const recognition = recognitionRef.current;
@@ -756,7 +774,7 @@ export function useVoiceCall(options: {
         } else if (ALLOW_BROWSER_TTS_FALLBACK && window.speechSynthesis) {
           window.speechSynthesis.resume();
         } else if (stillSilent) {
-          setError("Chatterbox did not return audio in time. The call stayed on the selected neural voice instead of changing voices.");
+          setError("Async Voice did not return audio in time. The call stayed on Max instead of changing voices.");
           finishSpeakingAndListen();
         }
       }, CHATTERBOX_WATCHDOG_MS);
@@ -778,33 +796,47 @@ export function useVoiceCall(options: {
   }, [clearPlaybackResumeTimer, finishSpeakingAndListen]);
 
   const startMicMeter = useCallback(async () => {
+    const existing = mediaStreamRef.current;
+    if (existing?.active && existing.getAudioTracks().some((track) => track.readyState === "live")) {
+      return existing;
+    }
+    // The WebSocket can announce pipeline mode while its onopen handler is
+    // already requesting the microphone. Reuse that request instead of
+    // releasing/recreating the meter graph in the middle of permission setup.
+    if (micStartPromiseRef.current) return micStartPromiseRef.current;
     releaseCapture();
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        channelCount: 1,
-      },
-      video: false,
-    });
-    mediaStreamRef.current = stream;
-    // Dedicated meter graph — never reused for TTS playback (that killed the meter).
-    const ctx = new AudioContext();
-    meterContextRef.current = ctx;
-    if (ctx.state === "suspended") await ctx.resume();
-    const source = ctx.createMediaStreamSource(stream);
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 1024;
-    analyser.smoothingTimeConstant = 0.2;
-    source.connect(analyser);
-    analyserRef.current = analyser;
+    const requestId = micRequestIdRef.current;
+    const capture = (async () => {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
+        video: false,
+      });
+      if (requestId !== micRequestIdRef.current || !activeRef.current) {
+        stopMediaStreamTracks(stream);
+        throw new Error("Microphone request was cancelled.");
+      }
+      mediaStreamRef.current = stream;
+      // Dedicated meter graph — never reused for TTS playback.
+      const ctx = new AudioContext();
+      meterContextRef.current = ctx;
+      if (ctx.state === "suspended") await ctx.resume();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.2;
+      source.connect(analyser);
+      analyserRef.current = analyser;
 
-    const data = new Uint8Array(analyser.fftSize);
-    const tick = () => {
-      if (!analyserRef.current || !activeRef.current) return;
-      // Prefer live PCM-capturer levels when pipeline mode owns the meter feed.
-      if (!pipelineModeRef.current || !pcmCapturerRef.current) {
+      const data = new Uint8Array(analyser.fftSize);
+      const tick = () => {
+        if (!analyserRef.current || !activeRef.current) return;
+        // Preserve a direct analyser feed after PCM capture starts. It keeps
+        // the meter responsive even when ScriptProcessor is briefly throttled.
         analyserRef.current.getByteTimeDomainData(data);
         let sum = 0;
         for (let i = 0; i < data.length; i += 1) {
@@ -813,14 +845,21 @@ export function useVoiceCall(options: {
         }
         const rms = Math.sqrt(sum / data.length);
         applyMicLevel(Math.min(1, Math.pow(rms * 6.5, 0.9)));
-      }
+        meterRafRef.current = requestAnimationFrame(tick);
+      };
       meterRafRef.current = requestAnimationFrame(tick);
-    };
-    meterRafRef.current = requestAnimationFrame(tick);
+      return stream;
+    })();
+    micStartPromiseRef.current = capture;
+    try {
+      return await capture;
+    } finally {
+      if (micStartPromiseRef.current === capture) micStartPromiseRef.current = null;
+    }
   }, [applyMicLevel, releaseCapture]);
 
   const startPipelineCapture = useCallback(async (sampleRate = captureSampleRateRef.current) => {
-    if (!mediaStreamRef.current) await startMicMeter();
+    const stream = await startMicMeter();
     pcmCapturerRef.current?.stop();
     const capturer = new VoicePcmCapturer(
       (base64, seq) => {
@@ -836,7 +875,7 @@ export function useVoiceCall(options: {
         if (activeRef.current) applyMicLevel(level);
       },
     );
-    await capturer.start(mediaStreamRef.current);
+    await capturer.start(stream, meterContextRef.current);
     pcmCapturerRef.current = capturer;
     capturer.setMuted(false);
   }, [applyMicLevel, startMicMeter]);
@@ -855,8 +894,25 @@ export function useVoiceCall(options: {
     setStatus("connecting");
     statusRef.current = "connecting";
     setAssistantText("");
+    pendingAssistantTextRef.current = "";
+    ttsPlaybackStartedRef.current = false;
     setPartialTranscript("");
     setMicLevel(0);
+    // This runs synchronously from the user's Start Call gesture. Keeping the
+    // context active here avoids browser autoplay policies suspending valid
+    // Async/Max PCM that arrives later over WebSocket.
+    void ensurePlaybackContext().catch((cause) => {
+      setError(
+        cause instanceof Error
+          ? `Voice playback: ${cause.message}`
+          : "Voice playback could not start.",
+      );
+    });
+    // Keep the microphone setup within the Start Call user gesture. Delaying
+    // it until WebSocket.onopen can leave capture suspended in Chromium.
+    void startMicMeter().catch((cause) => {
+      setError(cause instanceof Error ? cause.message : "Microphone permission denied");
+    });
     // Carry chat context into the call UI + server history.
     const seeded = (chatHistoryRef.current ?? []).map((msg, index, arr) => ({
       id: `seed-${index}-${msg.role}`,
@@ -901,12 +957,12 @@ export function useVoiceCall(options: {
         statusRef.current = "listening";
         try {
           await startMicMeter();
-          // Prefer pipeline mode once server announces it; fall back quickly.
-          window.setTimeout(() => {
-            if (!activeRef.current) return;
-            if (pipelineModeRef.current) return;
-            startRecognition();
-          }, 700);
+          // Wait for the gateway's explicit `pipeline_mode` message before
+          // selecting an STT implementation. Starting Web Speech after an
+          // arbitrary timeout races the local PCM pipeline while it warms up;
+          // in browsers where Web Speech is unavailable that race surfaces a
+          // misleading "Microphone permission denied" message even though
+          // getUserMedia and the meter are working normally.
         } catch (micError) {
           // Keep the call alive (Listening) so session/WS still work; show mic error.
           setError(
@@ -926,12 +982,22 @@ export function useVoiceCall(options: {
           if (packet.responseHash !== ttsResponseHashRef.current) return;
           const firstChunk = !gotTtsChunkRef.current;
           gotTtsChunkRef.current = true;
+          if (firstChunk) {
+            ttsPlaybackStartedRef.current = true;
+            setAssistantText(pendingAssistantTextRef.current);
+          }
           beginAssistantHold();
           clearTtsWatchdog();
           if (firstChunk && typeof window !== "undefined" && "speechSynthesis" in window) {
             window.speechSynthesis.cancel();
           }
-          void playPcmBytes(packet.pcm, packet.sampleRate);
+          void playPcmBytes(packet.pcm, packet.sampleRate).catch((cause) => {
+            setError(
+              cause instanceof Error
+                ? `Voice playback: ${cause.message}`
+                : "Voice playback could not start.",
+            );
+          });
           setStatus("speaking");
           return;
         }
@@ -1004,6 +1070,13 @@ export function useVoiceCall(options: {
             setPartialTranscript(message.text);
           }
           if (message.type === "transcript_final" && message.text) {
+            // Pipeline STT submits directly from the server rather than through
+            // sendUtterance, so reset the pending visual/TTS state here too.
+            gotTtsChunkRef.current = false;
+            ttsPlaybackStartedRef.current = false;
+            pendingAssistantTextRef.current = "";
+            setAssistantText("");
+            setStatus("thinking");
             setPartialTranscript(message.text);
             // Pipeline path may finalize without going through sendUtterance.
             setTurns((prev) => {
@@ -1027,21 +1100,21 @@ export function useVoiceCall(options: {
           }
           if (message.type === "llm_token" && message.token) {
             beginAssistantHold();
-            setAssistantText((prev) => {
-              const next = prev + message.token;
-              // Browser speech is an explicitly enabled emergency mode only.
-              // Normal calls wait for the shared Chatterbox PCM stream.
-              if (!pipelineModeRef.current && ALLOW_BROWSER_TTS_FALLBACK && !gotTtsChunkRef.current) {
-                speakProgressive(next, false);
-              }
-              return next;
-            });
+            const next = `${pendingAssistantTextRef.current}${message.token}`;
+            pendingAssistantTextRef.current = next;
+            if (ttsPlaybackStartedRef.current) setAssistantText(next);
+            // Browser speech is an explicitly enabled emergency mode only.
+            // Normal calls wait for the server-owned Async PCM stream.
+            if (!pipelineModeRef.current && ALLOW_BROWSER_TTS_FALLBACK && !gotTtsChunkRef.current) {
+              speakProgressive(next, false);
+            }
             if (statusRef.current === "thinking" || statusRef.current === "listening") {
               if (!localTtsActiveRef.current) setStatus("thinking");
             }
           }
           if (message.type === "llm_done" && message.text) {
-            setAssistantText(message.text);
+            pendingAssistantTextRef.current = message.text;
+            if (ttsPlaybackStartedRef.current) setAssistantText(message.text);
             setTurns((prev) => {
               const last = prev[prev.length - 1];
               if (last?.role === "assistant" && last.content === message.text) return prev;
@@ -1077,7 +1150,12 @@ export function useVoiceCall(options: {
             ttsResponseHashRef.current = stableVoiceId(message.responseId ?? "");
           }
           if (message.type === "tts_chunk" && message.data) {
+            const firstChunk = !gotTtsChunkRef.current;
             gotTtsChunkRef.current = true;
+            if (firstChunk) {
+              ttsPlaybackStartedRef.current = true;
+              setAssistantText(pendingAssistantTextRef.current);
+            }
             beginAssistantHold();
             clearTtsWatchdog();
             stopSpeechResumeRef.current?.();
@@ -1103,12 +1181,14 @@ export function useVoiceCall(options: {
               clearTtsWatchdog();
               return;
             }
-            if (assistantTextRef.current && ALLOW_BROWSER_TTS_FALLBACK) {
-              speakFallback(assistantTextRef.current);
-              armTtsWatchdog(assistantTextRef.current);
-            } else if (assistantTextRef.current) {
+            if (pendingAssistantTextRef.current && ALLOW_BROWSER_TTS_FALLBACK) {
+              setAssistantText(pendingAssistantTextRef.current);
+              speakFallback(pendingAssistantTextRef.current);
+              armTtsWatchdog(pendingAssistantTextRef.current);
+            } else if (pendingAssistantTextRef.current) {
+              setAssistantText(pendingAssistantTextRef.current);
               clearTtsWatchdog();
-              setError("Chatterbox returned no audio. Browser speech fallback is disabled to keep the selected voice consistent.");
+              setError("Async Voice returned no audio. Browser speech fallback is disabled to keep Max consistent.");
               finishSpeakingAndListen();
             } else {
               finishSpeakingAndListen();
@@ -1168,6 +1248,7 @@ export function useVoiceCall(options: {
     finishSpeakingAndListen,
     options.conversationId,
     options.enabled,
+    ensurePlaybackContext,
     playPcmBytes,
     scheduleResumeAfterPlayback,
     speakFallback,

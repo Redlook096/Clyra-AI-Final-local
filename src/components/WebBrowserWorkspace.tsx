@@ -6,12 +6,11 @@ import {
   Bot,
   Check,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   CirclePause,
   CirclePlay,
   Clock3,
   Download,
+  Ellipsis,
   ExternalLink,
   Eye,
   EyeOff,
@@ -20,7 +19,6 @@ import {
   History,
   Loader2,
   LockKeyhole,
-  Menu,
   Minus,
   MousePointer2,
   PanelRightClose,
@@ -53,6 +51,7 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { cn } from "../lib/utils";
+import { ShiningBrainIcon, ShiningText, ThinkingDots } from "./ShiningText";
 
 type AgentStatus =
   | "idle"
@@ -195,34 +194,29 @@ const ACTIVE_AGENT_PHASES = new Set<AgentStatus>([
   "paused",
 ]);
 
-const WELCOME_MESSAGE: AgentMessage = { id: "welcome", role: "assistant", content: "Ready when you are." };
-
 function initialAgentConversations(): Record<string, AgentMessage[]> {
+  const withoutRetiredWelcome = (messages: AgentMessage[]) => messages.filter((message) =>
+    !(message.role === "assistant" && /^Ready when you are\.?$/i.test(message.content.trim())),
+  );
   if (typeof window !== "undefined") {
     try {
       const saved = JSON.parse(window.localStorage.getItem(BROWSER_CHAT_STORAGE) || "{}") as AgentMessage[] | Record<string, AgentMessage[]>;
-      if (Array.isArray(saved) && saved.length) return { default: saved.slice(-60) };
+      if (Array.isArray(saved) && saved.length) return { default: withoutRetiredWelcome(saved).slice(-60) };
       if (saved && typeof saved === "object") {
         const entries = Object.entries(saved).filter(([, messages]) => Array.isArray(messages));
-        if (entries.length) return Object.fromEntries(entries.map(([key, messages]) => [key, messages.slice(-60)]));
+        if (entries.length) return Object.fromEntries(entries.map(([key, messages]) => [key, withoutRetiredWelcome(messages).slice(-60)]));
       }
     } catch {
       // A malformed local draft should not prevent the browser from opening.
     }
   }
-  return { default: [WELCOME_MESSAGE] };
+  return { default: [] };
 }
 
 type SideView = "agent" | "history" | "bookmarks" | "downloads" | "settings";
 
-const suggestedTasks = [
-  "Summarize this page",
-  "Compare the strongest options",
-  "Find the key details and sources",
-];
-
 const defaultSettings: BrowserSettings = {
-  defaultSearchEngine: "bing",
+  defaultSearchEngine: "google",
   restoreTabs: true,
   saveHistory: true,
   showBookmarksBar: false,
@@ -390,7 +384,7 @@ function IconButton({
       onClick={onClick}
       className={cn(
         "grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-500 transition-[background-color,color,transform,opacity] duration-150 hover:bg-slate-100 hover:text-slate-900 active:scale-[0.94] disabled:pointer-events-none disabled:opacity-30",
-        active && "bg-slate-900 text-white hover:bg-slate-800 hover:text-white",
+        active && "bg-slate-100 text-slate-700 hover:bg-slate-200 hover:text-slate-900",
         className,
       )}
     >
@@ -437,9 +431,6 @@ export default function WebBrowserWorkspace() {
   const [criteriaProgress, setCriteriaProgress] = useState({ complete: 0, total: 0 });
   const [factCount, setFactCount] = useState(0);
   const [activityOpen, setActivityOpen] = useState(false);
-  const [findOpen, setFindOpen] = useState(false);
-  const [findText, setFindText] = useState("");
-  const [findResult, setFindResult] = useState({ current: 0, total: 0 });
   const [browserMenuOpen, setBrowserMenuOpen] = useState(false);
   const [cursor, setCursor] = useState<AgentCursor | null>(null);
   const [frameTick, setFrameTick] = useState(0);
@@ -467,10 +458,10 @@ export default function WebBrowserWorkspace() {
   ));
 
   const activeChatKey = browserState?.activeTabId || previousActiveTabRef.current || "default";
-  const messages = messagesByTab[activeChatKey] || [{ ...WELCOME_MESSAGE, id: `welcome-${activeChatKey}` }];
+  const messages = messagesByTab[activeChatKey] || [];
   const setMessages = useCallback((update: React.SetStateAction<AgentMessage[]>, tabId = activeChatKey) => {
     setMessagesByTab((current) => {
-      const existing = current[tabId] || [{ ...WELCOME_MESSAGE, id: `welcome-${tabId}` }];
+      const existing = current[tabId] || [];
       const next = typeof update === "function" ? update(existing) : update;
       return { ...current, [tabId]: next.slice(-60) };
     });
@@ -483,7 +474,7 @@ export default function WebBrowserWorkspace() {
       const next = { ...current };
       for (const tab of state.tabs) {
         if (!next[tab.id]) {
-          next[tab.id] = [{ ...WELCOME_MESSAGE, id: `welcome-${tab.id}` }];
+          next[tab.id] = [];
           changed = true;
         }
       }
@@ -635,7 +626,15 @@ export default function WebBrowserWorkspace() {
 
   const takeManualControl = useCallback(async () => {
     if (!isAgentBusy || browserState?.agent.manualControl) return;
-    await requestBrowser("/api/openbrowser/control", { body: { command: "take_control" }, quiet: true }).catch(() => undefined);
+    const response = await requestBrowser("/api/openbrowser/control", { body: { command: "take_control" }, quiet: true }).catch(() => null);
+    const agent = response?.agent as { status?: AgentStatus; paused?: boolean; manualControl?: boolean } | undefined;
+    if (agent) {
+      setBrowserState((current) => current ? {
+        ...current,
+        agent: { ...current.agent, status: agent.status || "paused", paused: true, manualControl: true },
+      } : current);
+      setCursor(null);
+    }
     setAgentPhase("paused");
     setAgentStatus("You have control");
   }, [browserState?.agent.manualControl, isAgentBusy, requestBrowser]);
@@ -658,6 +657,19 @@ export default function WebBrowserWorkspace() {
   const controlAgent = async (command: "pause" | "resume" | "take_control" | "return_control" | "stop") => {
     const response = await requestBrowser("/api/openbrowser/control", { body: { command }, quiet: true }).catch(() => null);
     if (!response) return;
+    const agent = response.agent as { status?: AgentStatus; paused?: boolean; manualControl?: boolean } | undefined;
+    if (agent) {
+      setBrowserState((current) => current ? {
+        ...current,
+        agent: {
+          ...current.agent,
+          status: agent.status || current.agent.status,
+          paused: Boolean(agent.paused),
+          manualControl: Boolean(agent.manualControl),
+        },
+      } : current);
+      if (agent.manualControl || command === "pause") setCursor(null);
+    }
     if (command === "stop") {
       setAgentStatus("Stopping task");
     } else if (command === "pause" || command === "take_control") {
@@ -769,6 +781,10 @@ export default function WebBrowserWorkspace() {
         setIsAgentBusy(false);
         setAgentPhase("idle");
         setAgentStatus("Ready");
+        // A completed task hands the page straight back to the user.  Leaving
+        // the last cursor coordinate on screen made an idle browser look as if
+        // the agent still had the controls.
+        setCursor(null);
       }
     }
   };
@@ -825,11 +841,6 @@ export default function WebBrowserWorkspace() {
     await requestBrowser("/api/openbrowser/bookmarks", { body: {}, quiet: true }).catch(() => undefined);
   };
 
-  const runFind = async (value = findText) => {
-    const payload = await requestBrowser("/api/openbrowser/find", { body: { text: value }, quiet: true }).catch(() => null);
-    if (payload?.result) setFindResult(payload.result);
-  };
-
   const zoom = async (delta: number | "reset") => {
     await requestBrowser("/api/openbrowser/zoom", { body: { delta }, quiet: true }).catch(() => undefined);
   };
@@ -854,9 +865,6 @@ export default function WebBrowserWorkspace() {
       } else if (modifier && event.key.toLowerCase() === "r") {
         event.preventDefault();
         void performAction({ type: "reload" });
-      } else if (modifier && event.key.toLowerCase() === "f") {
-        event.preventDefault();
-        setFindOpen(true);
       } else if (modifier && (event.key === "+" || event.key === "=")) {
         event.preventDefault();
         void zoom(0.1);
@@ -874,7 +882,6 @@ export default function WebBrowserWorkspace() {
 
   const settings = browserState?.settings || defaultSettings;
   const pageHost = useMemo(() => displayHost(browserState?.url || address), [address, browserState?.url]);
-  const activeBookmarked = Boolean(browserState?.bookmarks.some((bookmark) => bookmark.url === browserState.url));
   const latestSteps = liveSteps.length ? liveSteps : [...messages].reverse().find((message) => message.steps?.length)?.steps || [];
   const frameUrl = browserState
     ? `/api/openbrowser/frame?${isAgentBusy || browserState.loading ? "fresh=1&" : ""}v=${browserState.frameVersion}&t=${frameTick}`
@@ -889,30 +896,34 @@ export default function WebBrowserWorkspace() {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 bg-[#f3f5f7] p-2 sm:p-2.5">
+    <div className="flex min-h-0 flex-1 bg-[#f6f8fa] p-[2px]">
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-        className={cn(
-          "relative mx-auto grid h-full min-h-0 w-full max-w-[1660px] overflow-hidden rounded-xl border bg-white transition-[border-color,box-shadow] duration-300",
-          "border-slate-200/90 shadow-[0_18px_48px_rgba(15,23,42,0.09)]",
-          sideOpen ? "lg:grid-cols-[minmax(0,1fr)_370px]" : "grid-cols-1",
-        )}
+        className="relative mx-auto flex h-full min-h-0 w-full max-w-none flex-col overflow-hidden rounded-[10px] border border-slate-200/90 bg-white shadow-[0_2px_12px_rgba(36,55,78,0.05)]"
       >
-        <section className="flex min-h-0 min-w-0 flex-col bg-white">
-          <div className="flex h-11 shrink-0 items-end gap-1 overflow-x-auto bg-[#e9edf1] px-2.5 pt-1.5 [scrollbar-width:none]">
+        <div className={cn(
+          "flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-slate-200/80 bg-white px-4 [scrollbar-width:none]",
+          sideOpen && "lg:mr-[clamp(310px,27vw,430px)]",
+        )}>
+          <AnimatePresence initial={false} mode="popLayout">
             {browserState?.tabs.map((tab) => (
-              <button
+              <motion.button
                 key={tab.id}
+                layout="position"
+                initial={{ opacity: 0, scale: 0.96, x: -6 }}
+                animate={{ opacity: 1, scale: 1, x: 0 }}
+                exit={{ opacity: 0, scale: 0.96, x: 6 }}
+                transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
                 type="button"
                 onClick={() => void performAction({ type: "switch_tab", tabId: tab.id })}
                 onAuxClick={(event) => {
                   if (event.button === 1 && browserState.tabs.length > 1) void performAction({ type: "close_tab", tabId: tab.id });
                 }}
                 className={cn(
-                  "group/tab relative flex h-9 min-w-[142px] max-w-[230px] flex-1 items-center gap-2 rounded-t-[9px] px-3 text-left text-[11px] font-semibold transition-[background-color,color] duration-150",
-                  tab.active ? "bg-white text-slate-800" : "text-slate-500 hover:bg-white/55 hover:text-slate-700",
+                  "group/tab relative flex h-8 min-w-[142px] max-w-[250px] items-center gap-2 rounded-[15px] px-3 text-left text-[12px] font-medium transition-[background-color,color,box-shadow] duration-200 ease-out",
+                  tab.active ? "bg-[#f1f1f1] text-slate-800" : "text-slate-500 hover:bg-[#f1f1f1] hover:text-slate-800",
                 )}
               >
                 {tab.loading ? (
@@ -931,23 +942,25 @@ export default function WebBrowserWorkspace() {
                     event.stopPropagation();
                     if ((browserState?.tabs.length || 0) > 1) void performAction({ type: "close_tab", tabId: tab.id });
                   }}
-                  className="grid h-5 w-5 shrink-0 place-items-center rounded-md opacity-0 transition-[opacity,background-color] hover:bg-slate-200 group-hover/tab:opacity-100"
+                  className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-slate-400 opacity-0 transition-[opacity,background-color,color] hover:bg-white hover:text-slate-700 group-hover/tab:opacity-100"
                 >
                   <X className="h-3 w-3" />
                 </span>
-              </button>
+              </motion.button>
             ))}
-            <IconButton label="New tab" onClick={() => void performAction({ type: "open_tab" })} className="mb-1 h-7 w-7 rounded-full">
+          </AnimatePresence>
+            <IconButton label="New tab" onClick={() => void performAction({ type: "open_tab" })} className="h-7 w-7 rounded-full text-slate-500 hover:bg-slate-100 hover:text-slate-800">
               <Plus className="h-4 w-4" />
             </IconButton>
-            <div className="ml-auto mb-1 flex items-center gap-0.5">
-              <IconButton label={sideOpen ? "Hide assistant" : "Show assistant"} onClick={() => setSideOpen((value) => !value)} className="h-7 w-7 rounded-full">
-                {sideOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
-              </IconButton>
-            </div>
-          </div>
+        </div>
 
-          <div className="relative flex h-[52px] shrink-0 items-center gap-1 border-b border-slate-200 bg-white px-2">
+        <div className={cn(
+          "grid min-h-0 flex-1 [transition:grid-template-columns_560ms_cubic-bezier(.16,1,.3,1)]",
+          sideOpen ? "lg:grid-cols-[minmax(0,1fr)_clamp(310px,27vw,430px)]" : "grid-cols-1 lg:grid-cols-[minmax(0,1fr)_0px]",
+        )}>
+        <section className="flex min-h-0 min-w-0 flex-col bg-white">
+
+          <div className="relative flex h-9 shrink-0 items-center gap-0.5 border-b border-slate-200/80 bg-white px-2 [&_button]:text-slate-500 [&_button:hover]:bg-slate-100 [&_button:hover]:text-slate-800">
             <IconButton label="Back" disabled={!browserState?.canGoBack} onClick={() => void performAction({ type: "back" })}>
               <ArrowLeft className="h-4 w-4" />
             </IconButton>
@@ -958,8 +971,8 @@ export default function WebBrowserWorkspace() {
               {browserState?.loading ? <X className="h-4 w-4" /> : <RefreshCw className={cn("h-4 w-4", isBrowserBusy && "animate-spin")} />}
             </IconButton>
             <form onSubmit={(event) => void navigate(event)} className="min-w-0 flex-1">
-              <div className="group/omnibox flex h-9 items-center gap-2 rounded-lg border border-transparent bg-[#eef1f4] px-3 transition-[background-color,border-color,box-shadow] duration-150 focus-within:border-slate-300 focus-within:bg-white focus-within:shadow-[0_0_0_3px_rgba(15,23,42,0.05)]">
-                {browserState?.secure ? <LockKeyhole className="h-3.5 w-3.5 shrink-0 text-emerald-600" /> : <Search className="h-3.5 w-3.5 shrink-0 text-slate-500" />}
+              <div className="group/omnibox flex h-8 items-center gap-2 rounded-[10px] border border-transparent bg-white px-3 transition-[background-color,border-color,box-shadow] duration-200 hover:bg-slate-100/85 focus-within:border-slate-300 focus-within:bg-slate-100/85 focus-within:shadow-[0_0_0_3px_rgba(148,163,184,0.14)]">
+                {browserState?.secure ? <LockKeyhole className="h-3.5 w-3.5 shrink-0 text-emerald-500" /> : <Search className="h-3.5 w-3.5 shrink-0 text-slate-400" />}
                 <input
                   data-browser-omnibox
                   value={address}
@@ -974,20 +987,17 @@ export default function WebBrowserWorkspace() {
                   placeholder="Search or enter address"
                   aria-label="Address and search bar"
                 />
-                <button type="button" title={activeBookmarked ? "Page bookmarked" : "Bookmark page"} aria-label={activeBookmarked ? "Page bookmarked" : "Bookmark page"} onClick={() => void saveBookmark()} className="text-slate-400 transition-colors hover:text-amber-500">
-                  <Star className={cn("h-3.5 w-3.5", activeBookmarked && "fill-amber-400 text-amber-500")} />
-                </button>
               </div>
             </form>
-            <IconButton label="Find in page" onClick={() => setFindOpen((value) => !value)} active={findOpen}>
-              <Search className="h-4 w-4" />
-            </IconButton>
-            <IconButton label="Open assistant" onClick={() => openSideView("agent")} active={sideOpen && sideView === "agent"}>
-              <Sparkles className="h-4 w-4" />
+            <IconButton label="Open history" onClick={() => {
+              setSideView((view) => view === "history" ? "agent" : "history");
+              setSideOpen(true);
+            }} active={sideOpen && sideView === "history"}>
+              <History className="h-4 w-4" />
             </IconButton>
             <div className="relative">
               <IconButton label="Browser menu" onClick={() => setBrowserMenuOpen((value) => !value)} active={browserMenuOpen}>
-                <Menu className="h-[17px] w-[17px]" />
+                <Ellipsis className="h-[17px] w-[17px]" />
               </IconButton>
               <AnimatePresence>
                 {browserMenuOpen ? (
@@ -999,7 +1009,6 @@ export default function WebBrowserWorkspace() {
                     className="absolute right-0 top-10 z-40 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_16px_42px_rgba(15,23,42,0.16)]"
                   >
                     {[
-                      { view: "history" as const, label: "History", icon: History },
                       { view: "bookmarks" as const, label: "Bookmarks", icon: Bookmark },
                       { view: "downloads" as const, label: "Downloads", icon: Download },
                       { view: "settings" as const, label: "Browser settings", icon: Settings2 },
@@ -1021,6 +1030,9 @@ export default function WebBrowserWorkspace() {
                 ) : null}
               </AnimatePresence>
             </div>
+            <IconButton label={sideOpen ? "Hide assistant" : "Show assistant"} onClick={() => setSideOpen((value) => !value)} active={sideOpen && sideView === "agent"}>
+              {sideOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
+            </IconButton>
           </div>
 
           <AnimatePresence initial={false}>
@@ -1032,26 +1044,6 @@ export default function WebBrowserWorkspace() {
                   </button>
                 ))}
               </motion.div>
-            ) : null}
-          </AnimatePresence>
-
-          <AnimatePresence initial={false}>
-            {findOpen ? (
-              <motion.form
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 42, opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                onSubmit={(event) => { event.preventDefault(); void runFind(); }}
-                className="flex shrink-0 items-center justify-end gap-1 overflow-hidden border-b border-slate-200 bg-white px-3"
-              >
-                <div className="flex h-8 w-[290px] items-center rounded-lg border border-slate-200 bg-white px-2 shadow-sm">
-                  <input autoFocus value={findText} onChange={(event) => { setFindText(event.target.value); void runFind(event.target.value); }} placeholder="Find in page" className="min-w-0 flex-1 bg-transparent text-[11px] font-medium text-slate-700 outline-none" />
-                  <span className="text-[9px] font-semibold text-slate-400">{findResult.total ? `${findResult.current}/${findResult.total}` : "0/0"}</span>
-                </div>
-                <IconButton label="Previous match" disabled={!findResult.total}><ChevronLeft className="h-4 w-4" /></IconButton>
-                <IconButton label="Next match" disabled={!findResult.total}><ChevronRight className="h-4 w-4" /></IconButton>
-                <IconButton label="Close find" onClick={() => { setFindOpen(false); setFindText(""); void runFind(""); }}><X className="h-4 w-4" /></IconButton>
-              </motion.form>
             ) : null}
           </AnimatePresence>
 
@@ -1091,18 +1083,18 @@ export default function WebBrowserWorkspace() {
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
                   className="pointer-events-none absolute inset-0 z-[18]"
-                  style={{ boxShadow: "inset 0 0 0 2px rgba(37,99,235,.72), inset 0 0 34px rgba(59,130,246,.22), inset 0 0 78px rgba(34,211,238,.08)" }}
+                  style={{ boxShadow: "inset 0 0 0 1px rgba(59,130,246,.48)" }}
                 >
-                  <div className="absolute left-3 top-3 flex items-center gap-2 rounded-xl border border-blue-200/80 bg-white/90 px-2.5 py-1.5 text-[9px] font-semibold text-blue-700 shadow-[0_10px_30px_rgba(37,99,235,.16)] backdrop-blur-xl">
-                    <span className="h-2 w-2 rounded-full bg-blue-600 shadow-[0_0_10px_rgba(37,99,235,.72)]" />
-                    {agentStatus}
+                  <div className="absolute left-3 top-3 flex items-center gap-2 rounded-full bg-slate-950/90 px-2.5 py-1.5 text-[9px] font-semibold text-white shadow-[0_8px_24px_rgba(15,23,42,.18)] backdrop-blur-xl">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-300" />
+                    <ShiningText text={agentStatus} play={!settings.reducedMotion} className="!text-[9px] !text-white [--clyra-thinking-base:#dbeafe] [--clyra-thinking-highlight:#ffffff]" />
                   </div>
                 </motion.div>
               ) : null}
             </AnimatePresence>
 
             <AnimatePresence>
-              {cursor && settings.showAiCursor && !browserState?.agent.manualControl ? (
+              {cursor && isAgentBusy && settings.showAiCursor && !browserState?.agent.manualControl ? (
                 <motion.div
                   key="browser-ai-cursor"
                   initial={settings.reducedMotion ? false : { opacity: 0, scale: 0.86 }}
@@ -1143,6 +1135,28 @@ export default function WebBrowserWorkspace() {
               </div>
             ) : null}
 
+            <AnimatePresence>
+              {isAgentBusy ? (
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.97 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 8, scale: 0.97 }}
+                  transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                  className="absolute bottom-4 left-1/2 z-30 flex h-9 -translate-x-1/2 items-center gap-1.5 rounded-full border border-slate-200/90 bg-white/95 px-1.5 text-[9px] font-semibold text-slate-700 shadow-[0_10px_28px_rgba(15,23,42,.12)] backdrop-blur-xl"
+                >
+                  <span className="grid h-6 w-6 place-items-center rounded-full bg-slate-100 text-slate-500"><Globe2 className="h-3 w-3" /></span>
+                  <span className="max-w-32 truncate px-1 text-slate-600">{agentStatus}</span>
+                  <button type="button" onClick={() => void controlAgent(agentPhase === "paused" && !browserState?.agent.manualControl ? "resume" : "pause")} className="flex h-7 items-center gap-1 rounded-full bg-slate-100 px-2 text-[9px] text-slate-600 transition-[background-color,transform] duration-200 hover:-translate-y-px hover:bg-slate-200">
+                    {agentPhase === "paused" && !browserState?.agent.manualControl ? <><CirclePlay className="h-3 w-3" /> Resume</> : <><CirclePause className="h-3 w-3" /> Pause</>}
+                  </button>
+                  <button type="button" onClick={() => void controlAgent(browserState?.agent.manualControl ? "return_control" : "take_control")} className="flex h-7 items-center gap-1 rounded-full bg-slate-100 px-2 text-[9px] text-slate-600 transition-[background-color,transform] duration-200 hover:-translate-y-px hover:bg-slate-200">
+                    {browserState?.agent.manualControl ? <><Sparkles className="h-3 w-3" /> Resume AI</> : <><MousePointer2 className="h-3 w-3" /> Take control</>}
+                  </button>
+                  <button type="button" onClick={() => void controlAgent("stop")} className="grid h-7 w-7 place-items-center rounded-full bg-rose-500 text-white transition-[background-color,transform] duration-200 hover:-translate-y-px hover:bg-rose-600" aria-label="Stop browser task"><Square className="h-2.5 w-2.5 fill-current" /></button>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+
             {error ? (
               <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="absolute inset-x-4 bottom-4 z-30 flex items-center gap-3 rounded-lg border border-red-200 bg-white px-3 py-2.5 text-[11px] font-medium text-red-600 shadow-lg">
                 <span className="min-w-0 flex-1">{error}</span>
@@ -1160,75 +1174,38 @@ export default function WebBrowserWorkspace() {
         <AnimatePresence initial={false}>
           {sideOpen ? (
             <motion.aside
-              initial={{ opacity: 0, x: 12 }}
+              initial={{ opacity: 0, x: 28 }}
               animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 12 }}
-              transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-              className="absolute inset-0 z-40 flex min-h-0 flex-col border-l border-slate-200/50 bg-[#f8fafc]/95 backdrop-blur-2xl lg:static lg:rounded-none"
+              exit={{ opacity: 0, x: 18 }}
+              transition={{ duration: 0.56, ease: [0.16, 1, 0.3, 1] }}
+              className="absolute inset-x-0 bottom-0 top-10 z-40 flex min-h-0 flex-col border-l border-slate-200 bg-white text-slate-800 lg:static lg:rounded-none"
             >
-              <header className="flex h-14 shrink-0 items-center gap-3 px-4 pt-1">
-                <span className="grid h-9 w-9 place-items-center rounded-2xl bg-slate-900 text-white"><Sparkles className="h-4 w-4" /></span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13px] font-semibold tracking-tight text-slate-900">{sideView === "agent" ? "Clyra Browser" : sideView[0]!.toUpperCase() + sideView.slice(1)}</p>
-                  <p className="truncate text-[10px] font-medium text-slate-400">
-                    {sideView === "agent"
-                      ? (isAgentBusy ? agentStatus : pageHost)
-                      : `${sideView === "history" ? browserState?.history.length || 0 : sideView === "bookmarks" ? browserState?.bookmarks.length || 0 : sideView === "downloads" ? browserState?.downloads.length || 0 : 6} items`}
-                  </p>
-                </div>
-                <div className="hidden items-center gap-0.5 rounded-2xl bg-slate-100/80 p-0.5 sm:flex">
-                  <IconButton label="Agent" active={sideView === "agent"} onClick={() => setSideView("agent")} className="h-7 w-7 rounded-xl"><Bot className="h-3.5 w-3.5" /></IconButton>
-                  <IconButton label="History" active={sideView === "history"} onClick={() => setSideView("history")} className="h-7 w-7 rounded-xl"><History className="h-3.5 w-3.5" /></IconButton>
-                  <IconButton label="Bookmarks" active={sideView === "bookmarks"} onClick={() => setSideView("bookmarks")} className="h-7 w-7 rounded-xl"><Bookmark className="h-3.5 w-3.5" /></IconButton>
-                </div>
-                <IconButton label="Close panel" onClick={() => setSideOpen(false)} className="rounded-xl"><X className="h-4 w-4" /></IconButton>
+              <header className="relative flex h-[52px] shrink-0 items-center justify-center border-b border-slate-200/80 px-3">
+                <span className="text-[12px] font-semibold tracking-[-0.01em] text-slate-700">Clyra</span>
               </header>
 
               {sideView === "agent" ? (
                 <>
-                  {isAgentBusy ? (
-                    <div className="mx-4 mb-1 shrink-0 rounded-3xl bg-white/80 px-3.5 py-3 shadow-[0_1px_0_rgba(15,23,42,0.04)]">
-                      <div className="mb-2.5 flex items-center gap-2">
-                        <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", agentPhase === "recovering" ? "bg-amber-500" : agentPhase === "paused" ? "bg-blue-500" : "bg-emerald-500")} />
-                        <p className="min-w-0 flex-1 truncate text-[11px] font-medium text-slate-600">
-                          <TypewriterText
-                            key={`status-${agentPhase}`}
-                            text={agentStatus}
-                            active={!settings.reducedMotion}
-                            msPerChar={12}
-                            showCaret={false}
-                          />
-                        </p>
-                        {factCount > 0 ? <span className="text-[9px] font-medium text-slate-400">{factCount} facts</span> : null}
-                      </div>
-                      <div className="h-1 overflow-hidden rounded-full bg-slate-100"><motion.div animate={{ width: `${progress || 7}%` }} className="h-full rounded-full bg-slate-900" /></div>
-                      <div className="mt-2.5 flex items-center gap-1.5">
-                        <button type="button" onClick={() => void controlAgent(agentPhase === "paused" && !browserState?.agent.manualControl ? "resume" : "pause")} className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-2xl bg-slate-50 text-[10px] font-semibold text-slate-600 transition-[background-color,transform] hover:bg-slate-100 active:scale-[.98]">
-                          {agentPhase === "paused" && !browserState?.agent.manualControl ? <><CirclePlay className="h-3 w-3" /> Resume</> : <><CirclePause className="h-3 w-3" /> Pause</>}
-                        </button>
-                        <button type="button" onClick={() => void controlAgent(browserState?.agent.manualControl ? "return_control" : "take_control")} className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-2xl bg-slate-50 text-[10px] font-semibold text-slate-600 transition-[background-color,transform] hover:bg-slate-100 active:scale-[.98]">
-                          {browserState?.agent.manualControl ? <><Sparkles className="h-3 w-3" /> Return to AI</> : <><MousePointer2 className="h-3 w-3" /> Take control</>}
-                        </button>
-                        <IconButton label="Stop task" onClick={() => void controlAgent("stop")} className="h-8 w-8 rounded-2xl bg-slate-50 hover:bg-slate-100"><Square className="h-3 w-3 fill-current" /></IconButton>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div className="clyra-visible-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-3">
+                  <div className="clyra-visible-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-3.5">
                     <div className="space-y-5">
+                      <div className="flex justify-end">
+                        <span className="flex h-7 items-center gap-1.5 rounded-full bg-slate-100 px-2.5 text-[10px] font-semibold text-slate-500">
+                          {browserState?.tabs.find((tab) => tab.active)?.favicon ? <img src={browserState.tabs.find((tab) => tab.active)?.favicon} alt="" className="h-3 w-3 rounded-sm" /> : <Globe2 className="h-3 w-3" />}
+                          {pageHost}
+                        </span>
+                      </div>
                       {messages.map((message) => {
                         const animateTypewriter = message.role === "assistant"
                           && !settings.reducedMotion
                           && !hydratedMessageIdsRef.current.has(message.id)
                           && !message.id.startsWith("welcome");
                         return (
-                        <motion.div key={message.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }} className={cn("flex gap-2.5", message.role === "user" && "justify-end")}>
-                          {message.role === "assistant" ? <span className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-2xl bg-slate-100 text-slate-500"><Bot className="h-3.5 w-3.5" /></span> : null}
+                        <motion.div key={message.id} initial={message.role === "user" ? { opacity: 0, y: 16, scale: 0.97 } : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: message.role === "user" ? 0.6 : 0.22, ease: [0.16, 1, 0.3, 1] }} className={cn("flex gap-2.5", message.role === "user" && "justify-end")}>
                           <div className={cn(
-                            "max-w-[300px] px-3.5 py-3 text-[12.5px] font-medium leading-[1.65]",
+                            "max-w-[300px] text-[12.5px] font-medium leading-[1.65]",
                             message.role === "user"
-                              ? "rounded-[22px] rounded-br-lg bg-slate-900 text-white"
-                              : "rounded-[22px] rounded-tl-lg bg-white text-slate-600 shadow-[0_8px_28px_rgba(15,23,42,0.04)]",
+                              ? "clyra-chat-user-bubble rounded-[18px] rounded-br-md border border-slate-200/70 bg-[#f4f4f4] px-3.5 py-3 text-slate-800"
+                              : "max-w-full pr-1 text-slate-700",
                           )}>
                             <p className="whitespace-pre-wrap">
                               {message.role === "assistant" ? (
@@ -1261,34 +1238,20 @@ export default function WebBrowserWorkspace() {
                         );
                       })}
 
-                      {isAgentBusy && latestSteps.length ? (
-                        <motion.div initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} className="ml-9 rounded-3xl bg-white/90 px-3.5 py-3 shadow-[0_8px_24px_rgba(15,23,42,.04)]">
-                          <div className="mb-2 text-[8px] font-semibold uppercase tracking-[0.12em] text-slate-400">Live actions</div>
-                          <div className="space-y-2">
-                            {latestSteps.slice(-3).map((step, index) => {
-                              const clean = step.replace(/^[a-z_]+:\s*/i, "").replace(/ -> .*/, "");
-                              return (
-                                <div key={`${step}-${index}`} className="flex items-start gap-2 text-[10px] font-medium leading-4 text-slate-500">
-                                  <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-slate-300" />
-                                  <TypewriterText
-                                    key={`${clean}-${index === latestSteps.slice(-3).length - 1 ? liveSteps.length : "done"}`}
-                                    text={clean}
-                                    active={!settings.reducedMotion && index === latestSteps.slice(-3).length - 1}
-                                    msPerChar={12}
-                                    showCaret={index === latestSteps.slice(-3).length - 1}
-                                  />
-                                </div>
-                              );
-                            })}
-                          </div>
+                      {isAgentBusy ? (
+                        <motion.div initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -3 }} transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }} className="flex items-center gap-2 py-0.5">
+                          <ShiningBrainIcon className="h-4 w-4 shrink-0" />
+                          <ShiningText text={agentStatus} preset="thinkingChat" play={!settings.reducedMotion} className="min-w-0 flex-1 truncate !text-[12px]" />
+                          <ThinkingDots />
+                          {factCount > 0 ? <span className="text-[9px] font-medium text-slate-400">{factCount} facts</span> : null}
                         </motion.div>
                       ) : null}
 
                       {isAgentBusy && plan ? (
-                        <div className="ml-1 space-y-1.5 border-l border-slate-200/80 pl-3.5">
+                        <div className="ml-1 space-y-1.5 border-l border-slate-200 pl-3.5">
                           {plan.steps.map((step) => (
-                            <div key={step.id} className="flex min-h-7 items-start gap-2 text-[10px] font-medium text-slate-400">
-                              <span className={cn("mt-1.5 h-1.5 w-1.5 rounded-full", step.status === "complete" ? "bg-emerald-500" : step.status === "active" ? "bg-slate-900" : "bg-slate-200")} />
+                            <div key={step.id} className="flex min-h-7 items-start gap-2 text-[10px] font-medium text-slate-500">
+                              <span className={cn("mt-1.5 h-1.5 w-1.5 rounded-full", step.status === "complete" ? "bg-emerald-400" : step.status === "active" ? "bg-blue-400" : "bg-slate-700")} />
                               <span className={cn("leading-4", step.status === "active" && "font-semibold text-slate-700")}>{step.label}</span>
                             </div>
                           ))}
@@ -1313,24 +1276,10 @@ export default function WebBrowserWorkspace() {
                     </div>
                   </div>
 
-                  <div className="shrink-0 px-4 pb-4 pt-1">
-                    {!isAgentBusy ? (
-                      <div className="mb-2.5 flex gap-1.5 overflow-x-auto [scrollbar-width:none]">
-                        {suggestedTasks.map((suggestion) => (
-                          <button
-                            key={suggestion}
-                            type="button"
-                            onClick={() => void runAgentTask(suggestion)}
-                            className="h-8 shrink-0 rounded-full bg-white px-3.5 text-[10px] font-semibold text-slate-500 shadow-[0_1px_0_rgba(15,23,42,0.04)] transition-[background-color,color,transform] hover:bg-slate-50 hover:text-slate-800 active:scale-[.98]"
-                          >
-                            {suggestion}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
+                  <div className="shrink-0 border-t border-slate-200/80 px-3 pb-3 pt-2.5">
                     <form
                       onSubmit={(event) => { event.preventDefault(); void runAgentTask(); }}
-                      className="rounded-[26px] bg-white p-3.5 shadow-[0_12px_40px_rgba(15,23,42,0.07)] transition-[box-shadow] focus-within:shadow-[0_16px_48px_rgba(15,23,42,0.11)]"
+                      className="rounded-2xl border border-slate-200 bg-white p-3.5 shadow-[0_12px_30px_rgba(35,54,76,0.08)] transition-[border-color,box-shadow] focus-within:border-slate-300 focus-within:shadow-[0_12px_34px_rgba(35,54,76,0.12)]"
                     >
                       <textarea
                         value={task}
@@ -1342,7 +1291,7 @@ export default function WebBrowserWorkspace() {
                       />
                       <div className="flex items-center justify-between pt-1.5">
                         <span className="flex items-center gap-1 text-[9px] font-medium text-slate-400"><Eye className="h-3 w-3" /> {pageHost}</span>
-                        <button type="submit" disabled={isAgentBusy || !task.trim()} className="grid h-9 w-9 place-items-center rounded-full bg-slate-900 text-white transition-[background-color,transform] hover:bg-slate-800 active:scale-95 disabled:bg-slate-200 disabled:text-slate-400" aria-label="Run browser task"><ArrowUp className="h-3.5 w-3.5" /></button>
+                        <button type="submit" disabled={isAgentBusy || !task.trim()} className="grid h-9 w-9 place-items-center rounded-full bg-slate-900 text-white transition-[background-color,transform] hover:bg-slate-700 active:scale-95 disabled:bg-slate-100 disabled:text-slate-400" aria-label="Run browser task"><ArrowUp className="h-3.5 w-3.5" /></button>
                       </div>
                     </form>
                   </div>
@@ -1406,6 +1355,7 @@ export default function WebBrowserWorkspace() {
             </motion.aside>
           ) : null}
         </AnimatePresence>
+        </div>
       </motion.div>
     </div>
   );

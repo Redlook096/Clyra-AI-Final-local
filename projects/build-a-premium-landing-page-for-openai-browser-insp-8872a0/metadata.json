@@ -1,9 +1,0 @@
-{
-  "id": "build-a-premium-landing-page-for-openai-browser-insp-8872a0",
-  "name": "Build a premium landing page for OpenAI Browser — inspired by OpenAI v",
-  "prompt": "Build a premium landing page for OpenAI Browser — inspired by OpenAI visual language, with navbar, hero, product preview, features, pricing, FAQ, auth modal, animations, and mobile layout. Research OpenAI style safely.",
-  "mode": "plan",
-  "status": "Ready",
-  "updatedAt": "2026-07-01T07:11:10.133Z",
-  "harness": "cline-sdk"
-}

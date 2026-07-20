@@ -155,10 +155,10 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
   return (
     <motion.div
       className="fixed inset-0 z-[260] overflow-hidden bg-[rgba(248,250,252,0.96)] text-slate-950"
-      initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.992 }}
+      initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.986 }}
       animate={{ opacity: 1, scale: 1 }}
-      exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 1.008 }}
-      transition={{ duration: reduceMotion ? 0 : 0.15, ease: [0.22, 1, 0.36, 1] }}
+      exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.99 }}
+      transition={{ duration: reduceMotion ? 0 : 0.18, ease: [0.16, 1, 0.3, 1] }}
       role="dialog"
       aria-modal="true"
       aria-label="Clyra app launcher"
@@ -179,10 +179,10 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
           <motion.div
             className="relative aspect-square w-[min(70vh,690px,94vw)]"
             onPointerMove={followPointer}
-            initial={{ opacity: 0, scale: 0.78, rotate: -4 }}
+            initial={{ opacity: 0, scale: 0.4, rotate: -2 }}
             animate={{ opacity: 1, scale: 1, rotate: 0 }}
-            exit={{ opacity: 0, scale: 0.88, rotate: 3 }}
-            transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 620, damping: 36, mass: 0.34 }}
+            exit={{ opacity: 0, scale: 0.5, rotate: 2 }}
+            transition={reduceMotion ? { duration: 0 } : { duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
           >
             <svg viewBox="0 0 640 640" className="absolute inset-0 h-full w-full overflow-visible drop-shadow-[0_28px_70px_rgba(15,23,42,0.10)]" aria-hidden="true">
               <circle cx="320" cy="320" r="302" fill="rgba(255,255,255,.72)" stroke="rgba(148,163,184,.22)" />
@@ -227,18 +227,18 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
                   type="button"
                   onFocus={() => selectTool(index)}
                   onClick={() => openTool(tool)}
-                  initial={reduceMotion ? false : { opacity: 0, scale: 0.7, y: 4 }}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.8, y: 2 }}
-                  transition={reduceMotion ? { duration: 0 } : { delay: 0.02 + index * 0.006, type: "spring", stiffness: 880, damping: 40, mass: 0.28 }}
+                  initial={reduceMotion ? false : { opacity: 0, scale: 0.42, x: (CENTER - x) * 0.48, y: (CENTER - y) * 0.48 }}
+                  animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.48, x: (CENTER - x) * 0.44, y: (CENTER - y) * 0.44 }}
+                  transition={reduceMotion ? { duration: 0 } : { delay: 0.015 + index * 0.022, duration: 0.26, ease: [0.16, 1, 0.3, 1] }}
                   className="absolute z-10 flex w-[116px] -translate-x-1/2 -translate-y-1/2 flex-col items-center text-center outline-none"
                   style={{ left: `${x / 6.4}%`, top: `${y / 6.4}%` }}
                   aria-label={`Open ${tool.label}`}
                 >
-                  <span className={selected ? "relative grid h-10 w-10 place-items-center rounded-full bg-white text-slate-950 shadow-[0_0_0_1px_rgba(79,70,229,.12),0_8px_22px_rgba(79,70,229,.14)]" : "relative grid h-10 w-10 place-items-center text-[#52617b]"}>
-                    <Icon className={selected ? "h-7 w-7 stroke-[2.05] text-slate-900" : "h-7 w-7 stroke-[1.65]"} />
+                  <span className={selected ? "relative grid h-10 w-10 place-items-center text-slate-950 transition-[color,transform] duration-200 ease-out" : "relative grid h-10 w-10 place-items-center text-[#52617b] transition-[color,transform] duration-200 ease-out"}>
+                    <Icon className={selected ? "h-7 w-7 scale-[1.045] stroke-[2.05] text-slate-900 transition-transform duration-200 ease-out" : "h-7 w-7 stroke-[1.65] transition-transform duration-200 ease-out"} />
                   </span>
-                  <span className={selected ? "mt-1.5 text-[11px] font-bold leading-tight text-slate-950 sm:text-[12px]" : "mt-1.5 text-[11px] font-semibold leading-tight text-slate-800 sm:text-[12px]"}>{tool.shortLabel}</span>
+                  <span className={selected ? "mt-1.5 text-[11px] font-bold leading-tight text-slate-950 transition-colors duration-200 sm:text-[12px]" : "mt-1.5 text-[11px] font-semibold leading-tight text-slate-800 transition-colors duration-200 sm:text-[12px]"}>{tool.shortLabel}</span>
                 </motion.button>
               );
             })}

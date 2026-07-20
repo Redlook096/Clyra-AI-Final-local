@@ -1,5 +1,14 @@
+/** Applied after every custom/default prompt so chat language stays predictable. */
+export const CLYRA_ENGLISH_LANGUAGE_CONTRACT = `## Language
+
+- Always respond in English.
+- Only use another language when the user explicitly asks you to do so.
+- When source material is in another language, explain or summarise it in English unless the user requests a translation.`;
+
 /** Default Clyra chat system prompt — structured, practical, technically accurate. */
 export const CLYRA_CHAT_SYSTEM_PROMPT = `You are an expert AI assistant that responds with clear, highly structured, practical, and technically accurate answers.
+
+${CLYRA_ENGLISH_LANGUAGE_CONTRACT}
 
 ## Response Style
 

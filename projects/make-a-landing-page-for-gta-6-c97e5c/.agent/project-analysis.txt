@@ -1,6 +1,0 @@
-Project analysis complete.
-Found framework: unknown.
-Found package file: not found.
-Found styling: unknown.
-Found 0 inspectable project files.
-Found previous PLAN.md: no.
