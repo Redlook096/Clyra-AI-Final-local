@@ -1997,6 +1997,12 @@ async function runElectronBrowserAgent(task: string, apiKey: string, options: { 
   const completedCriteria = new Set<number>();
   const attempted = new Map<string, number>();
   const requiresVisibleProgress = /\b(?:search|find|go to|navigate|open|click|fill|submit|compare|research)\b/i.test(task);
+  // A summary is a real browser task, but its evidence is the page observation
+  // itself. Requiring an unrelated click before it may finish led the native
+  // controller to report a false action-limit failure after it had already
+  // read the visible tab successfully.
+  const isReadOnlyPageTask = /\b(?:summari[sz]e|describe|explain|read|what(?:'s| is) on (?:this|the) page)\b/i.test(task)
+    && !requiresVisibleProgress;
   let verifiedActions = 0;
   let finalMessage = "Task complete.";
   let plan: TaskPlan | null = null;
@@ -2018,6 +2024,24 @@ async function runElectronBrowserAgent(task: string, apiKey: string, options: { 
         if (fact.claim && !facts.some((existing) => existing.claim === fact.claim && existing.sourceUrl === fact.sourceUrl)) facts.push(fact);
       }
       for (const index of decision.completedCriteria || []) if (Number.isInteger(index) && index >= 0 && index < plan.successCriteria.length) completedCriteria.add(index);
+      const hasReadOnlyAnswer = Boolean(decision.message?.trim() || decision.reasoningSummary?.trim() || facts.length);
+      if (isReadOnlyPageTask && hasReadOnlyAnswer && (decision.done || !(decision.actions || []).length)) {
+        for (let index = 0; index < plan.successCriteria.length; index += 1) completedCriteria.add(index);
+        if (!facts.length) {
+          facts.push({
+            claim: finalMessage.slice(0, 700),
+            sourceUrl: observation.page.url,
+            sourceTitle: observation.page.title,
+            capturedAt: new Date().toISOString(),
+            confidence: 0.86,
+          });
+        }
+        history.push(`Step ${step}: observed ${observation.page.title || observation.page.url} [verified read-only]`);
+        agentStatus = "completed";
+        emit({ phase: "completed", message: finalMessage, step, plan, completedCriteria: completedCriteria.size, totalCriteria: plan.successCriteria.length, facts: facts.length });
+        finishAgentSession({ message: finalMessage, steps: history, facts });
+        return { message: finalMessage, steps: history, plan, facts, state: await getManagedBrowserState() };
+      }
       if (decision.done || decision.actions?.some((item) => normalizeDecisionAction(item)?.type === "done")) {
         const complete = completedCriteria.size >= plan.successCriteria.length;
         const evidence = !isResearchTask(task) || new Set(facts.map((fact) => fact.sourceUrl)).size >= researchRequirements(task).minimumSources;

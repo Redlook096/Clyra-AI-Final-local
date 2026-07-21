@@ -238,6 +238,31 @@ function displayHost(url: string) {
   }
 }
 
+function displayPageName(url: string, title?: string) {
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+    const knownNames: Record<string, string> = {
+      "google.com": "Google",
+      "github.com": "GitHub",
+      "youtube.com": "YouTube",
+      "docs.google.com": "Google Docs",
+      "notion.so": "Notion",
+      "figma.com": "Figma",
+    };
+    if (knownNames[hostname]) return knownNames[hostname];
+    const hostLabel = hostname
+      .split(".")
+      .slice(0, -1)
+      .join(" ")
+      .replace(/[-_]+/g, " ")
+      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+    if (hostLabel) return hostLabel;
+  } catch {
+    // A new tab is not necessarily a valid URL.
+  }
+  return title?.trim() || "New tab";
+}
+
 function compactUrl(url: string) {
   try {
     const parsed = new URL(url);
@@ -925,6 +950,15 @@ export default function WebBrowserWorkspace() {
     return () => { void desktop.browser.setCursor(null); };
   }, [browserState?.agent.manualControl, cursor, desktopChromium, isAgentBusy, settings.reducedMotion, settings.showAiActionLabels, settings.showAiCursor]);
   const pageHost = useMemo(() => displayHost(browserState?.url || address), [address, browserState?.url]);
+  const activeTab = useMemo(
+    () => browserState?.tabs.find((tab) => tab.active),
+    [browserState?.tabs],
+  );
+  const pageName = useMemo(
+    () => displayPageName(activeTab?.url || browserState?.url || address, activeTab?.title || browserState?.title),
+    [activeTab?.title, activeTab?.url, address, browserState?.title, browserState?.url],
+  );
+  const pageContextReady = Boolean((activeTab?.url || browserState?.url) && (activeTab?.title || browserState?.title));
   const latestSteps = liveSteps.length ? liveSteps : [...messages].reverse().find((message) => message.steps?.length)?.steps || [];
   const frameUrl = browserState
     ? `/api/openbrowser/frame?${isAgentBusy || browserState.loading ? "fresh=1&" : ""}v=${browserState.frameVersion}&t=${frameTick}`
@@ -1038,7 +1072,7 @@ export default function WebBrowserWorkspace() {
             }} active={sideOpen && sideView === "history"}>
               <History className="h-4 w-4" />
             </IconButton>
-            <div className="relative">
+            <div className="relative z-50">
               <IconButton label="Browser menu" onClick={() => setBrowserMenuOpen((value) => !value)} active={browserMenuOpen}>
                 <Ellipsis className="h-[17px] w-[17px]" />
               </IconButton>
@@ -1049,7 +1083,7 @@ export default function WebBrowserWorkspace() {
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: -4, scale: 0.98 }}
                     transition={{ duration: 0.14 }}
-                    className="absolute right-0 top-10 z-40 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_16px_42px_rgba(15,23,42,0.16)]"
+                    className="absolute right-0 top-10 z-[70] w-56 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_16px_42px_rgba(15,23,42,0.16)]"
                   >
                     {[
                       { view: "bookmarks" as const, label: "Bookmarks", icon: Bookmark },
@@ -1239,20 +1273,50 @@ export default function WebBrowserWorkspace() {
               transition={{ duration: 0.56, ease: [0.16, 1, 0.3, 1] }}
               className="absolute inset-x-0 bottom-0 top-10 z-40 flex min-h-0 flex-col border-l border-slate-200 bg-white text-slate-800 lg:static lg:rounded-none"
             >
-              <header className="relative flex h-[52px] shrink-0 items-center justify-center border-b border-slate-200/80 px-3">
-                <span className="text-[12px] font-semibold tracking-[-0.01em] text-slate-700">Clyra</span>
+              <header className="relative flex shrink-0 flex-col gap-2 border-b border-slate-200/80 px-4 py-3">
+                <div className="flex h-4 items-center justify-center">
+                  {sideView !== "agent" ? (
+                    <button type="button" onClick={() => setSideView("agent")} className="absolute left-3 grid h-7 w-7 place-items-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700" aria-label="Back to Clyra">
+                      <ArrowLeft className="h-3.5 w-3.5" />
+                    </button>
+                  ) : null}
+                  <span className="text-[12px] font-semibold tracking-[-0.01em] text-slate-700">Clyra</span>
+                </div>
+                <button type="button" title={activeTab?.url || browserState?.url || "New tab"} className="flex min-w-0 items-center gap-2 rounded-xl border border-slate-200/90 bg-slate-50/75 px-2.5 py-2 text-left transition-[border-color,background-color,box-shadow] duration-200 hover:border-slate-300 hover:bg-white hover:shadow-[0_4px_12px_rgba(35,54,76,0.06)]">
+                  <span className="grid h-6 w-6 shrink-0 place-items-center overflow-hidden rounded-lg border border-slate-200 bg-white text-slate-400">
+                    {activeTab?.favicon ? <img src={activeTab.favicon} alt="" className="h-3.5 w-3.5" /> : <Globe2 className="h-3.5 w-3.5" />}
+                  </span>
+                  <span className="min-w-0 flex-1"><span className="block truncate text-[10.5px] font-semibold text-slate-700">{pageName}</span><span className="block truncate text-[9px] font-medium text-slate-400">{pageContextReady ? "Current page" : "Ready to assist"}</span></span>
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                </button>
               </header>
 
               {sideView === "agent" ? (
                 <>
                   <div className="clyra-visible-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-3.5">
                     <div className="space-y-5">
-                      <div className="flex justify-end">
-                        <span className="flex h-7 items-center gap-1.5 rounded-full bg-slate-100 px-2.5 text-[10px] font-semibold text-slate-500">
-                          {browserState?.tabs.find((tab) => tab.active)?.favicon ? <img src={browserState.tabs.find((tab) => tab.active)?.favicon} alt="" className="h-3 w-3 rounded-sm" /> : <Globe2 className="h-3 w-3" />}
-                          {pageHost}
-                        </span>
-                      </div>
+                      <AnimatePresence initial={false} mode="wait">
+                        {messages.length === 0 && !isAgentBusy ? (
+                          <motion.section key="browser-welcome" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8, height: 0 }} transition={{ duration: settings.reducedMotion ? 0.01 : 0.22, ease: [0.16, 1, 0.3, 1] }} className="mx-auto flex min-h-[calc(100vh-330px)] max-w-[300px] flex-col justify-center pb-8 pt-4 text-center">
+                            <span className="mx-auto mb-4 grid h-10 w-10 place-items-center rounded-2xl border border-blue-100 bg-blue-50 text-[#587da8] shadow-[0_6px_18px_rgba(77,115,160,0.10)]"><Sparkles className="h-4 w-4" /></span>
+                            <h2 className="text-[17px] font-semibold tracking-[-0.02em] text-slate-800">Browse with Clyra</h2>
+                            <p className="mx-auto mt-2 max-w-[270px] text-[11px] font-medium leading-5 text-slate-500">Ask about this page, find information, compare options, or let Clyra complete a browser task.</p>
+                            <div className="mt-5 grid gap-2 text-left">
+                              {[
+                                { label: "Summarise this page", detail: "Extract the useful points", icon: Sparkles, prompt: "Summarise the current page and cite the most important details." },
+                                { label: "Find something on this page", detail: "Search the visible content", icon: Search, prompt: "Find the most relevant information on the current page." },
+                                { label: "Complete a task", detail: "Plan and act in this browser", icon: MousePointer2, prompt: "Help me complete a task on the current page." },
+                              ].map((action) => (
+                                <button key={action.label} type="button" onClick={() => void runAgentTask(action.prompt)} className="group flex min-h-14 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 text-left shadow-[0_4px_14px_rgba(35,54,76,0.035)] transition-[transform,border-color,background-color,box-shadow] duration-200 hover:-translate-y-px hover:border-blue-200 hover:bg-blue-50/40 hover:shadow-[0_8px_20px_rgba(57,95,145,0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-200">
+                                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-slate-100 bg-slate-50 text-slate-500 transition-colors group-hover:border-blue-100 group-hover:bg-white group-hover:text-[#5d7fa8]"><action.icon className="h-3.5 w-3.5" /></span>
+                                  <span className="min-w-0"><span className="block text-[10.5px] font-semibold text-slate-700">{action.label}</span><span className="mt-0.5 block text-[9px] font-medium text-slate-400">{action.detail}</span></span>
+                                </button>
+                              ))}
+                            </div>
+                            {pageContextReady ? <span className="mt-4 flex items-center justify-center gap-1.5 text-[9px] font-semibold text-emerald-600"><Check className="h-3 w-3" /> Page context ready</span> : null}
+                          </motion.section>
+                        ) : null}
+                      </AnimatePresence>
                       {messages.map((message) => {
                         const animateTypewriter = message.role === "assistant"
                           && !settings.reducedMotion
@@ -1338,18 +1402,18 @@ export default function WebBrowserWorkspace() {
                   <div className="shrink-0 border-t border-slate-200/80 px-3 pb-3 pt-2.5">
                     <form
                       onSubmit={(event) => { event.preventDefault(); void runAgentTask(); }}
-                      className="rounded-2xl border border-slate-200 bg-white p-3.5 shadow-[0_12px_30px_rgba(35,54,76,0.08)] transition-[border-color,box-shadow] focus-within:border-slate-300 focus-within:shadow-[0_12px_34px_rgba(35,54,76,0.12)]"
+                      className="rounded-2xl border border-slate-200 bg-white p-3.5 shadow-[0_12px_30px_rgba(35,54,76,0.08)] transition-[border-color,box-shadow] duration-200 focus-within:border-blue-200 focus-within:shadow-[0_0_0_3px_rgba(96,145,202,0.10),0_12px_34px_rgba(35,54,76,0.12)]"
                     >
                       <textarea
                         value={task}
                         onChange={(event) => setTask(event.target.value)}
                         onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void runAgentTask(); } }}
                         rows={2}
-                        placeholder="Ask Clyra to browse..."
+                        placeholder="Ask Clyra about this page..."
                         className="w-full resize-none bg-transparent px-1 py-0.5 text-[13px] font-medium leading-5 text-slate-800 outline-none placeholder:text-slate-400"
                       />
                       <div className="flex items-center justify-between pt-1.5">
-                        <span className="flex items-center gap-1 text-[9px] font-medium text-slate-400"><Eye className="h-3 w-3" /> {pageHost}</span>
+                        <span title={activeTab?.url || browserState?.url || "New tab"} className="flex min-w-0 items-center gap-1.5 text-[9px] font-medium text-slate-400"><span className="grid h-4 w-4 shrink-0 place-items-center overflow-hidden rounded border border-slate-200 bg-white">{activeTab?.favicon ? <img src={activeTab.favicon} alt="" className="h-2.5 w-2.5" /> : <Eye className="h-2.5 w-2.5" />}</span><span className="max-w-40 truncate">{pageName}</span></span>
                         <button type="submit" disabled={isAgentBusy || !task.trim()} className="grid h-9 w-9 place-items-center rounded-full bg-slate-900 text-white transition-[background-color,transform] hover:bg-slate-700 active:scale-95 disabled:bg-slate-100 disabled:text-slate-400" aria-label="Run browser task"><ArrowUp className="h-3.5 w-3.5" /></button>
                       </div>
                     </form>

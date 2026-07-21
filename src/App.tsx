@@ -1588,7 +1588,10 @@ export default function App() {
       // Put the heavier optional workspace work behind Clyra's own boot UI so
       // opening Vibe later feels immediate instead of starting a cold stack.
       const vibePreparation = prepareVibeForBoot();
-      await wait(90);
+      // Keep the boot surface calm while the runtime, route chunks, and M1
+      // bridge warm up. The progress bar is intentionally visible at zero so
+      // it never reads as a stalled or missing startup UI.
+      await wait(5_000);
       if (cancelled) return;
 
       setIntroState("progress");
@@ -1604,13 +1607,13 @@ export default function App() {
       ]);
       const progressTimeline = (async () => {
         const milestones = [
-          { delay: 420, value: 0.06 },
-          { delay: 680, value: 0.16 },
-          { delay: 760, value: 0.29 },
-          { delay: 820, value: 0.45 },
-          { delay: 880, value: 0.62 },
-          { delay: 900, value: 0.77 },
-          { delay: 820, value: 0.89 },
+          { delay: 560, value: 0.05 },
+          { delay: 760, value: 0.15 },
+          { delay: 880, value: 0.29 },
+          { delay: 940, value: 0.44 },
+          { delay: 980, value: 0.60 },
+          { delay: 1_020, value: 0.76 },
+          { delay: 920, value: 0.89 },
         ];
         for (const milestone of milestones) {
           await wait(milestone.delay);
@@ -5328,7 +5331,7 @@ Please analyze the code you just wrote and fix this error.`;
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9, y: -8 }}
                 transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-                className="clyra-sidebar-toggle group fixed left-4 top-4 z-[200] flex h-11 w-11 items-center justify-center rounded-full border border-transparent bg-transparent text-slate-600 shadow-none transition-[color,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] hover:scale-[1.05] hover:text-slate-900 active:scale-[0.94] sm:top-6 sm:left-6"
+                className="clyra-sidebar-toggle group fixed left-4 top-7 z-[200] flex h-11 w-11 items-center justify-center rounded-full border border-transparent bg-transparent text-slate-600 shadow-none transition-[color,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] hover:scale-[1.05] hover:text-slate-900 active:scale-[0.94] sm:top-8 sm:left-6"
               >
                 <span className="pointer-events-none relative block h-[12px] w-[18px] opacity-95">
                   <span className="pointer-events-none absolute left-0 top-0 h-[2px] w-full rounded-full bg-current" />
@@ -5448,7 +5451,7 @@ Please analyze the code you just wrote and fix this error.`;
           </AnimatePresence>
           <AnimatePresence></AnimatePresence>
           <motion.div
-            className="clyra-screen-stage relative flex min-h-0 min-w-0 flex-1 flex-col"
+            className="clyra-screen-stage relative flex min-h-0 min-w-0 flex-1 flex-col pt-3 sm:pt-4"
             animate={{ x: sidebarAvoidShift }}
             transition={{
               type: "tween",
@@ -5641,6 +5644,18 @@ Please analyze the code you just wrote and fix this error.`;
                               <motion.div
                                 className="clyra-chat-quick-actions mt-4"
                                 initial={false}
+                                animate={{
+                                  opacity: isInputExpanded ? 0 : 1,
+                                  y: isInputExpanded ? -8 : 0,
+                                  scale: isInputExpanded ? 0.985 : 1,
+                                }}
+                                transition={{
+                                  duration: 0.22,
+                                  ease: [0.16, 1, 0.3, 1],
+                                }}
+                                style={{
+                                  pointerEvents: isInputExpanded ? "none" : "auto",
+                                }}
                               >
                                 {chatQuickActions.map((action) => {
                                   const QuickIcon = action.icon;
@@ -5940,7 +5955,9 @@ Please analyze the code you just wrote and fix this error.`;
                                   ? isExpanded
                                     ? 0
                                     : -56
-                                  : -112,
+                                  : isExpanded
+                                    ? -142
+                                    : -142,
                               scale: 1,
                             }}
                             exit={{
@@ -5970,7 +5987,7 @@ Please analyze the code you just wrote and fix this error.`;
                                 ? "px-3 sm:px-4"
                                 : "px-5 sm:px-8",
                               messages.length === 0
-                                ? "pb-5"
+                                ? "pb-5 clyra-composer-welcome"
                                 : "pb-4 sm:pb-6",
                             )}
                           >

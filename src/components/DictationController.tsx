@@ -43,6 +43,16 @@ function saveHistory(entry: Record<string, unknown>) {
   }
 }
 
+const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
+function userFacingDictationError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  if (/failed to fetch|networkerror|load failed/i.test(message)) {
+    return "Clyra's local voice service is still starting. Try again in a moment.";
+  }
+  return message || "Clyra dictation could not start.";
+}
+
 export function DictationController() {
   const activeRef = useRef<ActiveDictation | null>(null);
   const previewRef = useRef<{ text: string; target: DictationTarget; raw: string; startedAt: number } | null>(null);
@@ -51,6 +61,34 @@ export function DictationController() {
   const updateNative = useCallback((payload: Record<string, unknown>) => {
     void getElectronDesktop()?.dictation.setState(payload).catch(() => undefined);
   }, []);
+
+  const serviceUrl = useCallback(async (pathname: string) => {
+    const desktop = getElectronDesktop();
+    const origin = await desktop?.dictation.serviceUrl().catch(() => "") || window.location.origin;
+    return new URL(pathname, origin).toString();
+  }, []);
+
+  const postJson = useCallback(async (pathname: string, body: Record<string, unknown>) => {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const response = await fetch(await serviceUrl(pathname), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.ok) {
+          throw new Error(payload?.error || `Clyra request failed (${response.status}).`);
+        }
+        return payload;
+      } catch (error) {
+        lastError = error;
+        if (attempt === 0) await wait(650);
+      }
+    }
+    throw lastError;
+  }, [serviceUrl]);
 
   const release = useCallback(() => {
     const active = activeRef.current;
@@ -88,47 +126,29 @@ export function DictationController() {
     if (active.mode === "optimise") {
       updateNative({ phase: "optimising", detail: "Preparing rewrite" });
       try {
-        const response = await fetch("/api/dictation/optimise", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ selectedText: active.target.selectedText, instruction: raw }),
-        });
-        const payload = await response.json();
-        if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Clyra could not prepare the rewrite.");
+        const payload = await postJson("/api/dictation/optimise", { selectedText: active.target.selectedText, instruction: raw });
         previewRef.current = { text: String(payload.text), target: active.target, raw, startedAt: active.startedAt };
         updateNative({ phase: "preview", preview: String(payload.text).slice(0, 240), detail: "Review before replacing" });
       } catch (error) {
-        updateNative({ phase: "error", detail: error instanceof Error ? error.message : "Clyra could not optimise this text." });
+        updateNative({ phase: "error", detail: userFacingDictationError(error) });
       }
       return;
     }
     updateNative({ phase: "processing", detail: "Cleaning up dictation" });
     try {
-      const response = await fetch("/api/dictation/cleanup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript: raw, level: readCleanupLevel(), dictionary: readDictionary() }),
-      });
-      const payload = await response.json();
-      if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Clyra could not clean up this dictation.");
+      const payload = await postJson("/api/dictation/cleanup", { transcript: raw, level: readCleanupLevel(), dictionary: readDictionary() });
       await insert(String(payload.text || raw), active.target, raw, active.startedAt);
     } catch (error) {
-      updateNative({ phase: "error", detail: error instanceof Error ? error.message : "Clyra could not process this dictation." });
+      updateNative({ phase: "error", detail: userFacingDictationError(error) });
     }
-  }, [insert, updateNative]);
+  }, [insert, postJson, updateNative]);
 
   const start = useCallback(async (mode: DictationMode, target: DictationTarget) => {
     release();
     previewRef.current = null;
     updateNative({ phase: mode === "optimise" ? "optimising" : "listening", detail: mode === "optimise" ? "Tell Clyra how to rewrite this" : "Listening", application: target.application || "" });
     try {
-      const sessionResponse = await fetch("/voice/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "dictation", history: [] }),
-      });
-      const session = await sessionResponse.json();
-      if (!sessionResponse.ok || !session?.ok) throw new Error(session?.error || "Clyra dictation is unavailable.");
+      const session = await postJson("/voice/session", { mode: "dictation", history: [] });
       const socket = new WebSocket(session.websocketUrl);
       const active: ActiveDictation = { target, mode, sessionId: session.sessionId, socket, capture: null, rawTranscript: "", startedAt: Date.now() };
       activeRef.current = active;
@@ -173,9 +193,9 @@ export function DictationController() {
         if (activeRef.current === active) updateNative({ phase: "error", detail: "Clyra dictation connection failed." });
       };
     } catch (error) {
-      updateNative({ phase: "error", detail: error instanceof Error ? error.message : "Clyra dictation could not start." });
+      updateNative({ phase: "error", detail: userFacingDictationError(error) });
     }
-  }, [finishTranscript, release, updateNative]);
+  }, [finishTranscript, postJson, release, updateNative]);
 
   const stop = useCallback(() => {
     const active = activeRef.current;

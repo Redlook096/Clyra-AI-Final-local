@@ -115,6 +115,9 @@ function serviceEnvironment() {
     CLYRA_ELECTRON_BROWSER_BRIDGE: `http://127.0.0.1:${bridgePort}`,
     CLYRA_ELECTRON_BROWSER_TOKEN: bridgeToken,
     CLYRA_BROWSER_CDP_URL: `http://127.0.0.1:${cdpPort}`,
+    // A fixed Vite HMR port prevents a second desktop-development launch from
+    // starting at all. Keep it tied to this isolated local service instead.
+    HMR_PORT: process.env.HMR_PORT || String(appPort + 1),
   };
 }
 
@@ -181,6 +184,10 @@ function registerIpc() {
   ipcMain.handle("surface:update", (event, payload) => { authorize(event); return { ok: true, surface: surfaceManager.update(payload) }; });
   ipcMain.handle("surface:hide", (event, { id }) => { authorize(event); surfaceManager.hide(id); return { ok: true }; });
   ipcMain.handle("dictation:set-state", (event, payload) => { authorize(event); dictationManager?.setState(payload || { phase: "idle" }); return { ok: true }; });
+  ipcMain.handle("dictation:service-url", (event) => {
+    authorize(event);
+    return `http://127.0.0.1:${appPort}`;
+  });
   ipcMain.handle("dictation:insert", async (event, payload) => { authorize(event); return dictationManager?.insert(payload || {}); });
   ipcMain.on("dictation:pill-action", (event, action) => { authorizeDictation(event); void dictationManager?.action(String(action || "cancel")); });
 }
