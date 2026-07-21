@@ -12,6 +12,7 @@ export type VoiceServerMessage =
   | { type: "status"; sessionId: string; status: "listening" | "thinking" | "speaking" | "ended" }
   | { type: "transcript_partial"; sessionId: string; text: string; confidence?: number }
   | { type: "transcript_final"; sessionId: string; text: string; confidence?: number }
+  | { type: "dictation_final"; sessionId: string; text: string; confidence?: number }
   | { type: "llm_token"; sessionId: string; token: string }
   | { type: "llm_done"; sessionId: string; text: string }
   | { type: "tts_format"; sessionId: string; responseId: string; generation: number; codec: "pcm16"; sampleRate: number }

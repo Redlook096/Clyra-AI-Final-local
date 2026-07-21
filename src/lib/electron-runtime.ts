@@ -30,6 +30,12 @@ export type ClyraDesktopBridge = {
     }) => Promise<any>;
     hide: (id: string) => Promise<any>;
   };
+  dictation: {
+    setState: (payload: unknown) => Promise<any>;
+    insert: (payload: { text: string; target?: unknown }) => Promise<any>;
+    onTrigger: (callback: (payload: any) => void) => () => void;
+    onAction: (callback: (payload: any) => void) => () => void;
+  };
 };
 
 declare global {

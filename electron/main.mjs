@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell, WebContentsView } from "electron";
 import { ChromiumBrowserManager } from "./browser-manager.mjs";
 import { ChromiumSurfaceManager } from "./surface-manager.mjs";
+import { DictationManager } from "./dictation-manager.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(here, "..");
@@ -17,6 +18,11 @@ const bridgePort = Number(process.env.CLYRA_BROWSER_BRIDGE_PORT || 9_224);
 const bridgeToken = crypto.randomBytes(24).toString("hex");
 
 app.setName("Clyra");
+// QA and support launches can use an isolated profile without touching a
+// person's active Clyra session or its persistent browser profile.
+if (process.env.CLYRA_USER_DATA_DIR) {
+  app.setPath("userData", path.resolve(process.env.CLYRA_USER_DATA_DIR));
+}
 nativeTheme.themeSource = "light";
 
 app.commandLine.appendSwitch("remote-debugging-address", "127.0.0.1");
@@ -29,6 +35,7 @@ let mainWindow = null;
 let uiView = null;
 let browserManager = null;
 let surfaceManager = null;
+let dictationManager = null;
 let serviceProcess = null;
 let bridgeServer = null;
 let quitting = false;
@@ -151,6 +158,10 @@ function authorize(event) {
   if (!uiView || event.sender.id !== uiView.webContents.id) throw new Error("Untrusted desktop IPC sender.");
 }
 
+function authorizeDictation(event) {
+  if (!dictationManager?.isSender(event.sender)) throw new Error("Untrusted dictation IPC sender.");
+}
+
 function registerIpc() {
   if (ipcRegistered) return;
   ipcRegistered = true;
@@ -169,6 +180,9 @@ function registerIpc() {
   ipcMain.handle("browser:devtools", (event) => { authorize(event); browserManager.activeContents()?.openDevTools({ mode: "detach" }); return { ok: true }; });
   ipcMain.handle("surface:update", (event, payload) => { authorize(event); return { ok: true, surface: surfaceManager.update(payload) }; });
   ipcMain.handle("surface:hide", (event, { id }) => { authorize(event); surfaceManager.hide(id); return { ok: true }; });
+  ipcMain.handle("dictation:set-state", (event, payload) => { authorize(event); dictationManager?.setState(payload || { phase: "idle" }); return { ok: true }; });
+  ipcMain.handle("dictation:insert", async (event, payload) => { authorize(event); return dictationManager?.insert(payload || {}); });
+  ipcMain.on("dictation:pill-action", (event, action) => { authorizeDictation(event); void dictationManager?.action(String(action || "cancel")); });
 }
 
 function resizeUi() {
@@ -213,13 +227,21 @@ async function createWindow() {
     downloadsPath: app.getPath("downloads"),
   });
   surfaceManager = new ChromiumSurfaceManager({ window: mainWindow });
+  dictationManager = new DictationManager({
+    uiContents: () => uiView?.webContents ?? null,
+    preloadPath: path.join(here, "dictation-preload.cjs"),
+    pillPath: path.join(here, "dictation-pill.html"),
+  });
   await browserManager.initialize();
+  await dictationManager.initialize();
   registerIpc();
 
   mainWindow.on("resize", resizeUi);
   mainWindow.on("closed", () => {
     browserManager?.destroy();
     surfaceManager?.destroy();
+    dictationManager?.destroy();
+    dictationManager = null;
     if (uiView && !uiView.webContents.isDestroyed()) uiView.webContents.close({ waitForBeforeUnload: false });
     uiView = null;
     mainWindow = null;
@@ -298,6 +320,7 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   quitting = true;
   bridgeServer?.close();
+  dictationManager?.destroy();
 
   const service = serviceProcess;
   if (!service || service.exitCode != null || service.killed) {

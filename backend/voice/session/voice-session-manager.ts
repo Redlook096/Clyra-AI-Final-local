@@ -13,6 +13,8 @@ export type VoiceSession = {
   messages: VoiceChatMessage[];
   systemPrompt: string;
   temperature: number;
+  /** Dictation uses the same STT pipeline but never invokes the conversation LLM. */
+  mode: "conversation" | "dictation";
 };
 
 export class VoiceSessionManager {
@@ -23,6 +25,7 @@ export class VoiceSessionManager {
     history?: VoiceChatMessage[];
     systemPrompt?: string;
     temperature?: number;
+    mode?: "conversation" | "dictation";
   }): VoiceSession {
     const history = (options?.history ?? [])
       .filter((msg) => msg.content.trim())
@@ -45,6 +48,7 @@ export class VoiceSessionManager {
         typeof options?.temperature === "number" && Number.isFinite(options.temperature)
           ? options.temperature
           : 0.7,
+      mode: options?.mode === "dictation" ? "dictation" : "conversation",
     };
     this.sessions.set(session.id, session);
     return session;

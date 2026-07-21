@@ -212,6 +212,17 @@ async function handleFinalTranscript(sessionId: string, ws: WebSocket, text: str
   const { signal } = active.aborted;
 
   const session = voiceSessions.get(sessionId);
+  if (session?.mode === "dictation") {
+    voiceSessions.appendMessage(sessionId, "user", clean);
+    voiceSessions.update(sessionId, { status: "listening" });
+    send(ws, {
+      type: "dictation_final",
+      sessionId,
+      text: clean,
+      confidence: 0.92,
+    });
+    return;
+  }
   const history = [...(session?.messages ?? [])];
   voiceSessions.appendMessage(sessionId, "user", clean);
   voiceSessions.update(sessionId, { status: "thinking" });

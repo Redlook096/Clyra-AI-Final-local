@@ -40,6 +40,7 @@ export function ElectronWebContentsSurface({
     let disposed = false;
     let visible = false;
     let occluded = false;
+    let hasMeasuredLayout = false;
     const sync = () => {
       window.cancelAnimationFrame(frameRef.current);
       frameRef.current = window.requestAnimationFrame(() => {
@@ -61,6 +62,11 @@ export function ElectronWebContentsSurface({
           width: Math.max(2, rect.width),
           height: Math.max(2, rect.height),
         };
+        // Native Chromium must not be surfaced into the placeholder's initial
+        // 2px bounds. Wait for one real layout pass so entering Browser never
+        // flashes or looks like a page refresh while React settles.
+        if (!hasMeasuredLayout && (rect.width < 8 || rect.height < 8)) return;
+        hasMeasuredLayout = true;
         if (!changed(lastBoundsRef.current, bounds) && visible === nextVisible) return;
         lastBoundsRef.current = bounds;
         visible = nextVisible;

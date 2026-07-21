@@ -30,4 +30,10 @@ contextBridge.exposeInMainWorld("clyraDesktop", {
     update: (payload) => ipcRenderer.invoke("surface:update", payload),
     hide: (id) => ipcRenderer.invoke("surface:hide", { id }),
   },
+  dictation: {
+    setState: (payload) => ipcRenderer.invoke("dictation:set-state", payload),
+    insert: (payload) => ipcRenderer.invoke("dictation:insert", payload),
+    onTrigger: (callback) => subscribe("dictation:trigger", callback),
+    onAction: (callback) => subscribe("dictation:action", callback),
+  },
 });

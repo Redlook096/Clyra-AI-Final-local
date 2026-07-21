@@ -91,6 +91,7 @@ import { AppLauncher } from "./components/AppLauncher";
 import { AgentControlledPreview } from "./components/AgentControlledPreview";
 import type { CreatorMode } from "./components/CreatorStudioWorkspace";
 import { VoiceCallOverlay } from "./components/voice/VoiceCallOverlay";
+import { DictationController } from "./components/DictationController";
 import { VoiceWaveIcon } from "./components/voice/VoiceWaveIcon";
 import { useVoiceCall } from "./hooks/useVoiceCall";
 import { AiOrb, type OrbColorTheme } from "./components/AiOrb";
@@ -108,7 +109,7 @@ import {
   type AgentBridgeSnapshot,
 } from "./lib/agentController";
 
-const AIClipper = lazy(() => 
+const loadAIClipper = () =>
   import("./components/AIClipper").catch(() => ({
     default: () => (
       <div className="flex items-center justify-center min-h-screen bg-slate-50">
@@ -118,8 +119,8 @@ const AIClipper = lazy(() =>
         </div>
       </div>
     )
-  }))
-);
+  }));
+const AIClipper = lazy(loadAIClipper);
 const loadVibeCoderWorkspace = () => import("./components/VibeCoderWorkspace").catch(() => ({
     default: () => (
       <div className="flex items-center justify-center min-h-screen bg-slate-50">
@@ -152,12 +153,51 @@ async function waitForM1Readiness(timeoutMs = 40_000) {
   }
 }
 
+function WorkspaceImportFailure({ name }: { name: string }) {
+  return (
+    <div className="flex min-h-full items-center justify-center px-6 text-center">
+      <div>
+        <p className="text-sm font-medium text-slate-800">{name} could not open.</p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mt-3 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+        >
+          Reload Clyra
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const loadWebBrowserWorkspace = () =>
+  import("./components/WebBrowserWorkspace").catch(() => ({
+    default: () => <WorkspaceImportFailure name="Web Browser" />,
+  }));
+const WebBrowserWorkspace = lazy(loadWebBrowserWorkspace);
+
+const loadCreatorStudioWorkspace = () =>
+  import("./components/CreatorStudioWorkspace").catch(() => ({
+    default: () => <WorkspaceImportFailure name="Creator Studio" />,
+  }));
+const CreatorStudioWorkspace = lazy(loadCreatorStudioWorkspace);
+
+const loadStudyPalWorkspace = () =>
+  import("./components/StudyPalWorkspace").catch(() => ({
+    default: () => <WorkspaceImportFailure name="Study Pal" />,
+  }));
+const StudyPalWorkspace = lazy(loadStudyPalWorkspace);
+
 function prepareVibeForBoot() {
   if (vibeBootPreparation) return vibeBootPreparation;
   vibeBootPreparation = (async () => {
     const warmup = fetch("/api/vibe/m1-warmup", { method: "POST" }).catch(() => null);
     await Promise.allSettled([
       loadVibeCoderWorkspace(),
+      loadWebBrowserWorkspace(),
+      loadAIClipper(),
+      loadCreatorStudioWorkspace(),
+      loadStudyPalWorkspace(),
       warmup,
       fetch("/api/vibe/projects"),
     ]);
@@ -165,42 +205,6 @@ function prepareVibeForBoot() {
   })();
   return vibeBootPreparation;
 }
-const WebBrowserWorkspace = lazy(() => 
-  import("./components/WebBrowserWorkspace").catch(() => ({
-    default: () => (
-      <div className="flex items-center justify-center min-h-screen bg-slate-50">
-        <div className="text-center">
-          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-slate-400" />
-          <p className="text-sm text-slate-600">Loading Web Browser...</p>
-        </div>
-      </div>
-    )
-  }))
-);
-const CreatorStudioWorkspace = lazy(() => 
-  import("./components/CreatorStudioWorkspace").catch(() => ({
-    default: () => (
-      <div className="flex items-center justify-center min-h-screen bg-slate-50">
-        <div className="text-center">
-          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-slate-400" />
-          <p className="text-sm text-slate-600">Loading Creator Studio...</p>
-        </div>
-      </div>
-    )
-  }))
-);
-const StudyPalWorkspace = lazy(() => 
-  import("./components/StudyPalWorkspace").catch(() => ({
-    default: () => (
-      <div className="flex items-center justify-center min-h-screen bg-slate-50">
-        <div className="text-center">
-          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-slate-400" />
-          <p className="text-sm text-slate-600">Loading Study Pal...</p>
-        </div>
-      </div>
-    )
-  }))
-);
 
 type WorkspaceTabId = "chat" | "vibe" | "clip" | "browser" | "study" | CreatorMode;
 type AppAgentId = "vibe" | "browse" | "clip" | "study" | "fake-text" | "would-rather";
@@ -4855,6 +4859,7 @@ Please analyze the code you just wrote and fix this error.`;
         onUpdateUserMessage={voiceCall.updateUserMessage}
         onResendUserMessage={voiceCall.resendUserMessage}
       />
+      <DictationController />
       <AnimatePresence>
         {isAppLauncherOpen ? (
           <AppLauncher
@@ -5575,14 +5580,7 @@ Please analyze the code you just wrote and fix this error.`;
                           />
                         </Suspense>
                       ) : isClipWorkspace ? (
-                        <Suspense fallback={
-                          <div className="flex items-center justify-center min-h-screen bg-slate-50">
-                            <div className="text-center">
-                              <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-slate-400" />
-                              <p className="text-sm text-slate-600">Loading AI Clipper...</p>
-                            </div>
-                          </div>
-                        }>
+                        <Suspense fallback={null}>
                           <AIClipper
                             embedded
                             initialUrl={clipInitialUrl}
@@ -5595,25 +5593,11 @@ Please analyze the code you just wrote and fix this error.`;
                           />
                         </Suspense>
                       ) : isBrowserWorkspace ? (
-                        <Suspense fallback={
-                          <div className="flex items-center justify-center min-h-screen bg-slate-50">
-                            <div className="text-center">
-                              <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-slate-400" />
-                              <p className="text-sm text-slate-600">Loading Web Browser...</p>
-                            </div>
-                          </div>
-                        }>
+                        <Suspense fallback={null}>
                           <WebBrowserWorkspace />
                         </Suspense>
                       ) : isStudyWorkspace ? (
-                        <Suspense fallback={
-                          <div className="flex items-center justify-center min-h-screen bg-slate-50">
-                            <div className="text-center">
-                              <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-slate-400" />
-                              <p className="text-sm text-slate-600">Loading Study Pal...</p>
-                            </div>
-                          </div>
-                        }>
+                        <Suspense fallback={null}>
                           <StudyPalWorkspace globalTabsVisible={false} agentPrompt={new URLSearchParams(window.location.search).get("agentPrompt") || ""} />
                         </Suspense>
                       ) : creatorMode ? (

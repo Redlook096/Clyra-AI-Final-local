@@ -48,12 +48,14 @@ export function registerVoiceRoutes(app: Express) {
       typeof req.body?.systemPrompt === "string" ? req.body.systemPrompt : "";
     const temperature =
       typeof req.body?.temperature === "number" ? req.body.temperature : undefined;
+    const mode = req.body?.mode === "dictation" ? "dictation" : "conversation";
 
     const session = voiceSessions.create({
       conversationId,
       history,
       systemPrompt: buildVoiceSystemPrompt(customPrompt),
       temperature,
+      mode,
     });
     const livekit = createLiveKitSession(config, session.id);
     const host = req.get("host") || "localhost:3000";
