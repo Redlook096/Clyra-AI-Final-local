@@ -1,12 +1,16 @@
 {
   "name": "react-example",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
+  "main": "electron/main.mjs",
   "scripts": {
     "dev": "node tools/dev-full.mjs",
     "dev:app": "npm run build && NODE_ENV=production tsx server.ts",
     "dev:source": "tsx server.ts",
+    "desktop:dev": "node tools/electron-dev.mjs",
+    "desktop:build": "npm run desktop:prepare && electron-builder",
+    "desktop:prepare": "npm run build && node tools/build-electron-sidecar.mjs",
     "dev:openpencil": "node tools/openpencil-dev.mjs",
     "setup:openpencil": "node tools/openpencil-setup.mjs",
     "check:openpencil": "node tools/openpencil-check.mjs",
@@ -24,7 +28,8 @@
     "test:agent-controller": "tsx tools/agent-controller-unit-tests.ts",
     "test:vibe-runtime": "tsx tools/vibe-runtime-unit-tests.ts"
   },
-  "dependencies": {
+  "dependencies": {},
+  "devDependencies": {
     "@cline/sdk": "^0.0.52",
     "@monaco-editor/react": "^4.7.0",
     "@openhands/typescript-client": "^1.32.1",
@@ -55,24 +60,19 @@
     "tailwind-merge": "^3.5.0",
     "tailwindcss-animate": "^1.0.7",
     "vite": "^6.2.0",
-    "ws": "^8.21.0"
-  },
-  "devDependencies": {
+    "ws": "^8.21.0",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
     "binaryen": "^130.0.0",
+    "electron": "43.1.1",
+    "electron-builder": "26.15.3",
     "esbuild": "^0.28.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
-    "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "typescript": "~5.8.2"
   },
-  "description": "<div align=\"center\"> <img width=\"1200\" height=\"475\" alt=\"GHBanner\" src=\"https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6\" /> </div>",
-  "main": "fix-test.js",
-  "directories": {
-    "lib": "lib"
-  },
+  "description": "Clyra AI desktop assistant",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Redlook096/Clyra-AI-Final.git"
@@ -83,5 +83,72 @@
   "bugs": {
     "url": "https://github.com/Redlook096/Clyra-AI-Final/issues"
   },
-  "homepage": "https://github.com/Redlook096/Clyra-AI-Final#readme"
+  "homepage": "https://github.com/Redlook096/Clyra-AI-Final#readme",
+  "build": {
+    "appId": "ai.clyra.desktop",
+    "productName": "Clyra",
+    "asar": true,
+    "npmRebuild": false,
+    "directories": {
+      "output": "release-electron"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json",
+      "!node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "desktop-binaries",
+        "to": ".",
+        "filter": [
+          "clyra-server*"
+        ]
+      },
+      {
+        "from": "dist",
+        "to": "dist"
+      },
+      {
+        "from": "backend/voice-pipeline",
+        "to": "backend/voice-pipeline"
+      },
+      {
+        "from": "tools",
+        "to": "tools"
+      },
+      {
+        "from": "requirements-openhands.txt",
+        "to": "requirements-openhands.txt"
+      },
+      {
+        "from": "clipper-pipeline.py",
+        "to": "clipper-pipeline.py"
+      },
+      {
+        "from": "package-lock.json",
+        "to": "package-lock.json"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": true
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "category": "Utility",
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    }
+  }
 }

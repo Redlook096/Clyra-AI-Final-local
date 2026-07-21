@@ -10,8 +10,6 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowUpIcon,
-  Camera,
-  CameraOff,
   MessageSquareText,
   Mic,
   MicOff,
@@ -25,8 +23,8 @@ import { AiOrb, type OrbColorTheme } from "../AiOrb";
 import { cn } from "../../lib/utils";
 import type { VoiceStatus, VoiceTurn } from "../../hooks/useVoiceCall";
 
-type LeftMenuMode = "closed" | "chooser" | "type" | "summary";
-type CallMediaMode = "none" | "camera" | "screen";
+type LeftMenuMode = "closed" | "type" | "summary";
+type CallMediaMode = "none" | "screen";
 
 const TYPE_DOCK_COLLAPSED_PX = 48;
 const TYPE_DOCK_EXPANDED_PX = 320;
@@ -307,7 +305,8 @@ export function VoiceCallOverlay({
     setMediaError(null);
   };
 
-  const startMedia = async (nextMode: Exclude<CallMediaMode, "none">) => {
+  const startMedia = async () => {
+    const nextMode: Exclude<CallMediaMode, "none"> = "screen";
     setMediaError(null);
     const requestId = mediaRequestIdRef.current + 1;
     mediaRequestIdRef.current = requestId;
@@ -316,23 +315,15 @@ export function VoiceCallOverlay({
       track.stop();
     }
     try {
-      const stream = nextMode === "camera"
-        ? await navigator.mediaDevices.getUserMedia({
-            video: {
-              width: { ideal: 960 },
-              height: { ideal: 540 },
-              frameRate: { ideal: 24, min: 20, max: 30 },
-              facingMode: "user",
-            },
-            audio: false,
-          })
-        : await navigator.mediaDevices.getDisplayMedia({
-            video: {
-              frameRate: { ideal: 15, max: 30 },
-              ...({ selfBrowserSurface: "exclude", surfaceSwitching: "include" } as MediaTrackConstraints),
-            },
-            audio: false,
-          });
+      // Launch the platform picker immediately. There is no intermediate
+      // Clyra setup screen, and the platform retains the permission boundary.
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          frameRate: { ideal: 15, max: 30 },
+          ...({ selfBrowserSurface: "exclude", surfaceSwitching: "include" } as MediaTrackConstraints),
+        },
+        audio: false,
+      });
       // The picker may resolve after ending the call, changing media modes, or
       // closing the overlay. Do not retain that late stream.
       if (requestId !== mediaRequestIdRef.current) {
@@ -361,8 +352,8 @@ export function VoiceCallOverlay({
       const name = cause instanceof DOMException ? cause.name : "";
       setMediaError(
         name === "NotAllowedError"
-          ? `${nextMode === "camera" ? "Camera" : "Screen sharing"} permission was not granted.`
-          : `Could not start ${nextMode === "camera" ? "the camera" : "screen sharing"}.`,
+          ? "Screen sharing permission was not granted."
+          : "Could not start screen sharing.",
       );
       setMediaMode("none");
     }
@@ -457,13 +448,12 @@ export function VoiceCallOverlay({
                     playsInline
                     className={cn(
                       "h-full w-full object-cover",
-                      mediaMode === "camera" && "-scale-x-100",
                     )}
                   />
                   <div className="clyra-call-media-preview__sheen" />
                 </div>
                 <div className="absolute right-2 top-2 z-10">
-                  <button type="button" onClick={stopMedia} className="grid h-7 w-7 place-items-center rounded-full border border-white/35 bg-slate-950/65 text-white shadow-sm backdrop-blur-md transition-[background-color,transform] duration-200 hover:scale-105 hover:bg-slate-950/85" aria-label={`Stop ${mediaMode === "camera" ? "camera" : "screen sharing"}`}>
+                  <button type="button" onClick={stopMedia} className="grid h-7 w-7 place-items-center rounded-full border border-white/35 bg-slate-950/65 text-white shadow-sm backdrop-blur-md transition-[background-color,transform] duration-200 hover:scale-105 hover:bg-slate-950/85" aria-label="Stop screen sharing">
                     <X className="h-3.5 w-3.5" />
                   </button>
                 </div>
@@ -562,65 +552,6 @@ export function VoiceCallOverlay({
               </AnimatePresence>
             </div>
           </motion.div>
-
-          {/* Permission-controlled media chooser */}
-          <AnimatePresence>
-            {menu === "chooser" ? (
-              <motion.div
-                key="chooser"
-                initial={{ opacity: 0, y: 18, scale: 0.96, filter: "blur(8px)" }}
-                animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
-                exit={{ opacity: 0, y: 12, scale: 0.98, filter: "blur(6px)" }}
-                transition={{ type: "spring", stiffness: 420, damping: 34, mass: 0.55 }}
-                className="absolute bottom-[6.7rem] left-0 right-0 z-[242] flex justify-center px-6"
-              >
-                <div className="clyra-voice-chooser w-full max-w-[304px] overflow-hidden rounded-[26px] border border-slate-200/80 bg-white/92 p-1.5 shadow-[0_18px_46px_rgba(15,23,42,0.1)] backdrop-blur-xl">
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      void startMedia("camera");
-                    }}
-                    className="group relative flex w-full items-center gap-3 rounded-[20px] px-3 py-3 text-left transition-[background-color,transform] duration-200 hover:-translate-y-0.5 hover:bg-slate-50/95 active:scale-[0.982]"
-                  >
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-950 text-white shadow-[0_9px_22px_rgba(15,23,42,0.15)] transition-transform duration-300 group-hover:scale-[1.04]">
-                      <Camera className="h-4 w-4" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[13px] font-semibold text-slate-900">
-                        Show camera
-                      </span>
-                      <span className="mt-0.5 block text-[11.5px] leading-snug text-slate-400">
-                        Let Clyra see what you show
-                      </span>
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      void startMedia("screen");
-                    }}
-                    className="group flex w-full items-center gap-3 rounded-[20px] px-3 py-3 text-left transition-[background-color,transform] duration-200 hover:-translate-y-0.5 hover:bg-slate-50/95 active:scale-[0.982]"
-                  >
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200/75 bg-white text-slate-700 shadow-[0_8px_22px_rgba(15,23,42,0.055)] transition-transform duration-200 group-hover:scale-[1.03]">
-                      <MonitorUp className="h-4 w-4" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[13px] font-semibold text-slate-900">
-                        Share screen
-                      </span>
-                      <span className="mt-0.5 block text-[11.5px] leading-snug text-slate-400">
-                        Share a tab, window, or display
-                      </span>
-                    </span>
-                  </button>
-                </div>
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
 
           {/* Summary sheet only — no message list */}
           <AnimatePresence>
@@ -770,15 +701,14 @@ export function VoiceCallOverlay({
                     className="grid w-full max-w-[352px] grid-cols-4 items-center justify-items-center"
                   >
                     <CallControlButton
-                      label={mediaMode === "none" ? "Camera or screen sharing" : "Change camera or screen sharing"}
-                      onClick={() =>
-                        setMenu((m) =>
-                          m === "chooser" || m === "summary" ? "closed" : "chooser",
-                        )
-                      }
-                      active={menu === "chooser" || mediaMode !== "none"}
+                      label={mediaMode === "none" ? "Share screen" : "Stop screen sharing"}
+                      onClick={() => {
+                        if (mediaMode === "screen") stopMedia();
+                        else void startMedia();
+                      }}
+                      active={mediaMode === "screen"}
                     >
-                      {mediaMode === "none" ? <Camera className="h-5 w-5" /> : <CameraOff className="h-5 w-5" />}
+                      <MonitorUp className="h-5 w-5" />
                     </CallControlButton>
 
                     <CallControlButton

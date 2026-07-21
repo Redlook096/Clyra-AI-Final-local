@@ -12,6 +12,7 @@ import { detectDevScript } from "../terminal/script-detector";
 import { checkPreviewHealth } from "./preview-health";
 import { findPreviewPort, parsePreviewUrl, probePreviewPort } from "./port-detector";
 import { parsePreviewError } from "./preview-errors";
+import { clyraResourcePath } from "../../runtime-paths";
 
 type RunnerState = {
   process?: ChildProcessWithoutNullStreams;
@@ -46,9 +47,12 @@ function serialise(state: RunnerState): PreviewSession {
   return { ...state.session };
 }
 
-function getViteBinary() {
-  const binary = path.join(process.cwd(), "node_modules", ".bin", "vite");
-  return existsSync(binary) ? binary : "vite";
+function getViteBinary(projectPath: string) {
+  const candidates = [
+    path.join(projectPath, "node_modules", ".bin", "vite"),
+    clyraResourcePath("node_modules", ".bin", "vite"),
+  ];
+  return candidates.find((candidate) => existsSync(candidate));
 }
 
 async function waitForReady(state: RunnerState, port: number, timeoutMs = 20000) {
@@ -157,7 +161,7 @@ export async function startDevServer({
   }
 
   const port = await findPreviewPort(projectId);
-  const viteBinary = getViteBinary();
+  const viteBinary = getViteBinary(projectPath);
   const session: PreviewSession = {
     projectId,
     projectPath,
@@ -180,8 +184,10 @@ export async function startDevServer({
   addLog(state, "info", `Starting preview on port ${port}.`);
 
   const child = spawn(
-    viteBinary,
-    ["--host", "127.0.0.1", "--port", String(port), "--strictPort"],
+    viteBinary || "python3",
+    viteBinary
+      ? ["--host", "127.0.0.1", "--port", String(port), "--strictPort"]
+      : ["-m", "http.server", String(port), "--bind", "127.0.0.1"],
     {
       cwd: projectPath,
       env: { ...process.env, BROWSER: "none", FORCE_COLOR: "0" },
@@ -258,6 +264,11 @@ export async function stopDevServer(projectId: string) {
   }
   addLog(state, "info", "Preview server stopped.");
   return serialise(state);
+}
+
+export async function stopAllDevServers() {
+  await Promise.all([...sessions.keys()].map((projectId) => stopDevServer(projectId)));
+  sessions.clear();
 }
 
 export async function refreshPreview(projectId: string) {

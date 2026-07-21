@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { clyraResourcePath, clyraResourceRoot } from "../runtime-paths";
 
 const AGENT_SERVER_VERSION = process.env.OH_AGENT_SERVER_VERSION || "1.33.0";
 const DEFAULT_PORT = Number(process.env.OH_AGENT_SERVER_PORT || 18000);
@@ -105,11 +106,8 @@ export async function ensureOpenHandsAgentServer(): Promise<{
     const secretKey =
       process.env.OH_SECRET_KEY?.trim() || getOrCreateKey(SECRET_KEY_PATH);
     const host = `http://127.0.0.1:${DEFAULT_PORT}`;
-    const toolsDir = path.resolve(process.cwd(), "tools");
-    const toolsRequirements = path.resolve(
-      process.cwd(),
-      "requirements-openhands.txt",
-    );
+    const toolsDir = clyraResourcePath("tools");
+    const toolsRequirements = clyraResourcePath("requirements-openhands.txt");
 
     // Reuse a healthy existing server if present.
     try {
@@ -162,7 +160,7 @@ export async function ensureOpenHandsAgentServer(): Promise<{
       `[openhands] starting agent-server ${AGENT_SERVER_VERSION} on :${DEFAULT_PORT}`,
     );
     processHandle = spawn("uvx", args, {
-      cwd: process.cwd(),
+      cwd: clyraResourceRoot(),
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });

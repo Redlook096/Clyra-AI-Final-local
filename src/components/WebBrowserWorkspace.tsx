@@ -51,6 +51,8 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { cn } from "../lib/utils";
+import { getElectronDesktop, isElectronRuntime, requestElectronBrowser } from "../lib/electron-runtime";
+import { ElectronWebContentsSurface } from "./ElectronWebContentsSurface";
 import { ShiningBrainIcon, ShiningText, ThinkingDots } from "./ShiningText";
 
 type AgentStatus =
@@ -417,6 +419,7 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (val
 }
 
 export default function WebBrowserWorkspace() {
+  const desktopChromium = isElectronRuntime();
   const [browserState, setBrowserState] = useState<BrowserState | null>(null);
   const [address, setAddress] = useState("");
   const [task, setTask] = useState("");
@@ -458,6 +461,7 @@ export default function WebBrowserWorkspace() {
   ));
 
   const activeChatKey = browserState?.activeTabId || previousActiveTabRef.current || "default";
+
   const messages = messagesByTab[activeChatKey] || [];
   const setMessages = useCallback((update: React.SetStateAction<AgentMessage[]>, tabId = activeChatKey) => {
     setMessagesByTab((current) => {
@@ -493,6 +497,12 @@ export default function WebBrowserWorkspace() {
       if (!options.quiet) setIsBrowserBusy(true);
       setError(null);
       try {
+        const electronPayload = await requestElectronBrowser(path, { body: options.body });
+        if (electronPayload) {
+          if (!electronPayload?.ok) throw new Error(responseError(electronPayload, "Browser action failed."));
+          if (electronPayload.state) applyState(electronPayload.state);
+          return electronPayload;
+        }
         const response = await fetch(path, {
           method: options.method || "POST",
           headers: options.body === undefined ? undefined : { "Content-Type": "application/json" },
@@ -580,6 +590,21 @@ export default function WebBrowserWorkspace() {
   }, [loadState, syncAgentSession]);
 
   useEffect(() => {
+    const desktop = getElectronDesktop();
+    if (!desktop) return;
+    const stopState = desktop.browser.onState((state) => applyState(state as BrowserState));
+    const stopAddress = desktop.browser.onFocusAddress(() => {
+      document.querySelector<HTMLInputElement>("[data-browser-omnibox]")?.focus();
+    });
+    const stopFind = desktop.browser.onFocusFind(() => setSideView("history"));
+    return () => {
+      stopState();
+      stopAddress();
+      stopFind();
+    };
+  }, [applyState]);
+
+  useEffect(() => {
     window.localStorage.setItem(BROWSER_CHAT_STORAGE, JSON.stringify(messagesByTab));
   }, [messagesByTab]);
 
@@ -589,6 +614,7 @@ export default function WebBrowserWorkspace() {
   }, [isAgentBusy, syncAgentSession]);
 
   useEffect(() => {
+    if (desktopChromium) return;
     const surface = previewRef.current;
     if (!surface || !browserState) return;
     const observer = new ResizeObserver(([entry]) => {
@@ -608,16 +634,17 @@ export default function WebBrowserWorkspace() {
     });
     observer.observe(surface);
     return () => observer.disconnect();
-  }, [browserState?.activeTabId, requestBrowser]);
+  }, [browserState?.activeTabId, desktopChromium, requestBrowser]);
 
   useEffect(() => {
+    if (desktopChromium) return;
     if (!browserState || document.visibilityState === "hidden") return;
     // Keep streamed browser actions legible without turning the page viewer into
     // a high-frequency screenshot loop while it is idle.
     const delay = isAgentBusy || browserState.loading ? 140 : 1_800;
     const timer = window.setTimeout(() => setFrameTick((value) => value + 1), delay);
     return () => window.clearTimeout(timer);
-  }, [browserState, frameTick, isAgentBusy]);
+  }, [browserState, desktopChromium, frameTick, isAgentBusy]);
 
   const performAction = useCallback(
     (action: BrowserAction, quiet = false) => requestBrowser("/api/openbrowser/action", { body: { action }, quiet }),
@@ -881,6 +908,22 @@ export default function WebBrowserWorkspace() {
   }, [browserState?.activeTabId, performAction]);
 
   const settings = browserState?.settings || defaultSettings;
+
+  useEffect(() => {
+    if (!desktopChromium) return;
+    const desktop = getElectronDesktop();
+    if (!desktop) return;
+    if (!cursor || !isAgentBusy || !settings.showAiCursor || browserState?.agent.manualControl) {
+      void desktop.browser.setCursor(null);
+      return;
+    }
+    void desktop.browser.setCursor({
+      ...cursor,
+      showLabel: settings.showAiActionLabels,
+      reducedMotion: settings.reducedMotion,
+    });
+    return () => { void desktop.browser.setCursor(null); };
+  }, [browserState?.agent.manualControl, cursor, desktopChromium, isAgentBusy, settings.reducedMotion, settings.showAiActionLabels, settings.showAiCursor]);
   const pageHost = useMemo(() => displayHost(browserState?.url || address), [address, browserState?.url]);
   const latestSteps = liveSteps.length ? liveSteps : [...messages].reverse().find((message) => message.steps?.length)?.steps || [];
   const frameUrl = browserState
@@ -972,7 +1015,7 @@ export default function WebBrowserWorkspace() {
             </IconButton>
             <form onSubmit={(event) => void navigate(event)} className="min-w-0 flex-1">
               <div className="group/omnibox flex h-8 items-center gap-2 rounded-[10px] border border-transparent bg-white px-3 transition-[background-color,border-color,box-shadow] duration-200 hover:bg-slate-100/85 focus-within:border-slate-300 focus-within:bg-slate-100/85 focus-within:shadow-[0_0_0_3px_rgba(148,163,184,0.14)]">
-                {browserState?.secure ? <LockKeyhole className="h-3.5 w-3.5 shrink-0 text-emerald-500" /> : <Search className="h-3.5 w-3.5 shrink-0 text-slate-400" />}
+                {browserState?.secure ? <LockKeyhole className="h-3.5 w-3.5 shrink-0 text-[#7c8798]" strokeWidth={1.8} /> : <Search className="h-3.5 w-3.5 shrink-0 text-[#7c8798]" />}
                 <input
                   data-browser-omnibox
                   value={address}
@@ -1055,7 +1098,23 @@ export default function WebBrowserWorkspace() {
             className="group relative min-h-0 flex-1 overflow-hidden bg-white outline-none"
             aria-label="Interactive browser page"
           >
-            {browserState ? (
+            {browserState && desktopChromium ? (
+              <ElectronWebContentsSurface
+                title={`Live browser page: ${browserState.title}`}
+                surfaceId="primary-browser"
+                kind="browser"
+                className="h-full w-full"
+                fallback={
+                  <img
+                    src={frameUrl}
+                    alt={`Live browser page: ${browserState.title}`}
+                    draggable={false}
+                    onClick={(event) => void clickPreview(event)}
+                    className="block h-full w-full cursor-default select-none object-contain object-top"
+                  />
+                }
+              />
+            ) : browserState ? (
               <img
                 src={frameUrl}
                 alt={`Live browser page: ${browserState.title}`}
@@ -1166,7 +1225,7 @@ export default function WebBrowserWorkspace() {
           </div>
 
           <div className="flex h-7 shrink-0 items-center justify-between border-t border-slate-200 bg-white px-3 text-[9px] font-medium text-slate-400">
-            <span className="flex min-w-0 items-center gap-1.5"><ShieldCheck className="h-3 w-3 text-emerald-600" /><span className="truncate">{compactUrl(browserState?.url || "")}</span></span>
+            <span className="flex min-w-0 items-center gap-1.5"><ShieldCheck className="h-3 w-3 text-slate-400" /><span className="truncate">{compactUrl(browserState?.url || "")}</span></span>
             <span>{Math.round((browserState?.zoom || 1) * 100)}%</span>
           </div>
         </section>

@@ -11,6 +11,7 @@ import { VibeCoderEvent } from "./cline-events";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { promises as fs } from "node:fs";
+import { clyraDataPath } from "../runtime-paths";
 
 type VibeAdapter = ClineAdapter | OpenHandsAdapter;
 
@@ -261,8 +262,7 @@ export function registerClineRoutes(app: import("express").Application) {
     const resolvedWorkspacePath = path.resolve(
       workspacePath ||
         path.join(
-          process.cwd(),
-          "projects",
+          clyraDataPath("projects"),
           safeProjectId(actualProjectId),
           "files",
         ),

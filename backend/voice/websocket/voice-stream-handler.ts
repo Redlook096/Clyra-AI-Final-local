@@ -39,6 +39,8 @@ type ActiveSocket = {
   asyncStt: AsyncSttSession | null;
   asyncSttSpeechAt: number;
   asyncSttFlushTimer: ReturnType<typeof setTimeout> | null;
+  asyncSttFallbackInProgress: boolean;
+  asyncSttProviderUnavailable: boolean;
   asyncContextId: string | null;
   ttsFormatSent: boolean;
 };
@@ -405,7 +407,7 @@ function resetAsyncStt(active: ActiveSocket) {
 }
 
 function attachAsyncStt(active: ActiveSocket, config: ReturnType<typeof loadVoiceConfig>) {
-  if (!config.asyncApiKey || !config.asyncSttEnabled) return false;
+  if (!config.asyncApiKey || !config.asyncSttEnabled || active.asyncSttProviderUnavailable) return false;
   active.pipelineMode = true;
   const createTurn = () => new AsyncSttSession({
     apiKey: config.asyncApiKey,
@@ -450,6 +452,8 @@ function attachSocketHandlers(sessionId: string, ws: WebSocket) {
     asyncStt: null,
     asyncSttSpeechAt: 0,
     asyncSttFlushTimer: null,
+    asyncSttFallbackInProgress: false,
+    asyncSttProviderUnavailable: false,
     asyncContextId: null,
     ttsFormatSent: false,
   };
@@ -597,9 +601,17 @@ function attachSocketHandlers(sessionId: string, ws: WebSocket) {
           }, 620);
         }
         void current.asyncStt.sendPcm(message.data).catch((error) => {
-          console.warn("[voice] Async STT streaming failed:", error instanceof Error ? error.message : error);
+          // A provider handshake can fail while several 20ms mic packets are
+          // already queued. Fall back once, rather than opening a local socket
+          // for every packet and flooding the voice worker.
+          if (current.asyncSttFallbackInProgress) return;
+          current.asyncSttFallbackInProgress = true;
+          current.asyncSttProviderUnavailable = true;
+          console.warn("[voice] Async STT streaming failed; using local transcription:", error instanceof Error ? error.message : error);
           resetAsyncStt(current);
-          attachPipeline(current).catch(() => undefined);
+          void attachPipeline(current)
+            .catch(() => undefined)
+            .finally(() => { current.asyncSttFallbackInProgress = false; });
         });
       } else {
         current.pipeline?.sendAudio(message.data, message.seq);

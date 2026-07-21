@@ -22,3 +22,7 @@ projects/
 temp-repo/
 *.bak
 Clyra-AI-Final/
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+desktop-binaries/
+release-electron/

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import * as path from "node:path";
+import { clyraDataPath } from "../runtime-paths";
 
 export type AgentRuntimeState =
   | "CREATED"
@@ -151,7 +152,7 @@ function safeProjectSegment(value: string) {
 }
 
 export function runtimeWorkspaceAlias(projectId: string) {
-  return path.join(process.cwd(), ".clyra", "vibe-runtime", "workspaces", safeProjectSegment(projectId));
+  return clyraDataPath(".clyra", "vibe-runtime", "workspaces", safeProjectSegment(projectId));
 }
 
 export async function ensureWorkspaceAlias(projectId: string, workspacePath: string) {
@@ -219,7 +220,7 @@ export async function createWorkspaceCheckpoint(projectRoot: string, workspacePa
   // A full project-root workspace contains its runtime sidecar. Store the
   // checkpoint outside that root so Node cannot recursively copy a directory
   // into one of its own descendants.
-  const root = path.join(process.cwd(), ".clyra", "vibe-runtime", "checkpoints", path.basename(projectRoot), id);
+  const root = clyraDataPath(".clyra", "vibe-runtime", "checkpoints", path.basename(projectRoot), id);
   await fs.mkdir(root, { recursive: true });
   const manifest = await collectManifest(workspacePath);
   await fs.writeFile(path.join(root, "manifest.json"), `${JSON.stringify({ id, reason, createdAt: new Date().toISOString(), manifest }, null, 2)}\n`, "utf8");

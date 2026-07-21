@@ -6,7 +6,9 @@ type HarnessMode = "plan" | "fast";
 // requests through it until the approval workflow is reintroduced.
 // Plan mode is a first-class Clyra flow: it stays in the native workspace
 // until the generated PLAN.md is explicitly accepted or revised.
-const VIBE_PLAN_REVIEW_ENABLED = true;
+// Keep the proven Vibe workspace flow as the default while the optional plan review
+// surface remains behind a flag for future iteration.
+const VIBE_PLAN_REVIEW_ENABLED = false;
 
 // The full Vibe Coder M1 fork is the product surface for Vibe. The older Clyra
 // workspace remains below as a fallback while its project/session code is
@@ -49,6 +51,7 @@ import { cn } from "../lib/utils";
 import { describeControls, type AgentBridge, type AgentBridgeAction, type AgentBridgeActionResult } from "../lib/agentController";
 import { ShiningText } from "./ui/shining-text";
 import { MarkdownMessageContent } from "./MarkdownMessageContent";
+import { ElectronWebContentsSurface } from "./ElectronWebContentsSurface";
 
 // --- New Imports for the Advanced Workspace ---
 import { useVibeCoderWorkspace, type ProjectFile } from "../hooks/useVibeCoderWorkspace";
@@ -428,12 +431,20 @@ function VibeCoderM1Surface({ onEngaged }: Pick<VibeCoderWorkspaceProps, "onEnga
     const src = `${status.uiUrl.replace(/\/$/, "")}/conversations`;
     return (
       <div className="h-full min-h-0 w-full overflow-hidden bg-white">
-        <iframe
+        <ElectronWebContentsSurface
           key={reloadKey}
+          source={src}
           title="Vibe Coder"
-          src={src}
-          className="h-full w-full border-0 bg-white"
-          allow="clipboard-read; clipboard-write; fullscreen"
+          surfaceId="m1-workspace"
+          kind="vibe-runtime"
+          fallback={
+            <iframe
+              title="Vibe Coder"
+              src={src}
+              className="h-full w-full border-0 bg-white"
+              allow="clipboard-read; clipboard-write; fullscreen"
+            />
+          }
         />
       </div>
     );

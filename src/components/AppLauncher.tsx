@@ -52,6 +52,8 @@ const CENTER = 320;
 const OUTER_RADIUS = 294;
 const INNER_RADIUS = 124;
 const SLICE_ANGLE = 360 / tools.length;
+const RADIAL_OPEN = { duration: 0.18, ease: [0.16, 1, 0.3, 1] as const };
+const RADIAL_CLOSE = { duration: 0.14, ease: [0.7, 0, 0.84, 0] as const };
 const barActions = ["resume", "open", "chat"] as const;
 type BarAction = (typeof barActions)[number];
 
@@ -158,7 +160,7 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
       initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.986 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.99 }}
-      transition={{ duration: reduceMotion ? 0 : 0.18, ease: [0.16, 1, 0.3, 1] }}
+      transition={reduceMotion ? { duration: 0 } : RADIAL_OPEN}
       role="dialog"
       aria-modal="true"
       aria-label="Clyra app launcher"
@@ -169,7 +171,7 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
         className="relative z-10 mx-auto flex h-dvh max-w-[1120px] flex-col items-center px-4 pb-5 pt-7 sm:pt-8"
         onClick={(event) => event.stopPropagation()}
       >
-        <motion.header initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: reduceMotion ? 0 : 0.02, duration: 0.16, ease: [0.22, 1, 0.36, 1] }} className="shrink-0 text-center">
+        <motion.header initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }} transition={reduceMotion ? { duration: 0 } : RADIAL_OPEN} className="shrink-0 text-center">
           <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">Clyra workspace</p>
           <h1 className="mt-2 text-[30px] font-semibold leading-none text-slate-950 sm:text-[40px]">Launch your tools</h1>
           <p className="mt-2 text-[12px] text-slate-500 sm:text-[13px]">Smart AI tools to build, create and solve, all in one place.</p>
@@ -179,10 +181,10 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
           <motion.div
             className="relative aspect-square w-[min(70vh,690px,94vw)]"
             onPointerMove={followPointer}
-            initial={{ opacity: 0, scale: 0.4, rotate: -2 }}
+            initial={{ opacity: 0, scale: 0.001 }}
             animate={{ opacity: 1, scale: 1, rotate: 0 }}
-            exit={{ opacity: 0, scale: 0.5, rotate: 2 }}
-            transition={reduceMotion ? { duration: 0 } : { duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+            exit={{ opacity: 0, scale: 0.001, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }}
+            transition={reduceMotion ? { duration: 0 } : RADIAL_OPEN}
           >
             <svg viewBox="0 0 640 640" className="absolute inset-0 h-full w-full overflow-visible drop-shadow-[0_28px_70px_rgba(15,23,42,0.10)]" aria-hidden="true">
               <circle cx="320" cy="320" r="302" fill="rgba(255,255,255,.72)" stroke="rgba(148,163,184,.22)" />
@@ -227,10 +229,10 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
                   type="button"
                   onFocus={() => selectTool(index)}
                   onClick={() => openTool(tool)}
-                  initial={reduceMotion ? false : { opacity: 0, scale: 0.42, x: (CENTER - x) * 0.48, y: (CENTER - y) * 0.48 }}
+                  initial={reduceMotion ? false : { opacity: 0, scale: 0.001, x: CENTER - x, y: CENTER - y }}
                   animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.48, x: (CENTER - x) * 0.44, y: (CENTER - y) * 0.44 }}
-                  transition={reduceMotion ? { duration: 0 } : { delay: 0.015 + index * 0.022, duration: 0.26, ease: [0.16, 1, 0.3, 1] }}
+                  exit={{ opacity: 0, scale: 0.001, x: CENTER - x, y: CENTER - y, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }}
+                  transition={reduceMotion ? { duration: 0 } : RADIAL_OPEN}
                   className="absolute z-10 flex w-[116px] -translate-x-1/2 -translate-y-1/2 flex-col items-center text-center outline-none"
                   style={{ left: `${x / 6.4}%`, top: `${y / 6.4}%` }}
                   aria-label={`Open ${tool.label}`}
@@ -245,10 +247,10 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
 
             <div className="clyra-launcher-orb absolute left-1/2 top-1/2 z-20 grid h-[24%] w-[24%] -translate-x-1/2 -translate-y-1/2 place-items-center">
               <motion.div
-                initial={{ scale: 0.92, opacity: 0 }}
+                initial={{ scale: 0.001, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.95, opacity: 0 }}
-                transition={{ delay: reduceMotion ? 0 : 0.01, type: "spring", stiffness: 760, damping: 40, mass: 0.24 }}
+                exit={{ scale: 0.001, opacity: 0, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }}
+                transition={reduceMotion ? { duration: 0 } : RADIAL_OPEN}
                 className="scale-[0.92]"
               >
                 <AiOrb colorTheme={orbColorTheme} introActive={false} />
@@ -260,7 +262,8 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
         <motion.div
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: reduceMotion ? 0 : 0.08, duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+          exit={{ opacity: 0, y: 4, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }}
+          transition={reduceMotion ? { duration: 0 } : RADIAL_OPEN}
           className="mb-3 flex shrink-0 items-center justify-center px-2 py-1 text-[10px] font-medium text-slate-400"
         >
           Press <kbd className="mx-1 rounded-md border border-slate-200 bg-white/80 px-1.5 py-0.5 text-[9px] text-slate-600 shadow-[inset_0_1px_0_rgba(255,255,255,.9)]">Ctrl/⌘K</kbd> to close
@@ -269,8 +272,8 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
         <motion.nav
           initial={{ opacity: 0, y: 8, scaleX: 0.86 }}
           animate={{ opacity: 1, y: 0, scaleX: 1 }}
-          exit={{ opacity: 0, y: 6, scaleX: 0.92 }}
-          transition={reduceMotion ? { duration: 0 } : { delay: 0.03, type: "spring", stiffness: 720, damping: 40, mass: 0.3 }}
+          exit={{ opacity: 0, y: 6, scaleX: 0.86, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }}
+          transition={reduceMotion ? { duration: 0 } : RADIAL_OPEN}
           onPointerMove={(event) => {
             const rect = event.currentTarget.getBoundingClientRect();
             const index = Math.max(0, Math.min(barActions.length - 1, Math.floor(((event.clientX - rect.left) / rect.width) * barActions.length)));

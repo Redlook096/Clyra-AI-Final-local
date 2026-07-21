@@ -108,7 +108,11 @@ function isOwnedM1Process(pid: number) {
   // longer contains the Agent Canvas repository path. These are still Clyra's
   // paired M1 services when they occupy the dedicated M1 port; without this
   // recognition a stale child prevents every subsequent M1 launch.
-  return /(?:openhands-agent-server|\bagent-server\b).*--(?:host\s+)?(?:127\.0\.0\.1|0\.0\.0\.0).*--port\s+18000/.test(command);
+  return (
+    /(?:openhands-agent-server|\bagent-server\b).*--(?:host\s+)?(?:127\.0\.0\.1|0\.0\.0\.0).*--port\s+18000/.test(command) ||
+    /openhands\.automation\.app:app.*--port\s+18001/.test(command) ||
+    /(?:website-cloner|static-server|agent-canvas|openhands).*--port\s+(?:8000|3001|18002|19000)/.test(command)
+  );
 }
 
 async function freeOwnedPort(port: number) {
@@ -323,4 +327,34 @@ export function warmupM1StackInBackground(): void {
     .finally(() => {
       backgroundWarmup = null;
     });
+}
+
+/** Release the Clyra-owned M1 process group when the desktop app exits. */
+export async function shutdownM1Stack(): Promise<void> {
+  if (monitorTimer) {
+    clearInterval(monitorTimer);
+    monitorTimer = null;
+  }
+  backgroundWarmup = null;
+
+  if (m1Process?.pid) terminateProcessTree(m1Process.pid, "SIGTERM");
+  m1Process = null;
+
+  const ports = [M1_UI_PORT, M1_AGENT_PORT, ...M1_EXTRA_PORTS];
+  for (const port of ports) {
+    for (const pid of listeningProcesses(port)) {
+      if (pid !== process.pid && pid !== process.ppid && isOwnedM1Process(pid)) {
+        terminateProcessTree(pid, "SIGTERM");
+      }
+    }
+  }
+
+  await delay(500);
+  for (const port of ports) {
+    for (const pid of listeningProcesses(port)) {
+      if (pid !== process.pid && pid !== process.ppid && isOwnedM1Process(pid)) {
+        terminateProcessTree(pid, "SIGKILL");
+      }
+    }
+  }
 }

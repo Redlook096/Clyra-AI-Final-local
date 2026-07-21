@@ -1,11 +1,18 @@
 import dotenv from "dotenv";
 import express from "express";
 import path from "path";
-import { startVibeServer } from "./vibe-server";
+import {
+  clyraDataPath,
+  clyraResourcePath,
+} from "./lib/runtime-paths";
 
-const _envRoot = process.cwd();
-dotenv.config({ path: path.join(_envRoot, ".env") });
-dotenv.config({ path: path.join(_envRoot, ".env.local"), override: true });
+dotenv.config({ path: clyraResourcePath(".env") });
+// Development Electron keeps writable state under Application Support. Load a
+// resource-side local override first so the desktop shell can use the same
+// developer credentials as `npm run dev`; a user-owned data override still
+// wins below in packaged builds.
+dotenv.config({ path: clyraResourcePath(".env.local") });
+dotenv.config({ path: clyraDataPath(".env.local"), override: true });
 import { Readable, Transform } from "node:stream";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
@@ -19,6 +26,7 @@ import {
   refreshPreview,
   restartDevServer,
   startDevServer,
+  stopAllDevServers,
   stopDevServer,
 } from "./lib/vibe-coder/preview/preview-runner";
 import {
@@ -45,6 +53,7 @@ import {
   addManagedBrowserBookmark,
   actOnManagedBrowser,
   cancelManagedBrowserAgent,
+  closeManagedBrowser,
   clearManagedBrowserHistory,
   findManagedBrowserText,
   getManagedBrowserFrame,
@@ -78,7 +87,7 @@ interface VibeProjectMetadata {
   thumbnailUrl?: string;
 }
 
-const projectsRoot = () => path.join(process.cwd(), "projects");
+const projectsRoot = () => clyraDataPath("projects");
 const safeProjectId = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, "");
 const projectRoot = (id: string) => path.join(projectsRoot(), safeProjectId(id));
 
@@ -1127,16 +1136,16 @@ function buildAgentsMd(packageManager: string) {
 
 async function scanProject() {
   const packageJson = await readJson<Record<string, unknown>>(
-    path.join(process.cwd(), "package.json"),
+    clyraResourcePath("package.json"),
     {},
   );
   const deps = {
     ...((packageJson.dependencies as Record<string, string>) ?? {}),
     ...((packageJson.devDependencies as Record<string, string>) ?? {}),
   };
-  const packageManager = existsSync(path.join(process.cwd(), "pnpm-lock.yaml"))
+  const packageManager = existsSync(clyraResourcePath("pnpm-lock.yaml"))
     ? "pnpm"
-    : existsSync(path.join(process.cwd(), "yarn.lock"))
+    : existsSync(clyraResourcePath("yarn.lock"))
       ? "yarn"
       : "npm";
   const framework = deps["@vitejs/plugin-react"]
@@ -1149,7 +1158,7 @@ async function scanProject() {
     "src/App.tsx",
     "src/index.css",
     "server.ts",
-  ].filter((file) => existsSync(path.join(process.cwd(), file)));
+  ].filter((file) => existsSync(clyraResourcePath(file)));
 
   return { framework, packageManager, relevantFiles };
 }
@@ -1169,8 +1178,8 @@ async function ensureVoicePipelineWorker() {
   }
 
   const python = [
-    path.join(process.cwd(), ".venv-voice311", "bin", "python"),
-    path.join(process.cwd(), ".venv-voice", "bin", "python"),
+    clyraResourcePath(".venv-voice311", "bin", "python"),
+    clyraResourcePath(".venv-voice", "bin", "python"),
   ].find(
     (candidate) =>
       existsSync(candidate) && existsSync(path.join(path.dirname(candidate), "uvicorn")),
@@ -1183,7 +1192,7 @@ async function ensureVoicePipelineWorker() {
     python,
     ["-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8787"],
     {
-      cwd: path.join(process.cwd(), "backend", "voice-pipeline"),
+      cwd: clyraResourcePath("backend", "voice-pipeline"),
       env: { ...process.env, PYTHONUNBUFFERED: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -1205,9 +1214,6 @@ function stopVoicePipelineWorker() {
   voicePipelineProcess = null;
   stopCreatorTtsWorker();
 }
-
-process.once("SIGINT", stopVoicePipelineWorker);
-process.once("SIGTERM", stopVoicePipelineWorker);
 
 async function startServer() {
   const app = express();
@@ -1390,7 +1396,7 @@ async function startServer() {
       return;
     }
     const renderId = crypto.randomUUID();
-    const renderDir = path.join(process.cwd(), ".clyra", "renders", renderId);
+    const renderDir = clyraDataPath(".clyra", "renders", renderId);
     const input = path.join(renderDir, "source.webm");
     const output = path.join(renderDir, "video.mp4");
     const filename = `${String(req.query.filename || "clyra-video").replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 70) || "clyra-video"}.mp4`;
@@ -2219,9 +2225,9 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
     // reviewed plan inside that boundary so the agent never needs `../` access.
     await fs.mkdir(path.join(root, "files"), { recursive: true });
     await fs.writeFile(path.join(root, "files", "PLAN.md"), plan, "utf8");
-    const packageManager = existsSync(path.join(process.cwd(), "pnpm-lock.yaml"))
+    const packageManager = existsSync(clyraResourcePath("pnpm-lock.yaml"))
       ? "pnpm"
-      : existsSync(path.join(process.cwd(), "yarn.lock"))
+      : existsSync(clyraResourcePath("yarn.lock"))
         ? "yarn"
         : "npm";
     await fs.writeFile(
@@ -2436,7 +2442,7 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
       return;
     }
     const uploadId = `${crypto.randomUUID()}${extension}`;
-    const uploadRoot = path.join(process.cwd(), ".clyra", "clipper-uploads");
+    const uploadRoot = clyraDataPath(".clyra", "clipper-uploads");
     const destination = path.join(uploadRoot, uploadId);
     try {
       await fs.mkdir(uploadRoot, { recursive: true });
@@ -2470,7 +2476,7 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
         res.status(400).json({ error: "Invalid upload identifier" });
         return;
       }
-      const candidate = path.join(process.cwd(), ".clyra", "clipper-uploads", safeUploadId);
+      const candidate = clyraDataPath(".clyra", "clipper-uploads", safeUploadId);
       if (!existsSync(candidate)) {
         res.status(404).json({ error: "The uploaded video is no longer available" });
         return;
@@ -2489,7 +2495,7 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
     const send = (type, data) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify({ type, ...data })}
 
 `); };
-    const scriptPath = path.join(process.cwd(), "clipper-pipeline.py");
+    const scriptPath = clyraResourcePath("clipper-pipeline.py");
     const homeBin = path.join(homedir(), "bin");
     send("progress", { step: "captions", status: "running", message: "Starting..." });
     const proc = spawn("python3", [scriptPath, source, JSON.stringify(cfg || {})], {
@@ -2520,7 +2526,7 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
     });
     proc.on("error", (err) => { send("error", { message: err.message }); res.end(); });
   });
-  app.use("/output", express.static(path.join(process.cwd(), "output"), {
+  app.use("/output", express.static(clyraDataPath("output"), {
     setHeaders: (res) => { res.setHeader("Content-Type", "video/mp4"); res.setHeader("Accept-Ranges", "bytes"); },
     fallthrough: false
   }));
@@ -2532,7 +2538,7 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
       return;
     }
 
-    const filePath = path.join(process.cwd(), "output", filename);
+    const filePath = clyraDataPath("output", filename);
     if (!existsSync(filePath)) {
       res.status(404).json({ error: "Clip not found" });
       return;
@@ -2545,7 +2551,8 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
   });
 
   if (process.env.NODE_ENV !== "production") {
-    const { createServer: createViteServer } = await import("vite");
+    const viteModule = "vite";
+    const { createServer: createViteServer } = await import(viteModule);
     const hmrPort = Number(process.env.HMR_PORT) || 24678;
     const vite = await createViteServer({
       server: {
@@ -2566,7 +2573,7 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), "dist");
+    const distPath = clyraResourcePath("dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
@@ -2580,14 +2587,17 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
     void ensureVoicePipelineWorker();
-    // Launch the persistent Playwright context while the app is booting, not
-    // when the user first opens Browser. Restored third-party tabs can take a
-    // moment to settle; prewarming keeps the workspace responsive on entry.
-    setTimeout(() => {
-      void getManagedBrowserState().catch((error) => {
-        console.warn("[browser] background warmup did not complete:", error instanceof Error ? error.message : error);
-      });
-    }, 350);
+    // Electron owns the visible Chromium views during desktop runs. Its main
+    // process restores those tabs before the UI loads, so launching a second
+    // Playwright/CDP warmup here wastes startup time and can contend for the
+    // same DevTools target. The web build keeps its existing prewarm path.
+    if (!process.env.CLYRA_ELECTRON_BROWSER_BRIDGE) {
+      setTimeout(() => {
+        void getManagedBrowserState().catch((error) => {
+          console.warn("[browser] background warmup did not complete:", error instanceof Error ? error.message : error);
+        });
+      }, 350);
+    }
     // Start the static M1 stack alongside Clyra so the global boot sequence
     // absorbs its cold start and Vibe opens without a second loading screen.
     // CLYRA_M1_WARMUP=0 remains the explicit low-resource opt-out.
@@ -2600,13 +2610,33 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
       });
   });
 
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[server] ${signal}; closing Clyra services`);
+    stopVoicePipelineWorker();
+    await Promise.allSettled([
+      closeManagedBrowser(),
+      stopAllDevServers(),
+      import("./lib/openhands/m1-stack").then(({ shutdownM1Stack }) => shutdownM1Stack()),
+    ]);
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    process.exit(0);
+  };
+  process.once("SIGINT", () => void shutdown("SIGINT"));
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+
   // Legacy sandbox previews are no longer part of the production M1 path.
   // Starting a second Vite service by default wastes memory and can collide
   // with another Clyra window. Keep it available only for explicit legacy use.
   if (process.env.ENABLE_LEGACY_VIBE_SERVER === "true") {
-    startVibeServer(VIBE_PORT).catch((error) => {
-      console.error("Failed to start Vibe sandbox server:", error);
-    });
+    const legacyVibeModule = "./vibe-server";
+    void import(legacyVibeModule)
+      .then(({ startVibeServer }) => startVibeServer(VIBE_PORT))
+      .catch((error) => {
+        console.error("Failed to start Vibe sandbox server:", error);
+      });
   }
 }
 

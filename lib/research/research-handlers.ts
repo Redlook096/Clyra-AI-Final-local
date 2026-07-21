@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { webSearch, fetchUrl } from "../agent/research-tools";
+import { clyraResourcePath, clyraResourceRoot } from "../runtime-paths";
 
 export type YoutubeAnalyzeRequest = {
   url: string;
@@ -18,7 +19,7 @@ export type WebSearchRequest = {
 function runPythonJson(args: string[], timeoutMs = 45000): Promise<any> {
   return new Promise((resolve, reject) => {
     const proc = spawn("python3", args, {
-      cwd: process.cwd(),
+      cwd: clyraResourceRoot(),
       env: { ...process.env, PYTHONUNBUFFERED: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -180,5 +181,5 @@ Do NOT include a Sources section — sources are shown separately in the UI.`;
 }
 
 export function researchModulePath() {
-  return path.join(process.cwd(), "lib", "research", "research-handlers.ts");
+  return clyraResourcePath("lib", "research", "research-handlers.ts");
 }

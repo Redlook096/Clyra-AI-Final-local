@@ -80,9 +80,16 @@
     </style>
   </head>
   <body>
-    <!-- BootIntroOverlay is the single loading experience. Keep the root empty
-         so a second pre-React progress animation never flashes beforehand. -->
-    <div id="root"></div>
+    <div id="root">
+      <div class="clyra-boot-fallback">
+        <div class="clyra-boot-card">
+          <div class="clyra-boot-track">
+            <div class="clyra-boot-fill"></div>
+          </div>
+          <p class="clyra-boot-copy">Starting Clyra...</p>
+        </div>
+      </div>
+    </div>
     <script>
       window.addEventListener(
         "error",

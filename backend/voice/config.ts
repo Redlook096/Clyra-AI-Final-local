@@ -57,10 +57,11 @@ export function loadVoiceConfig(): VoiceConfig {
     asyncFallbackModel: process.env.ASYNC_TTS_FALLBACK_MODEL ?? "async_flash_v1.5",
     asyncVoiceId: process.env.ASYNC_VOICE_ID ?? "e0f39dc4-f691-4e78-bba5-5c636692cc04",
     asyncSampleRate: Number(process.env.ASYNC_TTS_SAMPLE_RATE ?? 44100),
-    // Async TTS is production-validated. Keep its separate streaming ASR
-    // transport opt-in until it has completed its provider handshake; the
-    // local/browser pipeline remains the reliable default for microphone input.
-    asyncSttEnabled: process.env.ASYNC_STT_ENABLED === "true",
+    // Async ASR is opt-in until the configured provider has completed its
+    // compatibility handshake. The local pipeline remains the dependable
+    // default and the desktop never silently loses transcription because an
+    // external streaming endpoint rejects a connection.
+    asyncSttEnabled: process.env.ASYNC_STT_ENABLED === "true" && Boolean(process.env.ASYNC_API_KEY),
     asyncSttModel: process.env.ASYNC_STT_MODEL ?? "async_asr_v1.0",
   };
 }

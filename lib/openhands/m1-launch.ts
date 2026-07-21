@@ -14,6 +14,7 @@ import {
 } from "../vibe-runtime/runtime";
 import { runWorkspaceValidation } from "../vibe-runtime/validation";
 import { startDevServer } from "../vibe-coder/preview/preview-runner";
+import { clyraDataPath } from "../runtime-paths";
 
 function slugify(input: string) {
   return (
@@ -121,7 +122,7 @@ function isUnsafeWorkspaceCommand(command: string, workspacePath: string) {
   // every other absolute location remain outside the workspace contract.
   const approvedRoots = [
     path.resolve(workspacePath),
-    path.join(process.cwd(), ".clyra", "vibe-runtime", "workspaces", path.basename(workspacePath)),
+    clyraDataPath(".clyra", "vibe-runtime", "workspaces", path.basename(workspacePath)),
   ];
   const commandWithApprovedRootNormalised = approvedRoots.reduce((command, root) => {
     const escapedRoot = root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -413,8 +414,7 @@ export async function launchM1Conversation(options: {
       : `${slugify(requestedPrompt || "clyra-vibe-project")}-${randomUUID().slice(0, 6)}`;
 
   const workspacePath = path.resolve(
-    process.cwd(),
-    "projects",
+    clyraDataPath("projects"),
     projectId,
     "files",
   );
@@ -583,6 +583,9 @@ export async function launchM1Conversation(options: {
           conversationTitle: title,
           status: "Open",
         });
+        await runtime.setConversation(match.id);
+        await runtime.append({ type: "thread.restored", harness: "m1", status: "completed", payload: { conversationId: match.id } });
+        activeM1Runtimes.set(projectId, { client, conversationId: match.id, store: runtime, workspacePath });
         return {
           projectId,
           workspacePath,
@@ -637,8 +640,17 @@ export async function launchM1Conversation(options: {
     name: continueExisting ? projectName : title,
   });
   await runtime.setConversation(conversation.id);
-  await runtime.transition(options.planMode ? "PLANNING" : "INSPECTING", options.planMode ? "M1 is inspecting the repository and creating a plan." : "M1 is inspecting the repository before implementation.");
-  await runtime.append({ type: "turn.started", harness: "m1", status: "started", payload: { conversationId: conversation.id, planMode: !!options.planMode } });
+  if (!continueExisting || !hasExistingRuntime) {
+    await runtime.transition(options.planMode ? "PLANNING" : "INSPECTING", options.planMode ? "M1 is inspecting the repository and creating a plan." : "M1 is inspecting the repository before implementation.");
+    await runtime.append({ type: "turn.started", harness: "m1", status: "started", payload: { conversationId: conversation.id, planMode: !!options.planMode } });
+  } else {
+    await runtime.append({
+      type: "thread.restored",
+      harness: "m1",
+      status: "completed",
+      payload: { conversationId: conversation.id, replacementConversation: true },
+    });
+  }
   activeM1Runtimes.set(projectId, { client, conversationId: conversation.id, store: runtime, workspacePath });
   bridgeM1Events({ agentUrl: stack.agentUrl, apiKey: stack.apiKey, projectId, client, conversationId: conversation.id, store: runtime, workspacePath: agentWorkspacePath });
   watchM1Conversation({
@@ -669,14 +681,14 @@ export async function launchM1Conversation(options: {
 
 export async function getM1RuntimeSnapshot(projectId: string) {
   const safeId = safeProjectId(projectId);
-  const workspacePath = path.resolve(process.cwd(), "projects", safeId, "files");
+  const workspacePath = path.resolve(clyraDataPath("projects"), safeId, "files");
   const store = activeM1Runtimes.get(safeId)?.store || new AgentRuntimeStore(path.resolve(workspacePath, ".."));
   return store.getSnapshot();
 }
 
 export async function getM1RuntimeEvents(projectId: string, afterSequence = 0) {
   const safeId = safeProjectId(projectId);
-  const workspacePath = path.resolve(process.cwd(), "projects", safeId, "files");
+  const workspacePath = path.resolve(clyraDataPath("projects"), safeId, "files");
   const store = activeM1Runtimes.get(safeId)?.store || new AgentRuntimeStore(path.resolve(workspacePath, ".."));
   return store.events(afterSequence);
 }

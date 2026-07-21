@@ -94,6 +94,7 @@ import { VoiceCallOverlay } from "./components/voice/VoiceCallOverlay";
 import { VoiceWaveIcon } from "./components/voice/VoiceWaveIcon";
 import { useVoiceCall } from "./hooks/useVoiceCall";
 import { AiOrb, type OrbColorTheme } from "./components/AiOrb";
+import { getElectronDesktop } from "./lib/electron-runtime";
 import { VibeAgentMessageBody } from "./components/vibe/VibeAgentMessageBody";
 import { VibeLivePreviewPanel } from "./components/vibe/VibeLivePreviewPanel";
 import { buildLocalVibeFallbackResponse } from "./lib/buildLocalVibeFallback";
@@ -323,32 +324,31 @@ function BootIntroOverlay({
   return (
     <motion.div
       className="clyra-boot-overlay"
-      initial={{ opacity: 0 }}
+      initial={{ opacity: 1 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: isComplete ? 0.72 : 0.32, ease: [0.16, 1, 0.3, 1] }}
     >
       <motion.div
         className="clyra-boot-overlay__content"
-        initial={{ opacity: 0, y: 8, filter: "blur(5px)" }}
-        animate={state === "booting" ? { opacity: 0, y: 8, filter: "blur(5px)" } : { opacity: 1, y: 0, filter: "blur(0px)" }}
-        transition={{ duration: 0.62, ease: [0.16, 1, 0.3, 1] }}
+        initial={{ opacity: 1 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.48, ease: [0.16, 1, 0.3, 1] }}
       >
         <AnimatePresence initial={false}>
-          {(state === "progress" || isComplete) && (
-            <motion.div
-              className={cn("clyra-boot-progress", isComplete && "clyra-boot-progress--complete")}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+          <motion.div
+            className={cn("clyra-boot-progress", isComplete && "clyra-boot-progress--complete")}
+            initial={{ opacity: 1 }}
+            animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.34, ease: [0.16, 1, 0.3, 1] }}
             >
               <div className="clyra-boot-progress__track">
                 <motion.div
                   className="clyra-boot-progress__fill"
                   initial={false}
                   animate={{ scaleX: progress }}
-                  transition={{ duration: isComplete ? 0.42 : 2.8, ease: [0.22, 1, 0.36, 1] }}
+                  transition={{ duration: isComplete ? 0.7 : 0.95, ease: [0.22, 1, 0.36, 1] }}
                 />
               </div>
               {isComplete ? (
@@ -369,7 +369,6 @@ function BootIntroOverlay({
                 </TextLoop>
               )}
             </motion.div>
-          )}
         </AnimatePresence>
       </motion.div>
     </motion.div>
@@ -1395,6 +1394,16 @@ export default function App() {
     };
   }, [activeWorkspaceTab, isEmbeddedToolPreview]);
   const [isAppLauncherOpen, setIsAppLauncherOpen] = useState(false);
+  useLayoutEffect(() => {
+    if (isAppLauncherOpen) {
+      void getElectronDesktop()?.browser.setSurface({ visible: false });
+    }
+    window.dispatchEvent(
+      new CustomEvent("clyra:native-surface-occlusion", {
+        detail: { occluded: isAppLauncherOpen },
+      }),
+    );
+  }, [isAppLauncherOpen]);
   const [workspaceChromeEngaged, setWorkspaceChromeEngaged] = useState(isEmbeddedToolPreview);
   const m1WorkspaceFrameRef = useRef<HTMLIFrameElement>(null);
   const [m1WorkspacePath, setM1WorkspacePath] = useState("/");
@@ -1575,16 +1584,12 @@ export default function App() {
       // Put the heavier optional workspace work behind Clyra's own boot UI so
       // opening Vibe later feels immediate instead of starting a cold stack.
       const vibePreparation = prepareVibeForBoot();
-      await wait(140);
+      await wait(90);
       if (cancelled) return;
 
       setIntroState("progress");
-      setIntroProgress(0.08);
-      await wait(40);
-      if (cancelled) return;
-      setIntroProgress(0.9);
+      setIntroProgress(0);
 
-      const minimumVisibleMs = 2_650;
       // Core UI readiness stays authoritative. Warming the optional coding
       // environment may be slow on first launch, so it gets a bounded window
       // rather than making the primary Chat boot appear frozen indefinitely.
@@ -1593,14 +1598,30 @@ export default function App() {
         Promise.race([vibePreparation, wait(8_000)]),
         wait(420),
       ]);
-      await Promise.all([systemReady, wait(minimumVisibleMs)]);
+      const progressTimeline = (async () => {
+        const milestones = [
+          { delay: 420, value: 0.06 },
+          { delay: 680, value: 0.16 },
+          { delay: 760, value: 0.29 },
+          { delay: 820, value: 0.45 },
+          { delay: 880, value: 0.62 },
+          { delay: 900, value: 0.77 },
+          { delay: 820, value: 0.89 },
+        ];
+        for (const milestone of milestones) {
+          await wait(milestone.delay);
+          if (cancelled) return;
+          setIntroProgress(milestone.value);
+        }
+      })();
+      await Promise.all([systemReady, progressTimeline]);
       if (cancelled) return;
 
       setIntroProgress(1);
-      await wait(440);
+      await wait(760);
       if (cancelled) return;
       setIntroState("progress_complete");
-      await wait(720);
+      await wait(880);
       if (cancelled) return;
 
       setIntroState("complete");

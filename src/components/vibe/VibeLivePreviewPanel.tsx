@@ -36,6 +36,8 @@ import {
 } from "@/lib/buildVibePreviewSrcDoc";
 import { sandboxVibePath } from "@/lib/parseVibeAgentContent";
 import { cn } from "@/lib/utils";
+import { isElectronRuntime } from "@/lib/electron-runtime";
+import { ElectronWebContentsSurface } from "@/components/ElectronWebContentsSurface";
 import { motion, AnimatePresence } from "framer-motion";
 
 const STORAGE_KEY = "clyra_vibe_preview_files";
@@ -1207,21 +1209,38 @@ export function VibeLivePreviewPanel({
                   </button>
                 ) : null}
               </div>
-              <iframe
-                key="vibe-preview-stable"
-                title="Vibe live preview"
-                ref={iframeRef}
-                src={sessionUrl || undefined}
-                srcDoc={
-                  !sessionUrl && sessionStatus === "offline"
-                    ? previewSrcDoc
-                    : undefined
-                }
-                onLoad={() => setPreviewLoaded(true)}
-                className="relative z-20 block min-h-0 min-w-0 w-full flex-1 border-0 bg-white"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                referrerPolicy="no-referrer"
-              />
+              {isElectronRuntime() && sessionUrl ? (
+                <ElectronWebContentsSurface
+                  key="vibe-preview-native"
+                  source={sessionUrl}
+                  title="Vibe live preview"
+                  surfaceId="live-preview"
+                  kind="preview"
+                  className="relative z-20 block min-h-0 min-w-0 w-full flex-1"
+                  fallback={
+                    <iframe
+                      title="Vibe live preview"
+                      src={sessionUrl}
+                      onLoad={() => setPreviewLoaded(true)}
+                      className="h-full w-full border-0 bg-white"
+                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                      referrerPolicy="no-referrer"
+                    />
+                  }
+                />
+              ) : (
+                <iframe
+                  key="vibe-preview-stable"
+                  title="Vibe live preview"
+                  ref={iframeRef}
+                  src={sessionUrl || undefined}
+                  srcDoc={!sessionUrl && sessionStatus === "offline" ? previewSrcDoc : undefined}
+                  onLoad={() => setPreviewLoaded(true)}
+                  className="relative z-20 block min-h-0 min-w-0 w-full flex-1 border-0 bg-white"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                  referrerPolicy="no-referrer"
+                />
+              )}
 
               {agentCursor.visible ? (
                 <div

@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { promises as fs } from "node:fs";
-import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
+import { clyraDataPath } from "../runtime-paths";
 
 export type BrowserSearchEngine = "bing" | "google" | "duckduckgo";
 
@@ -243,7 +244,7 @@ type BrowserProfile = {
 };
 
 const VIEWPORT = { width: 1440, height: 900 };
-const PROFILE_ROOT = path.join(process.cwd(), ".clyra", "browser");
+const PROFILE_ROOT = clyraDataPath(".clyra", "browser");
 const PROFILE_PATH = path.join(PROFILE_ROOT, "profile.json");
 const AGENT_SESSION_PATH = path.join(PROFILE_ROOT, "agent-session.json");
 const USER_DATA_PATH = path.join(PROFILE_ROOT, "chromium-profile");
@@ -257,6 +258,10 @@ const MAX_OBSERVATION_CHARS = Number(process.env.CLYRA_BROWSER_MAX_OBSERVATION_C
 // Clyra surface.  Keeping this as a real page also gives the agent a useful,
 // immediately interactive starting point for browser tasks.
 const HOME_URL = "https://www.google.com/";
+const ELECTRON_CDP_URL = process.env.CLYRA_BROWSER_CDP_URL?.trim() || "";
+const ELECTRON_BROWSER_BRIDGE = process.env.CLYRA_ELECTRON_BROWSER_BRIDGE?.trim() || "";
+const ELECTRON_BROWSER_TOKEN = process.env.CLYRA_ELECTRON_BROWSER_TOKEN?.trim() || "";
+const USE_ELECTRON_BROWSER = Boolean(ELECTRON_CDP_URL && ELECTRON_BROWSER_BRIDGE && ELECTRON_BROWSER_TOKEN);
 
 const DEFAULT_SETTINGS: BrowserSettings = {
   defaultSearchEngine: "google",
@@ -272,6 +277,7 @@ const DEFAULT_SETTINGS: BrowserSettings = {
 };
 
 let context: BrowserContext | null = null;
+let connectedBrowser: Browser | null = null;
 let page: Page | null = null;
 let operationQueue = Promise.resolve();
 let frameBuffer: Buffer | null = null;
@@ -294,6 +300,95 @@ const pageLoading = new WeakMap<Page, boolean>();
 const pageObservation = new WeakMap<Page, StructuredObservation>();
 const wiredPages = new WeakSet<Page>();
 const pointerPositions = new WeakMap<Page, { x: number; y: number }>();
+let electronTabIds = new Set<string>();
+let electronActiveTabId = "";
+
+type ElectronBrowserBridgeState = {
+  activeTabId?: string;
+  tabs?: Array<{ id: string; url: string; title: string; active: boolean }>;
+};
+
+type ElectronBrowserBridgeObservation = {
+  page: StructuredObservation["page"];
+  viewport: StructuredObservation["viewport"];
+  headings: StructuredObservation["headings"];
+  elements: StructuredObservation["elements"];
+  visibleText: StructuredObservation["visibleText"];
+  mainText: StructuredObservation["mainText"];
+  structuredData: StructuredObservation["structuredData"];
+  promptInjectionSignals: StructuredObservation["promptInjectionSignals"];
+  tabs: StructuredObservation["tabs"];
+  diff: StructuredObservation["diff"];
+};
+
+async function electronBridgeRequest<T = unknown>(route: string, body?: unknown, method = body === undefined ? "GET" : "POST") {
+  if (!USE_ELECTRON_BROWSER) throw new Error("The native Chromium bridge is unavailable.");
+  const response = await fetch(`${ELECTRON_BROWSER_BRIDGE}${route}`, {
+    method,
+    headers: {
+      authorization: `Bearer ${ELECTRON_BROWSER_TOKEN}`,
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(12_000),
+  });
+  const payload = await response.json() as T & { ok?: boolean; error?: string };
+  if (!response.ok || payload.ok === false) throw new Error(payload.error || `Native Chromium bridge failed (${response.status}).`);
+  return payload;
+}
+
+async function refreshElectronTabState() {
+  if (!USE_ELECTRON_BROWSER) return null;
+  const payload = await electronBridgeRequest<{ ok: true; state: ElectronBrowserBridgeState }>("/state");
+  electronTabIds = new Set((payload.state.tabs || []).map((tab) => tab.id));
+  electronActiveTabId = payload.state.activeTabId || "";
+  return payload.state;
+}
+
+async function getElectronObservation() {
+  const payload = await electronBridgeRequest<{ ok: true; observation: ElectronBrowserBridgeObservation }>("/observe");
+  return payload.observation;
+}
+
+async function runElectronAction(action: BrowserAction, observation: StructuredObservation, source: "agent" | "user") {
+  return electronBridgeRequest<{ ok: true; state: ManagedBrowserState; observation: StructuredObservation }>("/action", { action, observation, source });
+}
+
+async function setElectronCursor(cursor?: BrowserCursorEvent) {
+  await electronBridgeRequest("/cursor", { cursor: cursor || null }).catch(() => undefined);
+}
+
+async function identifyElectronPage(candidate: Page) {
+  if (!USE_ELECTRON_BROWSER) return tabId(candidate);
+  const existing = pageIds.get(candidate);
+  if (existing && !existing.startsWith("tab-")) return existing;
+  const session = await context?.newCDPSession(candidate);
+  if (!session) return tabId(candidate);
+  try {
+    const target = await session.send("Target.getTargetInfo") as { targetInfo?: { targetId?: string } };
+    const targetId = target.targetInfo?.targetId;
+    if (targetId) pageIds.set(candidate, targetId);
+    return targetId || tabId(candidate);
+  } finally {
+    await session.detach().catch(() => undefined);
+  }
+}
+
+async function waitForElectronPage(targetId: string, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const candidate of context?.pages() || []) {
+      if (candidate.isClosed()) continue;
+      await identifyElectronPage(candidate).catch(() => undefined);
+      if (pageIds.get(candidate) === targetId) {
+        await wirePage(candidate);
+        return candidate;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 80));
+  }
+  throw new Error("The visible Chromium tab did not become available to Clyra's agent.");
+}
 
 function serializeOperation<T>(operation: () => Promise<T>) {
   const next = operationQueue.then(operation, operation);
@@ -404,6 +499,14 @@ function recordAgentEvent(event: BrowserAgentEvent) {
   if (typeof event.facts === "number") agentSession.factCount = event.facts;
   agentSession.recentEvents = [...agentSession.recentEvents.slice(-29), { ...event, state: undefined }];
   scheduleAgentSessionSave();
+  if (USE_ELECTRON_BROWSER) {
+    void electronBridgeRequest("/agent", {
+      status: event.phase,
+      paused: event.phase === "paused",
+      manualControl,
+      message: event.message,
+    }).catch(() => undefined);
+  }
 }
 
 function finishAgentSession(result: { message: string; steps: string[]; facts: BrowserEvidence[] }) {
@@ -454,7 +557,12 @@ function tabId(activePage: Page) {
 }
 
 function activePages() {
-  return (context?.pages() || []).filter((candidate) => !candidate.isClosed());
+  const pages = (context?.pages() || []).filter((candidate) => !candidate.isClosed());
+  if (!USE_ELECTRON_BROWSER) return pages;
+  return pages.filter((candidate) => {
+    const id = pageIds.get(candidate);
+    return Boolean(id && electronTabIds.has(id));
+  });
 }
 
 function pageByReference(tabIdValue?: string, tabIndexValue?: number) {
@@ -537,6 +645,7 @@ async function recordHistory(activePage: Page, query?: string) {
 }
 
 async function wirePage(activePage: Page) {
+  await identifyElectronPage(activePage).catch(() => undefined);
   if (wiredPages.has(activePage)) return;
   wiredPages.add(activePage);
   // tsx/esbuild can preserve helper calls inside serialized page callbacks.
@@ -544,7 +653,8 @@ async function wirePage(activePage: Page) {
   // Do not block browser startup on background/restored tabs that are still
   // loading. This helper is best-effort and must never hold the whole browser
   // workspace behind one slow third-party page.
-  void activePage.evaluate("globalThis.__name ||= ((target) => target)").catch(() => undefined);
+  const installNameHelper = () => activePage.evaluate("globalThis.__name ||= ((target) => target)").catch(() => undefined);
+  void installNameHelper();
   tabId(activePage);
   pageZoom.set(activePage, 1);
   activePage.setDefaultTimeout(10_000);
@@ -553,7 +663,10 @@ async function wirePage(activePage: Page) {
     pageLoading.set(activePage, false);
     void recordHistory(activePage);
   });
-  activePage.on("domcontentloaded", () => pageLoading.set(activePage, false));
+  activePage.on("domcontentloaded", () => {
+    pageLoading.set(activePage, false);
+    void installNameHelper();
+  });
   activePage.on("request", (request) => {
     if (request.isNavigationRequest() && request.frame() === activePage.mainFrame()) pageLoading.set(activePage, true);
   });
@@ -599,7 +712,34 @@ async function trackDownload(download: import("playwright").Download, activePage
 }
 
 async function ensurePage() {
-  if (page && !page.isClosed()) return page;
+  if (!USE_ELECTRON_BROWSER && page && !page.isClosed()) return page;
+  if (USE_ELECTRON_BROWSER) {
+    if (!connectedBrowser) {
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 40 && !connectedBrowser; attempt += 1) {
+        try {
+          connectedBrowser = await chromium.connectOverCDP(ELECTRON_CDP_URL, { timeout: 1_500 });
+        } catch (error) {
+          lastError = error;
+          await new Promise((resolve) => setTimeout(resolve, 125));
+        }
+      }
+      if (!connectedBrowser) throw lastError instanceof Error ? lastError : new Error("Could not connect to Clyra's visible Chromium browser.");
+      context = connectedBrowser.contexts()[0] || null;
+      if (!context) throw new Error("Clyra's visible Chromium browser has no active session.");
+      await context.addInitScript({ content: "globalThis.__name ||= ((target) => target);" });
+      context.on("page", (created) => void wirePage(created));
+    }
+
+    await refreshElectronTabState();
+    for (const candidate of context.pages()) await wirePage(candidate);
+    page = activePages().find((candidate) => pageIds.get(candidate) === electronActiveTabId) || null;
+    if (!page && electronActiveTabId) page = await waitForElectronPage(electronActiveTabId);
+    if (!page) throw new Error("Clyra's visible Chromium browser has no active tab.");
+    await page.evaluate("globalThis.__name ||= ((target) => target)").catch(() => undefined);
+    return page;
+  }
+
   const currentProfile = await loadProfile();
   await fs.mkdir(USER_DATA_PATH, { recursive: true });
   await fs.mkdir(DOWNLOADS_PATH, { recursive: true });
@@ -857,7 +997,10 @@ async function captureState(activePage: Page, options: { screenshot?: boolean; f
   // Startup must be responsive even when a restored third-party tab is still
   // booting. A normal action path still performs the full observation.
   const observation = await inspectPage(activePage).catch(() => null);
-  if (options.screenshot !== false) await captureFrame(activePage);
+  // Electron renders the visible page directly with Chromium. Capturing a
+  // JPEG after every action adds latency and can stall on busy pages; retain
+  // screenshots only for the explicit visual-fallback endpoint.
+  if (options.screenshot !== false && !USE_ELECTRON_BROWSER) await captureFrame(activePage);
   const currentProfile = await loadProfile();
   const flags = await navigationFlags(activePage);
   const states = observation?.tabs || await tabStates();
@@ -885,6 +1028,9 @@ async function captureState(activePage: Page, options: { screenshot?: boolean; f
 function targetFromAction(target: number | ElementTarget, observation: StructuredObservation) {
   if (typeof target === "number") return observation.elements.find((element) => element.index === target);
   if (target.elementId) return observation.elements.find((element) => element.id === target.elementId);
+  if (target.css || target.coordinates) return undefined;
+  const hasSemanticTarget = Boolean(target.role || target.name || target.label || target.placeholder || target.text || target.testId);
+  if (!hasSemanticTarget) return undefined;
   return observation.elements.find((element) =>
     (!target.role || element.role === target.role) &&
     (!target.name || element.name.toLowerCase().includes(target.name.toLowerCase())) &&
@@ -1165,6 +1311,15 @@ async function executeAction(activePage: Page, action: BrowserAction, observatio
       break;
     case "open_tab": {
       if (activePages().length >= MAX_OPEN_TABS) throw new Error(`The browser is limited to ${MAX_OPEN_TABS} open tabs on this profile`);
+      if (USE_ELECTRON_BROWSER) {
+        const result = await electronBridgeRequest<{ ok: true; tabId: string }>("/tabs", {
+          url: action.url ? normalizeBrowserInput(action.url, currentProfile.settings.defaultSearchEngine) : HOME_URL,
+          activate: true,
+        });
+        await refreshElectronTabState();
+        page = await waitForElectronPage(result.tabId);
+        break;
+      }
       const nextPage = await context!.newPage();
       await wirePage(nextPage);
       page = nextPage;
@@ -1179,6 +1334,10 @@ async function executeAction(activePage: Page, action: BrowserAction, observatio
     case "switch_tab": {
       const nextPage = pageByReference(action.tabId, action.tabIndex);
       if (!nextPage) throw new Error("That tab no longer exists");
+      if (USE_ELECTRON_BROWSER) {
+        await electronBridgeRequest("/tabs/activate", { id: pageIds.get(nextPage) });
+        await refreshElectronTabState();
+      }
       page = nextPage;
       await page.bringToFront();
       break;
@@ -1187,6 +1346,12 @@ async function executeAction(activePage: Page, action: BrowserAction, observatio
       const closing = pageByReference(action.tabId, action.tabIndex);
       if (!closing) throw new Error("That tab no longer exists");
       if (activePages().length === 1) throw new Error("The last browser tab cannot be closed");
+      if (USE_ELECTRON_BROWSER) {
+        await electronBridgeRequest("/tabs/close", { id: pageIds.get(closing) });
+        const state = await refreshElectronTabState();
+        page = state?.activeTabId ? await waitForElectronPage(state.activeTabId) : null;
+        break;
+      }
       currentProfile.recentlyClosed.unshift({ id: crypto.randomUUID(), url: closing.url(), title: await closing.title().catch(() => closing.url()), closedAt: new Date().toISOString() });
       currentProfile.recentlyClosed = currentProfile.recentlyClosed.slice(0, 20);
       await closing.close();
@@ -1197,6 +1362,13 @@ async function executeAction(activePage: Page, action: BrowserAction, observatio
     case "duplicate_tab": {
       const sourcePage = pageByReference(action.tabId, action.tabIndex) || activePage;
       if (activePages().length >= MAX_OPEN_TABS) throw new Error(`The browser is limited to ${MAX_OPEN_TABS} open tabs`);
+      if (USE_ELECTRON_BROWSER) {
+        const result = await electronBridgeRequest<{ ok: true; state: ElectronBrowserBridgeState }>("/tabs/duplicate", { id: pageIds.get(sourcePage) });
+        electronTabIds = new Set((result.state.tabs || []).map((tab) => tab.id));
+        electronActiveTabId = result.state.activeTabId || "";
+        page = await waitForElectronPage(electronActiveTabId);
+        break;
+      }
       const duplicate = await context!.newPage();
       await wirePage(duplicate);
       await duplicate.goto(sourcePage.url(), { waitUntil: "domcontentloaded" });
@@ -1204,6 +1376,13 @@ async function executeAction(activePage: Page, action: BrowserAction, observatio
       break;
     }
     case "restore_closed_tab": {
+      if (USE_ELECTRON_BROWSER) {
+        const result = await electronBridgeRequest<{ ok: true; state: ElectronBrowserBridgeState }>("/tabs/restore", {});
+        electronTabIds = new Set((result.state.tabs || []).map((tab) => tab.id));
+        electronActiveTabId = result.state.activeTabId || "";
+        page = await waitForElectronPage(electronActiveTabId);
+        break;
+      }
       const closed = currentProfile.recentlyClosed.shift();
       if (!closed) throw new Error("There is no recently closed tab to restore");
       const restored = await context!.newPage();
@@ -1250,7 +1429,9 @@ async function verifyAction(action: BrowserAction, before: StructuredObservation
   }
   if (action.type === "type" && action.target != null) {
     const beforeElement = targetFromAction(action.target, before);
-    const afterElement = beforeElement ? after.elements.find((element) => element.id === beforeElement.id) : undefined;
+    const afterElement = beforeElement
+      ? after.elements.find((element) => element.id === beforeElement.id)
+      : after.elements.find((element) => element.value.includes(action.text));
     const ok = Boolean(afterElement?.value.includes(action.text) || (action.submit && changed));
     return { ok, summary: ok ? "The field contains the requested text" : "The field value could not be confirmed", changed };
   }
@@ -1581,10 +1762,17 @@ export function getManagedBrowserState() {
   // The workspace fetches its preview image separately. Skipping a full JPEG
   // capture here makes initial browser open and every idle state refresh much
   // lighter, especially with several restored tabs.
+  if (USE_ELECTRON_BROWSER) {
+    return serializeOperation(async () => {
+      const payload = await electronBridgeRequest<{ ok: true; state: ManagedBrowserState }>("/state");
+      return payload.state;
+    });
+  }
   return serializeOperation(async () => captureState(await ensurePage(), { screenshot: false, fast: true }));
 }
 
 export function getManagedBrowserObservation() {
+  if (USE_ELECTRON_BROWSER) return serializeOperation(getElectronObservation);
   return serializeOperation(async () => inspectPage(await ensurePage()));
 }
 
@@ -1597,8 +1785,12 @@ export function getManagedBrowserFrame(fresh = false) {
 }
 
 export function resizeManagedBrowserViewport(width: number, height: number) {
+  if (USE_ELECTRON_BROWSER) return getManagedBrowserState();
   return serializeOperation(async () => {
     const activePage = await ensurePage();
+    if (USE_ELECTRON_BROWSER) {
+      return captureState(activePage, { screenshot: false, fast: true });
+    }
     const next = {
       width: Math.max(720, Math.min(1_800, Math.round(width))),
       height: Math.max(520, Math.min(1_300, Math.round(height))),
@@ -1613,6 +1805,15 @@ export function resizeManagedBrowserViewport(width: number, height: number) {
 }
 
 export function navigateManagedBrowser(input: string) {
+  if (USE_ELECTRON_BROWSER) {
+    return serializeOperation(async () => {
+      const before = await getElectronObservation();
+      const action: BrowserAction = { type: "navigate", url: input };
+      validateBrowserAction(action, before, "user");
+      const result = await runElectronAction(action, before, "user");
+      return result.state;
+    });
+  }
   return serializeOperation(async () => {
     const activePage = await ensurePage();
     const observation = await inspectPage(activePage);
@@ -1624,6 +1825,15 @@ export function navigateManagedBrowser(input: string) {
 }
 
 export function actOnManagedBrowser(action: BrowserAction) {
+  if (USE_ELECTRON_BROWSER) {
+    return serializeOperation(async () => {
+      const before = await getElectronObservation();
+      validateBrowserAction(action, before, "user");
+      const result = await runElectronAction(action, before, "user");
+      const verification = await verifyAction(action, before, result.observation);
+      return { state: result.state, verification, cursor: cursorForAction(action, before) };
+    });
+  }
   return serializeOperation(async () => {
     const activePage = await ensurePage();
     const before = await inspectPage(activePage);
@@ -1763,10 +1973,145 @@ export function setManagedBrowserAgentControl(command: "pause" | "resume" | "tak
     recordAgentEvent({ phase: "observing", message: "Control returned to Clyra; checking the page" });
     wakeAgent();
   }
-  return { status: agentStatus, paused: agentPaused, manualControl };
+  const state = { status: agentStatus, paused: agentPaused, manualControl };
+  if (USE_ELECTRON_BROWSER) void electronBridgeRequest("/agent", state).catch(() => undefined);
+  return state;
+}
+
+async function runElectronBrowserAgent(task: string, apiKey: string, options: { onEvent?: (event: BrowserAgentEvent) => void; signal?: AbortSignal } = {}) {
+  activeTaskAbort?.abort();
+  await loadAgentSession();
+  const taskAbort = new AbortController();
+  activeTaskAbort = taskAbort;
+  options.signal?.addEventListener("abort", () => taskAbort.abort(), { once: true });
+  const now = new Date().toISOString();
+  agentSession = { id: crypto.randomUUID(), task, status: "planning", message: "Building a task plan", startedAt: now, updatedAt: now, completedCriteria: 0, totalCriteria: 0, factCount: 0, recentEvents: [] };
+  scheduleAgentSessionSave();
+  const emit = (event: BrowserAgentEvent) => { recordAgentEvent(event); options.onEvent?.(event); };
+  activeTask = task;
+  agentPaused = false;
+  manualControl = false;
+  const history: string[] = [];
+  const facts: BrowserEvidence[] = [];
+  const failures: string[] = [];
+  const completedCriteria = new Set<number>();
+  const attempted = new Map<string, number>();
+  const requiresVisibleProgress = /\b(?:search|find|go to|navigate|open|click|fill|submit|compare|research)\b/i.test(task);
+  let verifiedActions = 0;
+  let finalMessage = "Task complete.";
+  let plan: TaskPlan | null = null;
+  try {
+    agentStatus = "planning";
+    emit({ phase: "planning", message: "Building a task plan" });
+    plan = await buildTaskPlan(task, apiKey, taskAbort.signal);
+    emit({ phase: "planning", message: plan.steps[0]?.label || "Plan ready", plan, completedCriteria: 0, totalCriteria: plan.successCriteria.length });
+    for (let step = 1; step <= MAX_AGENT_STEPS; step += 1) {
+      await waitWhilePaused(taskAbort.signal, emit);
+      if (taskAbort.signal.aborted) throw new DOMException("Task cancelled", "AbortError");
+      const observation = await serializeOperation(getElectronObservation);
+      agentStatus = "observing";
+      emit({ phase: "observing", message: `Reading ${observation.page.title || "the current page"}`, step, completedCriteria: completedCriteria.size, totalCriteria: plan.successCriteria.length, facts: facts.length });
+      const decision = await decideNextActions(task, apiKey, history, plan, facts, failures, observation, taskAbort.signal);
+      finalMessage = decision.message?.trim() || decision.reasoningSummary?.trim() || finalMessage;
+      for (const rawFact of decision.facts || []) {
+        const fact = factFromDecision(rawFact, observation);
+        if (fact.claim && !facts.some((existing) => existing.claim === fact.claim && existing.sourceUrl === fact.sourceUrl)) facts.push(fact);
+      }
+      for (const index of decision.completedCriteria || []) if (Number.isInteger(index) && index >= 0 && index < plan.successCriteria.length) completedCriteria.add(index);
+      if (decision.done || decision.actions?.some((item) => normalizeDecisionAction(item)?.type === "done")) {
+        const complete = completedCriteria.size >= plan.successCriteria.length;
+        const evidence = !isResearchTask(task) || new Set(facts.map((fact) => fact.sourceUrl)).size >= researchRequirements(task).minimumSources;
+        if (complete && evidence && (!requiresVisibleProgress || verifiedActions > 0)) {
+          agentStatus = "completed";
+          emit({ phase: "completed", message: finalMessage, step, plan, completedCriteria: completedCriteria.size, totalCriteria: plan.successCriteria.length, facts: facts.length });
+          finishAgentSession({ message: finalMessage, steps: history, facts });
+          return { message: finalMessage, steps: history, plan, facts, state: await getManagedBrowserState() };
+        }
+        const missing = requiresVisibleProgress && verifiedActions === 0
+          ? "The plan has not performed a visible browser action yet."
+          : "The model proposed completion before all visible criteria had evidence.";
+        failures.push(missing);
+        emit({ phase: "verifying", message: missing, step, completedCriteria: completedCriteria.size, totalCriteria: plan.successCriteria.length });
+        continue;
+      }
+      const actions = (decision.actions || []).map(normalizeDecisionAction).filter((action): action is BrowserAction => Boolean(action)).slice(0, 2);
+      if (!actions.length) {
+        failures.push("Navigator returned no executable action.");
+        if (failures.filter((value) => value === "Navigator returned no executable action.").length >= 4) break;
+        continue;
+      }
+      let progressed = false;
+      for (const candidate of actions) {
+        await waitWhilePaused(taskAbort.signal, emit);
+        if (candidate.type === "ask_user") {
+          agentPaused = true;
+          agentStatus = "waiting_for_user";
+          emit({ phase: "waiting_for_user", message: candidate.question, step });
+          return { message: `${candidate.question}\n\n${candidate.reason}`, steps: history, plan, facts, waitingForUser: true, state: await getManagedBrowserState() };
+        }
+        const before = await serializeOperation(getElectronObservation);
+        const signature = `${before.page.fingerprint}|${JSON.stringify(candidate)}`;
+        if ((attempted.get(signature) || 0) >= 2) continue;
+        try {
+          const action = validateBrowserAction(candidate, before, "agent");
+          const cursor = cursorForAction(action, before);
+          await setElectronCursor(cursor);
+          agentStatus = "executing";
+          emit({ phase: "executing", message: decision.reasoningSummary || `Running ${action.type}`, step, action, cursor, completedCriteria: completedCriteria.size, totalCriteria: plan.successCriteria.length, facts: facts.length });
+          const result = await serializeOperation(() => runElectronAction(action, before, "agent"));
+          const verification = await verifyAction(action, before, result.observation);
+          history.push(`Step ${step}: ${JSON.stringify(action)} -> ${verification.summary}${verification.ok ? " [verified]" : " [not verified]"}`);
+          if (!verification.ok) {
+            attempted.set(signature, (attempted.get(signature) || 0) + 1);
+            failures.push(`${JSON.stringify(action)} was not verified: ${verification.summary}`);
+            emit({ phase: "recovering", message: `${verification.summary}; choosing another route`, step, action, cursor });
+            break;
+          }
+          progressed = true;
+          if (!["read_page", "inspect_element", "extract", "find_text", "wait"].includes(action.type)) verifiedActions += 1;
+          agentStatus = "verifying";
+          emit({ phase: "verifying", message: verification.summary, step, action, cursor, state: result.state, completedCriteria: completedCriteria.size, totalCriteria: plan.successCriteria.length, facts: facts.length });
+        } catch (error) {
+          attempted.set(signature, (attempted.get(signature) || 0) + 1);
+          const message = error instanceof Error ? error.message : String(error);
+          failures.push(`${JSON.stringify(candidate)} failed: ${message}`);
+          history.push(`Step ${step}: ${JSON.stringify(candidate)} failed: ${message}`);
+          emit({ phase: "recovering", message: `${publicActionError(message)}; choosing another route`, step, action: candidate });
+          break;
+        }
+      }
+      if (!progressed && failures.length >= 12) break;
+    }
+    finalMessage = `${finalMessage}\n\nI reached the bounded action limit without claiming the task was complete.`;
+    agentStatus = "failed";
+    emit({ phase: "failed", message: finalMessage, plan: plan || undefined, completedCriteria: completedCriteria.size, totalCriteria: plan?.successCriteria.length || 0, facts: facts.length });
+    finishAgentSession({ message: finalMessage, steps: history, facts });
+    return { message: finalMessage, steps: history, plan: plan || { goal: task, steps: [], successCriteria: [] }, facts, state: await getManagedBrowserState() };
+  } catch (error) {
+    if ((error instanceof DOMException && error.name === "AbortError") || taskAbort.signal.aborted) {
+      agentStatus = "cancelled";
+      emit({ phase: "cancelled", message: "Browser task cancelled" });
+      finishAgentSession({ message: "Browser task cancelled.", steps: history, facts });
+      return { message: "Browser task cancelled.", steps: history, facts, plan: plan || { goal: task, steps: [], successCriteria: [] }, state: await getManagedBrowserState() };
+    }
+    agentStatus = "failed";
+    const message = error instanceof Error ? error.message : String(error);
+    emit({ phase: "failed", message });
+    finishAgentSession({ message, steps: history, facts });
+    throw error;
+  } finally {
+    if (activeTaskAbort === taskAbort) activeTaskAbort = null;
+    activeTask = "";
+    agentPaused = false;
+    manualControl = false;
+    wakeAgent();
+    await setElectronCursor(undefined);
+    if (["completed", "failed", "cancelled"].includes(agentStatus)) setTimeout(() => { if (!activeTask) agentStatus = "idle"; }, 1_000);
+  }
 }
 
 export async function runManagedBrowserAgent(task: string, apiKey: string, options: { onEvent?: (event: BrowserAgentEvent) => void; signal?: AbortSignal } = {}) {
+  if (USE_ELECTRON_BROWSER) return runElectronBrowserAgent(task, apiKey, options);
   activeTaskAbort?.abort();
   await loadAgentSession();
   const taskAbort = new AbortController();
@@ -2094,9 +2439,12 @@ export async function closeManagedBrowser() {
   if (profileSaveTimer) clearTimeout(profileSaveTimer);
   await updateLastTabs().catch(() => undefined);
   await saveProfile().catch(() => undefined);
-  await context?.close().catch(() => undefined);
+  if (!USE_ELECTRON_BROWSER) await context?.close().catch(() => undefined);
   page = null;
   context = null;
+  connectedBrowser = null;
+  electronTabIds = new Set();
+  electronActiveTabId = "";
   frameBuffer = null;
   profile = null;
   agentStatus = "idle";
