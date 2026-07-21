@@ -26,3 +26,4 @@ src-tauri/binaries/*
 !src-tauri/binaries/.gitkeep
 desktop-binaries/
 release-electron/
+vendor-src/
