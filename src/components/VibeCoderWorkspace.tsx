@@ -862,15 +862,10 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
       // "refused to connect" workspace immediately after Send.
       setSkipEnterAnimation(false);
       setWelcomeView("home");
-      setState((prev) => ({
-        ...prev,
-        stage: "task-created",
-        prompt: opts.prompt || prev.prompt || "",
-        planMode: !!opts.planMode,
-        projectId: opts.projectId || prev.projectId,
-        startedAt: Date.now(),
-        error: null,
-      }));
+      // Keep the established welcome surface in place while M1 creates a real
+      // conversation. Switching the outer workspace before this returns
+      // produced a visible "Preparing" screen (and, on slow launches, a blank
+      // panel) between Send and the actual OpenHands canvas.
       if (opts.projectName) setActiveProjectName(opts.projectName);
 
       try {
@@ -920,6 +915,10 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
           projectId: String(data.projectId || prev.projectId),
           stage: "generating-file",
           taskId: conversationId,
+          prompt: opts.prompt || prev.prompt || "",
+          planMode: !!opts.planMode,
+          startedAt: Date.now(),
+          error: null,
         }));
         setActiveProjectName(
           opts.projectName ||
@@ -1338,6 +1337,23 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
               </button>
             </div>
           </div>
+        ) : m1ConversationUrl ? (
+          <div className="h-full min-h-0 w-full overflow-hidden bg-white">
+            <ElectronWebContentsSurface
+              source={m1ConversationUrl}
+              title="Vibe Coder M1"
+              surfaceId={`m1-conversation-${state.projectId}`}
+              kind="vibe-runtime"
+              fallback={
+                <iframe
+                  title="Vibe Coder M1"
+                  src={m1ConversationUrl}
+                  className="h-full w-full border-0 bg-white"
+                  allow="clipboard-read; clipboard-write; fullscreen"
+                />
+              }
+            />
+          </div>
         ) : m1Runtime ? (
           <M1RuntimePanel
             projectId={m1Runtime.projectId}
@@ -1412,7 +1428,7 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
                   mode={mode}
                   onModeChange={setMode}
                   onAttach={() => fileRef?.current?.click()}
-                  disabled={!promptInput.trim()}
+                  disabled={!promptInput.trim() || m1Launching}
                   isGenerating={false}
                 />
               </motion.div>

@@ -1182,7 +1182,9 @@ async function runAgentGoogleSearch(
   await searchField.press("ControlOrMeta+A");
   await searchField.press("Backspace");
   emit({ phase: "executing", message: `Typing ${query}`, step, action: { type: "type", target: { css: 'textarea[name="q"], input[name="q"]' }, text: query }, cursor: fieldCursor });
-  await searchField.pressSequentially(query, { delay: Math.max(34, Math.min(58, 48 - Math.floor(query.length / 14))) });
+  // Fast enough to feel intentional, slow enough that the visible native
+  // Chromium surface and cursor remain legible as Clyra works.
+  await searchField.pressSequentially(query, { delay: Math.max(18, Math.min(32, 29 - Math.floor(query.length / 22))) });
   await activePage.waitForTimeout(180);
   emit({ phase: "executing", message: "Searching Google", step, action: { type: "press", key: "Enter" }, cursor: fieldCursor });
   await searchField.press("Enter");
@@ -1286,7 +1288,28 @@ async function executeAction(activePage: Page, action: BrowserAction, observatio
     }
     case "press": case "press_key": await activePage.keyboard.press(action.key); break;
     case "key_combination": await activePage.keyboard.press(action.keys.join("+")); break;
-    case "select_option": if (target.locator) await target.locator.selectOption(action.value ? { value: action.value } : { label: action.label || "" }); break;
+    case "select_option": {
+      if (!target.locator) break;
+      const requested = String(action.value || action.label || "").trim();
+      if (!requested) throw new Error("A select option value or label is required");
+      const selected = await target.locator.evaluate((node, raw) => {
+        if (!(node instanceof HTMLSelectElement)) return false;
+        const comparable = (value: string) => value.toLowerCase().replace(/[^a-z0-9.]+/g, "");
+        const needle = comparable(String(raw));
+        const option = [...node.options].find((candidate) => (
+          comparable(candidate.value) === needle
+          || comparable(candidate.label) === needle
+          || comparable(candidate.textContent || "") === needle
+        ));
+        if (!option) return false;
+        node.value = option.value;
+        node.dispatchEvent(new Event("input", { bubbles: true }));
+        node.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }, requested);
+      if (!selected) throw new Error(`The option ${JSON.stringify(requested)} was not found`);
+      break;
+    }
     case "check": if (target.locator) await target.locator.check(); break;
     case "uncheck": if (target.locator) await target.locator.uncheck(); break;
     case "drag": {
@@ -1568,9 +1591,12 @@ async function requestJson(apiKey: string, system: string, user: string, signal?
 }
 
 async function buildTaskPlan(task: string, apiKey: string, signal: AbortSignal): Promise<TaskPlan> {
+  const localPageInstruction = taskExplicitlyTargetsLocalPage(task)
+    ? "This is a bounded local-page workflow. Stay on its current origin and require only the evidence the user explicitly requested. Do not invent open-web research or detail-page requirements."
+    : "For shopping, listings, comparisons, travel, or product research, explicitly require opening and inspecting the requested number of individual detail pages, recording each price/specification/condition constraint, rejecting invalid candidates, and revisiting the finalists. Search-result snippets alone are not evidence.";
   const raw = await requestJson(apiKey, `You are the planner for a real local browser agent. Return strict JSON only:
 {"goal":"concise goal","steps":["goal-oriented step"],"successCriteria":["measurable evidence criterion"]}
-Create 3-8 high-level steps, not clicks. For shopping, listings, comparisons, travel, or product research, explicitly require opening and inspecting the requested number of individual detail pages, recording each price/specification/condition constraint, rejecting invalid candidates, and revisiting the finalists. Search-result snippets alone are not evidence. Require source URLs and enough comparison evidence for research. Navigating to one URL is never completion. Do not add purchases, sign-ins, messages, uploads, or destructive actions.`, task, signal);
+Create 3-8 high-level steps, not clicks. ${localPageInstruction} Require source URLs and enough comparison evidence for genuine open-web research. Navigating to one URL is never completion. Do not add purchases, sign-ins, messages, uploads, or destructive actions.`, task, signal);
   try {
     const parsed = JSON.parse(raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1] || raw) as { goal?: unknown; steps?: unknown; successCriteria?: unknown };
     const stepLabels = Array.isArray(parsed.steps) && parsed.steps.length ? parsed.steps.map(String).slice(0, 8) : ["Inspect the current page", "Complete the requested task", "Verify the outcome"];
@@ -1612,7 +1638,10 @@ ${elementList || "None"}`;
 
 async function decideNextActions(task: string, apiKey: string, history: string[], plan: TaskPlan, facts: BrowserEvidence[], failures: string[], observation: StructuredObservation, signal: AbortSignal) {
   const research = researchRequirements(task);
-  const researchBlock = isResearchTask(task)
+  const localPageTask = taskExplicitlyTargetsLocalPage(task);
+  const researchBlock = localPageTask
+    ? "LOCAL PAGE SCOPE (mandatory): Complete the requested controls and read the requested result on this local origin. Do not add detail-page or multi-source requirements that the user did not request. Do not leave the current local origin."
+    : isResearchTask(task)
     ? `RESEARCH PATIENCE (mandatory): This is a research/comparison task. Do not finish early. Require at least ${research.minimumSources} distinct sourced claims and ${research.minimumDetailPages} opened item/detail pages with live-page evidence before done=true. Keep iterating: open results → inspect details → scroll for more → open more candidates → extract/compare until success criteria are met.`
     : `TASK COMPLETION: Finish the user's full multi-step objective. Search + 1–2 clicks is almost never enough; keep driving the browser through the remaining steps until every success criterion has evidence.`;
 
@@ -1681,7 +1710,7 @@ function localTaskOrigin(url: string) {
  * local page or app.
  */
 function taskExplicitlyTargetsLocalPage(task: string) {
-  return /\b(?:localhost|127\.0\.0\.1|local(?:host)?\s+(?:page|app|site|project)|this\s+local\s+(?:page|app|site|project))\b/i.test(task);
+  return /\b(?:localhost|127\.0\.0\.1|local(?:host)?\s+(?:page|app|site|project|catalogue|catalog|workspace)|this\s+local\s+(?:page|app|site|project|catalogue|catalog|workspace))\b/i.test(task);
 }
 
 function actionLeavesLocalTaskScope(
@@ -1847,6 +1876,12 @@ export function actOnManagedBrowser(action: BrowserAction) {
 }
 
 export async function updateManagedBrowserSettings(patch: Partial<BrowserSettings>) {
+  if (USE_ELECTRON_BROWSER) {
+    return serializeOperation(async () => {
+      const payload = await electronBridgeRequest<{ ok: true; state: ManagedBrowserState }>("/settings", { patch });
+      return payload.state;
+    });
+  }
   const currentProfile = await loadProfile();
   currentProfile.settings = { ...currentProfile.settings, ...patch };
   scheduleProfileSave();
@@ -1854,6 +1889,12 @@ export async function updateManagedBrowserSettings(patch: Partial<BrowserSetting
 }
 
 export async function addManagedBrowserBookmark(input: { url?: string; title?: string; folder?: string } = {}) {
+  if (USE_ELECTRON_BROWSER) {
+    return serializeOperation(async () => {
+      const payload = await electronBridgeRequest<{ ok: true; state: ManagedBrowserState }>("/bookmarks", input);
+      return payload.state;
+    });
+  }
   return serializeOperation(async () => {
     const activePage = await ensurePage();
     const currentProfile = await loadProfile();
@@ -1868,6 +1909,12 @@ export async function addManagedBrowserBookmark(input: { url?: string; title?: s
 }
 
 export async function removeManagedBrowserBookmark(id: string) {
+  if (USE_ELECTRON_BROWSER) {
+    return serializeOperation(async () => {
+      const payload = await electronBridgeRequest<{ ok: true; state: ManagedBrowserState }>("/bookmarks/remove", { id });
+      return payload.state;
+    });
+  }
   return serializeOperation(async () => {
     const currentProfile = await loadProfile();
     currentProfile.bookmarks = currentProfile.bookmarks.filter((bookmark) => bookmark.id !== id);
@@ -1877,6 +1924,12 @@ export async function removeManagedBrowserBookmark(id: string) {
 }
 
 export async function clearManagedBrowserHistory(ids?: string[]) {
+  if (USE_ELECTRON_BROWSER) {
+    return serializeOperation(async () => {
+      const payload = await electronBridgeRequest<{ ok: true; state: ManagedBrowserState }>("/history/clear", { ids });
+      return payload.state;
+    });
+  }
   return serializeOperation(async () => {
     const currentProfile = await loadProfile();
     currentProfile.history = ids?.length ? currentProfile.history.filter((entry) => !ids.includes(entry.id)) : [];
@@ -1926,6 +1979,12 @@ export async function findInPage(activePage: Page, text: string) {
 }
 
 export function findManagedBrowserText(text: string) {
+  if (USE_ELECTRON_BROWSER) {
+    return serializeOperation(async () => {
+      const payload = await electronBridgeRequest<{ ok: true; result: { total: number; current: number }; state: ManagedBrowserState }>("/find", { text });
+      return { result: payload.result, state: payload.state };
+    });
+  }
   return serializeOperation(async () => {
     const activePage = await ensurePage();
     const result = await findInPage(activePage, text);
@@ -1935,6 +1994,12 @@ export function findManagedBrowserText(text: string) {
 }
 
 export async function zoomManagedBrowser(delta: number | "reset") {
+  if (USE_ELECTRON_BROWSER) {
+    return serializeOperation(async () => {
+      const payload = await electronBridgeRequest<{ ok: true; state: ManagedBrowserState }>("/zoom", { delta });
+      return payload.state;
+    });
+  }
   return serializeOperation(async () => {
     const activePage = await ensurePage();
     const current = pageZoom.get(activePage) || 1;
@@ -1996,6 +2061,7 @@ async function runElectronBrowserAgent(task: string, apiKey: string, options: { 
   const failures: string[] = [];
   const completedCriteria = new Set<number>();
   const attempted = new Map<string, number>();
+  const localPageTask = taskExplicitlyTargetsLocalPage(task);
   const requiresVisibleProgress = /\b(?:search|find|go to|navigate|open|click|fill|submit|compare|research)\b/i.test(task);
   // A summary is a real browser task, but its evidence is the page observation
   // itself. Requiring an unrelated click before it may finish led the native
@@ -2044,7 +2110,7 @@ async function runElectronBrowserAgent(task: string, apiKey: string, options: { 
       }
       if (decision.done || decision.actions?.some((item) => normalizeDecisionAction(item)?.type === "done")) {
         const complete = completedCriteria.size >= plan.successCriteria.length;
-        const evidence = !isResearchTask(task) || new Set(facts.map((fact) => fact.sourceUrl)).size >= researchRequirements(task).minimumSources;
+        const evidence = localPageTask || !isResearchTask(task) || new Set(facts.map((fact) => fact.sourceUrl)).size >= researchRequirements(task).minimumSources;
         if (complete && evidence && (!requiresVisibleProgress || verifiedActions > 0)) {
           agentStatus = "completed";
           emit({ phase: "completed", message: finalMessage, step, plan, completedCriteria: completedCriteria.size, totalCriteria: plan.successCriteria.length, facts: facts.length });
@@ -2170,13 +2236,16 @@ export async function runManagedBrowserAgent(task: string, apiKey: string, optio
   const passiveActionCounts = new Map<string, number>();
   const visitedUrls = new Set<string>();
   const visitedDetailUrls = new Set<string>();
-  const evidenceRequirements = researchRequirements(task);
+  const localPageTask = taskExplicitlyTargetsLocalPage(task);
+  const evidenceRequirements = localPageTask
+    ? { minimumSources: 0, minimumDetailPages: 0 }
+    : researchRequirements(task);
   let consecutiveNoAction = 0;
   let stagnantSteps = 0;
   let lastProgressMarker = "";
   let automaticErrorRecoveries = 0;
   let activePage = await serializeOperation(() => ensurePage());
-  const taskScopeOrigin = taskExplicitlyTargetsLocalPage(task)
+  const taskScopeOrigin = localPageTask
     ? localTaskOrigin(activePage.url())
     : null;
   let finalMessage = "Task complete.";
@@ -2264,7 +2333,7 @@ export async function runManagedBrowserAgent(task: string, apiKey: string, optio
         lastProgressMarker = progressMarker;
       }
 
-      if (stagnantSteps >= 4 && isLikelyDetailPage(observation.page.url)) {
+      if (!localPageTask && stagnantSteps >= 4 && isLikelyDetailPage(observation.page.url)) {
         const recoveryAction: BrowserAction = { type: "go_back" };
         agentStatus = "recovering";
         failures.push(`No new evidence was found on ${observation.page.url}; returned to the previous page.`);

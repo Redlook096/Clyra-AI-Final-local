@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   cancelSpeechSynthesis,
   ensureSpeechVoices,
@@ -11,6 +12,13 @@ import {
 } from "../lib/voiceSpeech";
 import { stopMediaStreamTracks, VoicePcmCapturer } from "../lib/voicePcmCapture";
 import { decodeVoicePcmPacket, stableVoiceId } from "../lib/voicePcmPacket";
+import { getElectronDesktop } from "../lib/electron-runtime";
+import {
+  remainingVoiceSilenceMs,
+  VOICE_MIN_UTTERANCE_MS,
+  VOICE_SPEECH_LEVEL,
+  VOICE_TRAILING_SILENCE_MS,
+} from "../lib/voiceTurnDetection";
 
 type VoiceStatus =
   | "connecting"
@@ -148,6 +156,8 @@ export function useVoiceCall(options: {
   const lastUtteranceRef = useRef("");
   const playbackTimeRef = useRef(0);
   const playbackSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+  const playbackQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const playbackQueueEpochRef = useRef(0);
   const gotTtsChunkRef = useRef(false);
   const ttsSampleRateRef = useRef(16000);
   const ttsGenerationRef = useRef(0);
@@ -167,6 +177,11 @@ export function useVoiceCall(options: {
   const committedSpeechRef = useRef("");
   const interimSpeechRef = useRef("");
   const endpointTimerRef = useRef<number | null>(null);
+  const pipelineSilenceTimerRef = useRef<number | null>(null);
+  const pipelineHeardSpeechRef = useRef(false);
+  const pipelineSpeechStartedAtRef = useRef(0);
+  const pipelineLastSpeechAtRef = useRef(0);
+  const resumePipelineCaptureRef = useRef<(() => void) | null>(null);
   const listenPausedRef = useRef(false);
   const playbackResumeTimerRef = useRef<number | null>(null);
   const localTtsActiveRef = useRef(false);
@@ -197,10 +212,26 @@ export function useVoiceCall(options: {
   activeRef.current = active;
   assistantTextRef.current = assistantText;
 
+  // Keep calls on the same local service origin as global dictation. In the
+  // Electron shell this avoids relying on whichever renderer origin happened
+  // to load the UI, while browser development still uses window.location.
+  const serviceUrl = useCallback(async (pathname: string) => {
+    const desktop = getElectronDesktop();
+    const origin = await desktop?.dictation.serviceUrl().catch(() => "") || window.location.origin;
+    return new URL(pathname, origin).toString();
+  }, []);
+
   const clearEndpointTimer = useCallback(() => {
     if (endpointTimerRef.current != null) {
       window.clearTimeout(endpointTimerRef.current);
       endpointTimerRef.current = null;
+    }
+  }, []);
+
+  const clearPipelineSilenceTimer = useCallback(() => {
+    if (pipelineSilenceTimerRef.current != null) {
+      window.clearTimeout(pipelineSilenceTimerRef.current);
+      pipelineSilenceTimerRef.current = null;
     }
   }, []);
 
@@ -259,6 +290,8 @@ export function useVoiceCall(options: {
   }, []);
 
   const stopScheduledPlayback = useCallback(() => {
+    playbackQueueEpochRef.current += 1;
+    playbackQueueRef.current = Promise.resolve();
     for (const source of playbackSourcesRef.current) {
       try {
         source.stop();
@@ -306,6 +339,8 @@ export function useVoiceCall(options: {
     // Invalidate any in-flight permission request. A delayed browser response
     // must not revive a stopped meter after mute/end-call.
     micRequestIdRef.current += 1;
+    clearPipelineSilenceTimer();
+    pipelineHeardSpeechRef.current = false;
     stopMeter();
     stopRecognition();
     pcmCapturerRef.current?.stop();
@@ -318,7 +353,7 @@ export function useVoiceCall(options: {
     if (meter && meter.state !== "closed") void meter.close();
     micLevelRef.current = 0;
     setMicLevel(0);
-  }, [stopMeter, stopRecognition]);
+  }, [clearPipelineSilenceTimer, stopMeter, stopRecognition]);
 
   const ensurePlaybackContext = useCallback(async () => {
     if (!audioContextRef.current || audioContextRef.current.state === "closed") {
@@ -347,34 +382,35 @@ export function useVoiceCall(options: {
     }
   }, [clearPlaybackResumeTimer, clearTtsWatchdog, releaseCapture, stopScheduledPlayback]);
 
-  const endCall = useCallback(async () => {
+  const endCall = useCallback(() => {
     const sessionId = sessionIdRef.current;
     activeRef.current = false;
     pipelineModeRef.current = false;
     stopMic();
     wsRef.current?.close();
     wsRef.current = null;
-    if (sessionId) {
-      try {
-        await fetch("/voice/end", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId }),
-        });
-      } catch {
-        // ignore cleanup errors
-      }
-    }
     sessionIdRef.current = null;
     committedSpeechRef.current = "";
     interimSpeechRef.current = "";
-    setActive(false);
-    setStatus("ended");
+    // The hang-up action must always feel immediate. Cleanup on the gateway is
+    // intentionally detached so a transient request failure cannot leave the
+    // overlay or microphone stuck on screen.
+    flushSync(() => {
+      setActive(false);
+      setStatus("ended");
+      setPartialTranscript("");
+      setAssistantText("");
+      setError(null);
+    });
     statusRef.current = "ended";
-    setPartialTranscript("");
-    setAssistantText("");
-    setError(null);
-  }, [stopMic]);
+    if (sessionId) {
+      void serviceUrl("/voice/end").then((url) => fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId }),
+        }).catch(() => undefined));
+    }
+  }, [serviceUrl, stopMic]);
 
   const playPcmBytes = useCallback(async (bytes: Uint8Array, sampleRate: number) => {
     // Dedicated playback context at the device rate — never reuse the mic capture graph.
@@ -385,14 +421,6 @@ export function useVoiceCall(options: {
     if (!pcm.length) return;
     const float32 = new Float32Array(pcm.length);
     for (let i = 0; i < pcm.length; i += 1) float32[i] = pcm[i]! / 32768;
-
-    // Micro fade eliminates clicks/pops at chunk boundaries.
-    const fade = Math.min(48, Math.floor(float32.length / 10));
-    for (let i = 0; i < fade; i += 1) {
-      const g = i / fade;
-      float32[i]! *= g;
-      float32[float32.length - 1 - i]! *= g;
-    }
 
     const rate = sampleRate > 0 ? sampleRate : 16000;
     const audioBuffer = ctx.createBuffer(1, float32.length, rate);
@@ -406,10 +434,28 @@ export function useVoiceCall(options: {
       source.disconnect();
     };
     // Keep one monotonic timeline. The browser handles native-rate resampling once.
-    const startAt = Math.max(ctx.currentTime + 0.005, playbackTimeRef.current);
+    // Buffer the first packet very briefly, then schedule every following PCM
+    // packet on one contiguous timeline. Fading every transport packet was
+    // audible as clipped syllables and gaps even though the source audio was
+    // continuous.
+    const startAt = playbackTimeRef.current > ctx.currentTime + 0.01
+      ? playbackTimeRef.current
+      : ctx.currentTime + 0.085;
     source.start(startAt);
     playbackTimeRef.current = startAt + audioBuffer.duration;
   }, [ensurePlaybackContext]);
+
+  const enqueuePcmBytes = useCallback((bytes: Uint8Array, sampleRate: number) => {
+    const epoch = playbackQueueEpochRef.current;
+    const queued = playbackQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (epoch !== playbackQueueEpochRef.current) return;
+        await playPcmBytes(bytes, sampleRate);
+      });
+    playbackQueueRef.current = queued;
+    return queued;
+  }, [playPcmBytes]);
 
   const sendUtterance = useCallback((text: string) => {
     const clean = text.trim();
@@ -588,6 +634,10 @@ export function useVoiceCall(options: {
     if (!activeRef.current) return;
     // Stay muted: mark listening, but don't reopen the mic until unmuted.
     if (mutedRef.current) return;
+    if (pipelineModeRef.current) {
+      resumePipelineCaptureRef.current?.();
+      return;
+    }
     if (!recognitionRef.current) {
       startRecognition();
       return;
@@ -646,6 +696,39 @@ export function useVoiceCall(options: {
       !listenPausedRef.current &&
       !mutedRef.current
     ) {
+      // Voice Call must finalize turns exactly like the global Cmd+Shift+K
+      // dictation path. Pipeline STT has no browser transcript to key off, so
+      // use the proven level gate, minimum utterance, and trailing pause.
+      if (pipelineModeRef.current) {
+        const now = performance.now();
+        if (level >= VOICE_SPEECH_LEVEL) {
+          if (!pipelineHeardSpeechRef.current) pipelineSpeechStartedAtRef.current = now;
+          pipelineHeardSpeechRef.current = true;
+          pipelineLastSpeechAtRef.current = now;
+          clearPipelineSilenceTimer();
+          return;
+        }
+        if (!pipelineHeardSpeechRef.current || pipelineSilenceTimerRef.current != null) return;
+        if (now - pipelineSpeechStartedAtRef.current < VOICE_MIN_UTTERANCE_MS) return;
+        const remaining = remainingVoiceSilenceMs(pipelineLastSpeechAtRef.current, now);
+        pipelineSilenceTimerRef.current = window.setTimeout(() => {
+          pipelineSilenceTimerRef.current = null;
+          if (!activeRef.current || mutedRef.current || !pipelineHeardSpeechRef.current) return;
+          if (performance.now() - pipelineLastSpeechAtRef.current < VOICE_TRAILING_SILENCE_MS) return;
+          pipelineHeardSpeechRef.current = false;
+          listenPausedRef.current = true;
+          setPartialTranscript("Transcribing…");
+          setStatus("thinking");
+          pcmCapturerRef.current?.stop();
+          pcmCapturerRef.current = null;
+          const socket = wsRef.current;
+          const sessionId = sessionIdRef.current;
+          if (socket?.readyState === WebSocket.OPEN && sessionId) {
+            socket.send(JSON.stringify({ type: "flush", sessionId }));
+          }
+        }, remaining);
+        return;
+      }
       const hasSpeech = `${committedSpeechRef.current} ${interimSpeechRef.current}`.trim();
       if (hasSpeech) {
         if (level < VAD_SILENCE_LEVEL) {
@@ -668,7 +751,7 @@ export function useVoiceCall(options: {
         silenceFramesRef.current = 0;
       }
     }
-  }, [clearEndpointTimer, performBargeIn, scheduleEndpoint, sendUtterance]);
+  }, [clearEndpointTimer, clearPipelineSilenceTimer, performBargeIn, scheduleEndpoint, sendUtterance]);
 
   const enqueueSpeech = useCallback(
     (text: string) => {
@@ -860,6 +943,10 @@ export function useVoiceCall(options: {
 
   const startPipelineCapture = useCallback(async (sampleRate = captureSampleRateRef.current) => {
     const stream = await startMicMeter();
+    clearPipelineSilenceTimer();
+    pipelineHeardSpeechRef.current = false;
+    pipelineSpeechStartedAtRef.current = 0;
+    pipelineLastSpeechAtRef.current = 0;
     pcmCapturerRef.current?.stop();
     const capturer = new VoicePcmCapturer(
       (base64, seq) => {
@@ -878,7 +965,14 @@ export function useVoiceCall(options: {
     await capturer.start(stream, meterContextRef.current);
     pcmCapturerRef.current = capturer;
     capturer.setMuted(false);
-  }, [applyMicLevel, startMicMeter]);
+  }, [applyMicLevel, clearPipelineSilenceTimer, startMicMeter]);
+
+  resumePipelineCaptureRef.current = () => {
+    if (!activeRef.current || mutedRef.current || !pipelineModeRef.current || pcmCapturerRef.current) return;
+    void startPipelineCapture().catch((cause) => {
+      setError(cause instanceof Error ? cause.message : "Microphone permission denied");
+    });
+  };
 
   const startCall = useCallback(async () => {
     if (!options.enabled) return;
@@ -887,17 +981,23 @@ export function useVoiceCall(options: {
     activeRef.current = true;
     pipelineModeRef.current = false;
     audioSeqRef.current = 0;
-    setError(null);
-    setActive(true);
-    setMuted(false);
+    // Commit the call surface before Chromium opens a native microphone
+    // permission request. Without this flush, macOS can hold the click task
+    // while React still has the overlay batched, making the controls appear
+    // dead even though a session is being created.
+    flushSync(() => {
+      setError(null);
+      setActive(true);
+      setMuted(false);
+      setStatus("connecting");
+      setAssistantText("");
+      setPartialTranscript("");
+      setMicLevel(0);
+    });
     mutedRef.current = false;
-    setStatus("connecting");
     statusRef.current = "connecting";
-    setAssistantText("");
     pendingAssistantTextRef.current = "";
     ttsPlaybackStartedRef.current = false;
-    setPartialTranscript("");
-    setMicLevel(0);
     // This runs synchronously from the user's Start Call gesture. Keeping the
     // context active here avoids browser autoplay policies suspending valid
     // Async/Max PCM that arrives later over WebSocket.
@@ -931,7 +1031,7 @@ export function useVoiceCall(options: {
     });
 
     try {
-      const response = await fetch("/voice/session", {
+      const response = await fetch(await serviceUrl("/voice/session"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -991,7 +1091,7 @@ export function useVoiceCall(options: {
           if (firstChunk && typeof window !== "undefined" && "speechSynthesis" in window) {
             window.speechSynthesis.cancel();
           }
-          void playPcmBytes(packet.pcm, packet.sampleRate).catch((cause) => {
+          void enqueuePcmBytes(packet.pcm, packet.sampleRate).catch((cause) => {
             setError(
               cause instanceof Error
                 ? `Voice playback: ${cause.message}`
@@ -1167,7 +1267,13 @@ export function useVoiceCall(options: {
             localTtsActiveRef.current = false;
             const rate =
               message.sampleRate ?? ttsSampleRateRef.current ?? sampleRate;
-            void playPcmBytes(new Uint8Array(base64ToArrayBuffer(message.data)), rate);
+            void enqueuePcmBytes(new Uint8Array(base64ToArrayBuffer(message.data)), rate).catch((cause) => {
+              setError(
+                cause instanceof Error
+                  ? `Voice playback: ${cause.message}`
+                  : "Voice playback could not start.",
+              );
+            });
             setStatus("speaking");
           }
           if (message.type === "tts_done") {
@@ -1249,10 +1355,11 @@ export function useVoiceCall(options: {
     options.conversationId,
     options.enabled,
     ensurePlaybackContext,
-    playPcmBytes,
+    enqueuePcmBytes,
     scheduleResumeAfterPlayback,
     speakFallback,
     speakProgressive,
+    serviceUrl,
     startMicMeter,
     startPipelineCapture,
     startRecognition,

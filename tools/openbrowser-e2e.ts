@@ -149,7 +149,15 @@ try {
   await api("/api/openbrowser/navigate", { method: "POST", body: JSON.stringify({ target: fixtureUrl }) });
   let observation = await observe();
   assert.equal(observation.page.title, "Clyra Browser Test Catalogue");
-  assert.ok(observation.elements.length >= 8, "Observer did not expose the fixture controls");
+  // The real browser keeps its current split-panel viewport. Do not require
+  // below-the-fold fixture controls to be visible; require the controls the
+  // agent must interact with instead.
+  for (const name of ["Search products", "Maximum price", "Apply filters", "In stock only", "Dismiss cookie banner"]) {
+    assert.ok(
+      observation.elements.some((element: JsonObject) => element.name === name || element.label === name),
+      `Observer did not expose the fixture control: ${name}`,
+    );
+  }
   assert.ok(observation.promptInjectionSignals.length >= 1, "Prompt-injection text was not isolated");
 
   await action({ type: "click", target: elementByName(observation, "Dismiss cookie banner") });

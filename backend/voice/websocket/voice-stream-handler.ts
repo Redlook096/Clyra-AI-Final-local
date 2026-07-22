@@ -9,6 +9,7 @@ import { loadVoiceConfig } from "../config";
 import { voiceMetrics } from "../metrics/voice-metrics";
 import {
   probeVoicePipeline,
+  synthesizeViaPipeline,
   VoicePipelineClient,
 } from "../pipeline/client";
 import { voiceSessions } from "../session/voice-session-manager";
@@ -41,6 +42,9 @@ type ActiveSocket = {
   asyncSttFlushTimer: ReturnType<typeof setTimeout> | null;
   asyncSttFallbackInProgress: boolean;
   asyncSttProviderUnavailable: boolean;
+  /** Recent PCM retained only for the current utterance so hosted STT can
+   * hand the same audio to the local worker when it never yields a final. */
+  pendingAudio: Array<{ data: string; seq: number }>;
   asyncContextId: string | null;
   ttsFormatSent: boolean;
 };
@@ -155,10 +159,37 @@ async function speakText(
 ): Promise<boolean> {
   const spoken = normalizeSpokenText(text);
   if (!spoken || signal.aborted) return false;
+  const sendLocalPipelineAudio = async () => {
+    const rendered = await synthesizeViaPipeline(spoken, signal, { timeoutMs: 12_000 });
+    if (!rendered.chunks.length || signal.aborted) return false;
+    const config = loadVoiceConfig();
+    send(active.ws, {
+      type: "tts_format",
+      sessionId: active.sessionId,
+      responseId: active.responseId,
+      generation: active.generation,
+      sampleRate: rendered.sampleRate || config.sampleRate,
+      codec: "pcm16",
+    });
+    active.ttsFormatSent = true;
+    for (const chunk of rendered.chunks) {
+      if (signal.aborted || active.ws.readyState !== active.ws.OPEN) return false;
+      active.ws.send(encodeVoicePcmPacket(Buffer.from(chunk, "base64"), {
+        sessionId: active.sessionId,
+        responseId: active.responseId,
+        generation: active.generation,
+        sampleRate: rendered.sampleRate || config.sampleRate,
+        sequence: active.ttsSeq++,
+        phraseSequence: active.phraseSeq,
+      }), { binary: true });
+    }
+    active.phraseSeq += 1;
+    return true;
+  };
   try {
     const config = loadVoiceConfig();
     const contextId = active.asyncContextId || active.responseId;
-    if (!active.asyncVoice || !contextId) return false;
+    if (!active.asyncVoice || !contextId) return await sendLocalPipelineAudio();
     if (!active.ttsFormatSent) {
       send(active.ws, {
         type: "tts_format",
@@ -174,14 +205,23 @@ async function speakText(
     // phrases to the same provider context.  Forcing every partial phrase can
     // make Flash finalise a context mid-answer and truncate playback.
     await active.asyncVoice.sendText(contextId, spoken, active.phraseSeq === 0);
-    active.phraseSeq += 1;
-    return true;
+    if (await active.asyncVoice.waitForFirstAudio(contextId)) {
+      active.phraseSeq += 1;
+      return true;
+    }
+    active.asyncVoice.cancelContext(contextId);
+    return await sendLocalPipelineAudio();
   } catch (error) {
     console.warn(
       "[voice] Async TTS failed:",
       error instanceof Error ? error.message : error,
     );
-    return false;
+    try {
+      return await sendLocalPipelineAudio();
+    } catch (fallbackError) {
+      console.warn("[voice] Local TTS fallback failed:", fallbackError instanceof Error ? fallbackError.message : fallbackError);
+      return false;
+    }
   }
 }
 
@@ -417,6 +457,13 @@ function resetAsyncStt(active: ActiveSocket) {
   active.asyncSttSpeechAt = 0;
 }
 
+async function replayPendingAudioToPipeline(active: ActiveSocket) {
+  const frames = active.pendingAudio.splice(0);
+  await attachPipeline(active);
+  for (const frame of frames) active.pipeline?.sendAudio(frame.data, frame.seq);
+  active.pipeline?.flush();
+}
+
 function attachAsyncStt(active: ActiveSocket, config: ReturnType<typeof loadVoiceConfig>) {
   if (!config.asyncApiKey || !config.asyncSttEnabled || active.asyncSttProviderUnavailable) return false;
   active.pipelineMode = true;
@@ -431,6 +478,7 @@ function attachAsyncStt(active: ActiveSocket, config: ReturnType<typeof loadVoic
     onFinal: (text) => {
       voiceMetrics.record(active.sessionId, "stt_final", 0);
       resetAsyncStt(active);
+      active.pendingAudio = [];
       void handleFinalTranscript(active.sessionId, active.ws, text);
     },
     onError: (message) => {
@@ -465,6 +513,7 @@ function attachSocketHandlers(sessionId: string, ws: WebSocket) {
     asyncSttFlushTimer: null,
     asyncSttFallbackInProgress: false,
     asyncSttProviderUnavailable: false,
+    pendingAudio: [],
     asyncContextId: null,
     ttsFormatSent: false,
   };
@@ -491,7 +540,9 @@ function attachSocketHandlers(sessionId: string, ws: WebSocket) {
       if (current.ttsSeq === 1) voiceMetrics.record(sessionId, "tts_chunk", 0);
     },
     onError: (message) => {
-      send(ws, { type: "error", sessionId, message: `Voice output: ${message}` });
+      // Async is preferred, but a live call continues through the local TTS
+      // fallback when the hosted socket is slow or unavailable.
+      console.warn("[voice] Hosted TTS:", message);
     },
   });
   sockets.set(sessionId, active);
@@ -595,6 +646,10 @@ function attachSocketHandlers(sessionId: string, ws: WebSocket) {
         return;
       }
       if (current.asyncStt) {
+        current.pendingAudio.push({ data: message.data, seq: message.seq });
+        // Bound a pathological open mic to roughly 24 seconds at a 20ms
+        // capture cadence; the newest frames remain the useful fallback.
+        if (current.pendingAudio.length > 1_200) current.pendingAudio.splice(0, current.pendingAudio.length - 1_200);
         const speech = pcmHasSpeech(message.data);
         if (speech) {
           current.asyncSttSpeechAt = Date.now();
@@ -607,7 +662,7 @@ function attachSocketHandlers(sessionId: string, ws: WebSocket) {
             void turn.flush().then((text) => {
               if (text) return;
               resetAsyncStt(current);
-              attachAsyncStt(current, config);
+              return replayPendingAudioToPipeline(current).catch(() => undefined);
             });
           }, 620);
         }
@@ -620,7 +675,7 @@ function attachSocketHandlers(sessionId: string, ws: WebSocket) {
           current.asyncSttProviderUnavailable = true;
           console.warn("[voice] Async STT streaming failed; using local transcription:", error instanceof Error ? error.message : error);
           resetAsyncStt(current);
-          void attachPipeline(current)
+          void replayPendingAudioToPipeline(current)
             .catch(() => undefined)
             .finally(() => { current.asyncSttFallbackInProgress = false; });
         });
@@ -636,7 +691,7 @@ function attachSocketHandlers(sessionId: string, ws: WebSocket) {
         void turn.flush().then((text) => {
           if (!text && current.asyncStt === turn) {
             resetAsyncStt(current);
-            attachAsyncStt(current, config);
+            return replayPendingAudioToPipeline(current).catch(() => undefined);
           }
         });
       } else current.pipeline?.flush();

@@ -57,10 +57,10 @@ export function loadVoiceConfig(): VoiceConfig {
     asyncFallbackModel: process.env.ASYNC_TTS_FALLBACK_MODEL ?? "async_flash_v1.5",
     asyncVoiceId: process.env.ASYNC_VOICE_ID ?? "e0f39dc4-f691-4e78-bba5-5c636692cc04",
     asyncSampleRate: Number(process.env.ASYNC_TTS_SAMPLE_RATE ?? 44100),
-    // Async ASR is opt-in until the configured provider has completed its
-    // compatibility handshake. The local pipeline remains the dependable
-    // default and the desktop never silently loses transcription because an
-    // external streaming endpoint rejects a connection.
+    // The local streaming worker is the low-latency default for both native
+    // dictation and calls. Hosted ASR stays opt-in because a partial provider
+    // response followed by a network final can leave a turn waiting behind a
+    // replay fallback; that was noticeably worse on an 8 GB machine.
     asyncSttEnabled: process.env.ASYNC_STT_ENABLED === "true" && Boolean(process.env.ASYNC_API_KEY),
     asyncSttModel: process.env.ASYNC_STT_MODEL ?? "async_asr_v1.0",
   };

@@ -448,7 +448,10 @@ export default function WebBrowserWorkspace() {
   const [browserState, setBrowserState] = useState<BrowserState | null>(null);
   const [address, setAddress] = useState("");
   const [task, setTask] = useState("");
-  const [isBrowserBusy, setIsBrowserBusy] = useState(true);
+  // Loading the persisted Chromium state is passive work. Treating it as a
+  // navigation made a freshly opened Browser look as though Clyra was already
+  // reading the restored page.
+  const [isBrowserBusy, setIsBrowserBusy] = useState(false);
   const [isAgentBusy, setIsAgentBusy] = useState(false);
   const [sideView, setSideView] = useState<SideView>("agent");
   const [sideOpen, setSideOpen] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1024);
@@ -553,7 +556,7 @@ export default function WebBrowserWorkspace() {
 
   const loadState = useCallback(async () => {
     try {
-      await requestBrowser("/api/openbrowser/state", { method: "GET" });
+      await requestBrowser("/api/openbrowser/state", { method: "GET", quiet: true });
     } catch {
       // Error state is handled by requestBrowser.
     }
@@ -755,11 +758,15 @@ export default function WebBrowserWorkspace() {
         headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
         body: JSON.stringify({ task: cleanTask }),
       });
-      if (!response.ok || !response.body) throw new Error("The browser agent could not start that task.");
+      if (!response.ok || !response.body) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(responseError(payload, "The browser agent could not start that task."));
+      }
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
       let completePayload: Record<string, unknown> | null = null;
+      let acknowledgedPlan = false;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -773,7 +780,20 @@ export default function WebBrowserWorkspace() {
           if (next.type === "error") throw new Error(responseError(next, "The browser agent could not complete that task."));
           if (typeof next.message === "string") setAgentStatus(next.message);
           if (next.state) applyState(next.state as BrowserState);
-          if (next.plan) setPlan(next.plan as TaskPlan);
+          if (next.plan) {
+            setPlan(next.plan as TaskPlan);
+            if (!acknowledgedPlan) {
+              acknowledgedPlan = true;
+              setMessages((current) => [
+                ...current,
+                {
+                  id: `assistant-plan-${Date.now()}`,
+                  role: "assistant",
+                  content: "I’ll work through this in the browser, verify each result, and then bring back the outcome.",
+                },
+              ], originTabId);
+            }
+          }
           if (next.cursor) setCursor({ ...(next.cursor as Omit<AgentCursor, "id">), id: ++cursorSequenceRef.current });
           if (typeof next.completedCriteria === "number" || typeof next.totalCriteria === "number") {
             setCriteriaProgress((current) => ({
@@ -961,7 +981,7 @@ export default function WebBrowserWorkspace() {
   const pageContextReady = Boolean((activeTab?.url || browserState?.url) && (activeTab?.title || browserState?.title));
   const latestSteps = liveSteps.length ? liveSteps : [...messages].reverse().find((message) => message.steps?.length)?.steps || [];
   const frameUrl = browserState
-    ? `/api/openbrowser/frame?${isAgentBusy || browserState.loading ? "fresh=1&" : ""}v=${browserState.frameVersion}&t=${frameTick}`
+    ? `/api/openbrowser/frame?${isAgentBusy ? "fresh=1&" : ""}v=${browserState.frameVersion}&t=${frameTick}`
     : "";
   const progress = criteriaProgress.total ? Math.min(100, Math.round((criteriaProgress.complete / criteriaProgress.total) * 100)) : 0;
   const aiInControl = ["planning", "observing", "executing", "verifying", "recovering"].includes(agentPhase) && !browserState?.agent.manualControl;
@@ -1175,8 +1195,7 @@ export default function WebBrowserWorkspace() {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-                  className="pointer-events-none absolute inset-0 z-[18]"
-                  style={{ boxShadow: "inset 0 0 0 1px rgba(59,130,246,.48)" }}
+                  className="clyra-browser-ai-control pointer-events-none absolute inset-0 z-[18]"
                 >
                   <div className="absolute left-3 top-3 flex items-center gap-2 rounded-full bg-slate-950/90 px-2.5 py-1.5 text-[9px] font-semibold text-white shadow-[0_8px_24px_rgba(15,23,42,.18)] backdrop-blur-xl">
                     <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-300" />
@@ -1203,9 +1222,9 @@ export default function WebBrowserWorkspace() {
                     scale: { duration: 0.2 },
                     opacity: { duration: 0.12 },
                   }}
-                  className="pointer-events-none absolute z-20 -translate-x-[4px] -translate-y-[3px]"
+                  className="clyra-browser-agent-cursor pointer-events-none absolute z-20 -translate-x-[4px] -translate-y-[3px]"
                 >
-                  <MousePointer2 className="h-6 w-6 fill-slate-950 text-white [filter:drop-shadow(0_2px_2px_rgba(15,23,42,0.35))]" />
+                  <MousePointer2 className="h-6 w-6 fill-[#2563eb] text-white [filter:drop-shadow(0_3px_5px_rgba(37,99,235,.34))]" />
                   {settings.showAiActionLabels ? (
                     <span className="absolute left-5 top-5 whitespace-nowrap rounded-md bg-slate-950 px-2 py-1 text-[9px] font-semibold text-white shadow-lg">{cursor.label}</span>
                   ) : null}
@@ -1215,7 +1234,7 @@ export default function WebBrowserWorkspace() {
             </AnimatePresence>
 
             <AnimatePresence>
-              {isBrowserBusy || browserState?.loading ? (
+              {isBrowserBusy || (isAgentBusy && browserState?.loading) ? (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="pointer-events-none absolute inset-x-0 top-0 z-30 h-[2px] overflow-hidden bg-blue-100">
                   <motion.div className="h-full w-1/3 bg-blue-500" animate={{ x: ["-100%", "400%"] }} transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut" }} />
                 </motion.div>
@@ -1323,7 +1342,7 @@ export default function WebBrowserWorkspace() {
                           && !hydratedMessageIdsRef.current.has(message.id)
                           && !message.id.startsWith("welcome");
                         return (
-                        <motion.div key={message.id} initial={message.role === "user" ? { opacity: 0, y: 16, scale: 0.97 } : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: message.role === "user" ? 0.6 : 0.22, ease: [0.16, 1, 0.3, 1] }} className={cn("flex gap-2.5", message.role === "user" && "justify-end")}>
+                        <motion.div key={message.id} layout="position" initial={message.role === "user" ? { opacity: 0, y: 28, scale: 0.94 } : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: message.role === "user" ? 0.72 : 0.22, ease: [0.16, 1, 0.3, 1] }} className={cn("flex gap-2.5", message.role === "user" && "clyra-browser-user-message-entry origin-bottom-right justify-end")}>
                           <div className={cn(
                             "max-w-[300px] text-[12.5px] font-medium leading-[1.65]",
                             message.role === "user"
@@ -1335,7 +1354,7 @@ export default function WebBrowserWorkspace() {
                                 <TypewriterText
                                   text={message.content}
                                   active={animateTypewriter}
-                                  msPerChar={14}
+                                  msPerChar={12}
                                   onComplete={() => { hydratedMessageIdsRef.current.add(message.id); }}
                                 />
                               ) : (
@@ -1361,7 +1380,7 @@ export default function WebBrowserWorkspace() {
                         );
                       })}
 
-                      {isAgentBusy ? (
+                      {isAgentBusy && !plan ? (
                         <motion.div initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -3 }} transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }} className="flex items-center gap-2 py-0.5">
                           <ShiningBrainIcon className="h-4 w-4 shrink-0" />
                           <ShiningText text={agentStatus} preset="thinkingChat" play={!settings.reducedMotion} className="min-w-0 flex-1 truncate !text-[12px]" />
@@ -1371,14 +1390,22 @@ export default function WebBrowserWorkspace() {
                       ) : null}
 
                       {isAgentBusy && plan ? (
-                        <div className="ml-1 space-y-1.5 border-l border-slate-200 pl-3.5">
-                          {plan.steps.map((step) => (
-                            <div key={step.id} className="flex min-h-7 items-start gap-2 text-[10px] font-medium text-slate-500">
-                              <span className={cn("mt-1.5 h-1.5 w-1.5 rounded-full", step.status === "complete" ? "bg-emerald-400" : step.status === "active" ? "bg-blue-400" : "bg-slate-700")} />
-                              <span className={cn("leading-4", step.status === "active" && "font-semibold text-slate-700")}>{step.label}</span>
-                            </div>
-                          ))}
-                        </div>
+                        <motion.section initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: settings.reducedMotion ? 0.01 : 0.22, ease: [0.16, 1, 0.3, 1] }} className="clyra-browser-plan overflow-hidden">
+                          <div className="clyra-browser-plan__header">
+                            <span>Task progress</span>
+                            <span>{plan.steps.filter((step) => step.status === "complete").length}/{plan.steps.length}</span>
+                          </div>
+                          <ol className="clyra-browser-plan__steps">
+                            {plan.steps.map((step, index) => (
+                              <li key={step.id} className={cn("clyra-browser-plan__step", `clyra-browser-plan__step--${step.status}`)}>
+                                <span className="clyra-browser-plan__marker" aria-hidden>
+                                  {step.status === "complete" ? <Check className="h-2.5 w-2.5" /> : <span>{index + 1}</span>}
+                                </span>
+                                <span className="truncate">{step.label}</span>
+                              </li>
+                            ))}
+                          </ol>
+                        </motion.section>
                       ) : null}
 
                       <AnimatePresence>

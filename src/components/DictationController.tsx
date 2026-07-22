@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef } from "react";
 import { getElectronDesktop } from "../lib/electron-runtime";
 import { VoicePcmCapturer } from "../lib/voicePcmCapture";
+import {
+  remainingVoiceSilenceMs,
+  VOICE_MIN_UTTERANCE_MS,
+  VOICE_SPEECH_LEVEL,
+  VOICE_TRAILING_SILENCE_MS,
+} from "../lib/voiceTurnDetection";
 
 type DictationTarget = { application?: string; selectedText?: string };
 type DictationMode = "normal" | "replace" | "optimise";
@@ -57,6 +63,17 @@ export function DictationController() {
   const activeRef = useRef<ActiveDictation | null>(null);
   const previewRef = useRef<{ text: string; target: DictationTarget; raw: string; startedAt: number } | null>(null);
   const lastLevelAtRef = useRef(0);
+  const silenceTimerRef = useRef<number | null>(null);
+  const heardSpeechRef = useRef(false);
+  const lastSpeechAtRef = useRef(0);
+  const speechStartedAtRef = useRef(0);
+
+  const clearSilenceTimer = useCallback(() => {
+    if (silenceTimerRef.current != null) {
+      window.clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+  }, []);
 
   const updateNative = useCallback((payload: Record<string, unknown>) => {
     void getElectronDesktop()?.dictation.setState(payload).catch(() => undefined);
@@ -91,12 +108,13 @@ export function DictationController() {
   }, [serviceUrl]);
 
   const release = useCallback(() => {
+    clearSilenceTimer();
     const active = activeRef.current;
     if (!active) return;
     active.capture?.stop();
     try { active.socket.close(); } catch { /* already closed */ }
     activeRef.current = null;
-  }, []);
+  }, [clearSilenceTimer]);
 
   const cancel = useCallback(() => {
     release();
@@ -146,6 +164,9 @@ export function DictationController() {
   const start = useCallback(async (mode: DictationMode, target: DictationTarget) => {
     release();
     previewRef.current = null;
+    heardSpeechRef.current = false;
+    lastSpeechAtRef.current = 0;
+    speechStartedAtRef.current = 0;
     updateNative({ phase: mode === "optimise" ? "optimising" : "listening", detail: mode === "optimise" ? "Tell Clyra how to rewrite this" : "Listening", application: target.application || "" });
     try {
       const session = await postJson("/voice/session", { mode: "dictation", history: [] });
@@ -164,6 +185,32 @@ export function DictationController() {
               if (now - lastLevelAtRef.current < 100) return;
               lastLevelAtRef.current = now;
               updateNative({ phase: "listening", level: Math.max(0, Math.min(1, level)) });
+              if (level >= VOICE_SPEECH_LEVEL) {
+                if (!heardSpeechRef.current) speechStartedAtRef.current = now;
+                heardSpeechRef.current = true;
+                lastSpeechAtRef.current = now;
+                clearSilenceTimer();
+                return;
+              }
+              if (!heardSpeechRef.current || silenceTimerRef.current != null) return;
+              // Require a short real utterance, then use a slightly longer
+              // trailing pause. This avoids cutting off the first word while
+              // still handing a finished sentence to transcription promptly.
+              if (now - speechStartedAtRef.current < VOICE_MIN_UTTERANCE_MS) return;
+              const remaining = remainingVoiceSilenceMs(lastSpeechAtRef.current, now);
+              silenceTimerRef.current = window.setTimeout(() => {
+                silenceTimerRef.current = null;
+                const current = activeRef.current;
+                if (!current || !heardSpeechRef.current) return;
+                if (performance.now() - lastSpeechAtRef.current < VOICE_TRAILING_SILENCE_MS) return;
+                heardSpeechRef.current = false;
+                updateNative({ phase: "processing", detail: "Transcribing" });
+                current.capture?.stop();
+                current.capture = null;
+                if (current.socket.readyState === WebSocket.OPEN) {
+                  current.socket.send(JSON.stringify({ type: "flush", sessionId: current.sessionId }));
+                }
+              }, remaining);
             });
             active.capture = capture;
             void capture.start().catch((error) => {
@@ -195,16 +242,18 @@ export function DictationController() {
     } catch (error) {
       updateNative({ phase: "error", detail: userFacingDictationError(error) });
     }
-  }, [finishTranscript, postJson, release, updateNative]);
+  }, [clearSilenceTimer, finishTranscript, postJson, release, updateNative]);
 
   const stop = useCallback(() => {
     const active = activeRef.current;
     if (!active) return;
+    clearSilenceTimer();
+    heardSpeechRef.current = false;
     updateNative({ phase: "processing", detail: "Transcribing" });
     active.capture?.stop();
     active.capture = null;
     if (active.socket.readyState === WebSocket.OPEN) active.socket.send(JSON.stringify({ type: "flush", sessionId: active.sessionId }));
-  }, [updateNative]);
+  }, [clearSilenceTimer, updateNative]);
 
   useEffect(() => {
     const desktop = getElectronDesktop();
@@ -217,7 +266,7 @@ export function DictationController() {
     const removeAction = desktop.dictation.onAction((event) => {
       const target = event?.target || {};
       if (event?.action === "replace") void start("replace", target);
-      else if (event?.action === "optimise") void start("optimise", target);
+      else if (event?.action === "optimise" || event?.action === "enhance") void start("optimise", target);
       else if (event?.action === "try-again") void start("optimise", previewRef.current?.target || target);
       else if (event?.action === "replace-preview" && previewRef.current) {
         const preview = previewRef.current;

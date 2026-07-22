@@ -73,7 +73,7 @@ const migratedCustomBackground = migrateCreatorProject({
   background: "data:image/png;base64,custom",
 }, "fake_text_story");
 if (migratedCustomBackground.type === "fake_text_story") {
-  assert.equal(migratedCustomBackground.gameplay, undefined); assertions += 1;
+  assert.equal(migratedCustomBackground.gameplay?.clipId, "subway-01"); assertions += 1;
   assert.equal(migratedCustomBackground.background, "data:image/png;base64,custom"); assertions += 1;
 }
 

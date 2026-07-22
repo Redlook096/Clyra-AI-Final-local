@@ -40,6 +40,7 @@ import {
   Loader2,
   MessageCircleDashed,
   MessagesSquare,
+  Mic,
   MousePointer2,
   Paperclip,
   Pencil,
@@ -93,6 +94,7 @@ import type { CreatorMode } from "./components/CreatorStudioWorkspace";
 import { VoiceCallOverlay } from "./components/voice/VoiceCallOverlay";
 import { DictationController } from "./components/DictationController";
 import { VoiceWaveIcon } from "./components/voice/VoiceWaveIcon";
+import { VoicePcmCapturer } from "./lib/voicePcmCapture";
 import { useVoiceCall } from "./hooks/useVoiceCall";
 import { AiOrb, type OrbColorTheme } from "./components/AiOrb";
 import { getElectronDesktop } from "./lib/electron-runtime";
@@ -319,11 +321,29 @@ type BootOverlayState =
 function BootIntroOverlay({
   state,
   progress,
+  stage,
+  shinePass,
 }: {
   state: BootOverlayState;
   progress: number;
+  stage: number;
+  shinePass: number;
 }) {
   const isComplete = state === "progress_complete";
+  const bootStages = [
+    "Preparing Clyra's workspace",
+    "Restoring your recent conversations",
+    "Loading the private browser session",
+    "Connecting Clyra's assistant tools",
+    "Getting voice services ready",
+    "Preparing creator and study tools",
+    "Indexing your coding workspace",
+    "Checking local services",
+    "Finishing the last details",
+  ];
+  const showProgressTrack = state !== "booting";
+  const showStatus = (state === "progress" && stage >= 0) || isComplete;
+  const stageLabel = isComplete ? "Clyra is ready" : bootStages[Math.min(stage, bootStages.length - 1)];
 
   return (
     <motion.div
@@ -340,43 +360,228 @@ function BootIntroOverlay({
         transition={{ duration: 0.48, ease: [0.16, 1, 0.3, 1] }}
       >
         <AnimatePresence initial={false}>
-          <motion.div
+          {showProgressTrack ? <motion.div
             className={cn("clyra-boot-progress", isComplete && "clyra-boot-progress--complete")}
-            initial={{ opacity: 1 }}
-            animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.34, ease: [0.16, 1, 0.3, 1] }}
+            initial={{ opacity: 0, y: 4, scaleX: 0.985 }}
+            animate={{ opacity: 1, y: 0, scaleX: 1 }}
+              exit={{ opacity: 0, y: -2 }}
+              transition={{ duration: 0.58, ease: [0.16, 1, 0.3, 1] }}
             >
               <div className="clyra-boot-progress__track">
                 <motion.div
                   className="clyra-boot-progress__fill"
                   initial={false}
                   animate={{ scaleX: progress }}
-                  transition={{ duration: isComplete ? 0.7 : 0.95, ease: [0.22, 1, 0.36, 1] }}
-                />
+                  transition={{ duration: isComplete ? 1.82 : 1.7, ease: [0.22, 1, 0.36, 1] }}
+                >
+                  {!isComplete ? <span key={shinePass} className="clyra-boot-progress__shine" /> : null}
+                </motion.div>
               </div>
-              {isComplete ? (
+              {showStatus ? (
                 <motion.span
                   className="clyra-boot-progress__label"
                   initial={{ opacity: 0, y: 3 }}
                   animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.34, ease: [0.22, 1, 0.36, 1] }}
+                  transition={{ duration: 0.42, ease: [0.22, 1, 0.36, 1] }}
                 >
-                  Clyra is ready
+                  <AnimatePresence mode="wait" initial={false}>
+                    <motion.span
+                      key={stageLabel}
+                      initial={{ opacity: 0, y: 2 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -2 }}
+                      transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+                    >
+                      {stageLabel}
+                    </motion.span>
+                  </AnimatePresence>
                 </motion.span>
-              ) : (
-                <TextLoop className="clyra-boot-progress__label" interval={1550}>
-                  <span>Getting your workspace ready</span>
-                  <span>Loading your conversations</span>
-                  <span>Preparing your tools</span>
-                  <span>Almost ready</span>
-                </TextLoop>
-              )}
-            </motion.div>
+              ) : null}
+            </motion.div> : null}
         </AnimatePresence>
       </motion.div>
     </motion.div>
   );
+}
+
+type ComposerVoicePhase = "idle" | "listening" | "transcribing" | "error";
+
+function ComposerVoiceWaveform({ level }: { level: number }) {
+  const [phase, setPhase] = useState(0);
+  const targetVolumeRef = useRef(0.1);
+  const smoothVolumeRef = useRef(0.1);
+  const [targetVolume, setTargetVolume] = useState(0.1);
+
+  useEffect(() => {
+    const phaseTimer = window.setInterval(() => setPhase((value) => value + 0.22), 60);
+    const volumeTimer = window.setInterval(() => {
+      const next = 0.05 + Math.random() * 0.16;
+      targetVolumeRef.current = next;
+      setTargetVolume(next);
+    }, 360);
+    return () => {
+      window.clearInterval(phaseTimer);
+      window.clearInterval(volumeTimer);
+    };
+  }, []);
+
+  // The actual microphone level leads the motion. A low rolling floor keeps
+  // the pill alive during natural pauses without inventing a fake signal.
+  const desired = Math.max(Math.min(1, level) * 1.25, targetVolumeRef.current);
+  smoothVolumeRef.current += (desired - smoothVolumeRef.current) * 0.18;
+  const volume = Math.max(0.04, Math.min(1, smoothVolumeRef.current || targetVolume));
+
+  return (
+    <div className="flex h-8 min-w-0 flex-1 items-center justify-center gap-[2px]" aria-label="Microphone level">
+      {Array.from({ length: 27 }, (_, index) => {
+        const distance = (index - 13) / 13;
+        const bell = Math.exp(-(distance * distance) * 2.6);
+        const waves = (Math.sin(phase + index * 0.4) + Math.sin(phase * 0.7 - index * 0.2) + 2) / 4;
+        const height = 4 + bell * (4 + waves * (8 + volume * 25));
+        return (
+          <motion.span
+            key={index}
+            animate={{ height, opacity: 0.32 + bell * (0.34 + Math.min(0.34, volume * 0.5)) }}
+            transition={{ type: "spring", stiffness: 300, damping: 25, mass: 0.5 }}
+            className="w-[3px] shrink-0 rounded-full bg-gradient-to-b from-blue-300 to-blue-600 shadow-[0_0_7px_rgba(59,130,246,.14)]"
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function useComposerVoiceCapture(onComplete: (text: string) => void) {
+  const [phase, setPhase] = useState<ComposerVoicePhase>("idle");
+  const [level, setLevel] = useState(0);
+  const [detail, setDetail] = useState("");
+  const captureRef = useRef<VoicePcmCapturer | null>(null);
+  const socketRef = useRef<WebSocket | null>(null);
+  const sessionIdRef = useRef("");
+  const silenceTimerRef = useRef<number | null>(null);
+  const heardSpeechRef = useRef(false);
+  const lastSpeechAtRef = useRef(0);
+
+  const release = useCallback(() => {
+    if (silenceTimerRef.current != null) window.clearTimeout(silenceTimerRef.current);
+    silenceTimerRef.current = null;
+    captureRef.current?.stop();
+    captureRef.current = null;
+    try { socketRef.current?.close(); } catch { /* already closed */ }
+    socketRef.current = null;
+    sessionIdRef.current = "";
+    setLevel(0);
+  }, []);
+
+  const cancel = useCallback(() => {
+    release();
+    setPhase("idle");
+    setDetail("");
+  }, [release]);
+
+  const flush = useCallback(() => {
+    setPhase("transcribing");
+    setDetail("Transcribing");
+    captureRef.current?.stop();
+    captureRef.current = null;
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ type: "flush", sessionId: sessionIdRef.current }));
+    }
+  }, []);
+
+  const start = useCallback(async () => {
+    if (phase !== "idle") return;
+    heardSpeechRef.current = false;
+    lastSpeechAtRef.current = 0;
+    setPhase("listening");
+    setDetail("Listening");
+    try {
+      const response = await fetch("/voice/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "dictation", history: [] }),
+      });
+      const session = await response.json();
+      if (!response.ok || !session.websocketUrl) throw new Error(session.error || "Voice service is unavailable.");
+      const socket = new WebSocket(String(session.websocketUrl));
+      socketRef.current = socket;
+      sessionIdRef.current = String(session.sessionId || "");
+      socket.onmessage = (event) => {
+        let message: Record<string, unknown>;
+        try { message = JSON.parse(String(event.data)); } catch { return; }
+        if (message.type === "pipeline_mode" && message.mode === "pipeline" && !captureRef.current) {
+          const capture = new VoicePcmCapturer((data, seq) => {
+            if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "audio", sessionId: session.sessionId, codec: "pcm16", data, seq }));
+          }, Number(message.sampleRate) || 16_000, (nextLevel) => {
+            setLevel(nextLevel);
+            const now = performance.now();
+            if (nextLevel >= 0.07) {
+              heardSpeechRef.current = true;
+              lastSpeechAtRef.current = now;
+              if (silenceTimerRef.current != null) window.clearTimeout(silenceTimerRef.current);
+              silenceTimerRef.current = null;
+              return;
+            }
+            if (!heardSpeechRef.current || silenceTimerRef.current != null || now - lastSpeechAtRef.current < 1_100) return;
+            silenceTimerRef.current = window.setTimeout(() => {
+              silenceTimerRef.current = null;
+              if (performance.now() - lastSpeechAtRef.current >= 1_100) flush();
+            }, 140);
+          });
+          captureRef.current = capture;
+          void capture.start().catch((error) => {
+            release();
+            setPhase("error");
+            setDetail(error instanceof Error ? error.message : "Microphone access was denied.");
+          });
+        } else if (message.type === "dictation_final") {
+          const transcript = String(message.text || "").trim();
+          release();
+          if (!transcript) {
+            setPhase("error");
+            setDetail("No speech was detected.");
+            window.setTimeout(cancel, 1_600);
+            return;
+          }
+          setPhase("transcribing");
+          setDetail("Refining your prompt");
+          void fetch("/api/dictation/cleanup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ transcript, level: "light", dictionary: [] }),
+          })
+            .then(async (cleanup) => {
+              const payload = await cleanup.json().catch(() => ({}));
+              if (!cleanup.ok || !payload?.ok) throw new Error(payload?.error || "Prompt cleanup failed.");
+              onComplete(String(payload.text || transcript));
+              setPhase("idle");
+              setDetail("");
+            })
+            .catch(() => {
+              onComplete(transcript);
+              setPhase("idle");
+              setDetail("");
+            });
+        } else if (message.type === "error") {
+          release();
+          setPhase("error");
+          setDetail(String(message.message || "Voice transcription failed."));
+        }
+      };
+      socket.onerror = () => {
+        release();
+        setPhase("error");
+        setDetail("Voice service connection failed.");
+      };
+    } catch (error) {
+      release();
+      setPhase("error");
+      setDetail(error instanceof Error ? error.message : "Voice service is unavailable.");
+    }
+  }, [cancel, flush, onComplete, phase, release]);
+
+  useEffect(() => () => release(), [release]);
+  return { phase, level, detail, start, cancel };
 }
 
 /** Standard chat: shimmer until the model emits answer text (`content`), then hide so stagger can print it. */
@@ -1571,6 +1776,8 @@ export default function App() {
     | "complete";
   const [introState, setIntroState] = useState<IntroState>("booting");
   const [introProgress, setIntroProgress] = useState(0);
+  const [introStage, setIntroStage] = useState(-1);
+  const [introShinePass, setIntroShinePass] = useState(0);
   const isBootOverlayVisible =
     introState === "booting" ||
     introState === "orb_up" ||
@@ -1578,66 +1785,58 @@ export default function App() {
     introState === "progress_complete";
 
   useEffect(() => {
-    let cancelled = false;
-    const wait = (ms: number) =>
-      new Promise<void>((resolve) => {
-        window.setTimeout(resolve, ms);
-      });
+    // Warm optional work during this deliberate boot window. The visual
+    // sequence itself is scheduled up-front so a slow optional task can never
+    // strand the user on one status label.
+    void prepareVibeForBoot();
 
-    const run = async () => {
-      // Put the heavier optional workspace work behind Clyra's own boot UI so
-      // opening Vibe later feels immediate instead of starting a cold stack.
-      const vibePreparation = prepareVibeForBoot();
-      // Keep the boot surface calm while the runtime, route chunks, and M1
-      // bridge warm up. The progress bar is intentionally visible at zero so
-      // it never reads as a stalled or missing startup UI.
-      await wait(5_000);
-      if (cancelled) return;
+    const timers: number[] = [];
+    const schedule = (delay: number, callback: () => void) => {
+      timers.push(window.setTimeout(callback, delay));
+    };
+    // The fill may only advance once its travelling highlight has finished.
+    // Intentionally varied pauses keep boot calm and natural without faking
+    // random percentages or allowing a status line to race ahead.
+    const shineDuration = 1_700;
+    const milestones = [0.05, 0.14, 0.24, 0.37, 0.49, 0.61, 0.73, 0.86, 0.95];
+    const cycleGaps = [2_180, 2_540, 1_980, 2_360, 2_120, 2_610, 2_040, 2_420, 2_160];
+    const progressStart = 3_420;
 
+    // One quiet second, then a no-copy bar fade. The first status waits until
+    // the initial light pass has fully reached the far edge.
+    schedule(1_000, () => setIntroState("orb_up"));
+    schedule(1_680, () => {
       setIntroState("progress");
+      setIntroStage(-1);
       setIntroProgress(0);
-
-      // Core UI readiness stays authoritative. Warming the optional coding
-      // environment may be slow on first launch, so it gets a bounded window
-      // rather than making the primary Chat boot appear frozen indefinitely.
-      const systemReady = Promise.all([
-        document.fonts?.ready?.catch(() => undefined) ?? Promise.resolve(),
-        Promise.race([vibePreparation, wait(8_000)]),
-        wait(420),
-      ]);
-      const progressTimeline = (async () => {
-        const milestones = [
-          { delay: 560, value: 0.05 },
-          { delay: 760, value: 0.15 },
-          { delay: 880, value: 0.29 },
-          { delay: 940, value: 0.44 },
-          { delay: 980, value: 0.60 },
-          { delay: 1_020, value: 0.76 },
-          { delay: 920, value: 0.89 },
-        ];
-        for (const milestone of milestones) {
-          await wait(milestone.delay);
-          if (cancelled) return;
-          setIntroProgress(milestone.value);
-        }
-      })();
-      await Promise.all([systemReady, progressTimeline]);
-      if (cancelled) return;
-
+    });
+    let cycleAt = progressStart;
+    milestones.forEach((progress, index) => {
+      const currentCycleAt = cycleAt;
+      schedule(currentCycleAt, () => {
+        setIntroStage(index);
+        setIntroShinePass((pass) => pass + 1);
+      });
+      schedule(currentCycleAt + shineDuration + 56, () => {
+        setIntroProgress(progress);
+      });
+      cycleAt += cycleGaps[index];
+    });
+    const finalProgressAt = cycleAt;
+    schedule(finalProgressAt, () => {
+      setIntroShinePass((pass) => pass + 1);
+    });
+    schedule(finalProgressAt + shineDuration + 56, () => {
       setIntroProgress(1);
-      await wait(760);
-      if (cancelled) return;
-      setIntroState("progress_complete");
-      await wait(880);
-      if (cancelled) return;
-
+    });
+    schedule(finalProgressAt + shineDuration + 760, () => setIntroState("progress_complete"));
+    schedule(finalProgressAt + shineDuration + 1_640, () => {
       setIntroState("complete");
       setIsSidebarOpen(true);
-    };
+    });
 
-    void run();
     return () => {
-      cancelled = true;
+      timers.forEach((timer) => window.clearTimeout(timer));
     };
   }, []);
 
@@ -1669,6 +1868,10 @@ export default function App() {
   const [recentCommand, setRecentCommand] = useState<string | null>(null);
   const [isInputExpanded, setIsInputExpanded] = useState(false);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
+  const composerDictation = useComposerVoiceCapture((text) => {
+    setValue(text);
+    setIsInputExpanded(true);
+  });
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [resumingChatId, setResumingChatId] = useState<string | null>(null);
   const [feedbackMenu, setFeedbackMenu] = useState<{ messageId: string; sentiment: "up" | "down" } | null>(null);
@@ -1676,6 +1879,9 @@ export default function App() {
   const sendMessageRef = useRef<(() => Promise<void>) | null>(null);
   const regenerationRef = useRef<{ messageId: string; userMessageId: string } | null>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
+  const composerSurfaceRef = useRef<HTMLDivElement>(null);
+  const welcomeComposerCollapsedHeightRef = useRef<number | null>(null);
+  const [welcomeComposerOffset, setWelcomeComposerOffset] = useState(0);
 
   useEffect(() => {
     try {
@@ -1773,6 +1979,30 @@ export default function App() {
     selectedCommand !== null ||
     selectedAppAgents.length > 0 ||
     activeWorkspaceTab === "vibe";
+
+  // The welcome composer is bottom anchored. Measure its expanding shelf and
+  // offset the rail by the exact added height, keeping the text field's top
+  // edge optically fixed while controls reveal below it.
+  useLayoutEffect(() => {
+    if (messages.length > 0 || !composerSurfaceRef.current) return;
+    const surface = composerSurfaceRef.current;
+    const update = () => {
+      const height = surface.getBoundingClientRect().height;
+      if (!isExpanded) {
+        welcomeComposerCollapsedHeightRef.current = height;
+        setWelcomeComposerOffset(0);
+        return;
+      }
+      const collapsedHeight = welcomeComposerCollapsedHeightRef.current;
+      if (collapsedHeight != null) {
+        setWelcomeComposerOffset(Math.max(0, height - collapsedHeight));
+      }
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(surface);
+    return () => observer.disconnect();
+  }, [isExpanded, messages.length]);
 
   const { textareaRef, adjustHeight } = useAutoResizeTextarea({
     // Keep expanded min-height while focused/expanded so clearing text
@@ -2221,7 +2451,7 @@ export default function App() {
         e.preventDefault();
         setIsAppLauncherOpen((current) => !current);
         setShowCommandPalette(false);
-        textareaRef.current?.blur();
+        requestAnimationFrame(() => textareaRef.current?.blur());
       } else if (e.key === "Escape") {
         setIsAppLauncherOpen(false);
       }
@@ -2235,7 +2465,7 @@ export default function App() {
       }
       setIsAppLauncherOpen((current) => !current);
       setShowCommandPalette(false);
-      textareaRef.current?.blur();
+      requestAnimationFrame(() => textareaRef.current?.blur());
     };
     window.addEventListener("keydown", handleGlobalKeyDown);
     window.addEventListener("message", handleWorkspaceMessage);
@@ -4588,7 +4818,7 @@ Please analyze the code you just wrote and fix this error.`;
     isBrowserWorkspace || isStudyWorkspace
       ? Math.min(1280, Math.max(0, effectiveWorkspaceViewport - 32))
       : isClipWorkspace
-        ? Math.min(940, Math.max(0, effectiveWorkspaceViewport - 32))
+        ? Math.min(820, Math.max(0, effectiveWorkspaceViewport - 32))
     : showWorkspaceLivePreview
       ? Math.min(effectiveWorkspaceViewport, 1180)
       : Math.min(768, Math.max(0, effectiveWorkspaceViewport - 32));
@@ -4599,10 +4829,10 @@ Please analyze the code you just wrote and fix this error.`;
       setIsSidebarOpen(false);
     }
   }, [showSidebarControls]);
-  const workspaceSwipeTravelPx = Math.min(
-    Math.max(360, viewportWidth - 16),
-    Math.max(360, centeredContentWidth) + 8,
-  );
+  // The scene card spans the whole workspace, not merely the centred reading
+  // rail. Moving a full scene width keeps Chat -> Vibe and Vibe -> Chat
+  // perfectly mirrored and prevents either view from lingering at an edge.
+  const workspaceSwipeTravelPx = Math.max(360, effectiveWorkspaceViewport + 24);
   const workspaceSwipeEase = [0.38, 0, 0.16, 1] as [
     number,
     number,
@@ -4611,21 +4841,29 @@ Please analyze the code you just wrote and fix this error.`;
   ];
   const workspaceSwipeTransition = {
     type: "tween" as const,
-    duration: 0.58,
+    // A paired panel needs a little room to decelerate into place. The final
+    // third deliberately eases out so either direction feels identical.
+    duration: 0.72,
     ease: workspaceSwipeEase,
   };
   const workspacePanelVariants = {
     enter: (direction: number) => ({
-      opacity: 0.995,
       x: direction > 0 ? workspaceSwipeTravelPx : -workspaceSwipeTravelPx,
+      zIndex: 2,
+      pointerEvents: "none" as const,
     }),
     center: {
-      opacity: 1,
-      x: "0%",
+      // Keep every state in pixels. Mixing the incoming pixel distance with
+      // a percentage target leaves Motion unable to finish the exit lifecycle
+      // in Chromium, which is what made Vibe -> Chat appear to fade or stall.
+      x: 0,
+      zIndex: 2,
+      pointerEvents: "auto" as const,
     },
     exit: (direction: number) => ({
-      opacity: 0.12,
       x: direction > 0 ? -workspaceSwipeTravelPx : workspaceSwipeTravelPx,
+      zIndex: 1,
+      pointerEvents: "none" as const,
     }),
   };
 
@@ -4790,7 +5028,7 @@ Please analyze the code you just wrote and fix this error.`;
     workspaceSwitchTimeoutRef.current = window.setTimeout(() => {
       setIsWorkspaceSwitching(false);
       workspaceSwitchTimeoutRef.current = null;
-    }, 620);
+    }, 860);
     setActiveWorkspaceTab(tabId);
     setWorkspaceChromeEngaged(false);
     setSelectedCommand(null);
@@ -4884,6 +5122,8 @@ Please analyze the code you just wrote and fix this error.`;
               <BootIntroOverlay
                 state={introState}
                 progress={introProgress}
+                stage={introStage}
+                shinePass={introShinePass}
               />
             ) : null}
           </AnimatePresence>,
@@ -5531,7 +5771,7 @@ Please analyze the code you just wrote and fix this error.`;
                       }}
                       exit={{ opacity: 0 }}
                       transition={{
-                        duration: 0.58,
+                        duration: 0.72,
                         ease: workspaceSwipeEase,
                         times: [0, 0.52, 1],
                       }}
@@ -5543,33 +5783,31 @@ Please analyze the code you just wrote and fix this error.`;
                     "relative z-10 flex flex-col h-full min-h-0 w-full",
                   )}
                 >
-                  <AnimatePresence
-                    initial={false}
+                  <AnimatePresence initial={false} mode="sync" custom={workspaceTransitionDirection}>
+                  <motion.div
+                    key={workspaceViewKey}
+                    data-workspace-motion="true"
                     custom={workspaceTransitionDirection}
+                    variants={workspacePanelVariants}
+                    layout={false}
+                    className={cn(
+                      "clyra-workspace-card absolute inset-0 flex flex-col transform-gpu",
+                      messages.length === 0 &&
+                        !isClipWorkspace &&
+                        !isBrowserWorkspace &&
+                        !isStudyWorkspace &&
+                        !isCreatorWorkspace &&
+                        "justify-center",
+                    )}
+                    initial="enter"
+                    animate="center"
+                    exit="exit"
+                    transition={workspaceSwipeTransition}
+                    style={{
+                      backfaceVisibility: "hidden",
+                      willChange: "transform",
+                    }}
                   >
-                    <motion.div
-                      key={workspaceViewKey}
-                      custom={workspaceTransitionDirection}
-                      variants={workspacePanelVariants}
-                      layout={false}
-                      className={cn(
-                        "clyra-workspace-card absolute inset-0 flex flex-col transform-gpu",
-                        messages.length === 0 &&
-                          !isClipWorkspace &&
-                          !isBrowserWorkspace &&
-                          !isStudyWorkspace &&
-                          !isCreatorWorkspace &&
-                          "justify-center",
-                      )}
-                      initial="enter"
-                      animate="center"
-                      exit="exit"
-                      transition={workspaceSwipeTransition}
-                      style={{
-                        backfaceVisibility: "hidden",
-                        willChange: "transform",
-                      }}
-                    >
                       {isVibeWorkspace ? (
                         <Suspense fallback={
                           <div className="h-full w-full bg-white" aria-hidden="true" />
@@ -5645,16 +5883,16 @@ Please analyze the code you just wrote and fix this error.`;
                                 className="clyra-chat-quick-actions mt-4"
                                 initial={false}
                                 animate={{
-                                  opacity: isInputExpanded ? 0 : 1,
-                                  y: isInputExpanded ? -8 : 0,
-                                  scale: isInputExpanded ? 0.985 : 1,
+                                  opacity: 1,
+                                  y: 0,
+                                  scale: 1,
                                 }}
                                 transition={{
                                   duration: 0.22,
                                   ease: [0.16, 1, 0.3, 1],
                                 }}
                                 style={{
-                                  pointerEvents: isInputExpanded ? "none" : "auto",
+                                  pointerEvents: "auto",
                                 }}
                               >
                                 {chatQuickActions.map((action) => {
@@ -5943,21 +6181,9 @@ Please analyze the code you just wrote and fix this error.`;
                             animate={{
                               opacity: 1,
                               x: 0,
-                              // The composer is anchored to one bottom rail. Welcome
-                              // mode lifts it with a transform, so sending can animate
-                              // the complete distance without a layout-driven teleport.
-                              // The control shelf expands beneath the text field.
-                              // Offset the compact chat composer by the shelf height
-                              // so its top and side edges stay fixed while only its
-                              // lower border travels down into the bottom rail.
-                              y:
-                                messages.length > 0
-                                  ? isExpanded
-                                    ? 0
-                                    : -56
-                                  : isExpanded
-                                    ? -142
-                                    : -142,
+                              // Preserve the welcome input's top edge while the
+                              // measured lower shelf grows beneath it.
+                              y: messages.length > 0 ? 0 : -142 + welcomeComposerOffset,
                               scale: 1,
                             }}
                             exit={{
@@ -5967,14 +6193,7 @@ Please analyze the code you just wrote and fix this error.`;
                               pointerEvents: "none",
                             }}
                             transition={{
-                              y: {
-                                // Match the lower-shelf height animation. Keeping
-                                // both on the same long ease-out curve makes the
-                                // field's top edge feel pinned while its lower edge
-                                // settles softly into the bottom rail.
-                                duration: 0.76,
-                                ease: [0.16, 1, 0.3, 1],
-                              },
+                              y: { duration: 0.72, ease: [0.22, 1, 0.36, 1] },
                               opacity: { duration: 0.28, ease: "easeOut" },
                             }}
                             style={{
@@ -5987,8 +6206,8 @@ Please analyze the code you just wrote and fix this error.`;
                                 ? "px-3 sm:px-4"
                                 : "px-5 sm:px-8",
                               messages.length === 0
-                                ? "pb-5 clyra-composer-welcome"
-                                : "pb-4 sm:pb-6",
+                                ? cn("pb-5 clyra-composer-welcome", isExpanded && "clyra-composer-welcome--expanded")
+                                : "pb-0",
                             )}
                           >
                             <AnimatePresence>
@@ -6058,6 +6277,7 @@ Please analyze the code you just wrote and fix this error.`;
                               </div>
                             ) : null}
                             <motion.div
+                              ref={composerSurfaceRef}
                               className={cn(
                                 "input-wrapper relative backdrop-blur-xl border transition-[background-color,border-color,padding,box-shadow,border-radius] duration-[560ms] ease-[cubic-bezier(0.22,1,0.36,1)] cursor-text overflow-visible mx-auto z-[3]",
                                 isVibeWorkspace && "clyra-vibe-composer",
@@ -6364,6 +6584,32 @@ Please analyze the code you just wrote and fix this error.`;
                                       <Paperclip className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
                                     </motion.button>
                                   )}
+                                  {composerDictation.phase !== "idle" ? (
+                                    <motion.div
+                                      initial={{ opacity: 0, y: 4 }}
+                                      animate={{ opacity: 1, y: 0 }}
+                                      exit={{ opacity: 0, y: -4 }}
+                                      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                                      className="flex min-h-[46px] items-center gap-2 px-1 py-2"
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={composerDictation.cancel}
+                                        className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-800"
+                                        aria-label="Cancel voice prompt"
+                                      >
+                                        <X className="h-4 w-4" />
+                                      </button>
+                                      {composerDictation.phase === "listening" ? (
+                                        <ComposerVoiceWaveform level={composerDictation.level} />
+                                      ) : (
+                                        <div className="flex min-w-0 flex-1 items-center justify-center gap-2 text-[13px] font-medium text-slate-500">
+                                          {composerDictation.phase === "error" ? <CircleAlert className="h-4 w-4 text-rose-500" /> : <Loader2 className="h-4 w-4 animate-spin text-blue-500" />}
+                                          <span className="truncate">{composerDictation.detail}</span>
+                                        </div>
+                                      )}
+                                    </motion.div>
+                                  ) : (
                                   <Textarea
                                     ref={textareaRef}
                                     rows={1}
@@ -6439,7 +6685,20 @@ Please analyze the code you just wrote and fix this error.`;
                                     )}
                                     style={{ maxHeight: "160px" }}
                                   />
-                                  {!isExpanded && (
+                                  )}
+                                  {!isExpanded && composerDictation.phase === "idle" && (
+                                    <motion.button
+                                      type="button"
+                                      onClick={() => void composerDictation.start()}
+                                      whileHover={{ scale: 1.05 }}
+                                      whileTap={{ scale: 0.95 }}
+                                      className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
+                                      aria-label="Dictate a prompt"
+                                    >
+                                      <Mic className="h-4 w-4" />
+                                    </motion.button>
+                                  )}
+                                  {!isExpanded && composerDictation.phase === "idle" && (
                                     <motion.button
                                       type="button"
                                       onPointerDown={handleComposerVoicePointerDown}
@@ -6519,7 +6778,17 @@ Please analyze the code you just wrote and fix this error.`;
                                     )}
                                   >
                                     <div className="flex items-center gap-1 sm:gap-2">
-                                      <motion.button
+                                      {composerDictation.phase === "idle" ? <motion.button
+                                        type="button"
+                                        onClick={() => void composerDictation.start()}
+                                        whileHover={{ scale: 1.05 }}
+                                        whileTap={{ scale: 0.95 }}
+                                        className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
+                                        aria-label="Dictate a prompt"
+                                      >
+                                        <Mic className="h-[18px] w-[18px]" />
+                                      </motion.button> : null}
+                                      {composerDictation.phase === "idle" ? <motion.button
                                         type="button"
                                         onClick={handleAttachFile}
                                         whileHover={{ scale: 1.05 }}
@@ -6529,7 +6798,7 @@ Please analyze the code you just wrote and fix this error.`;
                                         title="Attach files"
                                       >
                                         <Paperclip className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
-                                      </motion.button>
+                                      </motion.button> : null}
 
                                       <motion.button
                                         data-command-button
@@ -6769,7 +7038,7 @@ Please analyze the code you just wrote and fix this error.`;
                           </motion.div>
                         )}
                       </AnimatePresence>
-                    </motion.div>
+                  </motion.div>
                   </AnimatePresence>
                 </div>
               </div>

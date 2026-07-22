@@ -8,12 +8,11 @@ import {
   type ReactNode,
 } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { createPortal } from "react-dom";
 import {
   ArrowUpIcon,
-  MessageSquareText,
   Mic,
   MicOff,
-  MonitorUp,
   Pencil,
   PhoneOff,
   Sparkles,
@@ -22,6 +21,7 @@ import {
 import { AiOrb, type OrbColorTheme } from "../AiOrb";
 import { cn } from "../../lib/utils";
 import type { VoiceStatus, VoiceTurn } from "../../hooks/useVoiceCall";
+import { VoiceWaveform } from "./VoiceWaveform";
 
 type LeftMenuMode = "closed" | "type" | "summary";
 type CallMediaMode = "none" | "screen";
@@ -67,78 +67,6 @@ function buildSummary(turns: VoiceTurn[]) {
   return `${head}${tail}`;
 }
 
-/** Minimal, accurate mic meter — few bars, RAF-smoothed, GPU-cheap. */
-function MicMeter({
-  level,
-  muted,
-  active,
-}: {
-  level: number;
-  muted: boolean;
-  active: boolean;
-}) {
-  const barsRef = useRef<HTMLSpanElement[]>([]);
-  const smoothRef = useRef(0);
-  const rafRef = useRef<number | null>(null);
-  const levelRef = useRef(level);
-  const mutedRef = useRef(muted);
-  const activeRef = useRef(active);
-  const BAR_COUNT = 18;
-
-  levelRef.current = level;
-  mutedRef.current = muted;
-  activeRef.current = active;
-
-  useEffect(() => {
-    const tick = () => {
-      const target =
-        mutedRef.current || !activeRef.current ? 0 : Math.min(1, levelRef.current);
-      // Fast attack, soft release — feels accurate without jitter.
-      const alpha = target > smoothRef.current ? 0.55 : 0.16;
-      smoothRef.current += (target - smoothRef.current) * alpha;
-      const s = smoothRef.current;
-      const mid = (BAR_COUNT - 1) / 2;
-      for (let i = 0; i < BAR_COUNT; i += 1) {
-        const el = barsRef.current[i];
-        if (!el) continue;
-        const dist = Math.abs(i - mid) / mid;
-        const env = Math.exp(-dist * dist * 2.8);
-        const h = 2 + (0.06 + env * s) * 22;
-        el.style.height = `${h.toFixed(2)}px`;
-        el.style.opacity = mutedRef.current
-          ? "0.18"
-          : (0.22 + env * (0.25 + s * 0.55)).toFixed(3);
-      }
-      rafRef.current = requestAnimationFrame(tick);
-    };
-    rafRef.current = requestAnimationFrame(tick);
-    return () => {
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-    };
-  }, []);
-
-  return (
-    <div
-      className="clyra-voice-mic-meter clyra-voice-mic-meter--slim"
-      aria-label="Microphone level"
-      role="meter"
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={Math.round(level * 100)}
-    >
-      {Array.from({ length: BAR_COUNT }).map((_, index) => (
-        <span
-          key={index}
-          ref={(node) => {
-            if (node) barsRef.current[index] = node;
-          }}
-          className="clyra-voice-mic-meter-bar"
-        />
-      ))}
-    </div>
-  );
-}
-
 function CallControlButton({
   label,
   onClick,
@@ -161,7 +89,7 @@ function CallControlButton({
         onClick();
       }}
       className={cn(
-        "clyra-voice-call-btn flex h-14 w-14 items-center justify-center rounded-full border transition-transform active:scale-90",
+        "clyra-voice-call-btn relative z-[280] flex h-14 w-14 touch-manipulation items-center justify-center rounded-full border transition-transform active:scale-90",
         danger
           ? "border-rose-600 bg-rose-600 text-white"
           : active
@@ -419,7 +347,7 @@ export function VoiceCallOverlay({
   void onUpdateUserMessage;
   void onResendUserMessage;
 
-  return (
+  const overlay = (
     <AnimatePresence>
       {open ? (
         <motion.div
@@ -428,7 +356,7 @@ export function VoiceCallOverlay({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-          className="fixed inset-0 z-[220] flex flex-col items-center justify-center overflow-hidden bg-white/90 backdrop-blur-[12px]"
+          className="fixed inset-0 z-[220] flex flex-col items-center justify-center overflow-hidden bg-white/90 backdrop-blur-[12px] pointer-events-auto"
         >
           <AnimatePresence initial={false}>
             {mediaMode !== "none" ? (
@@ -493,7 +421,7 @@ export function VoiceCallOverlay({
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1], delay: 0.1 }}
             >
-              <MicMeter level={micLevel} muted={muted} active={meterActive} />
+              <VoiceWaveform level={micLevel} muted={muted} active={meterActive} className="clyra-voice-call-waveform" />
             </motion.div>
 
             <StatusChip status={status} muted={muted} />
@@ -698,26 +626,11 @@ export function VoiceCallOverlay({
                     animate={{ scale: 1, opacity: 1 }}
                     exit={{ scale: 0.92, opacity: 0 }}
                     transition={{ type: "spring", stiffness: 320, damping: 28 }}
-                    className="grid w-full max-w-[352px] grid-cols-4 items-center justify-items-center"
+                    className="grid w-full max-w-[184px] grid-cols-2 items-center justify-items-center"
                   >
-                    <CallControlButton
-                      label={mediaMode === "none" ? "Share screen" : "Stop screen sharing"}
-                      onClick={() => {
-                        if (mediaMode === "screen") stopMedia();
-                        else void startMedia();
-                      }}
-                      active={mediaMode === "screen"}
-                    >
-                      <MonitorUp className="h-5 w-5" />
-                    </CallControlButton>
-
-                    <CallControlButton
-                      label="Type a message"
-                      onClick={() => setMenu("type")}
-                    >
-                      <Pencil className="h-5 w-5" />
-                    </CallControlButton>
-
+                    {/* The former left control (Type plus Share Screen) is
+                        intentionally hidden for now. `startMedia`, `stopMedia`
+                        and the type dock remain intact for the next UI pass. */}
                     <CallControlButton
                       label={muted ? "Unmute microphone" : "Mute microphone"}
                       onClick={onToggleMute}
@@ -738,4 +651,5 @@ export function VoiceCallOverlay({
       ) : null}
     </AnimatePresence>
   );
+  return typeof document === "undefined" ? overlay : createPortal(overlay, document.body);
 }

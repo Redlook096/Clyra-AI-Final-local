@@ -385,8 +385,9 @@ async function playIntoRecording(audioContext: AudioContext, destination: MediaS
   const decoded = await audioContext.decodeAudioData(data.slice(0));
   const source = audioContext.createBufferSource();
   source.buffer = decoded;
+  // Generation is an offline-ish render pass. Route narration exclusively to
+  // MediaRecorder's destination so users never hear the draft being encoded.
   source.connect(destination);
-  source.connect(audioContext.destination);
   await new Promise<void>((resolve, reject) => {
     const abort = () => {
       try { source.stop(); } catch { /* The source may already be stopped. */ }
@@ -458,8 +459,8 @@ function messageVideoStyle(theme: MessageTheme): MessageVideoStyle {
   }
   return {
     panel: "#000000",
-    header: "#1f1f1f",
-    incoming: "#292929",
+    header: "#1c1c1e",
+    incoming: "#2c2c2e",
     outgoing: "#0a84ff",
     incomingText: "#ffffff",
     outgoingText: "#ffffff",
@@ -477,7 +478,7 @@ function messageVideoGeometry(layout: MessageLayout, panelHeight: number) {
     return { x: 0, y: 0, width: 720, height: 760, radius: 0, headerHeight: 142 };
   }
   const height = Math.max(178, Math.min(520, panelHeight));
-  return { x: 11, y: 58, width: 702, height, radius: 36, headerHeight: Math.min(128, height * 0.47) };
+  return { x: 2, y: 18, width: 716, height, radius: 38, headerHeight: Math.min(132, height * 0.34) };
 }
 
 function drawMessageVideo(
@@ -501,7 +502,7 @@ function drawMessageVideo(
   context.fillRect(0, 0, 720, 1280);
   if (background) {
     drawCover(context, background, 720, 1280);
-    context.fillStyle = "rgba(17,73,51,.22)";
+    context.fillStyle = "rgba(15,23,42,.06)";
     context.fillRect(0, 0, 720, 1280);
   }
 
@@ -575,11 +576,9 @@ function drawMessageVideo(
     const removed = shown.shift();
     if (removed) contentHeight -= removed.bubbleHeight + 8;
   }
-  let bubbleY = y + headerHeight + 8;
-  if (shown.length > 2) bubbleY = y + height - contentHeight - 4;
-  for (const [index, item] of shown.entries()) {
+  let bubbleY = y + headerHeight + 14;
+  for (const item of shown) {
     const { message, lines, bubbleWidth, bubbleHeight } = item;
-    if (shown.length === 2 && index === 1) bubbleY = y + height - bubbleHeight - 8;
     const bubbleX = message.side === "right" ? x + width - bubbleWidth - 17 : x + 17;
     roundedRect(context, bubbleX, bubbleY, bubbleWidth, bubbleHeight, bubbleHeight / 2);
     context.fillStyle = message.side === "right" ? colors.outgoing : colors.incoming;
@@ -591,6 +590,14 @@ function drawMessageVideo(
       context.quadraticCurveTo(bubbleX + 1, bubbleY + bubbleHeight - 2, bubbleX + 4, bubbleY + bubbleHeight - 16);
       context.closePath();
       context.fillStyle = colors.incoming;
+      context.fill();
+    } else {
+      context.beginPath();
+      context.moveTo(bubbleX + bubbleWidth - 12, bubbleY + bubbleHeight - 13);
+      context.quadraticCurveTo(bubbleX + bubbleWidth - 3, bubbleY + bubbleHeight + 6, bubbleX + bubbleWidth + 7, bubbleY + bubbleHeight + 5);
+      context.quadraticCurveTo(bubbleX + bubbleWidth - 1, bubbleY + bubbleHeight - 2, bubbleX + bubbleWidth - 4, bubbleY + bubbleHeight - 16);
+      context.closePath();
+      context.fillStyle = colors.outgoing;
       context.fill();
     }
     context.fillStyle = message.side === "right" ? colors.outgoingText : colors.incomingText;
@@ -652,7 +659,7 @@ export async function renderMessageStoryVideo(options: { name: string; messages:
       currentWindowStart,
     );
     drawCurrentFrame();
-    if (backgroundVideo) backgroundTimer = window.setInterval(drawCurrentFrame, 1_000 / 30);
+    if (backgroundVideo) backgroundTimer = window.setInterval(drawCurrentFrame, 1_000 / 40);
     await cancellableDelay(220, options.signal);
     for (let index = 0; index < options.messages.length; index += 1) {
       throwIfCancelled(options.signal);
@@ -660,15 +667,6 @@ export async function renderMessageStoryVideo(options: { name: string; messages:
       if (index > 0 && index % 6 === 0) currentWindowStart = index;
       currentVisible = index + 1;
       const targetHeight = Math.min(520, 178 + (index - currentWindowStart + 1) * 58);
-      const startHeight = currentHeight;
-      const started = performance.now();
-      while (performance.now() - started < 220) {
-        throwIfCancelled(options.signal);
-        const progress = Math.min(1, (performance.now() - started) / 220);
-        currentHeight = startHeight + (targetHeight - startHeight) * (1 - Math.pow(1 - progress, 3));
-        drawCurrentFrame();
-        await cancellableDelay(16, options.signal);
-      }
       currentHeight = targetHeight;
       drawCurrentFrame();
       if (speeches[index]) await playIntoRecording(setup.audioContext, setup.audioDestination, speeches[index]!, options.signal);

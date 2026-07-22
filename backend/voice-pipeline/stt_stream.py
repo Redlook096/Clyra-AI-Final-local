@@ -67,6 +67,7 @@ class StreamingTranscriber:
     _spec_gen: int = 0
     _spec_started_at: float = 0.0
     _spec_buf_len: int = 0
+    _spec_speech_ms: float = 0.0
 
     def ensure_model(self) -> Any:
         if self._model is not None:
@@ -179,6 +180,7 @@ class StreamingTranscriber:
         gen = self._spec_gen
         self._spec_started_at = time.perf_counter()
         self._spec_buf_len = int(snapshot.size)
+        self._spec_speech_ms = self._speech_ms
 
         def _job() -> tuple[int, str, float, Optional[str], float]:
             t0 = time.perf_counter()
@@ -268,25 +270,12 @@ class StreamingTranscriber:
         return self._buffer[-(window + overlap) :]
 
     def _maybe_partial(self) -> None:
-        audio = self._window_audio()
-        text, conf, lang = self._transcribe_window(audio)
-        if not text:
-            return
-        if self._last_partial:
-            agreed = self._common_prefix(self._last_partial, text)
-            if len(agreed.split()) >= max(1, len(self._committed.split())):
-                elapsed_ms = (time.perf_counter() - self._utterance_started_at) * 1000
-                if elapsed_ms >= config.STT_MIN_COMMIT_MS and len(agreed) > len(self._committed):
-                    self._committed = agreed
-        self._last_partial = text
-        self._emit(
-            StreamEvent(
-                kind="partial",
-                text=text,
-                confidence=max(0.55, conf),
-                language=lang,
-            )
-        )
+        # A synchronous partial decode blocks this single audio worker for a
+        # whole Whisper pass. During a real sentence that makes queued frames
+        # pile up and can delay the final result for tens of seconds. Keep the
+        # useful speculative pass, but let it run in the existing one-flight
+        # executor; `_finalize` consumes it when it is still current.
+        self._start_speculative_decode()
 
     def force_finalize(self) -> None:
         """End the current utterance even if silence threshold isn't met yet."""
@@ -307,10 +296,12 @@ class StreamingTranscriber:
         decode_ms = 0.0
 
         fut = self._spec_future
-        # Only trust speculative result if buffer didn't grow with more speech
-        # and confidence is solid — otherwise re-decode (accuracy first).
-        buf_grew = self._buffer.size > self._spec_buf_len + int(self.sample_rate * 0.08)
-        if fut is not None and not buf_grew:
+        # Only invalidate a speculative pass when the speaker continued. The
+        # microphone can add several hundred milliseconds of trailing silence
+        # before a flush; treating that silence as new content used to force a
+        # second complete Whisper pass at the end of every turn.
+        speech_grew = self._speech_ms > self._spec_speech_ms + 1.0
+        if fut is not None and not speech_grew:
             try:
                 gen, text, conf, lang, decode_ms = fut.result(timeout=8.0)
                 if gen != self._spec_gen or conf < 0.7:

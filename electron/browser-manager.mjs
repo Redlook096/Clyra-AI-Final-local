@@ -6,6 +6,19 @@ import { dialog, session, WebContentsView } from "electron";
 const HOME_URL = "https://www.google.com/";
 const MAX_TABS = 16;
 
+function injectionSignals(lines) {
+  const patterns = [
+    /ignore\s+(?:all\s+)?previous\s+instructions/i,
+    /reveal\s+(?:the\s+)?system\s+prompt/i,
+    /disregard\s+(?:the\s+)?(?:prior|previous)\s+instructions/i,
+  ];
+  return [...new Set(lines
+    .flatMap((line) => String(line || "").split(/(?:\n+|(?<=[.!?])\s+)/))
+    .map((line) => line.trim())
+    .filter((line) => line && patterns.some((pattern) => pattern.test(line)))
+  )].slice(0, 12);
+}
+
 const DEFAULT_SETTINGS = {
   defaultSearchEngine: "google",
   restoreTabs: true,
@@ -55,9 +68,13 @@ export class ChromiumBrowserManager {
     this.bookmarks = [];
     this.downloads = [];
     this.settings = { ...DEFAULT_SETTINGS };
-    this.surface = { visible: false, bounds: { x: 0, y: 0, width: 2, height: 2 } };
+    // Keep a useful viewport even before the Browser workspace is visible.
+    // Native views can be hidden without being resized to 2px, so CDP/DOM
+    // inspection remains meaningful and tab state does not thrash on reopen.
+    this.surface = { visible: false, bounds: { x: 0, y: 0, width: 1280, height: 720 } };
     this.saveTimer = null;
     this.agent = { status: "idle", paused: false, manualControl: false };
+    this.destroyed = false;
   }
 
   async initialize() {
@@ -158,7 +175,18 @@ export class ChromiumBrowserManager {
   }
 
   async saveProfile() {
-    const lastTabs = [...this.tabs.values()].map((tab) => ({ url: tab.view.webContents.getURL() || HOME_URL }));
+    // A window-close event can arrive after Electron has torn down a child
+    // WebContentsView. Persist the tabs that remain readable and quietly skip
+    // views already released by Chromium.
+    const lastTabs = [...this.tabs.values()].flatMap((tab) => {
+      try {
+        const contents = tab?.view?.webContents;
+        if (!contents || contents.isDestroyed()) return [];
+        return [{ url: contents.getURL() || HOME_URL }];
+      } catch {
+        return [];
+      }
+    });
     const payload = {
       version: 1,
       history: this.history,
@@ -200,6 +228,9 @@ export class ChromiumBrowserManager {
     };
     this.tabs.set(id, tab);
     this.window.contentView.addChildView(view);
+    // Hidden tabs still need a real layout viewport for DOM/accessibility
+    // inspection and warm navigation. Visibility only controls compositing.
+    view.setBounds(this.surface.bounds);
     view.setVisible(false);
     this.wireTab(tab);
     // `nativeTheme.themeSource = "light"` is inherited by Chromium renderers.
@@ -333,7 +364,10 @@ export class ChromiumBrowserManager {
     return this.getState();
   }
 
-  setSurface({ bounds, visible }) {
+  async setSurface({ bounds, visible }) {
+    // A stale/corrupt persisted profile must never leave the native browser
+    // with an empty tab strip. Restore one durable Google tab before display.
+    if (this.tabs.size === 0) await this.createTab(HOME_URL, { activate: true, persist: true });
     const wasVisible = this.surface.visible;
     if (bounds) {
       this.surface.bounds = {
@@ -346,6 +380,7 @@ export class ChromiumBrowserManager {
     this.surface.visible = Boolean(visible);
     for (const [id, tab] of this.tabs) {
       const show = this.surface.visible && id === this.activeTabId;
+      tab.view.setBounds(this.surface.bounds);
       tab.view.setVisible(show);
       tab.view.webContents.setBackgroundThrottling(!show);
       if (show) {
@@ -353,12 +388,21 @@ export class ChromiumBrowserManager {
         if (!wasVisible) tab.view.webContents.focus();
       }
     }
+    this.emitState();
   }
 
   async navigate(target) {
     const contents = this.activeContents();
     if (!contents) throw new Error("No active browser tab.");
-    await contents.loadURL(normalizeInput(target, this.settings.defaultSearchEngine));
+    const destination = normalizeInput(target, this.settings.defaultSearchEngine);
+    try {
+      await contents.loadURL(destination);
+    } catch (error) {
+      // Chromium can reject a redundant Google new-tab recovery while the
+      // existing native tab is already usable. Keep that recovery local and
+      // surface genuine navigation failures for every other destination.
+      if (destination !== HOME_URL || !/^https:\/\/(?:www\.)?google\.com\/?$/i.test(contents.getURL())) throw error;
+    }
     return this.getState();
   }
 
@@ -426,16 +470,17 @@ export class ChromiumBrowserManager {
       const root = document.querySelector("main,article,[role='main']") || document.body;
       return { url: location.href, title: document.title, loading: document.readyState === "loading", viewport: { width: innerWidth, height: innerHeight, scrollX: scrollX, scrollY: scrollY, pageHeight: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0), zoom: 1 }, headings, elements, visibleText: [...new Set(lines)].slice(0, 160), mainText: clean(root.innerText || "", ${maxChars}), structuredData: [] };
     })()`, true);
+    const signals = injectionSignals([...page.visibleText, page.mainText]);
     const fingerprint = crypto.createHash("sha1").update(`${page.url}|${page.title}|${page.visibleText.slice(0, 80).join("|")}|${page.elements.map((item) => `${item.id}:${item.value}:${item.checked}`).join("|")}`).digest("hex").slice(0, 16);
     return {
       page: { url: page.url, title: page.title, loading: page.loading, fingerprint },
       viewport: page.viewport,
       headings: page.headings,
       elements: page.elements,
-      visibleText: page.visibleText,
-      mainText: page.mainText,
+      visibleText: page.visibleText.filter((line) => !signals.includes(line)),
+      mainText: signals.reduce((text, signal) => text.replaceAll(signal, "[untrusted instruction-like page text removed]"), page.mainText),
       structuredData: page.structuredData,
-      promptInjectionSignals: [],
+      promptInjectionSignals: signals,
       tabs: this.getState().tabs,
       diff: { urlChanged: false, titleChanged: false, addedText: [], removedText: [] },
       activeTabId: tab?.id,
@@ -464,6 +509,13 @@ export class ChromiumBrowserManager {
     };
     const click = async (clickCount = 1, button = "left") => {
       if (!point) throw new Error("The requested target is no longer visible.");
+      // A hidden native view has no compositor target for dispatchMouseEvent.
+      // Use the actual page node in that same WebContents until the user opens
+      // Browser again; visible browser actions always retain CDP coordinates.
+      if (!this.surface.visible && resolved) {
+        await contents.executeJavaScript(`document.querySelector(${JSON.stringify(`[data-clyra-browser-id="${resolved.id}"]`)})?.click()`, true);
+        return;
+      }
       await withDebugger(async (send) => {
         const params = { x: Math.round(point.x), y: Math.round(point.y), button, clickCount };
         await send("Input.dispatchMouseEvent", { type: "mousePressed", ...params });
@@ -506,6 +558,19 @@ export class ChromiumBrowserManager {
       }); break;
       case "type": {
         await focus();
+        if (!this.surface.visible && resolved) {
+          await contents.executeJavaScript(`(() => {
+            const node = document.querySelector(${JSON.stringify(`[data-clyra-browser-id="${resolved.id}"]`)});
+            if (!node) return;
+            const value = ${JSON.stringify(String(action.text || ""))};
+            if ("value" in node) node.value = ${action.clearFirst !== false ? "\"\"" : "node.value"} + value;
+            else if (node.isContentEditable) node.textContent = ${action.clearFirst !== false ? "value" : "node.textContent + value"};
+            node.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+            node.dispatchEvent(new Event("change", { bubbles: true }));
+          })()`, true);
+          if (action.submit) await contents.executeJavaScript(`document.querySelector(${JSON.stringify(`[data-clyra-browser-id="${resolved.id}"]`)})?.form?.requestSubmit?.()`, true);
+          break;
+        }
         if (action.clearFirst !== false) {
           await contents.executeJavaScript(`(() => { const node = document.activeElement; if (node && (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)) node.select(); else document.execCommand("selectAll"); })()`, true);
         }
@@ -517,6 +582,30 @@ export class ChromiumBrowserManager {
         if (action.submit) await key("Enter");
         break;
       }
+      case "check":
+      case "uncheck": {
+        if (!resolved) throw new Error("The requested control is no longer visible.");
+        const desired = action.type === "check";
+        await contents.executeJavaScript(`(() => { const node = document.querySelector(${JSON.stringify(`[data-clyra-browser-id="${resolved.id}"]`)}); if (node && node.checked !== ${desired}) node.click(); })()`, true);
+        break;
+      }
+      case "select_option": {
+        if (!resolved) throw new Error("The requested control is no longer visible.");
+        const selected = await contents.executeJavaScript(`(() => {
+          const node = document.querySelector(${JSON.stringify(`[data-clyra-browser-id="${resolved.id}"]`)});
+          if (!(node instanceof HTMLSelectElement)) return false;
+          const comparable = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9.]+/g, "");
+          const needle = comparable(${JSON.stringify(String(action.value ?? action.label ?? ""))});
+          const option = [...node.options].find((candidate) => comparable(candidate.value) === needle || comparable(candidate.label) === needle || comparable(candidate.textContent) === needle);
+          if (!option) return false;
+          node.value = option.value;
+          node.dispatchEvent(new Event("input", { bubbles: true }));
+          node.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        })()`, true);
+        if (!selected) throw new Error("The requested select option was not found.");
+        break;
+      }
       case "press": case "press_key": await key(action.key); break;
       case "key_combination": {
         const keys = action.keys || [];
@@ -524,11 +613,21 @@ export class ChromiumBrowserManager {
         await key(keys[keys.length - 1], modifiers);
         break;
       }
-      case "scroll": contents.sendInputEvent({ type: "mouseWheel", x: Math.round(point?.x || 8), y: Math.round(point?.y || 8), deltaX: action.direction === "left" ? Math.abs(action.amount || 600) : action.direction === "right" ? -Math.abs(action.amount || 600) : 0, deltaY: action.direction === "up" ? Math.abs(action.amount || 600) : -Math.abs(action.amount || 600), canScroll: true }); break;
+      case "scroll": {
+        const amount = Math.abs(Number(action.amount || 600));
+        if (!this.surface.visible) {
+          const x = action.direction === "left" ? -amount : action.direction === "right" ? amount : 0;
+          const y = action.direction === "up" ? -amount : amount;
+          await contents.executeJavaScript(`window.scrollBy({ left: ${x}, top: ${y}, behavior: "instant" })`, true);
+        } else {
+          contents.sendInputEvent({ type: "mouseWheel", x: Math.round(point?.x || 8), y: Math.round(point?.y || 8), deltaX: action.direction === "left" ? Math.abs(amount) : action.direction === "right" ? -Math.abs(amount) : 0, deltaY: action.direction === "up" ? Math.abs(amount) : -Math.abs(amount), canScroll: true });
+        }
+        break;
+      }
       case "scroll_to_top": await contents.executeJavaScript("window.scrollTo({top:0,behavior:'smooth'})", true); break;
       case "scroll_to_bottom": await contents.executeJavaScript("window.scrollTo({top:document.documentElement.scrollHeight,behavior:'smooth'})", true); break;
       case "scroll_to": await contents.executeJavaScript(`document.querySelector(${JSON.stringify(resolved ? `[data-clyra-browser-id="${resolved.id}"]` : "")})?.scrollIntoView({block:'center',behavior:'smooth'})`, true); break;
-      case "check": case "uncheck": case "select_option": case "drag": case "wait": case "read_page": case "extract": case "inspect_element": case "find_text": case "ask_user": case "done": break;
+      case "drag": case "wait": case "read_page": case "extract": case "inspect_element": case "find_text": case "ask_user": case "done": break;
       default: break;
     }
     await new Promise((resolve) => setTimeout(resolve, action?.type === "navigate" || action?.type === "search" ? 350 : 90));
@@ -582,10 +681,31 @@ export class ChromiumBrowserManager {
     })()`, true).catch(() => undefined);
   }
 
-  find(text) {
+  async find(text) {
     const contents = this.activeContents();
-    if (!contents || !text) return { requestId: -1 };
-    return { requestId: contents.findInPage(text, { findNext: true }) };
+    const query = String(text || "").trim();
+    if (!contents || !query) {
+      contents?.stopFindInPage?.("clearSelection");
+      return { result: { total: 0, current: 0 }, state: this.getState() };
+    }
+
+    const result = await new Promise((resolve) => {
+      let settled = false;
+      const finish = (payload) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        contents.removeListener("found-in-page", onFound);
+        resolve(payload);
+      };
+      const onFound = (_event, detail) => {
+        if (detail.finalUpdate) finish({ total: detail.matches || 0, current: detail.activeMatchOrdinal || 0 });
+      };
+      const timeout = setTimeout(() => finish({ total: 0, current: 0 }), 2_000);
+      contents.on("found-in-page", onFound);
+      contents.findInPage(query, { findNext: true, forward: true, findMatchCase: false });
+    });
+    return { result, state: this.getState() };
   }
 
   zoom(delta) {
@@ -604,12 +724,16 @@ export class ChromiumBrowserManager {
     return this.getState();
   }
 
-  addBookmark() {
+  addBookmark(input = {}) {
     const tab = this.activeTabId ? this.tabs.get(this.activeTabId) : null;
     if (!tab) return this.getState();
-    const url = tab.view.webContents.getURL();
-    if (!this.bookmarks.some((bookmark) => bookmark.url === url)) {
-      this.bookmarks.unshift({ id: crypto.randomUUID(), url, title: tab.title || url, folder: "Bookmarks", createdAt: new Date().toISOString() });
+    const url = input.url || tab.view.webContents.getURL();
+    const existing = this.bookmarks.find((bookmark) => bookmark.url === url);
+    if (existing) {
+      existing.title = input.title || existing.title;
+      existing.folder = input.folder || existing.folder;
+    } else {
+      this.bookmarks.unshift({ id: crypto.randomUUID(), url, title: input.title || tab.title || url, folder: input.folder || "Bookmarks", createdAt: new Date().toISOString() });
       this.scheduleSave();
     }
     this.emitState();
@@ -730,8 +854,9 @@ export class ChromiumBrowserManager {
 
   getState() {
     const active = this.activeTabId ? this.tabs.get(this.activeTabId) : null;
-    const contents = active?.view.webContents;
-    const url = contents?.getURL() || HOME_URL;
+    const contents = active?.view?.webContents;
+    const readableContents = contents && !contents.isDestroyed() ? contents : null;
+    const url = readableContents?.getURL() || HOME_URL;
     const bounds = this.surface.bounds;
     return {
       url,
@@ -740,18 +865,26 @@ export class ChromiumBrowserManager {
       viewport: { width: bounds.width, height: bounds.height, scrollX: 0, scrollY: 0, pageHeight: bounds.height },
       loading: Boolean(active?.loading),
       elements: [],
-      tabs: [...this.tabs.values()].map((tab) => ({
-        id: tab.id,
-        title: tab.title,
-        url: tab.view.webContents.getURL(),
-        active: tab.id === this.activeTabId,
-        loading: tab.loading,
-        favicon: tab.favicon,
-        zoom: tab.zoom,
-      })),
+      tabs: [...this.tabs.values()].flatMap((tab) => {
+        try {
+          const tabContents = tab?.view?.webContents;
+          if (!tabContents || tabContents.isDestroyed()) return [];
+          return [{
+            id: tab.id,
+            title: tab.title,
+            url: tabContents.getURL(),
+            active: tab.id === this.activeTabId,
+            loading: tab.loading,
+            favicon: tab.favicon,
+            zoom: tab.zoom,
+          }];
+        } catch {
+          return [];
+        }
+      }),
       activeTabId: this.activeTabId,
-      canGoBack: Boolean(contents?.navigationHistory.canGoBack()),
-      canGoForward: Boolean(contents?.navigationHistory.canGoForward()),
+      canGoBack: Boolean(readableContents?.navigationHistory.canGoBack()),
+      canGoForward: Boolean(readableContents?.navigationHistory.canGoForward()),
       secure: url.startsWith("https://"),
       zoom: active?.zoom || 1,
       history: this.history,
@@ -764,17 +897,38 @@ export class ChromiumBrowserManager {
   }
 
   emitState() {
-    if (!this.uiView.webContents.isDestroyed()) this.uiView.webContents.send("browser:state", this.getState());
+    if (this.destroyed) return;
+    try {
+      if (this.uiView?.webContents && !this.uiView.webContents.isDestroyed()) {
+        this.uiView.webContents.send("browser:state", this.getState());
+      }
+    } catch {
+      // The shell may already be closing. Native browser state no longer has a
+      // renderer to update in that case.
+    }
   }
 
   destroy() {
+    if (this.destroyed) return;
+    this.destroyed = true;
     clearTimeout(this.saveTimer);
     void this.saveProfile();
     for (const tab of this.tabs.values()) {
-      this.window.contentView.removeChildView(tab.view);
-      if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close({ waitForBeforeUnload: false });
+      try {
+        if (this.window && !this.window.isDestroyed()) this.window.contentView.removeChildView(tab.view);
+      } catch {
+        // The BrowserWindow owns this view and can release it first on macOS.
+      }
+      try {
+        if (tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
+          tab.view.webContents.close({ waitForBeforeUnload: false });
+        }
+      } catch {
+        // Closing a renderer that Chromium has already destroyed is harmless.
+      }
     }
     this.tabs.clear();
+    this.activeTabId = null;
   }
 }
 

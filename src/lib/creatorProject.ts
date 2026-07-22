@@ -231,9 +231,7 @@ export function migrateCreatorProject(raw: unknown, fallbackType: CreatorProject
     project.theme = value.theme === "ios_light" ? "ios_light" : "ios_dark";
     project.layout = "floating_phone";
     const gameplayId = typeof value.gameplay?.clipId === "string" ? value.gameplay.clipId : undefined;
-    const selectedGameplay = gameplayId || typeof value.background !== "string"
-      ? getFakeTextGameplayClip(gameplayId)
-      : undefined;
+    const selectedGameplay = getFakeTextGameplayClip(gameplayId);
     project.gameplay = selectedGameplay ? {
       clipId: selectedGameplay.id,
       category: selectedGameplay.category,

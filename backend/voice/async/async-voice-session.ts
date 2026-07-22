@@ -229,6 +229,23 @@ export class AsyncVoiceSession {
     context.initialized = true;
   }
 
+  /** Confirm a provider acknowledgement produced actual PCM within a bounded window. */
+  async waitForFirstAudio(contextId: string, timeoutMs = 1_500) {
+    const context = this.contexts.get(contextId);
+    if (!context || context.cancelled) return false;
+    if (context.receivedAudio) return true;
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        context.resolveFirstAudio = null;
+        resolve(context.receivedAudio);
+      }, timeoutMs);
+      context.resolveFirstAudio = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+    });
+  }
+
   async closeContext(contextId: string, timeoutMs = 20_000) {
     const context = this.contexts.get(contextId);
     if (!context || context.cancelled) return;
@@ -285,7 +302,11 @@ export class AsyncVoiceSession {
     this.closed = true;
     for (const [contextId] of this.contexts) this.cancelContext(contextId);
     if (this.socket?.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify({ terminate: true }));
+      // Async documents both `{ terminate: true }` and `{ text: "" }` as
+      // graceful connection-close frames. The current production validator
+      // applies the regular transcript schema to the terminate form, so use
+      // the empty-text form to close without an avoidable protocol error.
+      this.socket.send(JSON.stringify({ text: "" }));
     }
     this.socket?.close();
     this.socket = null;

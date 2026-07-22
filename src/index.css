@@ -3568,7 +3568,7 @@ body,
   box-shadow: none;
 }
 
-.clyra-chat-page .clyra-workspace-card {
+.clyra-chat-page .clyra-workspace-card:not([data-workspace-motion]) {
   background: var(--chat-bg);
 }
 
@@ -4177,14 +4177,14 @@ body,
 /* The welcome surface is absolutely positioned. Keep it full-width so its
    flex children can share the viewport centre; a capped absolute surface is
    otherwise pinned to an edge during the sidebar and boot handoff. */
-.clyra-chat-page .clyra-workspace-card {
+.clyra-chat-page .clyra-workspace-card:not([data-workspace-motion]) {
   left: 0 !important;
   right: 0 !important;
   width: 100% !important;
   max-width: none !important;
   transform: none !important;
 }
-.clyra-workspace-scene--sidebar-open .clyra-workspace-card {
+.clyra-workspace-scene--sidebar-open .clyra-workspace-card:not([data-workspace-motion]) {
   /* The sidebar is an overlay. Keep the canvas fixed so opening, closing, and
      the boot handoff never move the welcome or chat composition sideways. */
   transform: none !important;
@@ -4192,7 +4192,7 @@ body,
 
 /* The active conversation already spans the viewport. Recentre just its
    reading and composer rails instead of shifting the full-width canvas. */
-.clyra-workspace-scene--sidebar-open .clyra-workspace-card:has(#chat-container) {
+.clyra-workspace-scene--sidebar-open .clyra-workspace-card:not([data-workspace-motion]):has(#chat-container) {
   transform: none !important;
 }
 
@@ -4347,8 +4347,8 @@ body,
 }
 
 @media (min-width: 761px) and (max-width: 1100px) {
-  .clyra-workspace-scene--sidebar-open .clyra-workspace-card { transform: none !important; }
-  .clyra-workspace-scene--sidebar-open .clyra-workspace-card:has(#chat-container) { transform: none !important; }
+  .clyra-workspace-scene--sidebar-open .clyra-workspace-card:not([data-workspace-motion]) { transform: none !important; }
+  .clyra-workspace-scene--sidebar-open .clyra-workspace-card:not([data-workspace-motion]):has(#chat-container) { transform: none !important; }
   .clyra-workspace-scene--sidebar-open .clyra-workspace-card:has(#chat-container) #chat-container,
   .clyra-workspace-scene--sidebar-open .clyra-workspace-card:has(#chat-container) .clyra-composer-transition { transform: none !important; }
 }
@@ -4746,9 +4746,7 @@ body,
   bottom: 0;
   transition: bottom 720ms cubic-bezier(.16, 1, .3, 1);
 }
-.clyra-chat-page .clyra-composer-welcome:has(.clyra-composer-expanded) {
-  bottom: -58px;
-}
+.clyra-chat-page .clyra-composer-welcome:has(.clyra-composer-expanded) { bottom: 0; }
 
 .clyra-chat-page .input-wrapper:not(.loading) {
   transform-origin: top center;
@@ -5086,12 +5084,155 @@ body,
   will-change: transform;
   background: linear-gradient(90deg, #314a6b, #6b8eb7 72%, #9cc7e6);
   box-shadow: 0 0 12px rgba(83, 123, 171, .18);
+  transition: transform 1.12s cubic-bezier(.22, 1, .36, 1);
+}
+
+.clyra-boot-overlay .clyra-boot-progress__fill::after {
+  /* The next milestone is scheduled just after this pass reaches the end. */
+  display: none;
+}
+
+.clyra-boot-overlay .clyra-boot-progress__shine {
+  position: absolute;
+  inset: 0 auto 0 -44%;
+  width: 34%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .78), transparent);
+  filter: blur(.25px);
+  animation: clyra-boot-progress-shimmer 1.7s cubic-bezier(.22, 1, .36, 1) both;
+  will-change: transform;
 }
 
 .clyra-boot-overlay .clyra-boot-progress__label {
   color: #667a93;
   font-size: 12px;
   font-weight: 650;
+}
+
+.clyra-browser-ai-control {
+  box-shadow: inset 0 0 0 1px rgba(59,130,246,.44), inset 0 0 22px rgba(59,130,246,.10);
+}
+
+.clyra-browser-ai-control::after {
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  content: "";
+  background: linear-gradient(105deg, transparent 10%, rgba(147,197,253,.72) 48%, transparent 72%);
+  background-size: 210% 100%;
+  animation: clyra-browser-control-glow 1.85s linear infinite;
+  opacity: .62;
+}
+
+.clyra-browser-agent-cursor::before {
+  position: absolute;
+  left: -7px;
+  top: -7px;
+  width: 25px;
+  height: 25px;
+  border-radius: 999px;
+  content: "";
+  background: rgba(59,130,246,.16);
+  box-shadow: 0 0 18px rgba(59,130,246,.38);
+  animation: clyra-browser-cursor-halo 1.35s ease-in-out infinite;
+}
+
+.clyra-browser-agent-cursor > * { position: relative; }
+
+.clyra-browser-user-message-entry {
+  will-change: transform, opacity;
+}
+
+@keyframes clyra-browser-control-glow {
+  from { background-position: 190% 0; }
+  to { background-position: -80% 0; }
+}
+
+@keyframes clyra-browser-cursor-halo {
+  50% { transform: scale(1.16); opacity: .72; }
+}
+
+.clyra-browser-plan {
+  border: 1px solid rgba(226,232,240,.92);
+  border-radius: 16px;
+  background: rgba(255,255,255,.9);
+  padding: 7px;
+  box-shadow: 0 8px 22px rgba(35,54,76,.05);
+}
+
+.clyra-browser-plan__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 5px 8px;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.clyra-browser-plan__steps { display: grid; gap: 4px; }
+.clyra-browser-plan__step {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 8px;
+  border-radius: 10px;
+  padding: 5px 8px;
+  color: #94a3b8;
+  font-size: 9.5px;
+  font-weight: 600;
+  transition: background-color 180ms ease, color 180ms ease, box-shadow 180ms ease;
+}
+.clyra-browser-plan__step--active { background: #f8fbff; color: #334155; box-shadow: inset 0 0 0 1px rgba(147,197,253,.35), 0 2px 8px rgba(35,54,76,.045); }
+.clyra-browser-plan__step--complete { color: #64748b; }
+.clyra-browser-plan__marker { display: grid; width: 16px; height: 16px; flex: 0 0 16px; place-items: center; border: 1px solid #e2e8f0; border-radius: 999px; background: #fff; color: #94a3b8; font-size: 8px; }
+.clyra-browser-plan__step--active .clyra-browser-plan__marker { border-color: #bfdbfe; background: #eff6ff; color: #2563eb; box-shadow: 0 0 0 3px rgba(59,130,246,.07); }
+.clyra-browser-plan__step--complete .clyra-browser-plan__marker { border-color: #bbf7d0; background: #f0fdf4; color: #16a34a; }
+
+/* Creator previews are authored in a vertical 9:16 coordinate space.  Keep
+   that geometry intact when the desktop window is not maximised instead of
+   letting the preview fall beneath the editor rails. */
+.creator-preview-canvas {
+  min-width: 0;
+  min-height: 0;
+  padding: clamp(8px, 1.6vw, 20px);
+}
+
+.creator-preview-stage {
+  container-type: size;
+  isolation: isolate;
+}
+
+.creator-preview-stage > :first-child {
+  min-width: 0;
+  min-height: 0;
+}
+
+.creator-preview-canvas .creator-preview-stage {
+  height: auto;
+  width: min(100%, 360px);
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: 9 / 16;
+}
+
+.clyra-clipper-workspace {
+  isolation: isolate;
+  contain: layout paint;
+}
+
+.clyra-clipper-workspace input,
+.clyra-clipper-workspace textarea,
+.clyra-clipper-workspace button,
+.clyra-clipper-workspace select {
+  pointer-events: auto;
+}
+
+@media (max-height: 760px) {
+  .creator-preview-canvas {
+    min-height: 300px;
+    padding: 8px;
+  }
 }
 
 @keyframes clyra-boot-halo {
@@ -5206,8 +5347,165 @@ body,
   box-shadow: 0 10px 24px rgba(25, 45, 75, .08) !important;
 }
 
+/* Creator Studio is a desktop editing surface. Keep its tools and preview in
+   the same side-by-side composition at reduced window sizes instead of
+   reflowing the preview underneath and losing the timeline. */
+.creator-setup-layout {
+  grid-template-columns: minmax(148px, .62fr) minmax(260px, 1.5fr);
+}
+
+.creator-template-layout {
+  grid-template-columns: minmax(280px, 2.1fr) minmax(238px, 1fr);
+}
+
+.creator-editor-layout {
+  grid-template-columns: minmax(132px, .72fr) minmax(230px, 1.5fr) minmax(156px, .82fr);
+}
+
+.creator-editor-layout > aside {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.creator-editor-layout .creator-preview-canvas {
+  min-height: 0;
+  padding: clamp(8px, 1.6vw, 20px);
+}
+
+.creator-editor-layout .creator-preview-stage {
+  width: min(100%, 360px);
+  max-height: 100%;
+}
+
+@media (max-width: 640px) {
+  .creator-setup-layout { grid-template-columns: minmax(118px, .55fr) minmax(210px, 1.45fr); }
+  .creator-template-layout { grid-template-columns: minmax(210px, 1.55fr) minmax(150px, .8fr); }
+  .creator-editor-layout { grid-template-columns: minmax(104px, .62fr) minmax(190px, 1.35fr) minmax(126px, .7fr); }
+}
+
+.clyra-voice-waveform {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+.clyra-voice-waveform__bar {
+  width: 3px;
+  min-height: 4px;
+  border-radius: 999px;
+  background: #64748b;
+  transform: translateZ(0);
+  will-change: height, opacity;
+}
+
+.clyra-voice-call-waveform {
+  width: min(340px, 72vw);
+  margin-top: 16px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .clyra-m1-boot {
     animation: none !important;
   }
+}
+
+/* The stage has a capped reading width in several workspaces. It must still
+   sit in the centre of the available scene rather than inheriting flex-start
+   from the shell when the sidebar is closed or opened. */
+.clyra-layout-stage {
+  margin-inline: auto;
+}
+
+/* Chat uses one centred conversation rail. The rail is intentionally wider
+   than the old 640px cap so user bubbles do not crowd the middle of a desktop
+   workspace, while retaining a generous gutter at smaller widths. */
+.clyra-chat-page #chat-container {
+  width: min(780px, calc(100% - 48px));
+  margin-inline: auto;
+}
+
+/* Chat is allowed to use the complete scene even when a previous workspace
+   leaves a split-pane shell mounted for a transition. This keeps the welcome
+   composition truly viewport-centred at every desktop window width. */
+.clyra-chat-page .clyra-workspace-card[data-workspace-motion] {
+  left: 50%;
+  right: auto;
+  width: 100vw;
+  margin-left: -50vw;
+}
+
+.clyra-chat-page .clyra-workspace-card[data-workspace-motion] > .text-center:has(.clyra-chat-quick-actions) {
+  position: relative;
+  top: -42px;
+}
+
+.clyra-chat-page .clyra-composer-welcome--expanded {
+  /* Matches the lower shelf height, keeping the visible text field top still. */
+  padding-bottom: 5px;
+}
+
+.clyra-clip-source-preview__frame {
+  width: auto;
+  height: min(31dvh, 300px);
+  max-width: 100%;
+  aspect-ratio: 16 / 9;
+  margin-inline: auto;
+}
+
+@media (max-height: 820px) {
+  .clyra-clipper-workspace { padding-top: 14px; padding-bottom: 14px; }
+  .clyra-clip-source-preview__frame { height: min(29dvh, 250px); }
+}
+
+@media (max-height: 680px) {
+  .clyra-clipper-workspace > header { padding-bottom: 10px; }
+  .clyra-clipper-workspace > nav { padding-bottom: 10px; }
+  .clyra-clip-source-preview { margin-top: 12px; }
+  .clyra-clip-source-preview__frame { height: min(26dvh, 180px); }
+}
+
+/* The active composer is flush with the bottom edge; the latest-message
+   affordance floats above it where it remains visible and immediately usable. */
+.clyra-chat-page .clyra-composer-transition:not(.clyra-composer-welcome) {
+  bottom: 0;
+}
+
+.clyra-scroll-latest {
+  bottom: 104px;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+}
+
+/* The workspace scene, not an inherited split-pane, owns Chat's centre.
+   This survives a return from every other workspace and fullscreen resizing. */
+.clyra-chat-page .clyra-workspace-card[data-workspace-motion] {
+  left: 0;
+  right: 0;
+  width: 100%;
+  /* The older welcome rule capped this absolutely positioned scene at 980px.
+     Absolute inset positioning then anchored that cap to the left, so Chat
+     entered visibly off-centre after a workspace switch or launcher handoff. */
+  max-width: none !important;
+  margin-left: 0;
+}
+
+/* Keep the welcome group centred by the complete viewport-sized scene. This
+   deliberately wins over the earlier narrow-card styling for every entry
+   path: a cold launch, returning from a tool, and opening from the launcher. */
+.clyra-chat-page .clyra-workspace-card[data-workspace-motion]:has(.clyra-chat-quick-actions) {
+  justify-content: center;
+  align-items: stretch;
+}
+
+/* Let the lower composer shelf grow without moving or bouncing the text row. */
+.clyra-chat-page .clyra-composer-welcome {
+  transition: none !important;
+}
+
+@media (max-width: 760px) {
+  .clyra-chat-page #chat-container { width: calc(100% - 28px); }
+  .clyra-scroll-latest { bottom: 92px; }
 }

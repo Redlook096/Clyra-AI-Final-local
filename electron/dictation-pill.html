@@ -1,6 +1,126 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
-<style>
-  :root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#172033}body{margin:0;background:transparent;overflow:hidden}.pill{margin:10px auto;max-width:396px;min-height:52px;display:flex;align-items:center;gap:11px;padding:10px 12px;border:1px solid rgba(148,163,184,.34);border-radius:17px;background:rgba(255,255,255,.96);box-shadow:0 14px 36px rgba(15,23,42,.14);backdrop-filter:blur(18px);transition:transform .2s cubic-bezier(.22,1,.36,1),opacity .2s}.signal{display:flex;align-items:center;gap:2px;width:28px;height:20px}.signal i{width:3px;border-radius:3px;background:#4f8ff7;transform:scaleY(calc(.28 + var(--level, 0) * .72));transform-origin:center;opacity:calc(.45 + var(--level, 0) * .55);transition:transform 90ms linear,opacity 90ms linear}.signal i:nth-child(2){height:14px}.signal i:nth-child(3){height:20px}.signal i:nth-child(4){height:11px}.copy{min-width:0;flex:1}.title{font-size:12px;font-weight:650}.detail{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;font-size:11px;color:#718096}.actions{display:flex;gap:6px}button{border:1px solid #dbe3ef;border-radius:10px;background:#fff;color:#27364e;padding:6px 9px;font:600 11px inherit;cursor:pointer;transition:background .14s,transform .14s}button:hover{background:#f4f7fb;transform:translateY(-1px)}button.primary{border-color:#1d4ed8;background:#2563eb;color:#fff}button.close{padding:6px 8px}.preview .detail{white-space:nowrap}.error .signal i{background:#dc5b5b}
-</style></head><body><main class="pill" id="pill"><span class="signal" aria-hidden="true"><i></i><i></i><i></i><i></i></span><div class="copy"><div class="title" id="title">Clyra Dictation</div><div class="detail" id="detail"></div></div><div class="actions" id="actions"></div></main>
-<script>const p=document.getElementById('pill'),t=document.getElementById('title'),d=document.getElementById('detail'),a=document.getElementById('actions');let signature='';function b(label,action,primary=false){const e=document.createElement('button');e.textContent=label;e.className=primary?'primary':'';e.onclick=()=>window.clyraDictationPill.action(action);a.append(e)}function render(s={}){p.style.setProperty('--level',String(Math.max(0,Math.min(1,Number(s.level)||0))));const next=[s.phase||'',s.detail||'',s.preview||''].join('|');if(next===signature)return;signature=next;a.innerHTML='';p.className='pill '+(s.phase||'');t.textContent=s.phase==='selection'?'Use selected text':s.phase==='listening'?'Listening':s.phase==='processing'?'Processing dictation':s.phase==='optimising'?'Optimising':s.phase==='preview'?'Rewrite preview':s.phase==='error'?'Dictation needs attention':'Clyra Dictation';d.textContent=s.preview||s.detail||'';if(s.phase==='selection'){b('Replace','replace',true);b('Optimise','optimise');b('×','cancel')}else if(s.phase==='listening'){b('Stop','stop',true);b('Cancel','cancel')}else if(s.phase==='preview'){b('Replace','replace-preview',true);b('Try again','try-again');b('Copy','copy');b('×','cancel')}else if(s.phase==='processing'||s.phase==='optimising'){b('Cancel','cancel')}else if(s.phase==='error'){b('Close','cancel')}}window.clyraDictationPill.onState(render);render();</script></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root { color: #172033; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; overflow: hidden; background: transparent; }
+    #stage { display: grid; width: 100%; height: 100%; place-items: center; }
+    #pill { box-sizing: border-box; display: flex; align-items: center; justify-content: center; width: 56px; height: 56px; gap: 6px; padding: 4px; overflow: hidden; border: 1px solid rgba(203,213,225,.92); border-radius: 999px; background: rgba(255,255,255,.985); box-shadow: 0 10px 26px rgba(15,23,42,.13), 0 1px 4px rgba(15,23,42,.05); opacity: 0; transform: scale(.84); transition: width .46s cubic-bezier(.16,1,.3,1), padding .46s cubic-bezier(.16,1,.3,1), gap .46s cubic-bezier(.16,1,.3,1), opacity .2s ease, transform .46s cubic-bezier(.16,1,.3,1); }
+    #pill[hidden] { display: none; }
+    #pill[data-ready="true"] { opacity: 1; transform: scale(1); }
+    #pill[data-expanded="true"] { width: min(286px,calc(100vw - 24px)); padding: 4px 5px; }
+    button { appearance: none; border: 0; cursor: pointer; font: inherit; }
+    .control { display: grid; flex: 0 0 auto; width: 46px; height: 46px; place-items: center; border-radius: 50%; opacity: 0; transform: scale(.78); transition: opacity .2s ease .08s, transform .32s cubic-bezier(.16,1,.3,1) .08s, background .16s ease; }
+    #pill[data-expanded="true"] .control { opacity: 1; transform: scale(1); }
+    .cancel { background: #e8eef7; color: #61718a; } .cancel:hover { background: #dbe5f1; }
+    .stop { background: #ff3b30; color: #fff; } .stop:hover { background: #ed2f25; }
+    .control b { font-size: 25px; font-weight: 400; line-height: 1; } .control i { display: block; width: 14px; height: 14px; border-radius: 3px; background: currentColor; }
+    .meter { display: flex; flex: 1; min-width: 0; height: 34px; align-items: center; justify-content: center; gap: 2px; opacity: 0; transform: scale(.88); transition: opacity .18s ease .1s, transform .32s cubic-bezier(.16,1,.3,1) .1s, flex-basis .28s ease; }
+    #pill[data-expanded="true"] .meter { opacity: 1; transform: scale(1); }
+    .bar { display: block; width: 3px; height: 8px; flex: 0 0 3px; border-radius: 999px; background: linear-gradient(180deg, #7db4ff, #347ce4); box-shadow: 0 0 7px rgba(59,130,246,.15); transform-origin: center; will-change: height, opacity; }
+    .status { display: none; flex: 1; min-width: 0; align-items: center; justify-content: center; gap: 8px; color: #55657d; font-size: 11px; font-weight: 650; opacity: 0; transform: translateY(4px); transition: opacity .2s ease, transform .28s cubic-bezier(.16,1,.3,1); }
+    .loader { width: 13px; height: 13px; border: 1.5px solid #bfdbfe; border-top-color: #397ce0; border-radius: 50%; animation: spin .8s linear infinite; }
+    #pill[data-processing="true"] .meter { display: none; }
+    #pill[data-processing="true"] .status { display: flex; opacity: 1; transform: translateY(0); }
+    .selection { display: none; flex: 1; gap: 6px; align-items: center; }
+    #pill[data-selection="true"] .selection { display: flex; }
+    #pill[data-selection="true"] .meter, #pill[data-selection="true"] .status { display: none; }
+    .choice { flex: 1; height: 44px; border-radius: 14px; background: #f1f5f9; color: #18243a; font-size: 12px; font-weight: 680; transition: background .16s ease, transform .16s ease; }
+    .choice:hover { background: #e4edf9; transform: translateY(-1px); }
+    .selection-cancel { display: grid; width: 44px; height: 44px; flex: 0 0 44px; place-items: center; border-radius: 14px; background: #eef2f7; color: #64748b; font-size: 23px; font-weight: 350; transition: background .16s ease, transform .16s ease; }
+    .selection-cancel:hover { background: #e1e8f1; transform: scale(.96); }
+    .error { color: #b42318; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { #pill, .meter, .status, .control { transition-duration: 1ms !important; } .loader { animation: none; } }
+  </style>
+</head>
+<body>
+  <main id="stage"><div id="pill" hidden data-ready="false" data-expanded="false">
+    <button class="control cancel" id="cancel" type="button" aria-label="Cancel dictation"><b>×</b></button>
+    <div class="meter" id="meter" aria-hidden="true"></div>
+    <div class="status" id="status"><span class="loader"></span><span id="status-text">Transcribing</span></div>
+    <div class="selection"><button class="selection-cancel" id="selection-cancel" type="button" aria-label="Cancel">×</button><button class="choice" id="replace" type="button">Replace</button><button class="choice" id="enhance" type="button">Enhance</button></div>
+    <button class="control stop" id="primary" type="button" aria-label="Stop recording"><i></i></button>
+  </div></main>
+  <script>
+    const pill = document.getElementById('pill');
+    const meter = document.getElementById('meter');
+    const statusText = document.getElementById('status-text');
+    const primary = document.getElementById('primary');
+    const cancel = document.getElementById('cancel');
+    const prefersReducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let hideTimer = 0;
+    let phase = 'idle';
+    let inputLevel = 0;
+    let targetVolume = .08;
+    let currentVolume = .08;
+    let phaseValue = 0;
+    let targetTimer = 0;
+    const bars = Array.from({ length: 27 }, () => {
+      const bar = document.createElement('i');
+      bar.className = 'bar';
+      meter.append(bar);
+      return bar;
+    });
+
+    function setTargetVolume() {
+      // Microphone amplitude is always the dominant signal. This tiny idle
+      // floor only keeps the ready state from looking mechanically frozen.
+      targetVolume = phase === 'listening' ? .06 + Math.random() * .12 : .035;
+      targetTimer = window.setTimeout(setTargetVolume, 280 + Math.random() * 260);
+    }
+
+    function animateWave() {
+      phaseValue += .2;
+      const desired = Math.max(inputLevel * 1.35, targetVolume);
+      currentVolume += (desired - currentVolume) * .16;
+      bars.forEach((bar, index) => {
+        const distance = (index - 13) / 13;
+        const bell = Math.exp(-(distance * distance) * 2.6);
+        const waves = (Math.sin(phaseValue + index * .4) + Math.sin(phaseValue * .7 - index * .2) + 2) / 4;
+        const height = 4 + bell * (3 + waves * (8 + currentVolume * 26));
+        bar.style.height = `${Math.round(height)}px`;
+        bar.style.opacity = String(.32 + bell * (.32 + Math.min(.36, currentVolume * .55)));
+      });
+      if (!prefersReducedMotion) requestAnimationFrame(animateWave);
+    }
+
+    function render(payload = {}) {
+      phase = payload.phase || 'idle';
+      inputLevel = Math.max(0, Math.min(1, Number(payload.level) || 0));
+      clearTimeout(hideTimer);
+      if (phase === 'idle') {
+        pill.dataset.expanded = 'false';
+        pill.dataset.ready = 'false';
+        hideTimer = setTimeout(() => { pill.hidden = true; }, 420);
+        return;
+      }
+      pill.hidden = false;
+      requestAnimationFrame(() => {
+        pill.dataset.ready = 'true';
+        pill.dataset.expanded = String(phase !== 'arming');
+      });
+      const selection = phase === 'selection';
+      const processing = phase === 'processing' || phase === 'optimising' || phase === 'preview' || phase === 'error';
+      pill.dataset.selection = String(selection);
+      pill.dataset.processing = String(processing && !selection);
+      statusText.textContent = phase === 'processing' ? 'Transcribing' : phase === 'optimising' ? 'Enhancing' : phase === 'preview' ? 'Ready' : phase === 'error' ? 'Needs attention' : 'Listening';
+      statusText.className = phase === 'error' ? 'error' : '';
+      primary.style.display = selection || processing ? 'none' : 'grid';
+      cancel.style.display = selection || phase === 'error' || phase === 'preview' ? 'none' : 'grid';
+    }
+
+    primary.addEventListener('click', () => window.clyraDictationPill.action('stop'));
+    cancel.addEventListener('click', () => window.clyraDictationPill.action('cancel'));
+    document.getElementById('replace').addEventListener('click', () => window.clyraDictationPill.action('replace'));
+    document.getElementById('enhance').addEventListener('click', () => window.clyraDictationPill.action('enhance'));
+    document.getElementById('selection-cancel').addEventListener('click', () => window.clyraDictationPill.action('cancel'));
+    window.clyraDictationPill.onState(render);
+    setTargetVolume();
+    if (prefersReducedMotion) animateWave(); else requestAnimationFrame(animateWave);
+    render();
+  </script>
+</body>
+</html>

@@ -165,6 +165,19 @@ class SessionState:
 @app.on_event("startup")
 async def startup() -> None:
     _ = _vad.backend
+    # Keep the only always-needed voice model warm while Clyra is booting.
+    # This runs off the event loop and avoids the first real microphone turn
+    # paying model initialisation cost, without loading the heavier local TTS
+    # runtime into an idle 8 GB machine.
+    asyncio.create_task(
+        asyncio.to_thread(
+            StreamingTranscriber(
+                sample_rate=config.SAMPLE_RATE,
+                model_name=config.STT_MODEL,
+                language=config.STT_LANGUAGE,
+            ).ensure_model,
+        )
+    )
     # Voice Call now receives its spoken output from Async/Max in the Node
     # gateway. Do not warm the legacy PyTorch TTS runtime beside CTranslate2 on
     # startup: on macOS that competing OpenMP load can terminate the STT worker

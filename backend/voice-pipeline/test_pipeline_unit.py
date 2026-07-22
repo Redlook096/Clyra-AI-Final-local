@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import struct
 import sys
+from concurrent.futures import Future
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend" / "voice-pipeline"))
 
-from stt_stream import pcm16_bytes_to_f32  # noqa: E402
+from stt_stream import StreamingTranscriber, pcm16_bytes_to_f32  # noqa: E402
 from tts_stream import TtsRuntime, iter_speakable_units  # noqa: E402
 from vad import VoiceActivityDetector  # noqa: E402
 
@@ -47,9 +48,34 @@ def test_tts_runtime_has_one_engine_path():
     assert not hasattr(runtime, "_generate_macos")
 
 
+def test_finalize_reuses_speculative_decode_after_trailing_silence():
+    """Silence after speech must not turn one Whisper pass into two."""
+    import numpy as np
+
+    events = []
+    transcriber = StreamingTranscriber(on_event=events.append)
+    transcriber._buffer = np.zeros(16000, dtype=np.float32)
+    transcriber._speech_ms = 620.0
+    transcriber._spec_speech_ms = 620.0
+    transcriber._spec_gen = 4
+    transcriber._spec_buf_len = 12000
+    future = Future()
+    future.set_result((4, "Ready for the next task.", 0.91, "en", 42.0))
+    transcriber._spec_future = future
+
+    def should_not_decode(_audio):
+        raise AssertionError("trailing silence should reuse the speculative decode")
+
+    transcriber._transcribe_window = should_not_decode  # type: ignore[method-assign]
+    transcriber._finalize()
+    assert events and events[0]["type"] == "final"
+    assert events[0]["text"] == "Ready for the next task."
+
+
 if __name__ == "__main__":
     test_pcm_roundtrip_silence()
     test_energy_vad_detects_tone()
     test_speakable_units_split()
     test_tts_runtime_has_one_engine_path()
-    print("voice pipeline unit tests passed (4 checks)")
+    test_finalize_reuses_speculative_decode_after_trailing_silence()
+    print("voice pipeline unit tests passed (5 checks)")

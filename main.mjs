@@ -127,18 +127,10 @@ function startBrowserBridge() {
       sendJson(response, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
     }
   });
-  // Electron's Finder launch can bind the HTTP socket before invoking the
-  // Node listen callback. Waiting on that callback stalls the complete boot
-  // sequence even though the bridge is available. Bind it independently and
-  // let the local service start immediately; bridge errors are still recorded
-  // and surfaced through the normal boot error path when they occur first.
-  bridgeServer.once("error", (error) => {
-    reportDesktopLifecycle(`browser bridge error: ${error.message}`);
-    console.error("[browser bridge]", error);
+  return new Promise((resolve, reject) => {
+    bridgeServer.once("error", reject);
+    bridgeServer.listen(bridgePort, "127.0.0.1", resolve);
   });
-  bridgeServer.listen(bridgePort, "127.0.0.1");
-  reportDesktopLifecycle(`browser bridge binding port=${bridgePort}`);
-  return Promise.resolve();
 }
 
 function serviceEnvironment() {
@@ -440,9 +432,7 @@ async function createWindow() {
 async function boot() {
   Menu.setApplicationMenu(null);
   configureUiSession();
-  reportDesktopLifecycle("booting browser bridge");
   await startBrowserBridge();
-  reportDesktopLifecycle("browser bridge resolved; starting service");
   startLocalService();
   await waitForService();
   await createWindow();

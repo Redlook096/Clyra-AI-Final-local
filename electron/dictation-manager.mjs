@@ -56,14 +56,20 @@ async function readSelectedText() {
     const selected = await runAppleScript(direct);
     if (selected) return selected;
   } catch {
-    // Some apps expose no AXSelectedText. The fallback remains explicit: this
-    // only runs immediately after the user invokes Clyra's global shortcut.
+    // Some native controls expose no AXSelectedText. This fallback only runs
+    // after an explicit global shortcut and restores every clipboard format.
   }
   const saved = snapshotClipboard();
+  // A no-selection Cmd+C leaves the clipboard untouched. Seed it with a
+  // per-activation marker so stale clipboard text cannot impersonate a
+  // selected range and open Replace/Enhance by mistake.
+  const marker = `__clyra_selection_probe_${crypto.randomUUID()}__`;
   try {
+    clipboard.writeText(marker);
     await runAppleScript('tell application "System Events" to keystroke "c" using command down');
-    await wait(80);
-    return clipboard.readText();
+    await wait(70);
+    const copied = clipboard.readText();
+    return copied === marker ? "" : copied;
   } finally {
     restoreClipboard(saved);
   }
@@ -79,6 +85,7 @@ export class DictationManager {
     this.payload = { phase: "idle" };
     this.target = null;
     this.escapeRegistered = false;
+    this.activationId = 0;
   }
 
   isSender(contents) {
@@ -86,7 +93,7 @@ export class DictationManager {
   }
 
   async initialize() {
-    const shortcut = process.platform === "darwin" ? "CommandOrControl+Shift+K" : "Control+Shift+K";
+    const shortcut = process.platform === "darwin" ? "Command+Shift+K" : "Control+Shift+K";
     globalShortcut.unregister(shortcut);
     if (!globalShortcut.register(shortcut, () => void this.toggle())) {
       throw new Error("Clyra could not register the global dictation shortcut.");
@@ -104,10 +111,12 @@ export class DictationManager {
     const display = screen.getPrimaryDisplay();
     const { x, y, width, height } = display.workArea;
     this.window = new BrowserWindow({
-      width: 420,
-      height: 92,
-      x: Math.round(x + (width - 420) / 2),
-      y: Math.round(y + height - 150),
+      // The content grows from a circle within this transparent canvas, which
+      // keeps the expansion optically centred on any display.
+      width: 380,
+      height: 96,
+      x: Math.round(x + (width - 380) / 2),
+      y: Math.round(y + height - 122),
       show: false,
       frame: false,
       transparent: true,
@@ -177,16 +186,26 @@ export class DictationManager {
       this.cancel();
       return;
     }
-    const target = { application: await frontmostApplication().catch(() => ""), selectedText: "" };
-    target.selectedText = await readSelectedText().catch(() => "");
+    // Do not wait on macOS accessibility APIs before showing the shortcut UI.
+    // They can be slow when another app is busy, which used to make Cmd+Shift+K
+    // feel broken even though the global shortcut had fired.
+    const activationId = ++this.activationId;
+    this.target = { application: "", selectedText: "" };
+    this.setState({ phase: "arming", detail: "" });
+    const [application, selectedText] = await Promise.all([
+      frontmostApplication().catch(() => ""),
+      readSelectedText().catch(() => ""),
+    ]);
+    if (activationId !== this.activationId || this.phase === "idle") return;
+    const target = { application, selectedText };
     this.target = target;
-    if (target.selectedText.trim()) {
-      this.setState({ phase: "selection", selectedText: target.selectedText.slice(0, 260), application: target.application, detail: "Selected text ready" });
+    if (selectedText.trim()) {
+      this.setState({ phase: "selection", selectedText: selectedText.slice(0, 260), application, detail: "Selected text ready" });
       this.emitUi("dictation:trigger", { type: "selection", target });
-    } else {
-      this.setState({ phase: "listening", application: target.application, detail: "Listening" });
-      this.emitUi("dictation:trigger", { type: "start", target });
+      return;
     }
+    this.setState({ phase: "listening", application, detail: "Listening" });
+    this.emitUi("dictation:trigger", { type: "start", target });
   }
 
   async action(action) {
@@ -195,10 +214,19 @@ export class DictationManager {
     // selected at activation before asking the renderer to open the mic so
     // the later paste cannot land in Clyra's own window.
     await focusApplication(this.target?.application).catch(() => undefined);
+    // Keep the exact same full pill visible while the renderer opens the
+    // microphone. Previously the compact Replace/Enhance chooser could linger
+    // when Clyra was hidden, which made the next state look like a separate
+    // menu rather than the normal dictation flow.
+    this.setState({
+      phase: "processing",
+      detail: action === "enhance" || action === "optimise" ? "Preparing rewrite" : "Opening microphone",
+    });
     this.emitUi("dictation:action", { action, target: this.target });
   }
 
   cancel() {
+    this.activationId += 1;
     this.emitUi("dictation:trigger", { type: "cancel" });
     this.target = null;
     this.setState({ phase: "idle", detail: "" });

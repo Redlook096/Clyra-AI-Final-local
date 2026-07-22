@@ -52,8 +52,8 @@ const CENTER = 320;
 const OUTER_RADIUS = 294;
 const INNER_RADIUS = 124;
 const SLICE_ANGLE = 360 / tools.length;
-const RADIAL_OPEN = { duration: 0.18, ease: [0.16, 1, 0.3, 1] as const };
-const RADIAL_CLOSE = { duration: 0.14, ease: [0.7, 0, 0.84, 0] as const };
+const RADIAL_OPEN = { duration: 0.2, ease: [0.16, 1, 0.3, 1] as const };
+const RADIAL_CLOSE = { duration: 0.18, ease: [0.7, 0, 0.84, 0] as const };
 const barActions = ["resume", "open", "chat"] as const;
 type BarAction = (typeof barActions)[number];
 
@@ -99,41 +99,41 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
   const initialToolIndex = Math.max(0, tools.findIndex((tool) => tool.id === readLastTool()));
   const [activeIndex, setActiveIndex] = useState(initialToolIndex);
   const highlightTarget = useMotionValue(initialToolIndex * SLICE_ANGLE);
-  const highlightRotation = useSpring(highlightTarget, {
-    stiffness: 2600,
-    damping: 58,
-    mass: 0.035,
-  });
+  const highlightRotation = useSpring(highlightTarget, { stiffness: 900, damping: 64, mass: 0.08 });
   const [hoveredBarAction, setHoveredBarAction] = useState<BarAction | null>(null);
-  const pointerFrame = useRef<number | null>(null);
-  const pendingPointer = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
+  const activeIndexRef = useRef(initialToolIndex);
+  const pointerFrameRef = useRef<number | null>(null);
+  const pendingPointerRef = useRef<{ x: number; y: number; width: number } | null>(null);
   const activeTool = tools[activeIndex];
   const quickTool = tools.find((tool) => tool.id === (activeTool.id === "chat" ? "browser" : "chat"))!;
   const QuickToolIcon = quickTool.icon;
   const highlightPath = useMemo(() => wedgePath(-SLICE_ANGLE / 2, SLICE_ANGLE / 2), []);
 
   const selectTool = useCallback((index: number, rotation = index * SLICE_ANGLE) => {
-    setActiveIndex(index);
+    if (activeIndexRef.current !== index) {
+      activeIndexRef.current = index;
+      setActiveIndex(index);
+    }
     highlightTarget.set(closestRotation(highlightTarget.get(), rotation));
   }, [highlightTarget]);
 
   const followPointer = (event: PointerEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
-    pendingPointer.current = {
+    pendingPointerRef.current = {
       x: event.clientX - rect.left - rect.width / 2,
       y: event.clientY - rect.top - rect.height / 2,
       width: rect.width,
-      height: rect.height,
     };
-    if (pointerFrame.current != null) return;
-    pointerFrame.current = window.requestAnimationFrame(() => {
-      pointerFrame.current = null;
-      const next = pendingPointer.current;
-      if (!next) return;
-      const distance = Math.hypot(next.x, next.y);
-      if (distance < next.width * 0.18) return;
-      const angle = normalizeDegrees(Math.atan2(next.y, next.x) * 180 / Math.PI + 90);
+    if (pointerFrameRef.current != null) return;
+    pointerFrameRef.current = requestAnimationFrame(() => {
+      pointerFrameRef.current = null;
+      const pointer = pendingPointerRef.current;
+      if (!pointer || Math.hypot(pointer.x, pointer.y) < pointer.width * 0.18) return;
+      const angle = normalizeDegrees(Math.atan2(pointer.y, pointer.x) * 180 / Math.PI + 90);
       const index = Math.floor(normalizeDegrees(angle + SLICE_ANGLE / 2) / SLICE_ANGLE) % tools.length;
+      // The wedge rotates to the live pointer angle while the selected icon
+      // changes only when crossing a wedge boundary. This stays responsive
+      // without causing React work on every physical mouse event.
       selectTool(index, angle);
     });
   };
@@ -150,16 +150,16 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
     window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
-      if (pointerFrame.current != null) window.cancelAnimationFrame(pointerFrame.current);
+      if (pointerFrameRef.current != null) cancelAnimationFrame(pointerFrameRef.current);
     };
   }, [onClose]);
 
   return (
     <motion.div
       className="fixed inset-0 z-[260] overflow-hidden bg-[rgba(248,250,252,0.96)] text-slate-950"
-      initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.986 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.99 }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
       transition={reduceMotion ? { duration: 0 } : RADIAL_OPEN}
       role="dialog"
       aria-modal="true"
@@ -181,12 +181,20 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
           <motion.div
             className="relative aspect-square w-[min(70vh,690px,94vw)]"
             onPointerMove={followPointer}
-            initial={{ opacity: 0, scale: 0.001 }}
-            animate={{ opacity: 1, scale: 1, rotate: 0 }}
-            exit={{ opacity: 0, scale: 0.001, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }}
-            transition={reduceMotion ? { duration: 0 } : RADIAL_OPEN}
+            initial={{ opacity: 0, scale: 0.34 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.34, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }}
+            transition={reduceMotion ? { duration: 0 } : { duration: 0.34, ease: [0.16, 1, 0.3, 1] }}
           >
-            <svg viewBox="0 0 640 640" className="absolute inset-0 h-full w-full overflow-visible drop-shadow-[0_28px_70px_rgba(15,23,42,0.10)]" aria-hidden="true">
+            <motion.svg
+              viewBox="0 0 640 640"
+              className="absolute inset-0 h-full w-full overflow-visible drop-shadow-[0_28px_70px_rgba(15,23,42,0.10)]"
+              aria-hidden="true"
+              initial={{ opacity: 0, scale: 0.18 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.18, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }}
+              transition={reduceMotion ? { duration: 0 } : { duration: 0.36, ease: [0.16, 1, 0.3, 1] }}
+            >
               <circle cx="320" cy="320" r="302" fill="rgba(255,255,255,.72)" stroke="rgba(148,163,184,.22)" />
               <circle cx="320" cy="320" r={OUTER_RADIUS} fill="rgba(255,255,255,.34)" />
               {tools.map((tool, index) => {
@@ -206,7 +214,7 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
               })}
               <motion.g
                 initial={false}
-                style={{ transformBox: "view-box", transformOrigin: "center", pointerEvents: "none", rotate: reduceMotion ? highlightTarget : highlightRotation }}
+                style={{ transformBox: "view-box", transformOrigin: "center", pointerEvents: "none", rotate: highlightRotation }}
               >
                 <path
                   d={highlightPath}
@@ -216,7 +224,7 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
                 />
               </motion.g>
               <circle cx="320" cy="320" r="124" fill="rgba(255,255,255,.84)" stroke="rgba(148,163,184,.24)" />
-            </svg>
+            </motion.svg>
 
             {tools.map((tool, index) => {
               const Icon = tool.icon;
@@ -229,10 +237,10 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
                   type="button"
                   onFocus={() => selectTool(index)}
                   onClick={() => openTool(tool)}
-                  initial={reduceMotion ? false : { opacity: 0, scale: 0.001, x: CENTER - x, y: CENTER - y }}
-                  animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.001, x: CENTER - x, y: CENTER - y, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }}
-                  transition={reduceMotion ? { duration: 0 } : RADIAL_OPEN}
+                  initial={{ opacity: 0, scale: 0.72 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.72, transition: reduceMotion ? { duration: 0 } : { ...RADIAL_CLOSE, delay: (tools.length - index - 1) * 0.018 } }}
+                  transition={reduceMotion ? { duration: 0 } : { ...RADIAL_OPEN, delay: 0.14 + index * 0.028 }}
                   className="absolute z-10 flex w-[116px] -translate-x-1/2 -translate-y-1/2 flex-col items-center text-center outline-none"
                   style={{ left: `${x / 6.4}%`, top: `${y / 6.4}%` }}
                   aria-label={`Open ${tool.label}`}
@@ -247,10 +255,10 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
 
             <div className="clyra-launcher-orb absolute left-1/2 top-1/2 z-20 grid h-[24%] w-[24%] -translate-x-1/2 -translate-y-1/2 place-items-center">
               <motion.div
-                initial={{ scale: 0.001, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.001, opacity: 0, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }}
-                transition={reduceMotion ? { duration: 0 } : RADIAL_OPEN}
+                initial={{ opacity: 0, scale: 0.72 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.72, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }}
+                transition={reduceMotion ? { duration: 0 } : { ...RADIAL_OPEN, delay: 0.22 }}
                 className="scale-[0.92]"
               >
                 <AiOrb colorTheme={orbColorTheme} introActive={false} />
@@ -292,7 +300,7 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
                 initial={{ opacity: 0, scale: 0.85 }}
                 animate={{ opacity: 1, scale: 1, x: `calc(${barActions.indexOf(hoveredBarAction)} * 100%)` }}
                 exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.12 } }}
-                transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 980, damping: 54, mass: 0.09 }}
+                transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 720, damping: 42, mass: 0.12 }}
                 style={{ left: 6, top: 6, bottom: 6, height: "auto", width: "calc((100% - 12px) / 3)", zIndex: 0, translate: "none" }}
               />
             ) : null}

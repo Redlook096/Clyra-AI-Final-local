@@ -710,7 +710,7 @@ function SetupWizard({
           ) : null}
         </div>
 
-        <div className="grid gap-8 lg:grid-cols-[220px_minmax(0,1fr)]">
+        <div className="creator-setup-layout grid gap-5">
           <ol className="space-y-2" aria-label="Project setup">
             {[
               { id: "start" as const, index: 1, title: "Starting point", detail: "Choose AI or manual creation" },
@@ -958,24 +958,28 @@ function MessagePreview({
   isPlaying = false,
   playbackMs = 0,
   windowStart = 0,
+  typingSide = null,
 }: {
   project: FakeTextProject;
   visible: number;
   isPlaying?: boolean;
   playbackMs?: number;
   windowStart?: number;
+  typingSide?: "left" | "right" | null;
 }) {
   const gameplayVideo = useRef<HTMLVideoElement | null>(null);
   const shown = project.messages.slice(windowStart, visible);
-  const floatingHeight = `${Math.min(78, 20 + Math.max(0, shown.length) * 8)}%`;
+  // Keep the chat surface content-sized. Six messages can be visible without
+  // creating the old empty black transcript area.
+  const floatingHeight = `${Math.min(94, 34 + Math.max(0, shown.length) * 12)}%`;
   const panelGeometry = project.layout === "full_chat"
     ? { left: "0%", top: "0%", width: "100%", height: "100%", radius: "0px", headerHeight: "12%" }
     : project.layout === "chat_gameplay"
       ? { left: "0%", top: "0%", width: "100%", height: "62%", radius: "0px", headerHeight: "18.7%" }
-      : { left: "9%", top: "7.5%", width: "82%", height: floatingHeight, radius: "15px", headerHeight: "62px" };
+      : { left: "0.5%", top: "1%", width: "99%", height: floatingHeight, radius: "clamp(22px,7cqw,38px)", headerHeight: "34%" };
   const palette = project.theme === "ios_light"
     ? { panel: "#ffffff", header: "#f4f4f6", incoming: "#e9e9eb", outgoing: "#0a84ff", incomingText: "#111114", contact: "#26262b", accent: "#0a84ff", avatar: "#aab0bb" }
-    : { panel: "#000000", header: "#1f1f1f", incoming: "#292929", outgoing: "#0a84ff", incomingText: "#ffffff", contact: "#d8d8dc", accent: "#0a84ff", avatar: "#aab0bb" };
+    : { panel: "#000000", header: "#1c1c1e", incoming: "#2c2c2e", outgoing: "#0a84ff", incomingText: "#f5f5f7", contact: "#d8d8dc", accent: "#0a84ff", avatar: "#aab0bb" };
 
   useEffect(() => {
     const video = gameplayVideo.current;
@@ -1011,46 +1015,50 @@ function MessagePreview({
       ) : (
         <div className="absolute inset-0 bg-[linear-gradient(155deg,#328d68,#2a7659_52%,#205844)]" />
       )}
-      <motion.div
-        initial={false}
-        animate={{ left: panelGeometry.left, top: panelGeometry.top, width: panelGeometry.width, height: panelGeometry.height, borderRadius: panelGeometry.radius }}
-        transition={{ type: "spring", stiffness: 520, damping: 42, mass: 0.72 }}
+      <div
         className="absolute flex flex-col overflow-hidden"
-        style={{ backgroundColor: palette.panel }}
+        style={{
+          left: panelGeometry.left,
+          top: panelGeometry.top,
+          width: panelGeometry.width,
+          height: panelGeometry.height,
+          borderRadius: panelGeometry.radius,
+          backgroundColor: palette.panel,
+        }}
       >
-          <div className="relative shrink-0" style={{ height: panelGeometry.headerHeight, backgroundColor: palette.header }}>
-            <div className="absolute left-[5%] top-[31%] flex items-center gap-0.5" style={{ color: palette.accent }}>
-              <span className="text-[17px] font-light leading-none">‹</span>
-              <span className="text-[7px] font-medium">99</span>
+          {windowStart === 0 ? <div className="relative shrink-0 border-b border-white/5" style={{ height: panelGeometry.headerHeight, backgroundColor: palette.header }}>
+            <div className="absolute left-[3.5%] top-[44%] flex -translate-y-1/2 items-center gap-1" style={{ color: palette.accent }}>
+              <span className="text-[clamp(26px,8cqw,42px)] font-light leading-none">‹</span><span className="grid h-[clamp(28px,9cqw,43px)] w-[clamp(28px,9cqw,43px)] place-items-center rounded-full bg-[#0a84ff] text-[clamp(10px,3.6cqw,16px)] font-medium text-white">99</span>
             </div>
-            <div className="absolute left-1/2 top-[7px] flex -translate-x-1/2 flex-col items-center">
-              <span className="grid h-6 w-6 place-items-center rounded-full text-[11px] font-light text-white" style={{ backgroundColor: palette.avatar }}>{(project.participants[0].name || "Unknown").slice(0, 1).toUpperCase()}</span>
-              <span className="mt-1 whitespace-nowrap text-[7px] font-medium" style={{ color: palette.contact }}>{project.participants[0].name || "Unknown"} ›</span>
+            <div className="absolute left-1/2 top-[10%] flex -translate-x-1/2 flex-col items-center">
+              <span className="grid h-[clamp(44px,16cqw,80px)] w-[clamp(44px,16cqw,80px)] place-items-center rounded-full text-[clamp(18px,7cqw,34px)] font-light text-white" style={{ backgroundColor: palette.avatar }}>{(project.participants[0].name || "Unknown").slice(0, 1).toUpperCase()}</span>
+              <span className="mt-[clamp(2px,1cqw,6px)] whitespace-nowrap text-[clamp(15px,5cqw,27px)] font-medium leading-none" style={{ color: palette.contact }}>{project.participants[0].name || "Unknown"} ›</span>
             </div>
-            <Video className="absolute right-[5%] top-[32%] h-[12px] w-[18px]" style={{ color: palette.accent }} strokeWidth={1.8} />
-          </div>
-          <div className="flex min-h-0 flex-1 flex-col justify-end gap-1 overflow-hidden px-[3%] py-[2.3%]" style={{ backgroundColor: palette.panel }}>
+            <Video className="absolute right-[4%] top-[44%] h-[clamp(22px,7cqw,32px)] w-[clamp(31px,10cqw,44px)] -translate-y-1/2" style={{ color: palette.accent }} strokeWidth={1.8} />
+          </div> : null}
+          <div className="flex min-h-0 flex-1 flex-col justify-start gap-[clamp(5px,1.8cqw,10px)] overflow-hidden px-[3.5%] pb-[clamp(7px,2.5cqw,13px)] pt-[clamp(10px,4cqw,20px)]" style={{ backgroundColor: palette.panel }}>
             <AnimatePresence initial={false}>
               {shown.map((message) => (
                 <motion.div
-                  layout
                   key={message.id}
                   initial={{ opacity: 0, y: 6, scale: 0.94 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   transition={{ duration: 0.18, ease: [0.2, 0.82, 0.2, 1] }}
                   className={cn(
-                    "relative w-fit max-w-[78%] rounded-[10px] px-[8px] py-[5px] text-[9px] leading-[1.15]",
+                    "relative w-fit max-w-[62%] rounded-[clamp(22px,7cqw,30px)] px-[clamp(13px,4.5cqw,20px)] py-[clamp(9px,3cqw,14px)] text-[clamp(14px,5cqw,28px)] leading-[1.13]",
                     message.side === "right" ? "ml-auto text-white" : "",
                   )}
                   style={{ backgroundColor: message.side === "right" ? palette.outgoing : palette.incoming, color: message.side === "right" ? "#ffffff" : palette.incomingText }}
                 >
-                  {message.side === "left" ? <span className="absolute -bottom-[1px] -left-[3px] h-2.5 w-3 rounded-bl-[9px] [clip-path:polygon(100%_0,100%_100%,0_100%)]" style={{ backgroundColor: palette.incoming }} /> : null}
+                  {message.side === "left" ? <span className="absolute -bottom-[1px] -left-[3px] h-3 w-3 rounded-bl-[9px] [clip-path:polygon(100%_0,100%_100%,0_100%)]" style={{ backgroundColor: palette.incoming }} /> : null}
+                  {message.side === "right" ? <span className="absolute -bottom-[1px] -right-[3px] h-3 w-3 rounded-br-[9px] [clip-path:polygon(0_0,100%_100%,0_100%)]" style={{ backgroundColor: palette.outgoing }} /> : null}
                   <span className="relative">{message.text}</span>
                 </motion.div>
               ))}
+              {typingSide ? <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className={cn("w-fit rounded-[20px] px-3 py-2", typingSide === "right" ? "ml-auto bg-[#0a84ff]" : "bg-[#292929]")}><span className="flex gap-1">{[0, 1, 2].map((dot) => <motion.i key={dot} className="h-1.5 w-1.5 rounded-full bg-white/75" animate={{ opacity: [0.35, 1, 0.35], y: [0, -2, 0] }} transition={{ duration: 0.72, repeat: Infinity, delay: dot * 0.12 }} />)}</span></motion.div> : null}
             </AnimatePresence>
           </div>
-      </motion.div>
+      </div>
     </div>
   );
 }
@@ -1469,6 +1477,9 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
           const message = project.messages[index]!;
           setSelectedId(message.id);
           if (index > 0 && index % 6 === 0) setMessageWindowStart(index);
+          setTypingSide(message.side);
+          await waitFor(Math.max(180, Math.min(900, (message.typingSeconds ?? 0.45) * 500)), controller.signal);
+          setTypingSide(null);
           setVisibleMessages(index + 1);
           if (message.narration) {
             const voice = project.participants.find((participant) => participant.id === message.side)?.voice || "Ryan";
@@ -1624,14 +1635,14 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
 
   const preview = project.type === "would_rather"
     ? <WouldRatherPreview project={project} round={project.rounds[Math.min(previewRound, project.rounds.length - 1)]!} phase={wouldRatherPhase} countdown={countdown} revealed={revealed} />
-    : <MessagePreview project={project} visible={visibleMessages} windowStart={messageWindowStart} isPlaying={playing} playbackMs={currentTime} />;
+    : <MessagePreview project={project} visible={visibleMessages} windowStart={messageWindowStart} typingSide={typingSide} isPlaying={playing} playbackMs={currentTime} />;
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-white text-[#111318]">
       <AnimatePresence>{renderProgress !== null ? <RenderOverlay progress={renderProgress} onCancel={() => renderTask.current?.abort()} /> : null}</AnimatePresence>
       <AnimatePresence>{resultUrl ? <RenderResult url={resultUrl} title={project.name} onClose={() => setResultUrl("")} /> : null}</AnimatePresence>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-8 sm:py-8 xl:px-12 xl:py-10">
-        <div className="mx-auto grid w-full max-w-[1540px] gap-6 xl:grid-cols-[minmax(0,2.1fr)_minmax(390px,1fr)] xl:gap-9">
+        <div className="creator-template-layout mx-auto grid w-full max-w-[1540px] gap-6 xl:gap-9">
           <section className="min-w-0 rounded-[22px] border border-[#e2e5ea] bg-white px-5 py-5 shadow-[0_12px_38px_rgba(15,23,42,.045)] sm:px-8 sm:py-7 xl:h-[640px]">
             <div className="flex min-h-[66px] flex-wrap items-center gap-3 border-b border-[#e2e5ea] pb-4">
               <div className="min-w-0 flex-1"><h1 className="text-[clamp(22px,2vw,28px)] font-semibold tracking-0">{step === "gameplay" ? "Gameplay Video" : step === "theme" ? "Message Theme" : step === "audio" ? "Audio" : project.type === "fake_text_story" ? "Text Script" : "Questions"}</h1></div>
@@ -1742,7 +1753,7 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
           <aside className="rounded-[22px] border border-[#e2e5ea] bg-white px-6 py-7 shadow-[0_12px_38px_rgba(15,23,42,.045)] sm:px-8 xl:h-[640px]">
             <div className="min-h-[66px] border-b border-[#e2e5ea]"><h2 className="text-[clamp(22px,2vw,28px)] font-semibold tracking-0">Video Preview</h2></div>
             <div className="mt-6 grid place-items-center">
-              <div className="relative aspect-[9/16] h-[min(52vh,468px)] max-h-[468px] max-w-full overflow-hidden rounded-[15px] bg-[#2a7659] shadow-[0_18px_44px_rgba(15,23,42,.18)]">
+              <div className="creator-preview-stage relative aspect-[9/16] w-[min(100%,264px)] overflow-hidden rounded-[15px] bg-[#2a7659] shadow-[0_18px_44px_rgba(15,23,42,.18)]">
                 {preview}
                 <div className="absolute inset-x-0 bottom-0 z-40 bg-gradient-to-t from-black/70 via-black/20 to-transparent px-3 pb-3 pt-12 text-white">
                   <div className="flex items-center gap-2.5">
@@ -1913,6 +1924,9 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
           const message = project.messages[index];
           setSelectedId(message.id);
           if (index > 0 && index % 6 === 0) setMessageWindowStart(index);
+          setTypingSide(message.side);
+          await waitFor(Math.max(180, Math.min(900, (message.typingSeconds ?? 0.45) * 500)), controller.signal);
+          setTypingSide(null);
           setVisibleMessages(index + 1);
           if (message.narration) {
             const voice = project.participants.find((participant) => participant.id === message.side)?.voice || "Ryan";
@@ -2194,7 +2208,7 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
   const preview = project.type === "would_rather" && project.rounds.length ? (
     <WouldRatherPreview project={project} round={project.rounds[Math.min(previewRound, project.rounds.length - 1)]} phase={wouldRatherPhase} countdown={countdown} revealed={revealed} />
   ) : project.type === "fake_text_story" ? (
-    <MessagePreview project={project} visible={visibleMessages} windowStart={messageWindowStart} isPlaying={playing} />
+    <MessagePreview project={project} visible={visibleMessages} windowStart={messageWindowStart} typingSide={typingSide} isPlaying={playing} />
   ) : project.type === "story_video" ? (
     <StoryPreview project={project} />
   ) : null;
@@ -2348,11 +2362,15 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
         </div>
       </header>
 
-      <div className="grid min-h-0 flex-1 lg:grid-cols-[250px_minmax(340px,1fr)_270px]">
-        <aside className="hidden min-h-0 border-r border-slate-200 bg-white lg:block">{leftPanel}</aside>
+      <div className="creator-editor-layout grid min-h-0 flex-1">
+        <aside className="flex min-h-0 border-r border-slate-200 bg-white">{leftPanel}</aside>
         <main className="flex min-h-0 flex-col bg-[#17191e]">
           <div className="min-h-0 flex-1 p-3 sm:p-5">
-            <div className="grid h-full min-h-[390px] place-items-center">{preview}</div>
+            <div className="creator-preview-canvas grid h-full min-h-[390px] place-items-center">
+              <div className="creator-preview-stage relative aspect-[9/16] h-auto max-h-full w-auto max-w-full overflow-hidden rounded-[15px] bg-[#2a7659] shadow-[0_18px_44px_rgba(15,23,42,.18)]">
+                {preview}
+              </div>
+            </div>
           </div>
           <div className="flex h-12 shrink-0 items-center justify-center gap-2 border-t border-white/10 bg-[#111318] px-3 text-white">
             <IconButton label="Reset preview" onClick={resetPreview}><RotateCcw className="h-3.5 w-3.5 text-white/70" /></IconButton>
@@ -2363,7 +2381,7 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
             <span className="hidden text-[8px] text-white/40 sm:block">{formatTime(creatorProjectDuration(project))}</span>
           </div>
         </main>
-        <aside className="hidden min-h-0 border-l border-slate-200 bg-white lg:flex lg:flex-col">
+        <aside className="flex min-h-0 flex-col border-l border-slate-200 bg-white">
           <InspectorTabs value={inspectorTab} onChange={setInspectorTab} />
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
             {editorFields ? <div className="mb-6 border-b border-slate-200 pb-6">{editorFields}</div> : null}

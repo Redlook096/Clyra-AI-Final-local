@@ -24,6 +24,10 @@ const outPath = args[1]
 const SAMPLE_RATE = 16000;
 const CHUNK_MS = 40; // stream like realtime mic
 const CHUNK_BYTES = Math.floor((SAMPLE_RATE * CHUNK_MS) / 1000) * 2;
+// Electron launches Clyra on an isolated local port. Keep the default useful
+// for the web server, while allowing this end-to-end fixture to exercise the
+// actual desktop service instead of a stale development process.
+const BASE_URL = (process.env.CLYRA_VOICE_BASE_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
 
 function readPcm16(filePath) {
   const buf = fs.readFileSync(filePath);
@@ -76,7 +80,7 @@ When the user speaks, respond by clearly repeating back exactly what they said, 
 Do not add extra commentary. Keep it to one short spoken sentence.`;
   }
   // Omit systemPrompt for normal path so gateway uses buildVoiceSystemPrompt().
-  const sessionRes = await fetch("http://127.0.0.1:3000/voice/session", {
+  const sessionRes = await fetch(`${BASE_URL}/voice/session`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(sessionBody),
@@ -201,7 +205,7 @@ Do not add extra commentary. Keep it to one short spoken sentence.`;
   });
 
   ws.close();
-  await fetch("http://127.0.0.1:3000/voice/end", {
+  await fetch(`${BASE_URL}/voice/end`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sessionId: session.sessionId }),
