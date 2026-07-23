@@ -49,8 +49,7 @@ import {
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { describeControls, type AgentBridge, type AgentBridgeAction, type AgentBridgeActionResult } from "../lib/agentController";
-import { ShiningText } from "./ui/shining-text";
-import { ShiningBrainIcon, ThinkingDots } from "./ShiningText";
+import { ShiningBrainIcon, ShiningText, ThinkingDots } from "./ShiningText";
 import { MarkdownMessageContent } from "./MarkdownMessageContent";
 import { ElectronWebContentsSurface } from "./ElectronWebContentsSurface";
 
@@ -77,6 +76,39 @@ import {
 // Fallback/Mock Composer for the Welcome Page
 
 // Relative time util
+function isVibeEngineWarm() {
+  try {
+    return window.sessionStorage.getItem("clyra-vibe-boot-ready") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function VibeThinkingStatus({
+  label = "Thinking",
+  hint,
+  className,
+}: {
+  label?: string;
+  hint?: string;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "inline-flex flex-wrap items-center gap-2 text-[13px] font-medium text-slate-500",
+        className,
+      )}
+      aria-live="polite"
+    >
+      <ShiningBrainIcon />
+      <ShiningText text={label} preset="thinkingChat" className="!text-[13px] sm:!text-[13px]" />
+      <ThinkingDots />
+      {hint ? <span className="text-slate-400">{hint}</span> : null}
+    </div>
+  );
+}
+
 function relativeTime(iso: string) {
   const d = new Date(iso);
   const diff = Date.now() - d.getTime();
@@ -532,6 +564,7 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
   const [planDraft, setPlanDraft] = useState<VibePlanDraft | null>(null);
   const [isPreparingPlan, setIsPreparingPlan] = useState(false);
   const [isSavingPlan, setIsSavingPlan] = useState(false);
+  const [warmupStatusHint, setWarmupStatusHint] = useState<string | null>(null);
   // Whether the user explicitly paused the current run from this window.
   // Any PAUSED runtime state without this flag is an unrequested stall
   // (tool hand-off, server restart) that polling should resume on its own.
@@ -903,11 +936,16 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
       // "refused to connect" workspace immediately after Send.
       setSkipEnterAnimation(false);
       setWelcomeView("home");
-      // Keep the established welcome surface in place while M1 creates a real
-      // conversation. Switching the outer workspace before this returns
-      // produced a visible "Preparing" screen (and, on slow launches, a blank
-      // panel) between Send and the actual OpenHands canvas.
       if (opts.projectName) setActiveProjectName(opts.projectName);
+
+      const engineWarm = isVibeEngineWarm();
+      if (!engineWarm) {
+        setWarmupStatusHint("Starting coding engine…");
+        // Non-blocking nudge — boot usually already warmed this.
+        void fetch("/api/vibe/m1-warmup", { method: "POST" }).catch(() => undefined);
+      } else {
+        setWarmupStatusHint(null);
+      }
 
       try {
         const requestLaunch = () =>
@@ -950,6 +988,7 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
               ? `${uiUrl}/conversations/${encodeURIComponent(conversationId)}?openPreview=1`
               : "";
         if (!conversationUrl) throw new Error("Vibe Coder M1 did not return a conversation workspace.");
+        setWarmupStatusHint(null);
         setM1ConversationUrl(conversationUrl);
         setState((prev) => ({
           ...prev,
@@ -958,7 +997,7 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
           taskId: conversationId,
           prompt: opts.prompt || prev.prompt || "",
           planMode: !!opts.planMode,
-          startedAt: Date.now(),
+          startedAt: prev.startedAt || Date.now(),
           error: null,
         }));
         setActiveProjectName(
@@ -991,12 +1030,13 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
         const message =
           error instanceof Error ? error.message : "Failed to launch M1";
         setM1LaunchError(message);
+        setWarmupStatusHint(null);
         setState((prev) => ({ ...prev, stage: "failed", error: message }));
       } finally {
         setM1Launching(false);
       }
     },
-    [loadProjects, m1UiUrl, onEngaged, setState],
+    [loadProjects, onEngaged, setState],
   );
 
   const preparePlanReview = useCallback(async (prompt: string, projectId?: string) => {
@@ -1092,11 +1132,27 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
       },
     ]);
     setPromptInput("");
+    setM1LaunchError(null);
+
     if (VIBE_PLAN_REVIEW_ENABLED && mode === "plan") {
-      await preparePlanReview(cleanPrompt);
+      setM1Launching(true);
+      void preparePlanReview(cleanPrompt).finally(() => setM1Launching(false));
       return;
     }
-    await launchM1({
+
+    // Leave the welcome surface immediately so the user message + Thinking row
+    // paint without waiting on M1 conversation creation.
+    setM1Launching(true);
+    setState((prev) => ({
+      ...prev,
+      stage: "task-created",
+      prompt: cleanPrompt,
+      planMode: false,
+      startedAt: Date.now(),
+      error: null,
+      taskId: null,
+    }));
+    void launchM1({
       prompt: cleanPrompt.replace(/^\/design\s*/i, "").trim() || cleanPrompt,
       planMode: false,
       // A prompt from the welcome composer is always a new build. Reopening
@@ -1214,6 +1270,7 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
     persistCurrentSession();
     setM1LaunchError(null);
     setM1Launching(false);
+    setWarmupStatusHint(null);
     setM1Runtime(null);
     setM1RuntimeEvents([]);
     setM1ConversationUrl(null);
@@ -1452,15 +1509,35 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-            className="flex min-h-0 flex-1 items-center justify-center bg-white px-6"
+            className="flex min-h-0 flex-1 flex-col bg-white px-5 sm:px-8"
           >
-            <div className="w-full max-w-sm text-center">
-              <div className="inline-flex items-center gap-2 text-[13px] font-medium text-slate-500">
-                <ShiningBrainIcon />
-                <span className="clyra-thinking-shimmer">Preparing your Vibe workspace</span>
-                <ThinkingDots />
+            <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col justify-center gap-5 py-10">
+              {chatMessages.filter((message) => message.role === "user").slice(-1).map((message) => (
+                <div
+                  key={message.id}
+                  className="ml-auto max-w-[85%] rounded-[22px] bg-slate-950 px-4 py-3 text-left text-[14px] font-medium leading-relaxed text-white shadow-[0_12px_30px_rgba(15,23,42,0.12)]"
+                >
+                  {message.content}
+                </div>
+              ))}
+              <div className="flex flex-col gap-2">
+                <VibeThinkingStatus
+                  label={isPreparingPlan ? "Planning" : m1Launching ? "Thinking" : "Thinking"}
+                  hint={
+                    warmupStatusHint ||
+                    (isPreparingPlan
+                      ? "Drafting the build plan"
+                      : isVibeEngineWarm()
+                        ? undefined
+                        : "Opening your Vibe workspace")
+                  }
+                />
+                {warmupStatusHint ? (
+                  <p className="text-[12px] font-medium text-slate-400">
+                    Engine still warming — you can keep waiting; this won’t freeze the UI.
+                  </p>
+                ) : null}
               </div>
-              <p className="mt-2 text-[12px] text-slate-400">Connecting the build runtime and restoring its tools.</p>
             </div>
           </motion.div>
         )}
@@ -1516,20 +1593,19 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
               </motion.div>
 
               <AnimatePresence initial={false}>
-                {m1Launching ? (
+                {m1Launching || isPreparingPlan ? (
                   <motion.div
                     key="vibe-launching"
                     initial={{ opacity: 0, y: 5 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -4 }}
                     transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-                    className="-mt-2 mb-5 inline-flex items-center gap-2 text-[13px] font-medium text-slate-500"
-                    aria-live="polite"
+                    className="-mt-2 mb-5"
                   >
-                    <ShiningBrainIcon />
-                    <span className="clyra-thinking-shimmer">Thinking</span>
-                    <ThinkingDots />
-                    <span className="text-slate-400">Opening your Vibe workspace</span>
+                    <VibeThinkingStatus
+                      label={isPreparingPlan ? "Planning" : "Thinking"}
+                      hint={warmupStatusHint || undefined}
+                    />
                   </motion.div>
                 ) : null}
               </AnimatePresence>
@@ -1661,17 +1737,15 @@ function M1RuntimePanel({
           <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 pb-4">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Clyra agent runtime</p>
-              <h2 className="mt-1 flex items-center gap-2 text-[18px] font-semibold text-slate-950">
-                {active ? (
-                  <>
-                    <ShiningBrainIcon />
-                    <span className="clyra-thinking-shimmer">{snapshot.state.replaceAll("_", " ")}</span>
-                    <ThinkingDots />
-                  </>
-                ) : (
-                  snapshot.state.replaceAll("_", " ")
-                )}
-              </h2>
+              {active ? (
+                <div className="mt-1">
+                  <VibeThinkingStatus label={snapshot.state.replaceAll("_", " ")} />
+                </div>
+              ) : (
+                <h2 className="mt-1 text-[18px] font-semibold text-slate-950">
+                  {snapshot.state.replaceAll("_", " ")}
+                </h2>
+              )}
               <p className="mt-1 max-w-2xl text-[13px] leading-5 text-slate-500">{snapshot.stateReason || "Waiting for the next verified runtime event."}</p>
             </div>
             <div className="flex items-center gap-2">
@@ -1859,15 +1933,7 @@ function AgentActivityRow({ item }: { item: AgentActivityItem }) {
             {item.type === "file" && item.filePath ? (
               <FileEditActivity item={item} />
             ) : item.type === "stage" && item.status === "active" ? (
-              // Active agent thoughts use the same treatment as chat thinking:
-              // shimmering brain, shimmering text, trailing dots.
-              <span className="flex min-w-0 items-center gap-2">
-                <ShiningBrainIcon className="shrink-0" />
-                <span className="clyra-thinking-shimmer min-w-0 truncate text-[13px] font-bold tracking-[-0.01em]">
-                  {item.title}
-                </span>
-                <ThinkingDots className="shrink-0" />
-              </span>
+              <VibeThinkingStatus label={item.title} className="min-w-0" />
             ) : (
               <p className="min-w-0 truncate text-[13px] font-bold tracking-[-0.01em] text-slate-800">
                 {item.title}
@@ -1938,13 +2004,23 @@ function FileEditActivity({ item }: { item: AgentActivityItem }) {
   const action = active ? (isEdit ? "Editing" : "Generating") : isEdit ? "Edited" : "Created";
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-      {/* While the agent is writing, the whole "Editing <path>" phrase shimmers
-          like the thinking state; once done it settles into static slate text. */}
-      <span className={cn("text-[13px] font-bold", active ? "clyra-thinking-shimmer" : "text-sky-600")}>{action}</span>
-      <span className={cn("max-w-[260px] truncate font-mono text-[12px] font-semibold", active ? "clyra-thinking-shimmer" : "text-slate-600")}>
-        {item.filePath}
-      </span>
-      {active ? <ThinkingDots className="shrink-0" /> : null}
+      {active ? (
+        <>
+          <ShiningBrainIcon className="shrink-0" />
+          <ShiningText text={action} preset="thinkingChat" className="!text-[13px] font-bold sm:!text-[13px]" />
+          <span className="clyra-thinking-shimmer max-w-[260px] truncate font-mono text-[12px] font-semibold">
+            {item.filePath}
+          </span>
+          <ThinkingDots className="shrink-0" />
+        </>
+      ) : (
+        <>
+          <span className="text-[13px] font-bold text-sky-600">{action}</span>
+          <span className="max-w-[260px] truncate font-mono text-[12px] font-semibold text-slate-600">
+            {item.filePath}
+          </span>
+        </>
+      )}
       <motion.span
         layout
         initial={{ opacity: 0, scale: 0.94 }}
@@ -2930,7 +3006,7 @@ function PlanReviewCard({
                     transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
                     className="overflow-visible whitespace-nowrap pr-2"
                   >
-                    <ShiningText text="Generating plan..." className="text-[15px] font-medium tracking-wide" />
+                    <ShiningText text="Generating plan..." preset="thinkingChat" className="!text-[15px] font-medium tracking-wide" />
                   </motion.div>
                 ) : (
                   <motion.p

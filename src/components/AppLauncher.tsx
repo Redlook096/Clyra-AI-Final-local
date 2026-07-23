@@ -52,8 +52,12 @@ const CENTER = 320;
 const OUTER_RADIUS = 294;
 const INNER_RADIUS = 124;
 const SLICE_ANGLE = 360 / tools.length;
-const RADIAL_OPEN = { duration: 0.2, ease: [0.16, 1, 0.3, 1] as const };
-const RADIAL_CLOSE = { duration: 0.18, ease: [0.7, 0, 0.84, 0] as const };
+/** Snappy open: ~220ms, springy but not bouncy. */
+const LAUNCHER_OPEN = { duration: 0.22, ease: [0.22, 1, 0.36, 1] as const };
+const LAUNCHER_CLOSE = { duration: 0.18, ease: [0.4, 0, 1, 1] as const };
+/** Cascade only the first visible arc (~top row of the wheel). */
+const CASCADE_COUNT = 4;
+const CASCADE_STEP = 0.04;
 const barActions = ["resume", "open", "chat"] as const;
 type BarAction = (typeof barActions)[number];
 
@@ -89,6 +93,11 @@ function wedgePath(start: number, end: number) {
   ].join(" ");
 }
 
+function tileDelay(index: number) {
+  if (index >= CASCADE_COUNT) return CASCADE_COUNT * CASCADE_STEP;
+  return index * CASCADE_STEP;
+}
+
 function readLastTool(): LauncherToolId {
   const stored = localStorage.getItem("clyra-launcher-last-tool") as LauncherToolId | null;
   return tools.some((tool) => tool.id === stored) ? stored! : "chat";
@@ -99,7 +108,7 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
   const initialToolIndex = Math.max(0, tools.findIndex((tool) => tool.id === readLastTool()));
   const [activeIndex, setActiveIndex] = useState(initialToolIndex);
   const highlightTarget = useMotionValue(initialToolIndex * SLICE_ANGLE);
-  const highlightRotation = useSpring(highlightTarget, { stiffness: 900, damping: 64, mass: 0.08 });
+  const highlightRotation = useSpring(highlightTarget, { stiffness: 980, damping: 58, mass: 0.06 });
   const [hoveredBarAction, setHoveredBarAction] = useState<BarAction | null>(null);
   const activeIndexRef = useRef(initialToolIndex);
   const pointerFrameRef = useRef<number | null>(null);
@@ -108,6 +117,7 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
   const quickTool = tools.find((tool) => tool.id === (activeTool.id === "chat" ? "browser" : "chat"))!;
   const QuickToolIcon = quickTool.icon;
   const highlightPath = useMemo(() => wedgePath(-SLICE_ANGLE / 2, SLICE_ANGLE / 2), []);
+  const motionOff = reduceMotion ? { duration: 0 } : undefined;
 
   const selectTool = useCallback((index: number, rotation = index * SLICE_ANGLE) => {
     if (activeIndexRef.current !== index) {
@@ -156,47 +166,61 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
 
   return (
     <motion.div
-      className="fixed inset-0 z-[260] overflow-hidden bg-[rgba(248,250,252,0.96)] text-slate-950"
+      className="fixed inset-0 z-[260] overflow-hidden bg-slate-50/95 text-slate-950"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={reduceMotion ? { duration: 0 } : RADIAL_OPEN}
+      transition={motionOff ?? LAUNCHER_OPEN}
       role="dialog"
       aria-modal="true"
       aria-label="Clyra app launcher"
       onClick={onClose}
     >
-      <div className="pointer-events-none absolute inset-0 opacity-40 [background-image:linear-gradient(rgba(15,23,42,.02)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,.02)_1px,transparent_1px)] [background-size:44px_44px]" />
+      {/* Light grid — opacity only, not animated */}
+      <div className="pointer-events-none absolute inset-0 opacity-[0.28] [background-image:linear-gradient(rgba(15,23,42,.035)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,.035)_1px,transparent_1px)] [background-size:40px_40px]" />
+
       <div
-        className="relative z-10 mx-auto flex h-dvh max-w-[1120px] flex-col items-center px-4 pb-5 pt-7 sm:pt-8"
+        className="relative z-10 mx-auto flex h-dvh max-w-[1080px] flex-col items-center px-4 pb-4 pt-6 sm:pt-7"
         onClick={(event) => event.stopPropagation()}
       >
-        <motion.header initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }} transition={reduceMotion ? { duration: 0 } : RADIAL_OPEN} className="shrink-0 text-center">
-          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">Clyra workspace</p>
-          <h1 className="mt-2 text-[30px] font-semibold leading-none text-slate-950 sm:text-[40px]">Launch your tools</h1>
-          <p className="mt-2 text-[12px] text-slate-500 sm:text-[13px]">Smart AI tools to build, create and solve, all in one place.</p>
+        <motion.header
+          initial={{ opacity: 0, y: -4, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: -3, transition: motionOff ?? LAUNCHER_CLOSE }}
+          transition={motionOff ?? LAUNCHER_OPEN}
+          className="shrink-0 text-center"
+        >
+          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Clyra workspace</p>
+          <h1
+            className={
+              reduceMotion
+                ? "mt-1.5 text-[28px] font-semibold leading-none tracking-tight text-slate-950 sm:text-[36px]"
+                : "clyra-launcher-title-wash mt-1.5 text-[28px] font-semibold leading-none tracking-tight sm:text-[36px]"
+            }
+          >
+            Launch your tools
+          </h1>
+          <p className="mt-1.5 text-[12px] text-slate-500 sm:text-[13px]">
+            Smart AI tools to build, create and solve, all in one place.
+          </p>
         </motion.header>
 
         <div className="relative flex min-h-0 flex-1 items-center justify-center">
           <motion.div
-            className="relative aspect-square w-[min(70vh,690px,94vw)]"
+            className="relative aspect-square w-[min(68vh,660px,92vw)]"
             onPointerMove={followPointer}
-            initial={{ opacity: 0, scale: 0.34 }}
+            initial={{ opacity: 0, scale: 0.98 }}
             animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.34, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }}
-            transition={reduceMotion ? { duration: 0 } : { duration: 0.34, ease: [0.16, 1, 0.3, 1] }}
+            exit={{ opacity: 0, scale: 0.98, transition: motionOff ?? LAUNCHER_CLOSE }}
+            transition={motionOff ?? LAUNCHER_OPEN}
           >
-            <motion.svg
+            <svg
               viewBox="0 0 640 640"
-              className="absolute inset-0 h-full w-full overflow-visible drop-shadow-[0_28px_70px_rgba(15,23,42,0.10)]"
+              className="absolute inset-0 h-full w-full overflow-visible"
               aria-hidden="true"
-              initial={{ opacity: 0, scale: 0.18 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.18, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }}
-              transition={reduceMotion ? { duration: 0 } : { duration: 0.36, ease: [0.16, 1, 0.3, 1] }}
             >
-              <circle cx="320" cy="320" r="302" fill="rgba(255,255,255,.72)" stroke="rgba(148,163,184,.22)" />
-              <circle cx="320" cy="320" r={OUTER_RADIUS} fill="rgba(255,255,255,.34)" />
+              <circle cx="320" cy="320" r="302" fill="#ffffff" stroke="rgba(148,163,184,.28)" strokeWidth="1" />
+              <circle cx="320" cy="320" r={OUTER_RADIUS} fill="rgba(248,250,252,.9)" />
               {tools.map((tool, index) => {
                 const start = index * SLICE_ANGLE - SLICE_ANGLE / 2;
                 const end = (index + 1) * SLICE_ANGLE - SLICE_ANGLE / 2;
@@ -218,13 +242,13 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
               >
                 <path
                   d={highlightPath}
-                  fill="rgba(226,232,240,.62)"
+                  fill="rgba(226,232,240,.55)"
                   stroke="#cbd5e1"
-                  strokeWidth="1.25"
+                  strokeWidth="1"
                 />
               </motion.g>
-              <circle cx="320" cy="320" r="124" fill="rgba(255,255,255,.84)" stroke="rgba(148,163,184,.24)" />
-            </motion.svg>
+              <circle cx="320" cy="320" r="124" fill="#ffffff" stroke="rgba(148,163,184,.22)" strokeWidth="1" />
+            </svg>
 
             {tools.map((tool, index) => {
               const Icon = tool.icon;
@@ -237,29 +261,58 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
                   type="button"
                   onFocus={() => selectTool(index)}
                   onClick={() => openTool(tool)}
-                  initial={{ opacity: 0, scale: 0.72 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.72, transition: reduceMotion ? { duration: 0 } : { ...RADIAL_CLOSE, delay: (tools.length - index - 1) * 0.018 } }}
-                  transition={reduceMotion ? { duration: 0 } : { ...RADIAL_OPEN, delay: 0.14 + index * 0.028 }}
-                  className="absolute z-10 flex w-[116px] -translate-x-1/2 -translate-y-1/2 flex-col items-center text-center outline-none"
+                  initial={{ opacity: 0, scale: 0.92, y: 6 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{
+                    opacity: 0,
+                    scale: 0.96,
+                    transition: motionOff ?? { ...LAUNCHER_CLOSE, delay: Math.min(index, CASCADE_COUNT - 1) * 0.02 },
+                  }}
+                  transition={
+                    motionOff ?? {
+                      ...LAUNCHER_OPEN,
+                      delay: 0.06 + tileDelay(index),
+                    }
+                  }
+                  className="absolute z-10 flex w-[110px] -translate-x-1/2 -translate-y-1/2 flex-col items-center text-center outline-none"
                   style={{ left: `${x / 6.4}%`, top: `${y / 6.4}%` }}
                   aria-label={`Open ${tool.label}`}
                 >
-                  <span className={selected ? "relative grid h-10 w-10 place-items-center text-slate-950 transition-[color,transform] duration-200 ease-out" : "relative grid h-10 w-10 place-items-center text-[#52617b] transition-[color,transform] duration-200 ease-out"}>
-                    <Icon className={selected ? "h-7 w-7 scale-[1.045] stroke-[2.05] text-slate-900 transition-transform duration-200 ease-out" : "h-7 w-7 stroke-[1.65] transition-transform duration-200 ease-out"} />
+                  <span
+                    className={
+                      selected
+                        ? "relative grid h-9 w-9 place-items-center text-slate-950 transition-[color,transform] duration-200 ease-out"
+                        : "relative grid h-9 w-9 place-items-center text-slate-500 transition-[color,transform] duration-200 ease-out"
+                    }
+                  >
+                    <Icon
+                      className={
+                        selected
+                          ? "h-6 w-6 scale-[1.04] stroke-[2.05] text-slate-900 transition-transform duration-200 ease-out"
+                          : "h-6 w-6 stroke-[1.65] transition-transform duration-200 ease-out"
+                      }
+                    />
                   </span>
-                  <span className={selected ? "mt-1.5 text-[11px] font-bold leading-tight text-slate-950 transition-colors duration-200 sm:text-[12px]" : "mt-1.5 text-[11px] font-semibold leading-tight text-slate-800 transition-colors duration-200 sm:text-[12px]"}>{tool.shortLabel}</span>
+                  <span
+                    className={
+                      selected
+                        ? "mt-1 text-[11px] font-bold leading-tight text-slate-950 transition-colors duration-200 sm:text-[12px]"
+                        : "mt-1 text-[11px] font-semibold leading-tight text-slate-700 transition-colors duration-200 sm:text-[12px]"
+                    }
+                  >
+                    {tool.shortLabel}
+                  </span>
                 </motion.button>
               );
             })}
 
             <div className="clyra-launcher-orb absolute left-1/2 top-1/2 z-20 grid h-[24%] w-[24%] -translate-x-1/2 -translate-y-1/2 place-items-center">
               <motion.div
-                initial={{ opacity: 0, scale: 0.72 }}
+                initial={{ opacity: 0, scale: 0.96 }}
                 animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.72, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }}
-                transition={reduceMotion ? { duration: 0 } : { ...RADIAL_OPEN, delay: 0.22 }}
-                className="scale-[0.92]"
+                exit={{ opacity: 0, scale: 0.96, transition: motionOff ?? LAUNCHER_CLOSE }}
+                transition={motionOff ?? { ...LAUNCHER_OPEN, delay: 0.1 }}
+                className="scale-[0.9]"
               >
                 <AiOrb colorTheme={orbColorTheme} introActive={false} />
               </motion.div>
@@ -268,46 +321,93 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
         </div>
 
         <motion.div
-          initial={{ opacity: 0, y: 6 }}
+          initial={{ opacity: 0, y: 4 }}
           animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: 4, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }}
-          transition={reduceMotion ? { duration: 0 } : RADIAL_OPEN}
-          className="mb-3 flex shrink-0 items-center justify-center px-2 py-1 text-[10px] font-medium text-slate-400"
+          exit={{ opacity: 0, y: 3, transition: motionOff ?? LAUNCHER_CLOSE }}
+          transition={motionOff ?? { ...LAUNCHER_OPEN, delay: 0.08 }}
+          className="mb-2 flex shrink-0 items-center justify-center px-2 py-0.5 text-[10px] font-medium text-slate-400"
         >
-          Press <kbd className="mx-1 rounded-md border border-slate-200 bg-white/80 px-1.5 py-0.5 text-[9px] text-slate-600 shadow-[inset_0_1px_0_rgba(255,255,255,.9)]">Ctrl/⌘K</kbd> to close
+          Press{" "}
+          <kbd className="mx-1 rounded border border-slate-200/90 bg-white px-1.5 py-0.5 text-[9px] text-slate-600">
+            Ctrl/⌘K
+          </kbd>{" "}
+          to close
         </motion.div>
 
         <motion.nav
-          initial={{ opacity: 0, y: 8, scaleX: 0.86 }}
-          animate={{ opacity: 1, y: 0, scaleX: 1 }}
-          exit={{ opacity: 0, y: 6, scaleX: 0.86, transition: reduceMotion ? { duration: 0 } : RADIAL_CLOSE }}
-          transition={reduceMotion ? { duration: 0 } : RADIAL_OPEN}
+          initial={{ opacity: 0, y: 6, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 4, scale: 0.98, transition: motionOff ?? LAUNCHER_CLOSE }}
+          transition={motionOff ?? { ...LAUNCHER_OPEN, delay: 0.1 }}
           onPointerMove={(event) => {
             const rect = event.currentTarget.getBoundingClientRect();
-            const index = Math.max(0, Math.min(barActions.length - 1, Math.floor(((event.clientX - rect.left) / rect.width) * barActions.length)));
+            const index = Math.max(
+              0,
+              Math.min(barActions.length - 1, Math.floor(((event.clientX - rect.left) / rect.width) * barActions.length)),
+            );
             setHoveredBarAction(barActions[index]);
           }}
           onPointerLeave={() => setHoveredBarAction(null)}
           onBlur={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHoveredBarAction(null);
           }}
-          className="relative grid w-full max-w-[650px] shrink-0 grid-cols-3 items-center overflow-hidden rounded-full border border-slate-200 bg-white/82 p-1.5 shadow-[0_18px_50px_rgba(15,23,42,.10)] backdrop-blur-xl"
+          className="relative grid w-full max-w-[620px] shrink-0 grid-cols-3 items-center overflow-hidden rounded-full border border-slate-200/90 bg-white p-1 shadow-[0_8px_24px_rgba(15,23,42,.06)]"
         >
           <AnimatePresence>
             {hoveredBarAction ? (
               <motion.div
-                className="clyra-workflow-tab__hover pointer-events-none absolute bottom-1.5 top-1.5 rounded-full"
-                initial={{ opacity: 0, scale: 0.85 }}
+                className="clyra-workflow-tab__hover pointer-events-none absolute bottom-1 top-1 rounded-full"
+                initial={{ opacity: 0, scale: 0.92 }}
                 animate={{ opacity: 1, scale: 1, x: `calc(${barActions.indexOf(hoveredBarAction)} * 100%)` }}
-                exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.12 } }}
-                transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 720, damping: 42, mass: 0.12 }}
-                style={{ left: 6, top: 6, bottom: 6, height: "auto", width: "calc((100% - 12px) / 3)", zIndex: 0, translate: "none" }}
+                exit={{ opacity: 0, scale: 0.96, transition: { duration: 0.12 } }}
+                transition={
+                  reduceMotion
+                    ? { duration: 0 }
+                    : { type: "spring", stiffness: 780, damping: 44, mass: 0.1 }
+                }
+                style={{
+                  left: 4,
+                  top: 4,
+                  bottom: 4,
+                  height: "auto",
+                  width: "calc((100% - 8px) / 3)",
+                  zIndex: 0,
+                  translate: "none",
+                }}
               />
             ) : null}
           </AnimatePresence>
-          <button type="button" onMouseEnter={() => setHoveredBarAction("resume")} onFocus={() => setHoveredBarAction("resume")} onClick={() => openTool(tools.find((tool) => tool.id === readLastTool()) || tools[0])} className="relative z-10 flex h-11 items-center justify-center gap-2 rounded-full text-[10px] font-semibold text-slate-500 transition-[color,transform] duration-200 hover:text-slate-950 active:scale-[.98]"><Clock3 className="h-4 w-4" />Resume</button>
-          <button type="button" onMouseEnter={() => setHoveredBarAction("open")} onFocus={() => setHoveredBarAction("open")} onClick={() => openTool(activeTool)} className="relative z-10 flex h-11 items-center justify-center gap-2 rounded-full text-[10px] font-semibold text-slate-600 transition-[color,transform] duration-200 hover:text-slate-950 active:scale-[.98]"><Grid2X2 className="h-4 w-4" />Open {activeTool.shortLabel}<ArrowUpRight className="h-3.5 w-3.5" /></button>
-          <button type="button" onMouseEnter={() => setHoveredBarAction("chat")} onFocus={() => setHoveredBarAction("chat")} onClick={() => openTool(quickTool)} className="relative z-10 flex h-11 items-center justify-center gap-2 rounded-full text-[10px] font-semibold text-slate-500 transition-[color,transform] duration-200 hover:text-slate-950 active:scale-[.98]"><QuickToolIcon className="h-4 w-4" />Open {quickTool.shortLabel}</button>
+          <button
+            type="button"
+            onMouseEnter={() => setHoveredBarAction("resume")}
+            onFocus={() => setHoveredBarAction("resume")}
+            onClick={() => openTool(tools.find((tool) => tool.id === readLastTool()) || tools[0])}
+            className="relative z-10 flex h-10 items-center justify-center gap-2 rounded-full text-[10px] font-semibold text-slate-500 transition-[color,transform] duration-200 hover:text-slate-950 active:scale-[.98]"
+          >
+            <Clock3 className="h-4 w-4" />
+            Resume
+          </button>
+          <button
+            type="button"
+            onMouseEnter={() => setHoveredBarAction("open")}
+            onFocus={() => setHoveredBarAction("open")}
+            onClick={() => openTool(activeTool)}
+            className="relative z-10 flex h-10 items-center justify-center gap-2 rounded-full text-[10px] font-semibold text-slate-600 transition-[color,transform] duration-200 hover:text-slate-950 active:scale-[.98]"
+          >
+            <Grid2X2 className="h-4 w-4" />
+            Open {activeTool.shortLabel}
+            <ArrowUpRight className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onMouseEnter={() => setHoveredBarAction("chat")}
+            onFocus={() => setHoveredBarAction("chat")}
+            onClick={() => openTool(quickTool)}
+            className="relative z-10 flex h-10 items-center justify-center gap-2 rounded-full text-[10px] font-semibold text-slate-500 transition-[color,transform] duration-200 hover:text-slate-950 active:scale-[.98]"
+          >
+            <QuickToolIcon className="h-4 w-4" />
+            Open {quickTool.shortLabel}
+          </button>
         </motion.nav>
       </div>
     </motion.div>

@@ -36,7 +36,7 @@ const M1_SECRET_KEY_PATH = path.join(M1_STATE_DIR, "secret-key.txt");
 
 let m1Process: ChildProcess | null = null;
 let starting: Promise<void> | null = null;
-let backgroundWarmup: Promise<unknown> | null = null;
+let backgroundWarmup: Promise<{ uiUrl: string; agentUrl: string } | null> | null = null;
 let monitorTimer: NodeJS.Timeout | null = null;
 let lastM1LaunchError: Error | null = null;
 
@@ -329,58 +329,92 @@ export async function ensureM1Stack(): Promise<{
   return { uiUrl, agentUrl, apiKey };
 }
 
-/**
- * Fire-and-forget warm start so Vibe Coder is ready when the user opens it.
- * Never throws — failures are logged only.
- */
-export function warmupM1StackInBackground(): void {
-  const skip =
+function isWarmupSkipped() {
+  return (
     process.env.CLYRA_M1_WARMUP === "0" ||
-    process.env.CLYRA_M1_WARMUP === "false";
-  if (skip) {
-    console.log("[m1] warmup skipped (CLYRA_M1_WARMUP=0)");
-    return;
-  }
+    process.env.CLYRA_M1_WARMUP === "false"
+  );
+}
 
-  if (!monitorTimer) {
-    monitorTimer = setInterval(() => {
-      const { uiUrl, agentUrl } = getM1Paths();
-      void Promise.all([isUp(uiUrl), isUp(`${agentUrl}/server_info`)]).then(
-        ([uiReady, agentReady]) => {
-          if (uiReady && agentReady) return;
-          // Do not recycle this process group from a background probe. The
-          // agent server may temporarily decline a health request while an
-          // active conversation is flushing tool output; killing it there
-          // abandons the user's build. A fresh explicit launch still calls
-          // ensureM1Stack and performs recovery when the stack is truly down.
-          console.warn(
-            `[m1] health probe missed ui=${uiReady} agent=${agentReady}; preserving active conversations`,
-          );
-        },
-      );
-    }, 30_000);
-    monitorTimer.unref();
-  }
+function ensureWarmupMonitor() {
+  if (monitorTimer) return;
+  monitorTimer = setInterval(() => {
+    const { uiUrl, agentUrl } = getM1Paths();
+    void Promise.all([isUp(uiUrl), isUp(`${agentUrl}/server_info`)]).then(
+      ([uiReady, agentReady]) => {
+        if (uiReady && agentReady) return;
+        // Do not recycle this process group from a background probe. The
+        // agent server may temporarily decline a health request while an
+        // active conversation is flushing tool output; killing it there
+        // abandons the user's build. A fresh explicit launch still calls
+        // ensureM1Stack and performs recovery when the stack is truly down.
+        console.warn(
+          `[m1] health probe missed ui=${uiReady} agent=${agentReady}; preserving active conversations`,
+        );
+      },
+    );
+  }, 30_000);
+  monitorTimer.unref();
+}
 
-  if (backgroundWarmup) return;
+function startWarmupWork(): Promise<{ uiUrl: string; agentUrl: string } | null> {
+  if (backgroundWarmup) return backgroundWarmup;
 
   backgroundWarmup = ensureM1Stack()
-    .then(({ uiUrl, agentUrl }) => {
+    .then(async ({ uiUrl, agentUrl }) => {
       console.log(`[m1] warmup ready ui=${uiUrl} agent=${agentUrl}`);
       // Touch the UI once so Vite finishes first compile before the iframe opens.
-      return fetch(uiUrl, { signal: AbortSignal.timeout(15_000) }).catch(
-        () => null,
-      );
+      await fetch(uiUrl, { signal: AbortSignal.timeout(15_000) }).catch(() => null);
+      return { uiUrl, agentUrl };
     })
     .catch((error) => {
       console.warn(
         "[m1] warmup failed:",
         error instanceof Error ? error.message : error,
       );
+      return null;
     })
     .finally(() => {
       backgroundWarmup = null;
     });
+
+  return backgroundWarmup;
+}
+
+/**
+ * Awaitable warm start used by boot preload. Shares work with the background
+ * warmer so concurrent callers never spawn a second stack.
+ */
+export async function warmupM1Stack(options?: {
+  timeoutMs?: number;
+}): Promise<{ ready: boolean; uiUrl?: string; agentUrl?: string }> {
+  if (isWarmupSkipped()) {
+    console.log("[m1] warmup skipped (CLYRA_M1_WARMUP=0)");
+    return { ready: false };
+  }
+
+  ensureWarmupMonitor();
+  const timeoutMs = Math.max(5_000, options?.timeoutMs ?? 45_000);
+  const result = await Promise.race([
+    startWarmupWork(),
+    delay(timeoutMs).then(() => null),
+  ]);
+
+  if (!result) return { ready: false };
+  return { ready: true, uiUrl: result.uiUrl, agentUrl: result.agentUrl };
+}
+
+/**
+ * Fire-and-forget warm start so Vibe Coder is ready when the user opens it.
+ * Never throws — failures are logged only.
+ */
+export function warmupM1StackInBackground(): void {
+  if (isWarmupSkipped()) {
+    console.log("[m1] warmup skipped (CLYRA_M1_WARMUP=0)");
+    return;
+  }
+  ensureWarmupMonitor();
+  void startWarmupWork();
 }
 
 /** Release the Clyra-owned M1 process group when the desktop app exits. */

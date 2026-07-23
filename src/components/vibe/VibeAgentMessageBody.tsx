@@ -21,7 +21,6 @@ import { VibeMiniCodeBox } from "./VibeMiniCodeBox";
 import { VibeRunBlock } from "./VibeRunBlock";
 import { VibeTextLine } from "./VibeTextLine";
 import { VibeFinalSummary, type SummaryFile } from "./VibeFinalSummary";
-import { VibeProgressChecklist } from "./VibeProgressChecklist";
 import { cn } from "@/lib/utils";
 
 type StoredVibeFlowState = {
@@ -259,15 +258,10 @@ export function VibeAgentMessageBody({
     );
   }
 
-  const showChecklist = blocks.length > 2 && !isStaticHistory;
-
   return (
     <div
       className={cn(
-        "grid w-full max-w-[940px] gap-4",
-        showChecklist
-          ? "lg:grid-cols-[minmax(0,640px)_250px]"
-          : "lg:grid-cols-[minmax(0,640px)]",
+        "grid w-full max-w-[940px] gap-4 lg:grid-cols-[minmax(0,640px)]",
         fontSizeClass,
       )}
     >
@@ -394,14 +388,6 @@ export function VibeAgentMessageBody({
           />
         ) : null}
       </div>
-
-      {showChecklist ? (
-        <VibeProgressChecklist
-          segments={blocks}
-          activeStep={activeStep}
-          archived={archived}
-        />
-      ) : null}
     </div>
   );
 }

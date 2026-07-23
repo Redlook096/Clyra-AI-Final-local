@@ -1309,6 +1309,44 @@
   transform: translateZ(0) scale(1) !important;
 }
 
+/* One-shot sky/slate wash on launcher title — transform/opacity-friendly gradient wash */
+.clyra-launcher-title-wash {
+  background-image: linear-gradient(
+    105deg,
+    #0f172a 0%,
+    #0f172a 38%,
+    #38bdf8 48%,
+    #64748b 56%,
+    #0f172a 66%,
+    #0f172a 100%
+  );
+  background-size: 220% 100%;
+  background-position: 100% 50%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: clyra-launcher-title-wash 0.72s cubic-bezier(0.22, 1, 0.36, 1) 0.08s both;
+}
+
+@keyframes clyra-launcher-title-wash {
+  from {
+    background-position: 100% 50%;
+  }
+  to {
+    background-position: 0% 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clyra-launcher-title-wash {
+    animation: none;
+    background: none;
+    color: #0f172a;
+    -webkit-background-clip: unset;
+    background-clip: unset;
+  }
+}
+
 @keyframes clyra-ai-orb-float {
   0%,
   100% {

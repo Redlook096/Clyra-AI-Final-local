@@ -67,6 +67,7 @@ edit_plan = module.build_edit_plan([
     {"id": "candidate-1", "start": 1.0, "end": 8.0, "score": 88, "reason": "88 — Strong hook", "title": "Hook"},
 ])
 shots = module.detect_shot_boundaries("/tmp/does-not-exist.mp4")
+clamped = module.clamp_candidate_duration({"start": 100.0, "end": 250.0, "transcript": "x"}, 30, 1000)
 
 print(json.dumps({
     "candidates": candidates,
@@ -83,6 +84,7 @@ print(json.dumps({
     "deduped": deduped,
     "editPlan": edit_plan,
     "shots": shots,
+    "clamped": clamped,
     "endsConnective": module.ends_on_connective("We tried because"),
     "endsClean": module.ends_on_connective("This is the payoff!"),
 }))
@@ -113,6 +115,7 @@ const payload = JSON.parse(output.trim()) as {
   deduped: Array<{ id: string }>;
   editPlan: { clips: Array<{ score: number }>; shotBoundaries: unknown[] };
   shots: unknown[];
+  clamped: { start: number; end: number; duration_clamped?: boolean };
   endsConnective: boolean;
   endsClean: boolean;
 };
@@ -168,6 +171,9 @@ assert(payload.repaired.boundary_repaired === true, "boundary repair marks repai
 assert(payload.repaired.end > 3.9, "repair extends past a hanging because");
 assert(!/\bbecause$/i.test(payload.repaired.transcript.trim()), "repair refuses to end on because");
 
+assert(payload.clamped.end - payload.clamped.start <= 30 * 1.08 + 0.05, "hard clamp caps overlong candidates");
+assert(payload.clamped.duration_clamped === true, "clamp marks duration_clamped");
+
 assert(payload.scored.score >= payload.scoredBad.score, "complete payoff scores at least as high as hanging connective");
 assert(payload.scored.reason.includes("—"), "local score emits explanation");
 assert(payload.scoredBad.reason.toLowerCase().includes("ending") || payload.scoredBad.score < 90, "weak ending is reflected in scoring");
@@ -181,4 +187,4 @@ assert.equal(payload.editPlan.clips.length, 1, "edit plan includes ranked clips"
 assert.equal(payload.editPlan.clips[0].score, 88, "edit plan preserves clip potential score");
 assert.deepEqual(payload.shots, [], "missing PySceneDetect / video soft-fails to empty shot list");
 
-console.log("AI Clip unit tests passed (58 assertions)");
+console.log("AI Clip unit tests passed (60 assertions)");

@@ -402,7 +402,7 @@ function ProcessingScreen({
   onCancel: () => void;
 }) {
   return createPortal(
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[700] overflow-y-auto bg-slate-50/92 px-5 py-8 backdrop-blur-xl">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[9999] overflow-y-auto bg-white px-5 py-8">
       <div className="mx-auto flex min-h-full w-full max-w-[760px] flex-col justify-center">
         <section className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-[0_16px_44px_rgba(15,23,42,.06)] sm:p-8">
         <div className="flex items-start justify-between">

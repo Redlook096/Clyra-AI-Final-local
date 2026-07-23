@@ -171,12 +171,30 @@ export function registerClineRoutes(app: import("express").Application) {
     }
   });
 
-  // Fire-and-forget warm start so Vibe is ready before the user opens it.
-  app.post("/api/vibe/m1-warmup", async (_req, res) => {
+  // Boot preload can await a real stack start; hover/idle callers stay fire-and-forget.
+  app.post("/api/vibe/m1-warmup", async (req, res) => {
     try {
-      const { warmupM1StackInBackground } = await import("../openhands/m1-stack");
-      warmupM1StackInBackground();
-      res.json({ ok: true, warming: true });
+      const awaitReady =
+        req.query.await === "1" ||
+        req.query.await === "true" ||
+        req.body?.await === true;
+      if (!awaitReady) {
+        const { warmupM1StackInBackground } = await import("../openhands/m1-stack");
+        warmupM1StackInBackground();
+        res.json({ ok: true, warming: true });
+        return;
+      }
+
+      const timeoutMs = Math.max(
+        5_000,
+        Math.min(
+          90_000,
+          Number(req.body?.timeoutMs || req.query.timeoutMs || 45_000) || 45_000,
+        ),
+      );
+      const { warmupM1Stack } = await import("../openhands/m1-stack");
+      const result = await warmupM1Stack({ timeoutMs });
+      res.json({ ok: true, warming: !result.ready, ...result });
     } catch (error) {
       res.status(500).json({
         error: error instanceof Error ? error.message : "M1 warmup failed",

@@ -520,7 +520,7 @@ def ends_on_connective(text):
 def repair_clip_boundaries(candidate, sentences, video_duration, target_duration):
     """Snap cuts to sentence edges and avoid hanging on and/but/because endings."""
     if not sentences:
-        return candidate
+        return clamp_candidate_duration(candidate, target_duration, video_duration)
 
     start = float(candidate["start"])
     end = float(candidate["end"])
@@ -539,8 +539,9 @@ def repair_clip_boundaries(candidate, sentences, video_duration, target_duration
     if not matching:
         matching = [start_sentence]
 
-    while len(matching) > 1 and matching[-1]["end"] - matching[0]["start"] > target * 1.15:
-        matching.pop()
+    while len(matching) > 1 and matching[-1]["end"] - matching[0]["start"] > target * 1.08:
+        # Drop leading setup first so the ending payoff survives.
+        matching.pop(0)
     while len(matching) > 1 and ends_on_connective(matching[-1]["text"]):
         matching.pop()
     # If still connective-ended (single sentence), extend one sentence when possible.
@@ -550,7 +551,7 @@ def repair_clip_boundaries(candidate, sentences, video_duration, target_duration
         )), None)
         if next_index is not None and next_index + 1 < len(sentences):
             extension = sentences[next_index + 1]
-            if extension["end"] - matching[0]["start"] <= target * 1.25:
+            if extension["end"] - matching[0]["start"] <= target * 1.12:
                 matching.append(extension)
 
     transcript = " ".join(item["text"] for item in matching).strip()
@@ -559,7 +560,23 @@ def repair_clip_boundaries(candidate, sentences, video_duration, target_duration
     repaired["end"] = round(min(float(video_duration), matching[-1]["end"] + 0.12), 2)
     repaired["transcript"] = transcript[:900]
     repaired["boundary_repaired"] = True
-    return repaired
+    return clamp_candidate_duration(repaired, target, video_duration)
+
+
+def clamp_candidate_duration(candidate, target_duration, video_duration):
+    """Hard-cap clip length so a long caption sentence cannot produce a 2+ minute short."""
+    item = dict(candidate)
+    start = max(0.0, float(item.get("start", 0)))
+    end = max(start + 0.5, float(item.get("end", start + 1)))
+    target = max(8.0, min(float(target_duration), max(8.0, float(video_duration) - 0.2)))
+    max_end = start + target * 1.08
+    if end > max_end:
+        end = max_end
+        item["duration_clamped"] = True
+    end = min(float(video_duration), end)
+    item["start"] = round(start, 2)
+    item["end"] = round(end, 2)
+    return item
 
 
 def dedupe_by_overlap(candidates, max_overlap=0.42, limit=None):
@@ -720,6 +737,7 @@ def semantic_candidates(words, video_duration, moment_type, target_duration, cou
                 break
     for index, candidate in enumerate(selected):
         candidate["id"] = f"candidate-{index + 1}"
+        selected[index] = clamp_candidate_duration(candidate, target, video_duration)
     return selected
 
 
@@ -1165,7 +1183,15 @@ def main():
         for candidate_index, candidate in enumerate(candidates):
             clip_start = float(candidate["start"])
             clip_end = float(candidate["end"])
-            clip_duration = max(6.0, clip_end - clip_start)
+            candidate = clamp_candidate_duration(
+                {"start": clip_start, "end": clip_end, **{k: v for k, v in candidate.items() if k not in {"start", "end"}}},
+                requested_duration,
+                duration,
+            )
+            clip_start = float(candidate["start"])
+            clip_end = float(candidate["end"])
+            clip_duration = max(6.0, min(requested_duration * 1.08, clip_end - clip_start))
+            clip_end = clip_start + clip_duration
             item_name = f"{base_name}-{candidate_index + 1}"
             output_name = f"{job_id}-{candidate_index + 1}.mp4"
             clean_clip_path = os.path.join(job_tmp, f"{item_name}-clean.mp4")

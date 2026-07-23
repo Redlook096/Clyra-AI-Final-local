@@ -134,9 +134,34 @@ const loadVibeCoderWorkspace = () => import("./components/VibeCoderWorkspace").c
     )
   }));
 const VibeCoderWorkspace = lazy(loadVibeCoderWorkspace);
-let vibeBootPreparation: Promise<void> | null = null;
+let vibeBootPreparation: Promise<{ ready: boolean }> | null = null;
 
-async function waitForM1Readiness(timeoutMs = 40_000) {
+type VibeBootProgressUpdate = {
+  progress: number;
+  stage: number;
+  label: string;
+};
+
+const VIBE_BOOT_STAGE_LABELS = [
+  "Preparing workspace…",
+  "Loading coding tools…",
+  "Starting coding engine…",
+  "Connecting services…",
+  "Almost ready…",
+] as const;
+
+function markVibeBootReady(ready: boolean) {
+  try {
+    window.sessionStorage.setItem("clyra-vibe-boot-ready", ready ? "1" : "0");
+  } catch {
+    // sessionStorage can fail in restricted embeds; boot still continues.
+  }
+}
+
+async function waitForM1Readiness(
+  timeoutMs = 40_000,
+  onTick?: (ready: boolean) => void,
+) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
@@ -145,14 +170,17 @@ async function waitForM1Readiness(timeoutMs = 40_000) {
         const status = await response.json() as { ready?: boolean; uiUrl?: string };
         if (status.ready) {
           if (status.uiUrl) window.sessionStorage.setItem("clyra-m1-ui-url", status.uiUrl);
-          return;
+          onTick?.(true);
+          return true;
         }
       }
     } catch {
       // The stack is still coming online. The next bounded probe will retry.
     }
+    onTick?.(false);
     await new Promise((resolve) => window.setTimeout(resolve, 450));
   }
+  return false;
 }
 
 function WorkspaceImportFailure({ name }: { name: string }) {
@@ -190,20 +218,50 @@ const loadStudyPalWorkspace = () =>
   }));
 const StudyPalWorkspace = lazy(loadStudyPalWorkspace);
 
-function prepareVibeForBoot() {
+function prepareVibeForBoot(
+  onProgress?: (update: VibeBootProgressUpdate) => void,
+) {
   if (vibeBootPreparation) return vibeBootPreparation;
   vibeBootPreparation = (async () => {
-    const warmup = fetch("/api/vibe/m1-warmup", { method: "POST" }).catch(() => null);
-    await Promise.allSettled([
-      loadVibeCoderWorkspace(),
-      loadWebBrowserWorkspace(),
-      loadAIClipper(),
-      loadCreatorStudioWorkspace(),
-      loadStudyPalWorkspace(),
-      warmup,
-      fetch("/api/vibe/projects"),
-    ]);
-    await waitForM1Readiness();
+    const report = (stage: number, progress: number) => {
+      onProgress?.({
+        stage,
+        progress,
+        label: VIBE_BOOT_STAGE_LABELS[Math.min(stage, VIBE_BOOT_STAGE_LABELS.length - 1)],
+      });
+    };
+
+    report(0, 0.08);
+    // Focus boot on Vibe: warm its chunk + routes first. Other workspaces can
+    // stay lazy so this window is spent on the coding engine.
+    const vibeChunk = loadVibeCoderWorkspace();
+    report(1, 0.22);
+    const routesWarm = fetch("/api/vibe/projects").catch(() => null);
+    const warmup = fetch("/api/vibe/m1-warmup?await=1", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ await: true, timeoutMs: 45_000 }),
+    })
+      .then(async (response) => {
+        if (!response.ok) return { ready: false as const };
+        const data = (await response.json()) as { ready?: boolean; uiUrl?: string };
+        if (data.uiUrl) window.sessionStorage.setItem("clyra-m1-ui-url", data.uiUrl);
+        return { ready: !!data.ready };
+      })
+      .catch(() => ({ ready: false as const }));
+
+    report(2, 0.42);
+    await Promise.allSettled([vibeChunk, routesWarm]);
+    report(3, 0.62);
+
+    const warmupResult = await warmup;
+    report(4, warmupResult.ready ? 0.88 : 0.78);
+    const ready =
+      warmupResult.ready ||
+      (await waitForM1Readiness(warmupResult.ready ? 2_000 : 12_000));
+    markVibeBootReady(ready);
+    report(4, ready ? 0.97 : 0.9);
+    return { ready };
   })();
   return vibeBootPreparation;
 }
@@ -232,7 +290,7 @@ const WORKSPACE_TAB_ORDER: WorkspaceTabId[] = [
 function readEmbeddedWorkspace(): WorkspaceTabId {
   if (typeof window === "undefined") return "chat";
   const tool = new URLSearchParams(window.location.search).get("embedTool");
-  if (tool === "browse") return "browser";
+  if (tool === "browse" || tool === "browser") return "browser";
   if (tool === "fake-text" || tool === "would-rather") return tool;
   if (tool === "vibe" || tool === "clip" || tool === "study") return tool;
   return "chat";
@@ -330,20 +388,12 @@ function BootIntroOverlay({
   shinePass: number;
 }) {
   const isComplete = state === "progress_complete";
-  const bootStages = [
-    "Preparing Clyra's workspace",
-    "Restoring your recent conversations",
-    "Loading the private browser session",
-    "Connecting Clyra's assistant tools",
-    "Getting voice services ready",
-    "Preparing creator and study tools",
-    "Indexing your coding workspace",
-    "Checking local services",
-    "Finishing the last details",
-  ];
+  const bootStages = [...VIBE_BOOT_STAGE_LABELS];
   const showProgressTrack = state !== "booting";
   const showStatus = (state === "progress" && stage >= 0) || isComplete;
-  const stageLabel = isComplete ? "Clyra is ready" : bootStages[Math.min(stage, bootStages.length - 1)];
+  const stageLabel = isComplete
+    ? "Clyra is ready"
+    : bootStages[Math.min(Math.max(stage, 0), bootStages.length - 1)];
 
   return (
     <motion.div
@@ -1788,57 +1838,89 @@ export default function App() {
     introState === "progress_complete";
 
   useEffect(() => {
-    // Warm optional work during this deliberate boot window. The visual
-    // sequence itself is scheduled up-front so a slow optional task can never
-    // strand the user on one status label.
-    void prepareVibeForBoot();
-
+    // Drive the boot bar from real Vibe preload work so the first message never
+    // waits on a cold M1 start. A short visual floor keeps the sequence calm
+    // when warmup finishes instantly.
+    let cancelled = false;
     const timers: number[] = [];
     const schedule = (delay: number, callback: () => void) => {
       timers.push(window.setTimeout(callback, delay));
     };
-    // The fill may only advance once its travelling highlight has finished.
-    // Intentionally varied pauses keep boot calm and natural without faking
-    // random percentages or allowing a status line to race ahead.
-    const shineDuration = 1_700;
-    const milestones = [0.05, 0.14, 0.24, 0.37, 0.49, 0.61, 0.73, 0.86, 0.95];
-    const cycleGaps = [2_180, 2_540, 1_980, 2_360, 2_120, 2_610, 2_040, 2_420, 2_160];
-    const progressStart = 3_420;
+    const bootStartedAt = performance.now();
+    const minimumBootMs = 2_800;
+    let latestProgress = 0;
+    let latestStage = -1;
+    let preparationDone = false;
+    let preparationReady = false;
+    vibeBootPreparation = null;
 
-    // One quiet second, then a no-copy bar fade. The first status waits until
-    // the initial light pass has fully reached the far edge.
-    schedule(1_000, () => setIntroState("orb_up"));
-    schedule(1_680, () => {
-      setIntroState("progress");
-      setIntroStage(-1);
-      setIntroProgress(0);
-    });
-    let cycleAt = progressStart;
-    milestones.forEach((progress, index) => {
-      const currentCycleAt = cycleAt;
-      schedule(currentCycleAt, () => {
-        setIntroStage(index);
-        setIntroShinePass((pass) => pass + 1);
-      });
-      schedule(currentCycleAt + shineDuration + 56, () => {
-        setIntroProgress(progress);
-      });
-      cycleAt += cycleGaps[index];
-    });
-    const finalProgressAt = cycleAt;
-    schedule(finalProgressAt, () => {
+    const applyProgress = (progress: number, stage: number) => {
+      if (cancelled) return;
+      latestProgress = Math.max(latestProgress, Math.min(1, progress));
+      latestStage = Math.max(latestStage, stage);
+      setIntroProgress(latestProgress);
+      if (latestStage >= 0) setIntroStage(latestStage);
       setIntroShinePass((pass) => pass + 1);
-    });
-    schedule(finalProgressAt + shineDuration + 56, () => {
+    };
+
+    const finishBoot = () => {
+      if (cancelled) return;
       setIntroProgress(1);
+      setIntroStage(VIBE_BOOT_STAGE_LABELS.length - 1);
+      setIntroState("progress_complete");
+      schedule(820, () => {
+        if (cancelled) return;
+        setIntroState("complete");
+        setIsSidebarOpen(true);
+      });
+    };
+
+    const maybeFinish = () => {
+      if (!preparationDone || cancelled) return;
+      const elapsed = performance.now() - bootStartedAt;
+      const waitMore = Math.max(0, minimumBootMs - elapsed);
+      schedule(waitMore, () => {
+        applyProgress(1, VIBE_BOOT_STAGE_LABELS.length - 1);
+        finishBoot();
+      });
+    };
+
+    schedule(700, () => {
+      if (cancelled) return;
+      setIntroState("orb_up");
     });
-    schedule(finalProgressAt + shineDuration + 760, () => setIntroState("progress_complete"));
-    schedule(finalProgressAt + shineDuration + 1_640, () => {
-      setIntroState("complete");
-      setIsSidebarOpen(true);
+    schedule(1_160, () => {
+      if (cancelled) return;
+      setIntroState("progress");
+      setIntroStage(0);
+      setIntroProgress(0.04);
+    });
+
+    void prepareVibeForBoot((update) => {
+      if (cancelled) return;
+      applyProgress(update.progress, update.stage);
+    }).then((result) => {
+      preparationDone = true;
+      preparationReady = result.ready;
+      markVibeBootReady(preparationReady);
+      maybeFinish();
+    }).catch(() => {
+      preparationDone = true;
+      preparationReady = false;
+      markVibeBootReady(false);
+      maybeFinish();
+    });
+
+    // Safety valve: never strand the splash if warmup hangs past the await race.
+    schedule(52_000, () => {
+      if (preparationDone || cancelled) return;
+      preparationDone = true;
+      markVibeBootReady(false);
+      maybeFinish();
     });
 
     return () => {
+      cancelled = true;
       timers.forEach((timer) => window.clearTimeout(timer));
     };
   }, []);
