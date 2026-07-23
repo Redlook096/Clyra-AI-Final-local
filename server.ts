@@ -2,8 +2,11 @@ import dotenv from "dotenv";
 import express from "express";
 import path from "path";
 import {
+  clipperOutputDir,
   clyraDataPath,
+  clyraDataRoot,
   clyraResourcePath,
+  resolveClipperMediaPath,
 } from "./lib/runtime-paths";
 
 dotenv.config({ path: clyraResourcePath(".env") });
@@ -2712,6 +2715,77 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
     }
   });
 
+  const sendClipperMedia = (req, res, disposition: "inline" | "attachment") => {
+    const filename = path.basename(req.params.filename || "");
+    const filePath = resolveClipperMediaPath(filename);
+    if (!filePath) {
+      res.status(404).json({ error: "Clip not found" });
+      return;
+    }
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.setHeader("Content-Disposition", `${disposition}; filename="${filename}"`);
+    res.sendFile(filePath, (error) => {
+      if (error && !res.headersSent) res.status(404).json({ error: "Clip not found" });
+    });
+  };
+
+  const spawnClipperPipeline = (args: string[], res: import("express").Response, startMessage = "Starting...") => {
+    const outputDir = clipperOutputDir();
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+    const send = (type, data) => {
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+    };
+    const scriptPath = clyraResourcePath("clipper-pipeline.py");
+    const homeBin = path.join(homedir(), "bin");
+    send("progress", { step: "captions", status: "running", message: startMessage });
+    const proc = spawn("python3", [scriptPath, ...args], {
+      cwd: clyraResourcePath(),
+      env: {
+        ...process.env,
+        PYTHONUNBUFFERED: "1",
+        PATH: `${process.env.PATH || ""}:${homeBin}`,
+        CLYRA_DATA_ROOT: clyraDataRoot(),
+        CLYRA_OUTPUT_DIR: outputDir,
+        CLYRA_TMP_DIR: clyraDataPath("tmp"),
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let buf = "";
+    let stderr = "";
+    res.once("close", () => {
+      if (!res.writableEnded && proc.exitCode === null) proc.kill("SIGTERM");
+    });
+    proc.stdout.on("data", (chunk) => {
+      buf += chunk.toString();
+      const lines = buf.split("\n");
+      buf = lines.pop() || "";
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const d = JSON.parse(t);
+          send(d.type || "progress", d);
+        } catch {
+          send("log", { message: t });
+        }
+      }
+    });
+    proc.stderr.on("data", (chunk) => {
+      stderr = `${stderr}${String(chunk)}`.slice(-8_000);
+      send("log", { message: chunk.toString().trim() });
+    });
+    proc.on("close", (code) => {
+      if (code !== 0 && !res.writableEnded) send("error", { message: stderr.trim().split("\n").at(-1) || `Pipeline failed code ${code}` });
+      res.end();
+    });
+    proc.on("error", (err) => {
+      send("error", { message: err.message });
+      res.end();
+    });
+  };
+
   app.post("/api/clipper/start", async (req, res) => {
     const { url, uploadId, config: cfg } = req.body || {};
     let source = String(url || "").trim();
@@ -2736,64 +2810,58 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
         return;
       }
     }
-    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-    const send = (type, data) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify({ type, ...data })}
-
-`); };
-    const scriptPath = clyraResourcePath("clipper-pipeline.py");
-    const homeBin = path.join(homedir(), "bin");
-    send("progress", { step: "captions", status: "running", message: "Starting..." });
-    const proc = spawn("python3", [scriptPath, source, JSON.stringify(cfg || {})], {
-      env: { ...process.env, PYTHONUNBUFFERED: "1", PATH: `${process.env.PATH || ""}:${homeBin}` },
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    let buf = "";
-    let stderr = "";
-    res.once("close", () => {
-      if (!res.writableEnded && proc.exitCode === null) proc.kill("SIGTERM");
-    });
-    proc.stdout.on("data", (chunk) => {
-      buf += chunk.toString();
-      const lines = buf.split("\n"); buf = lines.pop() || "";
-      for (const line of lines) {
-        const t = line.trim(); if (!t) continue;
-        try { const d = JSON.parse(t); send(d.type || "progress", d); }
-        catch { send("log", { message: t }); }
-      }
-    });
-    proc.stderr.on("data", (chunk) => {
-      stderr = `${stderr}${String(chunk)}`.slice(-8_000);
-      send("log", { message: chunk.toString().trim() });
-    });
-    proc.on("close", (code) => {
-      if (code !== 0 && !res.writableEnded) send("error", { message: stderr.trim().split("\n").at(-1) || `Pipeline failed code ${code}` });
-      res.end();
-    });
-    proc.on("error", (err) => { send("error", { message: err.message }); res.end(); });
+    await fs.mkdir(clipperOutputDir(), { recursive: true });
+    await fs.mkdir(clyraDataPath("tmp"), { recursive: true }).catch(() => undefined);
+    spawnClipperPipeline([source, JSON.stringify(cfg || {})], res, "Starting...");
   });
-  app.use("/output", express.static(clyraDataPath("output"), {
-    setHeaders: (res) => { res.setHeader("Content-Type", "video/mp4"); res.setHeader("Accept-Ranges", "bytes"); },
-    fallthrough: false
-  }));
 
-  app.get("/api/clipper/download/:filename", (req, res) => {
-    const filename = path.basename(req.params.filename || "");
-    if (!/^[\w.-]+\.mp4$/i.test(filename)) {
-      res.status(400).json({ error: "Invalid clip filename" });
+  // Re-encode one clip from saved plate + words (face tracking / subtitle edits).
+  app.post("/api/clipper/rerender", async (req, res) => {
+    const body = req.body || {};
+    const artifactId = String(body.artifactId || body.artifact_id || body.clipId || body.clip_id || "").trim();
+    if (!artifactId || !/^[\w.-]+$/.test(artifactId)) {
+      res.status(400).json({ error: "A valid clip artifact id is required" });
       return;
     }
-
-    const filePath = clyraDataPath("output", filename);
-    if (!existsSync(filePath)) {
-      res.status(404).json({ error: "Clip not found" });
+    const artifactCandidates = [
+      clyraDataPath("tmp", "clipper-artifacts", artifactId),
+      clyraResourcePath("tmp", "clipper-artifacts", artifactId),
+      path.join(process.cwd(), "tmp", "clipper-artifacts", artifactId),
+    ];
+    const artifactDir = artifactCandidates.find((candidate) => existsSync(candidate));
+    if (!artifactDir) {
+      res.status(404).json({ error: "Clip artifacts are no longer available for refine" });
       return;
     }
-
-    res.setHeader("Content-Type", "video/mp4");
-    res.setHeader("Accept-Ranges", "bytes");
-    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
-    res.sendFile(filePath);
+    await fs.mkdir(clipperOutputDir(), { recursive: true });
+    const cfg = {
+      artifact_id: artifactId,
+      output_name: body.outputName || body.output_name,
+      words: body.words,
+      ass: body.ass,
+      face_tracking: body.faceTracking || body.face_tracking || {
+        enabled: body.faceTrackingMode ? body.faceTrackingMode !== "off" : true,
+        mode: body.faceTrackingMode || body.mode || "smooth",
+        selectedTrackId: body.selectedTrackId || body.selected_face_id || null,
+        allowZoom: body.allowZoom !== false,
+      },
+      face_tracking_mode: body.faceTrackingMode || body.mode,
+      selected_face_id: body.selectedTrackId,
+      aspect_ratio: body.aspectRatio || body.aspect_ratio,
+      crop_focus: body.cropFocus || body.crop_focus,
+      font: body.font,
+      font_size: body.fontSize ?? body.font_size,
+      text_colour: body.textColour || body.text_colour,
+      position: body.position,
+      captions_enabled: body.captionsEnabled ?? body.captions_enabled ?? true,
+    };
+    spawnClipperPipeline(["--refine", JSON.stringify(cfg)], res, "Refining crop and captions...");
   });
+
+  // Legacy path kept for older cached result URLs; resolves data-root + cwd/output.
+  app.get("/output/:filename", (req, res) => sendClipperMedia(req, res, "inline"));
+  app.get("/api/clipper/media/:filename", (req, res) => sendClipperMedia(req, res, "inline"));
+  app.get("/api/clipper/download/:filename", (req, res) => sendClipperMedia(req, res, "attachment"));
 
   if (process.env.NODE_ENV !== "production") {
     const viteModule = "vite";
