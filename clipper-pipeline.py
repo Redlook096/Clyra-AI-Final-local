@@ -22,8 +22,11 @@ import xml.etree.ElementTree as ET
 from clipper_face_tracking import (
     build_crop_filter,
     capability_report as face_capability_report,
+    evaluate_scene,
     face_tracking_config,
+    filter_candidates_by_scenes,
     probe_video_size,
+    scan_people,
     track_faces_and_build_crops,
 )
 
@@ -690,7 +693,15 @@ def detect_shot_boundaries(video_path):
 
 def build_edit_plan(ranked_clips, shot_boundaries=None, face_cfg=None, crop_plans=None):
     """Canonical render plan consumed by the existing FFmpeg crop/subtitle path."""
-    face_cfg = face_cfg or {"enabled": True, "mode": "smooth", "selectedTrackId": None, "allowZoom": True}
+    face_cfg = face_cfg or {
+        "enabled": True,
+        "mode": "smooth",
+        "selectedTrackId": None,
+        "selectedPersonId": None,
+        "personMode": "strict",
+        "sceneMode": "strict",
+        "allowZoom": True,
+    }
     crop_plans = crop_plans or {}
     clips = []
     for item in ranked_clips:
@@ -698,7 +709,10 @@ def build_edit_plan(ranked_clips, shot_boundaries=None, face_cfg=None, crop_plan
         face = plan.get("faceTracking") or {
             "enabled": bool(face_cfg.get("enabled", True)),
             "mode": face_cfg.get("mode", "smooth"),
-            "selectedTrackId": face_cfg.get("selectedTrackId"),
+            "selectedTrackId": face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId"),
+            "selectedPersonId": face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId"),
+            "personMode": face_cfg.get("personMode") or face_cfg.get("sceneMode", "strict"),
+            "sceneMode": face_cfg.get("sceneMode") or face_cfg.get("personMode", "strict"),
             "allowZoom": bool(face_cfg.get("allowZoom", True)),
         }
         clips.append(
@@ -714,17 +728,23 @@ def build_edit_plan(ranked_clips, shot_boundaries=None, face_cfg=None, crop_plan
                 "faceTracking": face,
                 "cropKeyframes": plan.get("cropKeyframes") or [],
                 "availableFaces": plan.get("availableFaces") or [],
+                "scenes": plan.get("scenes") or [],
+                "faceOverlay": plan.get("faceOverlay") or [],
             }
         )
     return {
-        "version": 2,
+        "version": 3,
         "clips": clips,
         "shotBoundaries": shot_boundaries or [],
         "faceCapabilities": face_capability_report(),
+        "sceneMode": face_cfg.get("sceneMode") or face_cfg.get("personMode", "strict"),
+        "personMode": face_cfg.get("personMode") or face_cfg.get("sceneMode", "strict"),
+        "selectedPersonId": face_cfg.get("selectedPersonId"),
         "notes": [
             "Transcript-first selection; visual adapters are optional evidence only.",
-            "Face tracking uses MediaPipe Tasks when installed; otherwise a motion-heuristic fallback.",
-            "Changing faceTracking regenerates crop keyframes only — not download/transcription/selection.",
+            "Selected-person identity uses lightweight appearance histograms (InsightFace optional later).",
+            "Strict/Flexible sceneMode filters scenes without the selected person when possible.",
+            "Changing faceTracking / selectedPersonId regenerates crop keyframes only — not download/transcription.",
         ],
     }
 
@@ -1067,10 +1087,88 @@ def artifact_dir_for(output_name):
     return path
 
 
+def _faces_with_urls(artifact_id, faces):
+    out = []
+    for face in faces or []:
+        item = dict(face)
+        url = item.get("thumbnailUrl")
+        thumb = item.get("thumbnailPath") or item.get("thumbnail")
+        if url and str(url).startswith("/"):
+            item["thumbnailUrl"] = url
+        elif url:
+            item["thumbnailUrl"] = f"/api/clipper/artifact/{artifact_id}/{url}"
+        elif thumb and isinstance(thumb, str) and thumb.startswith("/"):
+            item["thumbnailUrl"] = thumb
+        elif item.get("id"):
+            item["thumbnailUrl"] = f"/api/clipper/artifact/{artifact_id}/faces/{item['id']}.jpg"
+        # Normalize bbox for the studio overlay from sampleBbox / bboxSamples.
+        if not item.get("bbox") and item.get("sampleBbox"):
+            box = item["sampleBbox"]
+            if isinstance(box, (list, tuple)) and len(box) >= 4:
+                item["bbox"] = {
+                    "x": float(box[0]),
+                    "y": float(box[1]),
+                    "width": float(box[2] - box[0]),
+                    "height": float(box[3] - box[1]),
+                }
+            elif isinstance(box, dict):
+                item["bbox"] = box
+        out.append(item)
+    return out
+
+
+def _relocate_face_thumbs(artifact_dir, crop_plan):
+    """Copy person thumbnails into the artifact and rewrite paths for the API."""
+    if not isinstance(crop_plan, dict):
+        return crop_plan
+    faces_dir = os.path.join(artifact_dir, "faces")
+    os.makedirs(faces_dir, exist_ok=True)
+    available = []
+    for face in crop_plan.get("availableFaces") or crop_plan.get("people") or []:
+        item = dict(face)
+        src = item.get("thumbnailPath") or item.get("thumbnail")
+        if src and os.path.isfile(str(src)):
+            dest_name = f"{item.get('id') or 'person'}.jpg"
+            dest = os.path.join(faces_dir, dest_name)
+            try:
+                if os.path.abspath(src) != os.path.abspath(dest):
+                    shutil.copy2(src, dest)
+                item["thumbnailPath"] = dest
+                item["thumbnail"] = dest
+                item["thumbnailUrl"] = f"faces/{dest_name}"
+            except Exception:
+                pass
+        available.append(item)
+    crop_plan = dict(crop_plan)
+    crop_plan["availableFaces"] = available
+    if crop_plan.get("selectedPerson") and isinstance(crop_plan["selectedPerson"], dict):
+        selected = dict(crop_plan["selectedPerson"])
+        match = next((face for face in available if face.get("id") == selected.get("id")), None)
+        if match:
+            selected["thumbnailPath"] = match.get("thumbnailPath")
+            selected["thumbnailUrl"] = match.get("thumbnailUrl")
+        crop_plan["selectedPerson"] = selected
+    write_json(os.path.join(artifact_dir, "detected-people.json"), available)
+    scenes = crop_plan.get("scenes") or crop_plan.get("acceptedScenes") or []
+    write_json(os.path.join(artifact_dir, "accepted-face-scenes.json"), [s for s in scenes if s.get("accepted")])
+    write_json(os.path.join(artifact_dir, "crop-keyframes.json"), crop_plan.get("cropKeyframes") or [])
+    if crop_plan.get("selectedPerson") or crop_plan.get("faceTracking"):
+        write_json(
+            os.path.join(artifact_dir, "selected-person.json"),
+            crop_plan.get("selectedPerson")
+            or {
+                "personId": (crop_plan.get("faceTracking") or {}).get("selectedPersonId"),
+                "sceneMode": (crop_plan.get("faceTracking") or {}).get("sceneMode"),
+            },
+        )
+    return crop_plan
+
+
 def persist_clip_artifacts(artifact_dir, *, words, meta, plate_path=None, subtitle_path=None, crop_plan=None):
     write_json(os.path.join(artifact_dir, "words.json"), words)
     write_json(os.path.join(artifact_dir, "meta.json"), meta)
     if crop_plan is not None:
+        crop_plan = _relocate_face_thumbs(artifact_dir, crop_plan)
         write_json(os.path.join(artifact_dir, "crop-plan.json"), crop_plan)
     if plate_path and os.path.isfile(plate_path):
         dest = os.path.join(artifact_dir, "plate.mp4")
@@ -1080,6 +1178,7 @@ def persist_clip_artifacts(artifact_dir, *, words, meta, plate_path=None, subtit
         dest = os.path.join(artifact_dir, "captions.ass")
         if os.path.abspath(subtitle_path) != os.path.abspath(dest):
             shutil.copy2(subtitle_path, dest)
+    return crop_plan
 
 
 def transcribe_clip_words(clip_path):
@@ -1217,9 +1316,13 @@ def refine_clip(cfg):
         words = edited_words
     ass_override = cfg.get("ass")
     clip_duration = float(meta.get("clip_duration") or probe_duration(plate_path))
+    shot_boundaries = read_json(os.path.join(artifact_dir, "shot-boundaries.json"), [])
+    if not isinstance(shot_boundaries, list):
+        shot_boundaries = []
 
     emit("clip", "running", message="Refining crop from saved plate...")
     frame_w, frame_h = probe_video_size(FFPROBE, FFMPEG, plate_path)
+    faces_dir = os.path.join(artifact_dir, "faces")
     crop_plan = track_faces_and_build_crops(
         FFMPEG,
         plate_path,
@@ -1228,15 +1331,26 @@ def refine_clip(cfg):
         OUTPUT_WIDTH,
         OUTPUT_HEIGHT,
         mode=face_cfg["mode"],
-        selected_track_id=face_cfg.get("selectedTrackId"),
+        selected_track_id=face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId"),
+        selected_person_id=face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId"),
+        person_mode=face_cfg.get("personMode") or face_cfg.get("sceneMode", "strict"),
+        scene_mode=face_cfg.get("sceneMode") or face_cfg.get("personMode", "strict"),
         allow_zoom=face_cfg.get("allowZoom", True),
         crop_focus=crop_focus,
         cache_root=os.path.join(TMP_ROOT, "clipper-face-cache"),
         frame_w=frame_w,
         frame_h=frame_h,
+        shot_boundaries=shot_boundaries,
+        scene_rules=face_cfg.get("sceneRules"),
+        thumb_dir=faces_dir,
     )
-    if face_cfg.get("selectedTrackId"):
-        crop_plan["faceTracking"]["selectedTrackId"] = face_cfg["selectedTrackId"]
+    selected_id = face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId")
+    if selected_id:
+        crop_plan["faceTracking"]["selectedTrackId"] = selected_id
+        crop_plan["faceTracking"]["selectedPersonId"] = selected_id
+    mode_value = face_cfg.get("personMode") or face_cfg.get("sceneMode", "strict")
+    crop_plan["faceTracking"]["personMode"] = mode_value
+    crop_plan["faceTracking"]["sceneMode"] = mode_value
 
     clean_clip_path = os.path.join(artifact_dir, "clean-refined.mp4")
     sendcmd_path = os.path.join(artifact_dir, "crop.sendcmd")
@@ -1266,17 +1380,19 @@ def refine_clip(cfg):
     else:
         shutil.copy2(clean_clip_path, output_path)
 
-    persist_clip_artifacts(
+    crop_plan = persist_clip_artifacts(
         artifact_dir,
         words=words,
         meta={**meta, "face_tracking": crop_plan.get("faceTracking"), "aspect_ratio": aspect, "crop_focus": crop_focus},
         plate_path=plate_path,
         subtitle_path=subtitle_path,
         crop_plan=crop_plan,
-    )
+    ) or crop_plan
     write_json(os.path.join(artifact_dir, "edit-plan-clip.json"), {
         "faceTracking": crop_plan.get("faceTracking"),
         "cropKeyframes": crop_plan.get("cropKeyframes"),
+        "scenes": crop_plan.get("scenes") or [],
+        "faceOverlay": crop_plan.get("faceOverlay") or [],
     })
 
     result = {
@@ -1301,18 +1417,54 @@ def refine_clip(cfg):
         "output_quality": f"{OUTPUT_WIDTH}x{OUTPUT_HEIGHT} {aspect} 30fps AAC 256k",
         "artifact_id": os.path.basename(artifact_dir),
         "face_tracking": crop_plan.get("faceTracking"),
-        "available_faces": crop_plan.get("availableFaces") or [],
+        "available_faces": _faces_with_urls(os.path.basename(artifact_dir), crop_plan.get("availableFaces") or []),
         "crop_keyframes": crop_plan.get("cropKeyframes") or [],
+        "face_overlay": crop_plan.get("faceOverlay") or [],
+        "face_scenes": crop_plan.get("scenes") or [],
+        "plate_url": f"/api/clipper/artifact/{os.path.basename(artifact_dir)}/plate.mp4",
     }
     emit("render", "complete", message="Refined clip ready")
     emit("complete", "complete", message="Refine complete", results=[result], output=result["output"], **{k: result[k] for k in ("title", "clip_duration", "reason", "caption", "file_size")})
     print(json.dumps({"type": "clip_result", "step": "result", "status": "complete", "message": "Refined clip ready", "result": result}), flush=True)
 
 
+def scan_people_cli(cfg):
+    """Scan a local video for recurring people (picker helper for the create wizard)."""
+    source = str(cfg.get("source") or cfg.get("path") or "").strip()
+    if not source or not os.path.isfile(source):
+        fail("scan-people requires a local video path in config.source")
+    start = float(cfg.get("start") or 0.0)
+    duration = cfg.get("duration")
+    duration = float(duration) if duration is not None else None
+    cache_root = os.path.join(TMP_ROOT, "clipper-face-cache")
+    emit("analyze", "running", message="Scanning people for face picker...")
+    payload = scan_people(
+        FFMPEG,
+        source,
+        start=start,
+        duration=duration,
+        cache_root=cache_root,
+        job_id=str(cfg.get("job_id") or cfg.get("jobId") or "") or None,
+        max_people=int(cfg.get("max_people") or cfg.get("maxPeople") or 8),
+    )
+    people = payload.get("people") or []
+    emit(
+        "complete",
+        "complete",
+        message=f"Found {len(people)} people",
+        people=people,
+        scenes=payload.get("scenes") or [],
+        jobId=payload.get("jobId"),
+        cacheDir=payload.get("cacheDir"),
+        capabilities=payload.get("capabilities"),
+    )
+    print(json.dumps({"type": "people_scan", "status": "complete", **payload}), flush=True)
+
+
 def main():
     global OUTPUT_WIDTH, OUTPUT_HEIGHT, TMP_ROOT, OUTPUT_DIR
     if len(sys.argv) < 2:
-        fail("Usage: clipper-pipeline.py <url-or-file|--refine> [config]")
+        fail("Usage: clipper-pipeline.py <url-or-file|--refine|--scan-people> [config]")
 
     # Allow CLYRA_TMP_DIR / CLYRA_OUTPUT_DIR overrides set by Electron/Express.
     env_tmp = (os.environ.get("CLYRA_TMP_DIR") or "").strip()
@@ -1324,6 +1476,16 @@ def main():
         cfg = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
         try:
             refine_clip(cfg)
+        except SystemExit:
+            raise
+        except Exception as exc:
+            fail(f"{type(exc).__name__}: {exc}")
+        return
+
+    if sys.argv[1].strip() in {"--scan-people", "scan-people"}:
+        cfg = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
+        try:
+            scan_people_cli(cfg)
         except SystemExit:
             raise
         except Exception as exc:
@@ -1522,6 +1684,7 @@ def main():
 
             track_source = plate_path if os.path.isfile(plate_path) else (fallback_path or stream_url)
             emit("clip", "running", message=f"Face tracking candidate {candidate_index + 1} ({face_cfg['mode']})...")
+            faces_dir = os.path.join(artifact_dir, "faces")
             crop_plan = track_faces_and_build_crops(
                 FFMPEG,
                 track_source,
@@ -1530,14 +1693,33 @@ def main():
                 OUTPUT_WIDTH,
                 OUTPUT_HEIGHT,
                 mode=face_cfg["mode"],
-                selected_track_id=face_cfg.get("selectedTrackId"),
+                selected_track_id=face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId"),
+                selected_person_id=face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId"),
+                person_mode=face_cfg.get("personMode") or face_cfg.get("sceneMode", "strict"),
+                scene_mode=face_cfg.get("sceneMode") or face_cfg.get("personMode", "strict"),
                 allow_zoom=face_cfg.get("allowZoom", True),
                 crop_focus=crop_focus,
                 cache_root=os.path.join(source_cache, "face-cache"),
                 frame_w=frame_w,
                 frame_h=frame_h,
+                shot_boundaries=[
+                    {
+                        "startMs": max(0, int(item.get("startMs", 0)) - int(clip_start * 1000)),
+                        "endMs": max(0, int(item.get("endMs", 0)) - int(clip_start * 1000)),
+                    }
+                    for item in (shot_boundaries or [])
+                    if isinstance(item, dict)
+                ],
+                scene_rules=face_cfg.get("sceneRules"),
+                thumb_dir=faces_dir,
             )
+            # When a person is locked and the clip fails scene acceptance, keep render but annotate.
+            if face_cfg.get("selectedPersonId") and (crop_plan.get("scenes") or crop_plan.get("acceptedScenes")):
+                scenes = crop_plan.get("acceptedScenes") or [s for s in (crop_plan.get("scenes") or []) if s.get("accepted")]
+                if not scenes and (face_cfg.get("personMode") or face_cfg.get("sceneMode")) == "strict":
+                    candidate["face_rejected"] = True
             crop_plans[candidate["id"]] = crop_plan
+            write_json(os.path.join(artifact_dir, "shot-boundaries.json"), shot_boundaries or [])
 
             try:
                 if os.path.isfile(plate_path):
@@ -1637,10 +1819,15 @@ def main():
                 subtitle_path=subtitle_path,
                 crop_plan=crop_plan,
             )
+            # Reload relocated thumb URLs from persisted plan.
+            persisted = read_json(os.path.join(artifact_dir, "crop-plan.json"), crop_plan)
+            crop_plan = persisted if isinstance(persisted, dict) else crop_plan
+            crop_plans[candidate["id"]] = crop_plan
 
             caption_words = [word["word"] for word in transcribed_words if len(word["word"]) > 2]
             score = int(max(1, min(100, int(candidate.get("score", 50)))))
             reason = str(candidate.get("reason") or f"{score} — Strong standalone moment")[:220]
+            available_faces = _faces_with_urls(os.path.basename(artifact_dir), crop_plan.get("availableFaces") or [])
             result = {
                 "id": candidate["id"],
                 "rank": candidate_index + 1,
@@ -1664,8 +1851,11 @@ def main():
                 "output_quality": f"{OUTPUT_WIDTH}x{OUTPUT_HEIGHT} {aspect} 30fps AAC 256k",
                 "artifact_id": os.path.basename(artifact_dir),
                 "face_tracking": crop_plan.get("faceTracking"),
-                "available_faces": crop_plan.get("availableFaces") or [],
+                "available_faces": available_faces,
                 "crop_keyframes": crop_plan.get("cropKeyframes") or [],
+                "face_overlay": crop_plan.get("faceOverlay") or [],
+                "face_scenes": crop_plan.get("scenes") or [],
+                "plate_url": f"/api/clipper/artifact/{os.path.basename(artifact_dir)}/plate.mp4",
             }
             results.append(result)
             print(json.dumps({"type": "clip_result", "step": "result", "status": "complete", "message": f"Candidate {candidate_index + 1} ready", "result": result}), flush=True)
