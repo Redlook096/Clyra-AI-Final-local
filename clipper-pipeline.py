@@ -20,9 +20,9 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 from clipper_face_tracking import (
+    annotate_scenes,
     build_crop_filter,
     capability_report as face_capability_report,
-    evaluate_scene,
     face_tracking_config,
     filter_candidates_by_scenes,
     probe_video_size,
@@ -1621,6 +1621,41 @@ def main():
                 ranked.append(candidate)
                 if len(ranked) >= clip_count:
                     break
+        # When a person is already selected, prefer candidates that overlap accepted face scenes.
+        if face_cfg.get("selectedPersonId") and (local_source or (fallback_path and os.path.isfile(fallback_path))):
+            try:
+                scan_source = source if local_source and os.path.isfile(source) else fallback_path
+                people_scan = scan_people(
+                    FFMPEG,
+                    scan_source,
+                    start=0.0,
+                    duration=min(float(duration), 180.0),
+                    cache_root=os.path.join(source_cache, "face-cache"),
+                    job_id=f"{source_fingerprint(source)}-people",
+                )
+                write_json(os.path.join(source_cache, "detected-people.json"), people_scan.get("people") or [])
+                write_json(os.path.join(source_cache, "detected-scenes.json"), people_scan.get("scenes") or [])
+                # Mark scenes accepted for the selected person using presence from people bbox samples.
+                presence = []
+                for person in people_scan.get("people") or []:
+                    if person.get("id") != face_cfg.get("selectedPersonId"):
+                        continue
+                    for sample in person.get("bboxSamples") or []:
+                        presence.append(float(sample.get("timeMs", 0)) / 1000.0)
+                annotated = annotate_scenes(
+                    people_scan.get("scenes") or [],
+                    presence,
+                    face_cfg.get("personMode") or face_cfg.get("sceneMode") or "strict",
+                    face_cfg.get("selectedPersonId"),
+                )
+                write_json(os.path.join(source_cache, "accepted-face-scenes.json"), [s for s in annotated if s.get("accepted")])
+                ranked = filter_candidates_by_scenes(
+                    ranked,
+                    annotated,
+                    person_mode=face_cfg.get("personMode") or face_cfg.get("sceneMode") or "strict",
+                )
+            except Exception:
+                pass
         for index, candidate in enumerate(ranked):
             candidate["id"] = f"candidate-{index + 1}"
             candidate["start"] = round(float(candidate["start"]), 2)

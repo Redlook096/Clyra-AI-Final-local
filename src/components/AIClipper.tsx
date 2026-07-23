@@ -273,6 +273,8 @@ function faceOverlayBox(face: AvailableFace, index: number) {
     height: 0.34,
   };
 }
+
+function rewriteTimedWords(words: CaptionWord[]): CaptionWord[] {
   return words
     .map((item) => {
       const cleaned = wordText(item)
@@ -837,12 +839,7 @@ export default function AIClipper({
       return (selected?.available_faces || []).map((face, index) => ({
         id: face.id,
         label: face.label || face.id,
-        bbox: face.bbox || {
-          x: 0.18 + (index % 3) * 0.22,
-          y: 0.16 + Math.floor(index / 3) * 0.28,
-          width: 0.28,
-          height: 0.34,
-        },
+        bbox: faceOverlayBox(face, index),
       }));
     }
     let best = tracks[0]!;
