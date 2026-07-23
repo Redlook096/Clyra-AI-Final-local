@@ -2938,6 +2938,31 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
     });
   });
 
+  // Wizard people-scan thumbs live under tmp/clipper-face-cache/<jobId>/thumbs/.
+  app.get("/api/clipper/face-cache/:jobId/thumbs/:faceFile", (req, res) => {
+    const jobId = String(req.params.jobId || "");
+    const faceFile = String(req.params.faceFile || "");
+    if (!/^[\w.-]+$/.test(jobId) || !/^[\w.-]+\.jpe?g$/i.test(faceFile)) {
+      res.status(400).json({ error: "Invalid face cache path" });
+      return;
+    }
+    const candidates = [
+      clyraDataPath("tmp", "clipper-face-cache", jobId, "thumbs", faceFile),
+      clyraResourcePath("tmp", "clipper-face-cache", jobId, "thumbs", faceFile),
+      path.join(process.cwd(), "tmp", "clipper-face-cache", jobId, "thumbs", faceFile),
+    ];
+    const filePath = candidates.find((candidate) => existsSync(candidate));
+    if (!filePath) {
+      res.status(404).json({ error: "Face thumbnail not found" });
+      return;
+    }
+    res.type("image/jpeg");
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.sendFile(filePath, (error) => {
+      if (error && !res.headersSent) res.status(404).json({ error: "Face thumbnail not found" });
+    });
+  });
+
   // Legacy path kept for older cached result URLs; resolves data-root + cwd/output.
   app.get("/output/:filename", (req, res) => sendClipperMedia(req, res, "inline"));
   app.get("/api/clipper/media/:filename", (req, res) => sendClipperMedia(req, res, "inline"));

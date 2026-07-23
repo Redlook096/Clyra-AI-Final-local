@@ -145,6 +145,7 @@ type ClipDraft = {
   cropFocus: CropFocus;
   faceTracking: FaceTrackingMode;
   sceneMode: SceneMode;
+  selectedPersonId: string;
   captionsEnabled: boolean;
   removeFillers: boolean;
   font: string;
@@ -193,6 +194,7 @@ const DEFAULT_DRAFT: ClipDraft = {
   cropFocus: "center",
   faceTracking: "smooth",
   sceneMode: "strict",
+  selectedPersonId: "",
   captionsEnabled: true,
   removeFillers: true,
   font: "Impact",
@@ -624,6 +626,8 @@ export default function AIClipper({
   const [refineBusy, setRefineBusy] = useState(false);
   const [selectedFaceId, setSelectedFaceId] = useState<string>("");
   const [previewTimeMs, setPreviewTimeMs] = useState(0);
+  const [wizardPeople, setWizardPeople] = useState<AvailableFace[]>([]);
+  const [peopleScanning, setPeopleScanning] = useState(false);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const task = useRef<AbortController | null>(null);
   const resultBuffer = useRef<ClipResult[]>([]);
@@ -667,12 +671,106 @@ export default function AIClipper({
     onEngaged?.();
     try {
       const uploaded = await uploadVideo(file, controller.signal, setUploadProgress);
-      setDraft((current) => ({ ...current, source: { mode: "upload", url: "", ...uploaded } }));
+      setDraft((current) => ({
+        ...current,
+        source: { mode: "upload", url: "", ...uploaded },
+        selectedPersonId: "",
+      }));
+      setWizardPeople([]);
+      // Scan people as soon as a local upload is ready so the Look step can
+      // lock onto one person before generate.
+      void scanPeopleForUpload(uploaded.uploadId, controller.signal);
     } catch (cause) {
       if (!(cause instanceof DOMException && cause.name === "AbortError")) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       if (task.current === controller) task.current = null;
       setUploading(false);
+    }
+  };
+
+  const scanPeopleForUpload = async (uploadId?: string, signal?: AbortSignal) => {
+    if (!uploadId) return;
+    setPeopleScanning(true);
+    try {
+      const response = await fetch("/api/clipper/scan-people", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal,
+        body: JSON.stringify({ uploadId, maxPeople: 8 }),
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(detail.error || `People scan failed (${response.status})`);
+      }
+      // SSE stream — collect last people payload
+      const reader = response.body?.getReader();
+      if (!reader) return;
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let people: AvailableFace[] = [];
+      let selectedId = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const event = JSON.parse(line.slice(6)) as {
+              type?: string;
+              people?: AvailableFace[];
+              selectedPersonId?: string;
+              jobId?: string;
+              result?: { people?: AvailableFace[]; selectedPersonId?: string; jobId?: string };
+            };
+            if (event.type === "error") throw new Error("People scan failed");
+            const nextPeople = event.people || event.result?.people;
+            const jobId = event.jobId || event.result?.jobId || "";
+            if (Array.isArray(nextPeople) && nextPeople.length) {
+              people = nextPeople.map((person) => {
+                const id = person.personId || person.id;
+                const raw = person.thumbnailUrl || person.thumbnail || person.thumbnailPath || "";
+                const fileName = raw.split(/[/\\]/).pop() || "";
+                const publicThumb =
+                  person.thumbnailUrl?.startsWith("/api/")
+                    ? person.thumbnailUrl
+                    : raw.startsWith("/api/")
+                      ? raw
+                      : jobId && /^[\w.-]+\.jpe?g$/i.test(fileName)
+                        ? `/api/clipper/face-cache/${jobId}/thumbs/${fileName}`
+                        : "";
+                return {
+                  ...person,
+                  id,
+                  personId: id,
+                  thumbnailUrl: publicThumb || undefined,
+                  thumbnail: publicThumb || undefined,
+                };
+              });
+            }
+            selectedId = event.selectedPersonId || event.result?.selectedPersonId || selectedId;
+          } catch {
+            // Ignore malformed SSE chunks mid-stream.
+          }
+        }
+      }
+      if (people.length) {
+        setWizardPeople(people);
+        const pick = selectedId || people[0]?.id || people[0]?.personId || "";
+        if (pick) {
+          setDraft((current) => ({ ...current, selectedPersonId: pick }));
+        }
+      }
+    } catch (cause) {
+      if (!(cause instanceof DOMException && cause.name === "AbortError")) {
+        // Non-fatal — generate still works with auto person pick.
+        console.warn("People scan skipped:", cause);
+      }
+    } finally {
+      setPeopleScanning(false);
     }
   };
 
@@ -724,6 +822,8 @@ export default function AIClipper({
               mode: draft.faceTracking,
               sceneMode: draft.sceneMode,
               personMode: draft.sceneMode,
+              selectedPersonId: draft.selectedPersonId || null,
+              selectedTrackId: draft.selectedPersonId || null,
               allowZoom: true,
             },
             captions_enabled: draft.captionsEnabled,
@@ -1170,26 +1270,84 @@ export default function AIClipper({
                     onChange={(value) => updateDraft("faceTracking", value ? "smooth" : "off")}
                   />
                   {draft.faceTracking !== "off" ? (
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <div>
-                        <p className="mb-1.5 text-[10px] font-semibold text-slate-500">Tracking feel</p>
-                        <div className="flex rounded-md border border-slate-200 bg-slate-100/70 p-1">
-                          {(["smooth", "responsive"] as FaceTrackingMode[]).map((value) => (
-                            <Segment key={value} value={value} current={draft.faceTracking} onClick={(next) => updateDraft("faceTracking", next)}>
-                              {value === "smooth" ? "Smooth" : "Responsive"}
-                            </Segment>
-                          ))}
+                    <div className="space-y-4">
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div>
+                          <p className="mb-1.5 text-[10px] font-semibold text-slate-500">Tracking feel</p>
+                          <div className="flex rounded-md border border-slate-200 bg-slate-100/70 p-1">
+                            {(["smooth", "responsive"] as FaceTrackingMode[]).map((value) => (
+                              <Segment key={value} value={value} current={draft.faceTracking} onClick={(next) => updateDraft("faceTracking", next)}>
+                                {value === "smooth" ? "Smooth" : "Responsive"}
+                              </Segment>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <p className="mb-1.5 text-[10px] font-semibold text-slate-500">Scene mode</p>
+                          <div className="flex rounded-md border border-slate-200 bg-slate-100/70 p-1">
+                            {(["strict", "flexible"] as SceneMode[]).map((value) => (
+                              <Segment key={value} value={value} current={draft.sceneMode} onClick={(next) => updateDraft("sceneMode", next)}>
+                                {value === "strict" ? "Strict" : "Flexible"}
+                              </Segment>
+                            ))}
+                          </div>
                         </div>
                       </div>
                       <div>
-                        <p className="mb-1.5 text-[10px] font-semibold text-slate-500">Scene mode</p>
-                        <div className="flex rounded-md border border-slate-200 bg-slate-100/70 p-1">
-                          {(["strict", "flexible"] as SceneMode[]).map((value) => (
-                            <Segment key={value} value={value} current={draft.sceneMode} onClick={(next) => updateDraft("sceneMode", next)}>
-                              {value === "strict" ? "Strict" : "Flexible"}
-                            </Segment>
-                          ))}
+                        <div className="mb-1.5 flex items-center justify-between gap-2">
+                          <p className="text-[10px] font-semibold text-slate-500">Follow this person</p>
+                          {draft.source.mode === "upload" && draft.source.uploadId && !peopleScanning && wizardPeople.length === 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => void scanPeopleForUpload(draft.source.uploadId)}
+                              className="text-[10px] font-semibold text-slate-600 hover:text-slate-950"
+                            >
+                              Scan faces
+                            </button>
+                          ) : null}
                         </div>
+                        {peopleScanning ? (
+                          <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-[12px] text-slate-500">Finding people in your upload…</p>
+                        ) : wizardPeople.length > 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            {wizardPeople.map((person) => {
+                              const id = person.personId || person.id;
+                              const active = draft.selectedPersonId === id;
+                              const thumb =
+                                (person.thumbnailUrl?.startsWith("/api/") && person.thumbnailUrl) ||
+                                (person.thumbnail?.startsWith("/api/") && person.thumbnail) ||
+                                "";
+                              return (
+                                <button
+                                  key={id}
+                                  type="button"
+                                  onClick={() => updateDraft("selectedPersonId", id)}
+                                  className={cn(
+                                    "flex w-[92px] flex-col overflow-hidden rounded-md border text-left transition-colors",
+                                    active ? "border-slate-900 ring-1 ring-slate-900" : "border-slate-200 hover:border-slate-300",
+                                  )}
+                                >
+                                  <span className="aspect-square bg-slate-100">
+                                    {thumb ? (
+                                      <img src={thumb} alt="" className="h-full w-full object-cover" />
+                                    ) : (
+                                      <span className="grid h-full place-items-center text-[10px] font-semibold text-slate-400">Face</span>
+                                    )}
+                                  </span>
+                                  <span className="truncate px-2 py-1.5 text-[10px] font-semibold text-slate-700">
+                                    {active ? "Primary" : person.label || id}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="rounded-md border border-dashed border-slate-200 bg-slate-50/80 px-3 py-3 text-[12px] leading-5 text-slate-500">
+                            {draft.source.mode === "upload"
+                              ? "Upload a video on step 1 to scan and pick the primary person here."
+                              : "YouTube links select the main person during generation. Re-pick in the studio after clips are ready."}
+                          </p>
+                        )}
                       </div>
                     </div>
                   ) : null}
@@ -1244,7 +1402,7 @@ export default function AIClipper({
                     </div>
                   </div>
                   <dl className="mt-6 divide-y divide-slate-100 rounded-md border border-slate-200 bg-white px-4 text-[11px]">
-                    {[["Source", draft.source.name || draft.source.url || "Ready"], ["Moments", objective], ["Output", `${draft.clipCount} clips · ${draft.clipLength}s`], ["Face tracking", draft.faceTracking === "off" ? "Off" : `${draft.faceTracking} · ${draft.sceneMode}`]].map(([label, value]) => (
+                    {[["Source", draft.source.name || draft.source.url || "Ready"], ["Moments", objective], ["Output", `${draft.clipCount} clips · ${draft.clipLength}s`], ["Face tracking", draft.faceTracking === "off" ? "Off" : `${draft.faceTracking} · ${draft.sceneMode}${draft.selectedPersonId ? ` · ${draft.selectedPersonId}` : ""}`]].map(([label, value]) => (
                       <div key={label} className="flex justify-between gap-4 py-3">
                         <dt className="text-slate-400">{label}</dt>
                         <dd className="max-w-[70%] truncate text-right font-medium text-slate-700">{value}</dd>

@@ -1428,6 +1428,16 @@ def refine_clip(cfg):
     print(json.dumps({"type": "clip_result", "step": "result", "status": "complete", "message": "Refined clip ready", "result": result}), flush=True)
 
 
+def _public_face_thumb(job_id, thumb_path):
+    """Map an on-disk face thumb to the Express face-cache URL the UI can load."""
+    if not thumb_path or not job_id:
+        return ""
+    name = os.path.basename(str(thumb_path))
+    if not name or ".." in name:
+        return ""
+    return f"/api/clipper/face-cache/{job_id}/thumbs/{name}"
+
+
 def scan_people_cli(cfg):
     """Scan a local video for recurring people (picker helper for the create wizard)."""
     source = str(cfg.get("source") or cfg.get("path") or "").strip()
@@ -1447,18 +1457,40 @@ def scan_people_cli(cfg):
         job_id=str(cfg.get("job_id") or cfg.get("jobId") or "") or None,
         max_people=int(cfg.get("max_people") or cfg.get("maxPeople") or 8),
     )
-    people = payload.get("people") or []
+    job_id = str(payload.get("jobId") or "")
+    people = []
+    for person in payload.get("people") or []:
+        row = dict(person)
+        thumb = row.get("thumbnail") or row.get("thumbnailPath") or ""
+        public = _public_face_thumb(job_id, thumb)
+        if public:
+            row["thumbnailUrl"] = public
+            row["thumbnail"] = public
+        row["personId"] = row.get("personId") or row.get("id")
+        people.append(row)
+    payload["people"] = people
     emit(
         "complete",
         "complete",
         message=f"Found {len(people)} people",
         people=people,
         scenes=payload.get("scenes") or [],
-        jobId=payload.get("jobId"),
+        jobId=job_id,
         cacheDir=payload.get("cacheDir"),
         capabilities=payload.get("capabilities"),
+        selectedPersonId=(people[0].get("id") if people else None),
     )
-    print(json.dumps({"type": "people_scan", "status": "complete", **payload}), flush=True)
+    print(
+        json.dumps(
+            {
+                "type": "people_scan",
+                "status": "complete",
+                **payload,
+                "selectedPersonId": (people[0].get("id") if people else None),
+            }
+        ),
+        flush=True,
+    )
 
 
 def main():
