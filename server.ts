@@ -2865,6 +2865,37 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
     spawnClipperPipeline(["--refine", JSON.stringify(cfg)], res, "Refining crop and captions...");
   });
 
+  // Lightweight people scan for the create-wizard person picker (local upload only).
+  app.post("/api/clipper/scan-people", async (req, res) => {
+    const body = req.body || {};
+    const uploadId = String(body.uploadId || body.upload_id || "").trim();
+    let source = String(body.source || body.path || "").trim();
+    if (uploadId) {
+      if (!/^[a-f0-9-]+\.(?:mp4|mov|m4v|webm|mkv)$/i.test(uploadId)) {
+        res.status(400).json({ error: "Invalid upload identifier" });
+        return;
+      }
+      const candidate = clyraDataPath(".clyra", "clipper-uploads", uploadId);
+      if (!existsSync(candidate)) {
+        res.status(404).json({ error: "The uploaded video is no longer available" });
+        return;
+      }
+      source = candidate;
+    }
+    if (!source || !existsSync(source)) {
+      res.status(400).json({ error: "A local uploaded video is required for people scan" });
+      return;
+    }
+    const cfg = {
+      source,
+      start: body.start ?? 0,
+      duration: body.duration,
+      max_people: body.maxPeople ?? body.max_people ?? 8,
+      job_id: body.jobId || body.job_id,
+    };
+    spawnClipperPipeline(["--scan-people", JSON.stringify(cfg)], res, "Scanning people...");
+  });
+
   // Serve plate video + face thumbnails for the results studio overlay picker.
   const resolveClipperArtifactFile = (artifactId: string, ...parts: string[]) => {
     if (!artifactId || !/^[\w.-]+$/.test(artifactId) || parts.some((part) => !part || part.includes(".."))) return null;
