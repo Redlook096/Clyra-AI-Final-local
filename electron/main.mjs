@@ -354,6 +354,11 @@ function registerIpc() {
     if (mic && mic.ok === false) return { ...status, ...mic };
     return { ok: true, ...(status || {}), ...(mic || {}) };
   });
+  ipcMain.handle("dictation:open-microphone-settings", async (event) => {
+    authorize(event);
+    await dictationManager?.openMicrophoneSettings();
+    return { ok: true };
+  });
   ipcMain.on("dictation:pill-action", (event, action) => { authorizeDictation(event); void dictationManager?.action(String(action || "cancel")); });
 }
 

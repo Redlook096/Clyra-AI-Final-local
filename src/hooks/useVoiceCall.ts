@@ -20,6 +20,11 @@ import {
   VOICE_TRAILING_SILENCE_MS,
 } from "../lib/voiceTurnDetection";
 
+function openMicrophoneSettingsIfNeeded(message?: string) {
+  if (!/microphone|notallowed|permission|denied|not-allowed/i.test(String(message || "microphone"))) return;
+  void getElectronDesktop()?.dictation.openMicrophoneSettings?.().catch(() => undefined);
+}
+
 type VoiceStatus =
   | "connecting"
   | "listening"
@@ -592,7 +597,8 @@ export function useVoiceCall(options: {
       if (!activeRef.current) return;
       if (event.error === "aborted" || event.error === "no-speech") return;
       if (event.error === "not-allowed") {
-        setError("Microphone permission denied");
+        setError("Microphone permission denied. Opening System Settings…");
+        openMicrophoneSettingsIfNeeded("microphone permission denied");
         // Keep overlay alive if the voice socket is already up.
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           setStatus("listening");
@@ -970,7 +976,9 @@ export function useVoiceCall(options: {
   resumePipelineCaptureRef.current = () => {
     if (!activeRef.current || mutedRef.current || !pipelineModeRef.current || pcmCapturerRef.current) return;
     void startPipelineCapture().catch((cause) => {
-      setError(cause instanceof Error ? cause.message : "Microphone permission denied");
+      const message = cause instanceof Error ? cause.message : "Microphone permission denied";
+      setError(message);
+      openMicrophoneSettingsIfNeeded(message);
     });
   };
 
@@ -1011,7 +1019,9 @@ export function useVoiceCall(options: {
     // Keep the microphone setup within the Start Call user gesture. Delaying
     // it until WebSocket.onopen can leave capture suspended in Chromium.
     void startMicMeter().catch((cause) => {
-      setError(cause instanceof Error ? cause.message : "Microphone permission denied");
+      const message = cause instanceof Error ? cause.message : "Microphone permission denied";
+      setError(message);
+      openMicrophoneSettingsIfNeeded(message);
     });
     // Carry chat context into the call UI + server history.
     const seeded = (chatHistoryRef.current ?? []).map((msg, index, arr) => ({
@@ -1386,7 +1396,9 @@ export function useVoiceCall(options: {
         if (pipelineModeRef.current) await startPipelineCapture();
         else if (statusRef.current === "listening" && !listenPausedRef.current) startRecognition();
       } catch (error) {
-        setError(error instanceof Error ? error.message : "Microphone permission denied");
+        const message = error instanceof Error ? error.message : "Microphone permission denied";
+        setError(message);
+        openMicrophoneSettingsIfNeeded(message);
         mutedRef.current = true;
         setMuted(true);
         releaseCapture();

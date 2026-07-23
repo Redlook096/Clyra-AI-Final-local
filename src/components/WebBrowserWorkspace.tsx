@@ -1505,8 +1505,18 @@ export default function WebBrowserWorkspace() {
 
             <AnimatePresence>
               {isBrowserBusy || (isAgentBusy && browserState?.loading) ? (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="pointer-events-none absolute inset-x-0 top-0 z-30 h-[2px] overflow-hidden bg-slate-100">
-                  <motion.div className="h-full w-1/3 bg-slate-700" animate={{ x: ["-100%", "400%"] }} transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut" }} />
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+                  className="pointer-events-none absolute inset-x-0 top-0 z-30 h-[2px] overflow-hidden bg-slate-100/90"
+                >
+                  <motion.div
+                    className="h-full w-[38%] rounded-full bg-gradient-to-r from-transparent via-slate-700 to-transparent"
+                    animate={{ x: ["-120%", "320%"] }}
+                    transition={{ duration: 1.15, repeat: Infinity, ease: [0.16, 1, 0.3, 1] }}
+                  />
                 </motion.div>
               ) : null}
             </AnimatePresence>

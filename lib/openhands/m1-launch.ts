@@ -44,8 +44,10 @@ function buildConversationUrl(
   conversationId: string,
   continueExisting: boolean,
 ) {
-  const base = `${uiUrl}/conversations/${conversationId}?openPreview=1`;
-  return continueExisting ? `${base}&continue=1` : base;
+  // Do not force openPreview=1 — Agent Canvas then parks on "Preparing browser
+  // preview…" forever when no live preview URL exists yet.
+  const base = `${uiUrl}/conversations/${conversationId}`;
+  return continueExisting ? `${base}?continue=1` : base;
 }
 
 type M1RuntimeControl = {

@@ -76,6 +76,46 @@ import {
 // Fallback/Mock Composer for the Welcome Page
 
 // Relative time util
+function vibeThinkingHoldMs(prompt: string) {
+  const words = prompt.trim().split(/\s+/).filter(Boolean).length;
+  const hard = /\b(auth|oauth|database|postgres|deploy|fullstack|realtime|payment|stripe|multi[- ]?tenant|kubernetes|electron)\b/i.test(prompt);
+  const base = hard ? 5_400 : words > 48 ? 4_800 : words > 18 ? 3_800 : 3_200;
+  return Math.min(7_000, Math.max(3_000, base + Math.floor(Math.random() * 1_100)));
+}
+
+function vibeHandoffSummary(prompt: string) {
+  const cleaned = prompt.replace(/\s+/g, " ").trim();
+  const short = cleaned.length > 92 ? `${cleaned.slice(0, 89).trim()}…` : cleaned;
+  return short ? `Got it — ${short} Getting to work.` : "Got it. Getting to work.";
+}
+
+function SoftVibeStreamText({ text, active }: { text: string; active: boolean }) {
+  const [shown, setShown] = useState(active ? "" : text);
+  useEffect(() => {
+    if (!active) {
+      setShown(text);
+      return;
+    }
+    setShown("");
+    let index = 0;
+    let frame = 0;
+    const tokens = text.match(/\s+|\S+/g) || [text];
+    const tick = () => {
+      index = Math.min(tokens.length, index + 1);
+      setShown(tokens.slice(0, index).join(""));
+      if (index < tokens.length) frame = window.setTimeout(tick, 28);
+    };
+    frame = window.setTimeout(tick, 40);
+    return () => window.clearTimeout(frame);
+  }, [active, text]);
+  return (
+    <p className="clyra-stream-paint max-w-[85%] text-left text-[14px] font-medium leading-relaxed text-slate-700">
+      {shown}
+      {active && shown.length < text.length ? <span className="clyra-stream-paint__caret" aria-hidden /> : null}
+    </p>
+  );
+}
+
 function isVibeEngineWarm() {
   try {
     return window.sessionStorage.getItem("clyra-vibe-boot-ready") === "1";
@@ -565,6 +605,11 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
   const [isPreparingPlan, setIsPreparingPlan] = useState(false);
   const [isSavingPlan, setIsSavingPlan] = useState(false);
   const [warmupStatusHint, setWarmupStatusHint] = useState<string | null>(null);
+  const [pendingM1Url, setPendingM1Url] = useState<string | null>(null);
+  const [thinkingHoldMs, setThinkingHoldMs] = useState(0);
+  const [thinkingStartedAt, setThinkingStartedAt] = useState<number | null>(null);
+  const [handoffSummary, setHandoffSummary] = useState<string | null>(null);
+  const [handoffReady, setHandoffReady] = useState(false);
   // Whether the user explicitly paused the current run from this window.
   // Any PAUSED runtime state without this flag is an unrequested stall
   // (tool hand-off, server restart) that polling should resume on its own.
@@ -684,6 +729,16 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
         if (!response.ok) return;
         const data = await response.json() as { snapshot: RuntimeSnapshot; events: RuntimeEvent[] };
         if (cancelled) return;
+        // While the chat-style thinking / handoff surface is up, do not publish
+        // the legacy runtime panel snapshot — that flash is what users saw as
+        // the "weird screen" between Thinking and the M1 workspace.
+        if (!m1ConversationUrl && (m1Launching || pendingM1Url || thinkingStartedAt)) {
+          setM1RuntimeEvents((current) => {
+            const merged = [...current, ...data.events];
+            return Array.from(new Map(merged.map((event) => [event.id, event])).values()).slice(-60);
+          });
+          return;
+        }
         setM1Runtime(data.snapshot);
         setM1RuntimeEvents((current) => {
           const merged = [...current, ...data.events];
@@ -723,7 +778,7 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
     void loadRuntime();
     const timer = window.setInterval(() => void loadRuntime(), 1000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [m1ConversationUrl, state.projectId, state.stage]);
+  }, [m1ConversationUrl, m1Launching, pendingM1Url, state.projectId, state.stage, thinkingStartedAt]);
 
   const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
     const response = await fetch(url, init);
@@ -983,13 +1038,21 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
         }
         const conversationUrl =
           typeof data.conversationUrl === "string" && data.conversationUrl
-            ? data.conversationUrl
+            ? String(data.conversationUrl).replace(/\?openPreview=1&/, "?").replace(/\?openPreview=1$/, "").replace(/&openPreview=1/, "")
             : uiUrl && conversationId
-              ? `${uiUrl}/conversations/${encodeURIComponent(conversationId)}?openPreview=1`
+              ? `${uiUrl}/conversations/${encodeURIComponent(conversationId)}`
               : "";
         if (!conversationUrl) throw new Error("Vibe Coder M1 did not return a conversation workspace.");
         setWarmupStatusHint(null);
-        setM1ConversationUrl(conversationUrl);
+        onEngaged?.();
+        // Hold the chat-style thinking surface for a short, difficulty-scaled
+        // beat so the iframe never flashes the optimistic bubble away mid-thought.
+        const holdMs = opts.continueExisting ? 720 : vibeThinkingHoldMs(opts.prompt || "");
+        setThinkingHoldMs((current) => (current > 0 && !opts.continueExisting ? current : holdMs));
+        setThinkingStartedAt((current) => current ?? Date.now());
+        setHandoffSummary(vibeHandoffSummary(opts.prompt || ""));
+        setHandoffReady(false);
+        setPendingM1Url(conversationUrl);
         setState((prev) => ({
           ...prev,
           projectId: String(data.projectId || prev.projectId),
@@ -1143,6 +1206,12 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
     // Leave the welcome surface immediately so the user message + Thinking row
     // paint without waiting on M1 conversation creation.
     setM1Launching(true);
+    setPendingM1Url(null);
+    setM1ConversationUrl(null);
+    setHandoffReady(false);
+    setHandoffSummary(null);
+    setThinkingHoldMs(vibeThinkingHoldMs(cleanPrompt));
+    setThinkingStartedAt(Date.now());
     setState((prev) => ({
       ...prev,
       stage: "task-created",
@@ -1172,6 +1241,30 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
       planDraft.projectId,
     );
   };
+
+  useEffect(() => {
+    if (!pendingM1Url || m1ConversationUrl || !thinkingStartedAt) return;
+    // Always honour the difficulty-scaled thinking window from send time.
+    // If launch finished early, keep Thinking on screen until the hold elapses.
+    // If launch ran long, flip to the handoff print immediately, then reveal.
+    const remaining = Math.max(0, thinkingHoldMs - (Date.now() - thinkingStartedAt));
+    const summary = vibeHandoffSummary(state.prompt || "");
+    const printMs = Math.min(2_200, Math.max(900, summary.split(/\s+/).length * 55));
+    const showSummaryAt = window.setTimeout(() => {
+      setHandoffReady(true);
+      setHandoffSummary((current) => current || summary);
+    }, remaining);
+    const revealAt = window.setTimeout(() => {
+      setM1ConversationUrl(pendingM1Url);
+      setPendingM1Url(null);
+      setThinkingStartedAt(null);
+      setM1Launching(false);
+    }, remaining + printMs);
+    return () => {
+      window.clearTimeout(showSummaryAt);
+      window.clearTimeout(revealAt);
+    };
+  }, [m1ConversationUrl, pendingM1Url, state.prompt, thinkingHoldMs, thinkingStartedAt]);
 
   useEffect(() => {
     if (state.stage !== "idle") return;
@@ -1274,6 +1367,10 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
     setM1Runtime(null);
     setM1RuntimeEvents([]);
     setM1ConversationUrl(null);
+    setPendingM1Url(null);
+    setHandoffSummary(null);
+    setHandoffReady(false);
+    setThinkingStartedAt(null);
     resetToIdle();
     setWelcomeView("home");
     if (projectId && projectId !== "project-advanced-vibe") {
@@ -1406,14 +1503,14 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
         {/* The four workspace surfaces (error, live canvas, runtime panel,
             preparing) used to hard-swap. Cross-fade them so the shell never
             pops between states. */}
-        <AnimatePresence mode="wait" initial={false}>
+        <AnimatePresence mode="sync" initial={false}>
         {m1LaunchError ? (
           <motion.div
             key="m1-error"
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
             className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center"
           >
             <p className="text-[15px] font-semibold text-slate-900">
@@ -1449,11 +1546,11 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
         ) : m1ConversationUrl ? (
           <motion.div
             key="m1-conversation"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
+            initial={{ opacity: 0, y: 10, filter: "blur(6px)" }}
+            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
-            className="h-full min-h-0 w-full overflow-hidden bg-white"
+            transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
+            className="relative h-full min-h-0 w-full overflow-hidden bg-white"
           >
             <ElectronWebContentsSurface
               source={m1ConversationUrl}
@@ -1470,7 +1567,7 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
               }
             />
           </motion.div>
-        ) : m1Runtime ? (
+        ) : m1Runtime && !m1Launching && !pendingM1Url && !thinkingStartedAt ? (
           <motion.div
             key="m1-runtime"
             initial={{ opacity: 0, y: 8 }}
@@ -1505,38 +1602,51 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
         ) : (
           <motion.div
             key="m1-preparing"
-            initial={{ opacity: 0, y: 6 }}
+            initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            exit={{ opacity: 0, y: -8, filter: "blur(4px)" }}
+            transition={{ duration: 0.42, ease: [0.16, 1, 0.3, 1] }}
             className="flex min-h-0 flex-1 flex-col bg-white px-5 sm:px-8"
           >
             <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col justify-center gap-5 py-10">
               {chatMessages.filter((message) => message.role === "user").slice(-1).map((message) => (
-                <div
+                <motion.div
                   key={message.id}
+                  initial={{ opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.46, ease: [0.16, 1, 0.3, 1] }}
                   className="ml-auto max-w-[85%] rounded-[22px] bg-slate-950 px-4 py-3 text-left text-[14px] font-medium leading-relaxed text-white shadow-[0_12px_30px_rgba(15,23,42,0.12)]"
                 >
                   {message.content}
-                </div>
+                </motion.div>
               ))}
-              <div className="flex flex-col gap-2">
-                <VibeThinkingStatus
-                  label={isPreparingPlan ? "Planning" : m1Launching ? "Thinking" : "Thinking"}
-                  hint={
-                    warmupStatusHint ||
-                    (isPreparingPlan
-                      ? "Drafting the build plan"
-                      : isVibeEngineWarm()
-                        ? undefined
-                        : "Opening your Vibe workspace")
-                  }
-                />
-                {warmupStatusHint ? (
-                  <p className="text-[12px] font-medium text-slate-400">
-                    Engine still warming — you can keep waiting; this won’t freeze the UI.
-                  </p>
-                ) : null}
+              <div className="flex flex-col gap-3">
+                <AnimatePresence mode="wait" initial={false}>
+                  {!handoffReady ? (
+                    <motion.div
+                      key="thinking"
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -4, filter: "blur(3px)" }}
+                      transition={{ duration: 0.36, ease: [0.16, 1, 0.3, 1] }}
+                    >
+                      <VibeThinkingStatus
+                        label={isPreparingPlan ? "Planning" : "Thinking"}
+                        hint={warmupStatusHint || undefined}
+                      />
+                    </motion.div>
+                  ) : (
+                    <motion.div
+                      key="handoff"
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                    >
+                      <SoftVibeStreamText text={handoffSummary || "Got it. Getting to work."} active />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             </div>
           </motion.div>
@@ -1932,6 +2042,18 @@ function AgentActivityRow({ item }: { item: AgentActivityItem }) {
           <div className="flex flex-wrap items-center gap-2">
             {item.type === "file" && item.filePath ? (
               <FileEditActivity item={item} />
+            ) : item.type === "terminal" ? (
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                <span className={cn("text-[13px] font-semibold", item.status === "active" ? "text-sky-500" : "text-slate-600")}>
+                  {item.status === "active" ? "Running" : item.status === "success" ? "Ran" : "Command"}
+                </span>
+                <span className={cn(
+                  "max-w-[320px] truncate font-mono text-[12px] font-semibold",
+                  item.status === "active" ? "clyra-thinking-shimmer text-slate-700" : "text-slate-500",
+                )}>
+                  {item.command || item.title}
+                </span>
+              </div>
             ) : item.type === "stage" && item.status === "active" ? (
               <VibeThinkingStatus label={item.title} className="min-w-0" />
             ) : (
@@ -2006,17 +2128,15 @@ function FileEditActivity({ item }: { item: AgentActivityItem }) {
     <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
       {active ? (
         <>
-          <ShiningBrainIcon className="shrink-0" />
-          <ShiningText text={action} preset="thinkingChat" className="!text-[13px] font-bold sm:!text-[13px]" />
-          <span className="clyra-thinking-shimmer max-w-[260px] truncate font-mono text-[12px] font-semibold">
+          <span className="text-[13px] font-semibold text-sky-500">Editing</span>
+          <span className="clyra-thinking-shimmer max-w-[260px] truncate font-mono text-[12px] font-semibold text-slate-700">
             {item.filePath}
           </span>
-          <ThinkingDots className="shrink-0" />
         </>
       ) : (
         <>
-          <span className="text-[13px] font-bold text-sky-600">{action}</span>
-          <span className="max-w-[260px] truncate font-mono text-[12px] font-semibold text-slate-600">
+          <span className="text-[13px] font-semibold text-sky-600">{action}</span>
+          <span className="max-w-[260px] truncate font-mono text-[12px] font-medium text-slate-500">
             {item.filePath}
           </span>
         </>

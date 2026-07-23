@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { BrowserWindow, clipboard, globalShortcut, screen, systemPreferences } from "electron";
+import { BrowserWindow, clipboard, globalShortcut, screen, shell, systemPreferences } from "electron";
 
 const execFileAsync = promisify(execFile);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -144,52 +144,58 @@ export class DictationManager {
     }
     if (status === "granted") return { ok: true, status };
     if (status === "denied" || status === "restricted") {
+      void this.openMicrophoneSettings();
       return {
         ok: false,
         status,
-        error: "Microphone access is blocked. Enable Clyra in System Settings → Privacy & Security → Microphone, then try Cmd+Shift+K again.",
+        error: "Microphone access is blocked. Opening System Settings → Privacy & Security → Microphone so you can enable Clyra.",
       };
     }
     // not-determined / unknown — prompt once from the main process so a
     // background renderer does not silently fail getUserMedia.
     try {
       const granted = await systemPreferences.askForMediaAccess("microphone");
-      return granted
-        ? { ok: true, status: "granted" }
-        : {
-            ok: false,
-            status: "denied",
-            error: "Microphone permission was denied. Enable Clyra in System Settings → Privacy & Security → Microphone.",
-          };
+      if (granted) return { ok: true, status: "granted" };
+      void this.openMicrophoneSettings();
+      return {
+        ok: false,
+        status: "denied",
+        error: "Microphone permission was denied. Opening System Settings → Privacy & Security → Microphone.",
+      };
     } catch {
       return { ok: true, status };
     }
   }
 
   /**
-   * Place the pill on the display under the cursor (not always the primary
-   * display), near the pointer, clamped into that display's work area.
+   * Place the pill near the bottom of the display under the cursor,
+   * horizontally centred — stable and easy to find outside the app.
    */
   positionPill() {
     if (!this.window || this.window.isDestroyed()) return;
     const cursor = screen.getCursorScreenPoint();
     const display = screen.getDisplayNearestPoint(cursor);
     const { x, y, width, height } = display.workArea;
-    let px = Math.round(cursor.x - PILL_WIDTH / 2);
-    // Prefer just below the cursor so the expanding pill does not cover the
-    // insertion caret; flip above when the pointer sits near the bottom edge.
-    let py = Math.round(cursor.y + 28);
-    if (py + PILL_HEIGHT > y + height - PILL_MARGIN) {
-      py = Math.round(cursor.y - PILL_HEIGHT - 28);
-    }
-    // If the cursor is somehow outside a usable band, centre on this display.
-    if (py < y + PILL_MARGIN || py + PILL_HEIGHT > y + height - PILL_MARGIN) {
-      px = Math.round(x + (width - PILL_WIDTH) / 2);
-      py = Math.round(y + Math.max(PILL_MARGIN, height * 0.38 - PILL_HEIGHT / 2));
-    }
-    px = Math.min(Math.max(px, x + PILL_MARGIN), x + width - PILL_WIDTH - PILL_MARGIN);
-    py = Math.min(Math.max(py, y + PILL_MARGIN), y + height - PILL_HEIGHT - PILL_MARGIN);
+    const px = Math.round(x + (width - PILL_WIDTH) / 2);
+    const py = Math.round(y + height - PILL_HEIGHT - Math.max(PILL_MARGIN, 28));
     this.window.setBounds({ x: px, y: py, width: PILL_WIDTH, height: PILL_HEIGHT });
+  }
+
+  async openMicrophoneSettings() {
+    if (process.platform !== "darwin") return;
+    const candidates = [
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+      "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone",
+      "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension",
+    ];
+    for (const url of candidates) {
+      try {
+        await shell.openExternal(url);
+        return;
+      } catch {
+        // Try the next deep-link style used across macOS versions.
+      }
+    }
   }
 
   ensurePill() {
@@ -206,7 +212,7 @@ export class DictationManager {
       width: PILL_WIDTH,
       height: PILL_HEIGHT,
       x: Math.round(x + (width - PILL_WIDTH) / 2),
-      y: Math.round(y + Math.max(PILL_MARGIN, height * 0.38 - PILL_HEIGHT / 2)),
+      y: Math.round(y + height - PILL_HEIGHT - Math.max(PILL_MARGIN, 28)),
       show: false,
       frame: false,
       transparent: true,

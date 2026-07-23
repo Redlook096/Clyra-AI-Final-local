@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld("clyraDesktop", {
     serviceUrl: () => ipcRenderer.invoke("dictation:service-url"),
     insert: (payload) => ipcRenderer.invoke("dictation:insert", payload),
     ensurePermissions: () => ipcRenderer.invoke("dictation:ensure-permissions"),
+    openMicrophoneSettings: () => ipcRenderer.invoke("dictation:open-microphone-settings"),
     onTrigger: (callback) => subscribe("dictation:trigger", callback),
     onAction: (callback) => subscribe("dictation:action", callback),
   },
