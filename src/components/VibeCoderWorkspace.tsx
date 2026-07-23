@@ -1007,6 +1007,7 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
           fetch("/api/vibe/m1-launch", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            signal: AbortSignal.timeout(85_000),
             body: JSON.stringify({
               prompt: opts.prompt,
               projectId: opts.projectId,
@@ -1221,13 +1222,20 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
       error: null,
       taskId: null,
     }));
+    const launchTimeout = window.setTimeout(() => {
+      setM1LaunchError("Vibe Coder took too long to start. Check that M1 is running, then retry.");
+      setM1Launching(false);
+      setPendingM1Url(null);
+      setThinkingStartedAt(null);
+      setHandoffReady(false);
+      setState((prev) => ({ ...prev, stage: "failed", error: "Launch timed out" }));
+    }, 90_000);
     void launchM1({
       prompt: cleanPrompt.replace(/^\/design\s*/i, "").trim() || cleanPrompt,
       planMode: false,
-      // A prompt from the welcome composer is always a new build. Reopening
-      // an existing project happens through its recent-project card, where
-      // `continueExisting` preserves its conversation and files explicitly.
       projectId: undefined,
+    }).finally(() => {
+      window.clearTimeout(launchTimeout);
     });
   };
 
