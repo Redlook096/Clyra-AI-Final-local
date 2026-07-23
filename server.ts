@@ -2842,11 +2842,18 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
       face_tracking: body.faceTracking || body.face_tracking || {
         enabled: body.faceTrackingMode ? body.faceTrackingMode !== "off" : true,
         mode: body.faceTrackingMode || body.mode || "smooth",
-        selectedTrackId: body.selectedTrackId || body.selected_face_id || null,
+        selectedTrackId: body.selectedPersonId || body.selectedTrackId || body.selected_face_id || null,
+        selectedPersonId: body.selectedPersonId || body.selected_person_id || body.selectedTrackId || body.selected_face_id || null,
+        sceneMode: body.sceneMode || body.scene_mode || body.personMode || body.person_mode || "strict",
+        personMode: body.sceneMode || body.personMode || body.person_mode || "strict",
         allowZoom: body.allowZoom !== false,
+        sceneRules: body.sceneRules || body.scene_rules,
       },
       face_tracking_mode: body.faceTrackingMode || body.mode,
-      selected_face_id: body.selectedTrackId,
+      selected_face_id: body.selectedPersonId || body.selectedTrackId,
+      selected_person_id: body.selectedPersonId || body.selected_person_id || body.selectedTrackId,
+      person_mode: body.sceneMode || body.personMode || body.person_mode || "strict",
+      scene_mode: body.sceneMode || body.scene_mode || body.personMode || "strict",
       aspect_ratio: body.aspectRatio || body.aspect_ratio,
       crop_focus: body.cropFocus || body.crop_focus,
       font: body.font,
@@ -2856,6 +2863,48 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
       captions_enabled: body.captionsEnabled ?? body.captions_enabled ?? true,
     };
     spawnClipperPipeline(["--refine", JSON.stringify(cfg)], res, "Refining crop and captions...");
+  });
+
+  // Serve plate video + face thumbnails for the results studio overlay picker.
+  const resolveClipperArtifactFile = (artifactId: string, ...parts: string[]) => {
+    if (!artifactId || !/^[\w.-]+$/.test(artifactId) || parts.some((part) => !part || part.includes(".."))) return null;
+    const candidates = [
+      clyraDataPath("tmp", "clipper-artifacts", artifactId, ...parts),
+      clyraResourcePath("tmp", "clipper-artifacts", artifactId, ...parts),
+      path.join(process.cwd(), "tmp", "clipper-artifacts", artifactId, ...parts),
+    ];
+    return candidates.find((candidate) => existsSync(candidate)) || null;
+  };
+
+  app.get("/api/clipper/artifact/:artifactId/plate.mp4", (req, res) => {
+    const filePath = resolveClipperArtifactFile(String(req.params.artifactId || ""), "plate.mp4");
+    if (!filePath) {
+      res.status(404).json({ error: "Plate not found" });
+      return;
+    }
+    res.type("video/mp4");
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.sendFile(filePath, (error) => {
+      if (error && !res.headersSent) res.status(404).json({ error: "Plate not found" });
+    });
+  });
+
+  app.get("/api/clipper/artifact/:artifactId/faces/:faceFile", (req, res) => {
+    const faceFile = String(req.params.faceFile || "");
+    if (!/^[\w.-]+\.jpe?g$/i.test(faceFile)) {
+      res.status(400).json({ error: "Invalid face thumbnail" });
+      return;
+    }
+    const filePath = resolveClipperArtifactFile(String(req.params.artifactId || ""), "faces", faceFile);
+    if (!filePath) {
+      res.status(404).json({ error: "Face thumbnail not found" });
+      return;
+    }
+    res.type("image/jpeg");
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.sendFile(filePath, (error) => {
+      if (error && !res.headersSent) res.status(404).json({ error: "Face thumbnail not found" });
+    });
   });
 
   // Legacy path kept for older cached result URLs; resolves data-root + cwd/output.

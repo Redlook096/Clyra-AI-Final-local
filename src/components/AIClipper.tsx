@@ -54,6 +54,7 @@ type ClipAspect = "9:16" | "1:1" | "16:9";
 type CaptionPosition = "top" | "centre" | "bottom";
 type CropFocus = "left" | "center" | "right";
 type FaceTrackingMode = "off" | "smooth" | "responsive";
+type SceneMode = "strict" | "flexible";
 type ResultLayout = "grid" | "list";
 type SortMode = "score" | "duration" | "source";
 
@@ -65,6 +66,18 @@ type ClipSource = {
   uploadId?: string;
   name?: string;
   size?: number;
+};
+
+type AvailableFace = {
+  id: string;
+  label?: string;
+  personId?: string;
+  bbox?: { x: number; y: number; width: number; height: number };
+  confidence?: number;
+  thumbnail?: string;
+  thumbnailUrl?: string;
+  thumbnailPath?: string;
+  sampleBbox?: number[] | { x: number; y: number; width: number; height: number };
 };
 
 type ClipResult = {
@@ -89,8 +102,32 @@ type ClipResult = {
   output_quality?: string;
   artifact_id?: string;
   words?: CaptionWord[];
-  available_faces?: Array<{ id: string; label?: string }>;
-  face_tracking?: { enabled?: boolean; mode?: FaceTrackingMode; selectedTrackId?: string | null };
+  available_faces?: AvailableFace[];
+  face_tracking?: {
+    enabled?: boolean;
+    mode?: FaceTrackingMode;
+    selectedTrackId?: string | null;
+    selectedPersonId?: string | null;
+    sceneMode?: SceneMode;
+    personMode?: SceneMode;
+  };
+  crop_keyframes?: Array<{
+    timeMs: number;
+    faceBox?: { x: number; y: number; width: number; height: number } | number[];
+    trackId?: string;
+    personId?: string;
+  }>;
+  face_overlay?: Array<{
+    timeMs: number;
+    faces: Array<{
+      id?: string;
+      personId?: string;
+      trackId?: string;
+      bbox: { x: number; y: number; width: number; height: number };
+      confidence?: number;
+    }>;
+  }>;
+  plate_url?: string;
 };
 
 function clipPotentialScore(result: ClipResult): number {
@@ -107,6 +144,7 @@ type ClipDraft = {
   aspect: ClipAspect;
   cropFocus: CropFocus;
   faceTracking: FaceTrackingMode;
+  sceneMode: SceneMode;
   captionsEnabled: boolean;
   removeFillers: boolean;
   font: string;
@@ -154,6 +192,7 @@ const DEFAULT_DRAFT: ClipDraft = {
   aspect: "9:16",
   cropFocus: "center",
   faceTracking: "smooth",
+  sceneMode: "strict",
   captionsEnabled: true,
   removeFillers: true,
   font: "Impact",
@@ -214,7 +253,26 @@ function wordText(item: CaptionWord) {
   return String(item.word || item.text || "").trim();
 }
 
-function rewriteTimedWords(words: CaptionWord[]): CaptionWord[] {
+function faceOverlayBox(face: AvailableFace, index: number) {
+  if (face.bbox && Number.isFinite(face.bbox.width) && face.bbox.width > 0.02) {
+    return face.bbox;
+  }
+  if (Array.isArray(face.sampleBbox) && face.sampleBbox.length >= 4) {
+    const [x0, y0, x1, y1] = face.sampleBbox;
+    return {
+      x: Math.max(0, Math.min(0.92, x0)),
+      y: Math.max(0, Math.min(0.92, y0)),
+      width: Math.max(0.08, Math.min(1 - x0, x1 - x0)),
+      height: Math.max(0.08, Math.min(1 - y0, y1 - y0)),
+    };
+  }
+  return {
+    x: 0.18 + (index % 3) * 0.22,
+    y: 0.16 + Math.floor(index / 3) * 0.28,
+    width: 0.28,
+    height: 0.34,
+  };
+}
   return words
     .map((item) => {
       const cleaned = wordText(item)
@@ -563,9 +621,13 @@ export default function AIClipper({
   const [rewriteBusy, setRewriteBusy] = useState(false);
   const [refineBusy, setRefineBusy] = useState(false);
   const [selectedFaceId, setSelectedFaceId] = useState<string>("");
+  const [previewTimeMs, setPreviewTimeMs] = useState(0);
+  const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const task = useRef<AbortController | null>(null);
   const resultBuffer = useRef<ClipResult[]>([]);
   void onClose;
+  void advanced;
+  void setAdvanced;
 
   useEffect(() => {
     if (!initialUrl) return;
@@ -658,6 +720,8 @@ export default function AIClipper({
             face_tracking: {
               enabled: draft.faceTracking !== "off",
               mode: draft.faceTracking,
+              sceneMode: draft.sceneMode,
+              personMode: draft.sceneMode,
               allowZoom: true,
             },
             captions_enabled: draft.captionsEnabled,
@@ -758,8 +822,44 @@ export default function AIClipper({
     } else {
       setCaptionWords([]);
     }
-    setSelectedFaceId(selected.face_tracking?.selectedTrackId || selected.available_faces?.[0]?.id || "");
-  }, [selected?.id, selected?.caption, selected?.words, selected?.clip_duration, selected?.face_tracking?.selectedTrackId, selected?.available_faces]);
+    setSelectedFaceId(
+      selected.face_tracking?.selectedPersonId
+      || selected.face_tracking?.selectedTrackId
+      || selected.available_faces?.[0]?.id
+      || "",
+    );
+    setPreviewTimeMs(0);
+  }, [selected?.id, selected?.caption, selected?.words, selected?.clip_duration, selected?.face_tracking?.selectedTrackId, selected?.face_tracking?.selectedPersonId, selected?.available_faces]);
+
+  const liveOverlayFaces = useMemo(() => {
+    const tracks = selected?.face_overlay;
+    if (!tracks?.length) {
+      return (selected?.available_faces || []).map((face, index) => ({
+        id: face.id,
+        label: face.label || face.id,
+        bbox: face.bbox || {
+          x: 0.18 + (index % 3) * 0.22,
+          y: 0.16 + Math.floor(index / 3) * 0.28,
+          width: 0.28,
+          height: 0.34,
+        },
+      }));
+    }
+    let best = tracks[0]!;
+    let bestDist = Math.abs(best.timeMs - previewTimeMs);
+    for (const row of tracks) {
+      const dist = Math.abs(row.timeMs - previewTimeMs);
+      if (dist < bestDist) {
+        best = row;
+        bestDist = dist;
+      }
+    }
+    return (best.faces || []).map((face) => ({
+      id: String(face.personId || face.id || face.trackId || "face"),
+      label: String(face.personId || face.id || face.trackId || "Face"),
+      bbox: face.bbox,
+    }));
+  }, [selected?.available_faces, selected?.face_overlay, previewTimeMs]);
 
   const persistSelectedEdits = () => {
     if (!selected) return;
@@ -773,6 +873,9 @@ export default function AIClipper({
               face_tracking: {
                 ...(item.face_tracking || { enabled: draft.faceTracking !== "off", mode: draft.faceTracking }),
                 selectedTrackId: selectedFaceId || null,
+                selectedPersonId: selectedFaceId || null,
+                sceneMode: draft.sceneMode,
+                personMode: draft.sceneMode,
               },
             }
           : item,
@@ -800,6 +903,9 @@ export default function AIClipper({
           artifactId: selected.artifact_id,
           faceTrackingMode: draft.faceTracking,
           selectedTrackId: selectedFaceId || null,
+          selectedPersonId: selectedFaceId || null,
+          sceneMode: draft.sceneMode,
+          personMode: draft.sceneMode,
           allowZoom: true,
           cropFocus: draft.cropFocus,
           aspectRatio: draft.aspect,
@@ -868,6 +974,9 @@ export default function AIClipper({
           artifactId: selected.artifact_id,
           faceTrackingMode: draft.faceTracking,
           selectedTrackId: selectedFaceId || null,
+          selectedPersonId: selectedFaceId || null,
+          sceneMode: draft.sceneMode,
+          personMode: draft.sceneMode,
           allowZoom: true,
           cropFocus: draft.cropFocus,
           aspectRatio: draft.aspect,
@@ -932,105 +1041,241 @@ export default function AIClipper({
   };
 
   const wizardMeta = [
-    { title: "Add your source", detail: "Paste a public video link or upload a local file." },
-    { title: "Choose the moments", detail: "Tell Clyra what makes a moment worth keeping." },
-    { title: "Style the subtitles", detail: "Set the framing and caption treatment used in every render." },
-    { title: "Set the output", detail: "Choose clip length and how many distinct moments to create." },
+    { id: "source" as const, title: "Source", detail: "Paste a link or upload a file" },
+    { id: "moments" as const, title: "Moments", detail: "What Clyra should keep" },
+    { id: "look" as const, title: "Look", detail: "Captions, crop and face tracking" },
+    { id: "output" as const, title: "Output", detail: "Length and clip count" },
   ];
   const canContinue = wizardStep === 0 ? sourceReady && !uploading : wizardStep === 1 ? hasChosenObjective && Boolean(objective) : true;
   const createView = (
-    <div className="clyra-clipper-workspace mx-auto flex h-full max-h-full w-full max-w-[820px] flex-col overflow-hidden px-5 py-5 sm:px-7 sm:py-7">
-      <header className="flex shrink-0 items-center justify-between pb-5">
-        <div><p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600">AI Clip</p><h1 className="mt-1.5 text-[24px] font-semibold tracking-[-0.02em] text-slate-950 sm:text-[27px]">Create polished clips</h1><p className="mt-1.5 text-[13px] text-slate-500">Turn a source video into focused, share-ready moments.</p></div>
-        {results.length ? <button type="button" onClick={() => setView("results")} className="flex h-9 items-center gap-2 rounded-full border border-slate-200/80 bg-white px-4 text-[11px] font-medium text-slate-600 shadow-sm transition-colors hover:bg-slate-50"><Clock3 className="h-3.5 w-3.5" />Recent</button> : null}
-      </header>
-
-      <nav className="flex shrink-0 items-start pb-5" aria-label="Clip setup progress">
-        {wizardMeta.map((item, index) => {
-          const complete = index < wizardStep;
-          const current = index === wizardStep;
-          const clickable = index <= wizardStep || (index === wizardStep + 1 && canContinue);
-          return (
-            <div key={item.title} className={cn("flex items-start", index > 0 && "min-w-0 flex-1")}>
-              {index > 0 ? <span aria-hidden className={cn("mt-[15px] h-px min-w-3 flex-1 transition-colors duration-200", complete || current ? "bg-slate-400" : "bg-slate-200")} /> : null}
-              <button type="button" onClick={() => clickable ? setWizardStep(index) : undefined} className="group flex min-w-0 flex-col items-center gap-1.5 px-1.5 text-center">
-                <span className={cn(
-                  "grid h-8 w-8 shrink-0 place-items-center rounded-full text-[11px] font-semibold transition-[background-color,color,box-shadow] duration-200",
-                  complete
-                    ? "bg-slate-900 text-white"
-                    : current
-                      ? "bg-white text-slate-600 ring-2 ring-slate-900 shadow-[0_0_0_4px_rgba(15,23,42,.08)]"
-                      : "bg-white text-slate-400 ring-1 ring-slate-200",
-                )}>
-                  {complete ? <Check className="h-3.5 w-3.5" /> : index + 1}
-                </span>
-                <span className={cn("hidden max-w-full truncate text-[10px] font-medium uppercase tracking-[0.06em] transition-colors sm:block", current ? "text-slate-700" : complete ? "text-slate-600" : "text-slate-400")}>{item.title.replace(/^Set |^Add |^Choose |^Style /, "")}</span>
-              </button>
+    <div className="relative h-full overflow-y-auto bg-[#f8fafc] px-5 py-8 sm:px-8 lg:px-12">
+      <div className="mx-auto flex min-h-full w-full max-w-[1120px] flex-col justify-center">
+        <div className="mb-7 flex items-end justify-between gap-6 border-b border-slate-200 pb-6">
+          <div>
+            <div className="mb-4 flex items-center gap-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-slate-900" />
+              <span className="text-[10px] font-bold uppercase tracking-[.17em] text-slate-400">AI Clipper</span>
             </div>
-          );
-        })}
-      </nav>
+            <h1 className="text-[clamp(30px,4vw,48px)] font-semibold tracking-[-.035em] text-slate-950">Create vertical clips</h1>
+            <p className="mt-2 max-w-xl text-[13px] leading-6 text-slate-500">
+              Turn a YouTube link or local file into share-ready moments with timed captions and optional face tracking.
+            </p>
+          </div>
+          {results.length ? (
+            <button
+              type="button"
+              onClick={() => setView("results")}
+              className="hidden h-10 shrink-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-4 text-[10px] font-semibold text-slate-700 shadow-sm transition-colors hover:border-slate-400 sm:flex"
+            >
+              <Clock3 className="h-3.5 w-3.5" />
+              Recent clips
+            </button>
+          ) : null}
+        </div>
 
-      <div className="flex min-h-0 flex-1 flex-col">
-        <motion.section layout className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm pointer-events-auto">
-          <div className="shrink-0 border-b border-slate-100 px-6 py-5 sm:px-8 sm:py-6"><p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-600">Step {wizardStep + 1} of 4</p><h2 className="mt-1.5 text-[20px] font-semibold tracking-[-0.02em] text-slate-950">{wizardMeta[wizardStep].title}</h2><p className="mt-1.5 text-[13px] leading-5 text-slate-500">{wizardMeta[wizardStep].detail}</p></div>
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div key={wizardStep} initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -8 }} transition={{ duration: 0.2, ease: [0.2, .82, .2, 1] }} className="min-h-0 flex-1 overflow-hidden p-6 sm:p-8">
-              {wizardStep === 0 ? <div className="h-full overflow-y-auto pr-1"><SourcePicker source={draft.source} onSource={(source) => updateDraft("source", source)} onFile={(file) => void handleFile(file)} uploading={uploading} uploadProgress={uploadProgress} /></div> : null}
+        <div className="creator-setup-layout grid gap-5">
+          <ol className="space-y-2" aria-label="Clip setup">
+            {wizardMeta.map((item, index) => {
+              const current = index === wizardStep;
+              const complete = index < wizardStep;
+              const clickable = index <= wizardStep || (index === wizardStep + 1 && canContinue);
+              return (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    onClick={() => (clickable ? setWizardStep(index) : undefined)}
+                    className={cn(
+                      "flex w-full items-start gap-3 rounded-md px-3 py-3 text-left transition-colors",
+                      current ? "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200" : "text-slate-400 hover:bg-white/70",
+                    )}
+                  >
+                    <span className={cn(
+                      "grid h-6 w-6 shrink-0 place-items-center rounded-full border text-[9px] font-bold",
+                      current || complete ? "border-slate-900 bg-slate-950 text-white" : "border-slate-200 bg-white",
+                    )}>
+                      {complete ? <Check className="h-3 w-3" /> : index + 1}
+                    </span>
+                    <span>
+                      <span className="block text-[11px] font-semibold">{item.title}</span>
+                      <span className="mt-0.5 block text-[8px] leading-4 text-slate-400">{item.detail}</span>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+
+          <motion.section
+            key={wizardStep}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.24, ease: [0.2, 0.8, 0.2, 1] }}
+            className="border-t border-slate-200 pt-6 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0"
+          >
+            <p className="text-[10px] font-bold uppercase tracking-[.14em] text-slate-400">Step {wizardStep + 1} of 4</p>
+            <h2 className="mt-2 text-[22px] font-semibold text-slate-950">{wizardMeta[wizardStep].title}</h2>
+            <p className="mt-1.5 max-w-lg text-[12px] leading-5 text-slate-500">{wizardMeta[wizardStep].detail}</p>
+
+            <div className="mt-6">
+              {wizardStep === 0 ? <SourcePicker source={draft.source} onSource={(source) => updateDraft("source", source)} onFile={(file) => void handleFile(file)} uploading={uploading} uploadProgress={uploadProgress} /> : null}
               {wizardStep === 1 ? (
-                <div className="h-full overflow-y-auto pr-1">
+                <div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     {OBJECTIVES.map(([id, label]) => {
                       const meta = OBJECTIVE_DETAILS[id];
                       const Icon = meta.icon;
                       const selected = draft.objective === id;
                       return (
-                        <motion.button
+                        <button
                           key={id}
                           type="button"
                           onClick={() => {
                             setHasChosenObjective(true);
                             updateDraft("objective", id);
                           }}
-                          whileTap={{ scale: 0.985 }}
                           className={cn(
-                            "relative min-h-[88px] rounded-2xl border p-4 text-left transition-[border-color,background-color,box-shadow,transform] duration-200",
-                            selected
-                              ? "border-transparent bg-slate-50 text-slate-900 ring-2 ring-slate-900 shadow-sm"
-                              : "border-slate-200/80 bg-white text-slate-700 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md",
+                            "min-h-[120px] rounded-md border p-4 text-left transition-[border-color,background-color,transform] duration-150 active:scale-[.99]",
+                            selected ? "border-slate-900 bg-white shadow-sm" : "border-slate-200 bg-white/60 hover:border-slate-400",
                           )}
                         >
-                          <div className="flex items-start gap-3">
-                            <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-xl", selected ? "bg-slate-100 text-slate-700" : "bg-slate-100 text-slate-500")}><Icon className="h-4 w-4" /></span>
-                            <span className="min-w-0 flex-1"><span className="block text-[13px] font-semibold">{id === "custom" ? "Describe it yourself" : label}</span><span className="mt-1 block text-[11px] leading-4 text-slate-500">{meta.detail}</span></span>
-                            {selected ? <span className="grid h-5 w-5 place-items-center rounded-full bg-slate-900 text-white"><Check className="h-3 w-3" /></span> : null}
+                          <div className="flex items-center justify-between">
+                            <span className="grid h-9 w-9 place-items-center rounded-md bg-slate-100 text-slate-700"><Icon className="h-4 w-4" /></span>
+                            {selected ? <Check className="h-4 w-4 text-slate-950" /> : null}
                           </div>
-                          {meta.recommended ? <span className="absolute right-4 top-3 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[.08em] text-slate-700">Recommended</span> : null}
-                        </motion.button>
+                          <p className="mt-4 text-[13px] font-semibold text-slate-950">{id === "custom" ? "Describe it yourself" : label}</p>
+                          <p className="mt-1.5 text-[10px] leading-5 text-slate-500">{meta.detail}</p>
+                        </button>
                       );
                     })}
                   </div>
-                  <AnimatePresence initial={false}>
-                    {draft.objective === "custom" ? (
-                      <motion.label initial={{ opacity: 0, height: 0, y: -6 }} animate={{ opacity: 1, height: "auto", y: 0 }} exit={{ opacity: 0, height: 0, y: -6 }} transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }} className="mt-4 block overflow-hidden">
-                        <span className="mb-2 flex items-center gap-2 text-[11px] font-medium text-slate-600"><Sparkles className="h-3.5 w-3.5 text-slate-600" />Custom direction</span>
-                        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition-[border-color,box-shadow] duration-200 focus-within:border-slate-300 focus-within:ring-2 focus-within:ring-slate-200">
-                          <textarea value={draft.customObjective} onChange={(event) => updateDraft("customObjective", event.target.value.slice(0, 500))} rows={3} placeholder="Find clear moments where the speaker explains a surprising idea with a useful takeaway..." className="w-full resize-none bg-transparent text-[12px] leading-5 text-slate-700 outline-none placeholder:text-slate-400" />
-                          <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-2 text-[11px]"><button type="button" onClick={() => updateDraft("customObjective", "Find self-contained, high-retention moments with a strong hook and clear payoff.")} className="font-medium text-slate-600 transition-colors hover:text-slate-800">Improve prompt</button><span className="text-slate-400">{draft.customObjective.length}/500</span></div>
-                        </div>
-                      </motion.label>
-                    ) : null}
-                  </AnimatePresence>
-                  <p className="mt-4 flex items-center gap-2 text-[11px] leading-4 text-slate-500"><Sparkles className="h-3.5 w-3.5 text-slate-600" />Clyra will analyse pacing, emotion, clarity and audience retention.</p>
+                  {draft.objective === "custom" ? (
+                    <label className="mt-4 block">
+                      <span className="mb-2 block text-[10px] font-semibold text-slate-500">Custom direction</span>
+                      <textarea
+                        value={draft.customObjective}
+                        onChange={(event) => updateDraft("customObjective", event.target.value.slice(0, 500))}
+                        rows={3}
+                        placeholder="Find clear moments where the speaker explains a surprising idea…"
+                        className="w-full resize-none rounded-md border border-slate-200 bg-white px-3 py-3 text-[12px] leading-5 text-slate-700 outline-none focus:border-slate-400"
+                      />
+                    </label>
+                  ) : null}
                 </div>
               ) : null}
-              {wizardStep === 2 ? <div className="grid h-full gap-5 overflow-y-auto md:grid-cols-[minmax(0,1fr)_180px]"><div><Toggle label="Dynamic captions" detail="Burn word-timed captions into every exported MP4." checked={draft.captionsEnabled} onChange={(value) => updateDraft("captionsEnabled", value)} /><Toggle label="Remove filler words" detail="Hide common filler words without cutting the source audio." checked={draft.removeFillers} onChange={(value) => updateDraft("removeFillers", value)} /><div className="mt-4 grid gap-4 sm:grid-cols-2"><label className="text-[10px] font-medium uppercase tracking-[0.06em] text-slate-500">Caption font<select value={draft.font} onChange={(event) => updateDraft("font", event.target.value)} className="mt-1.5 h-10 w-full rounded-2xl border border-slate-200/80 bg-white px-3 text-[12px] font-medium normal-case tracking-normal text-slate-700 shadow-sm outline-none transition-[border-color,box-shadow] duration-200 focus:border-slate-300 focus:ring-2 focus:ring-slate-200"><option>Impact</option><option>Arial Black</option><option>Helvetica</option></select></label><label className="text-[10px] font-medium uppercase tracking-[0.06em] text-slate-500">Position<select value={draft.position} onChange={(event) => updateDraft("position", event.target.value as CaptionPosition)} className="mt-1.5 h-10 w-full rounded-2xl border border-slate-200/80 bg-white px-3 text-[12px] font-medium normal-case tracking-normal text-slate-700 shadow-sm outline-none transition-[border-color,box-shadow] duration-200 focus:border-slate-300 focus:ring-2 focus:ring-slate-200"><option value="top">Top</option><option value="centre">Middle</option><option value="bottom">Bottom safe zone</option></select></label><div><p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.06em] text-slate-500">Aspect ratio</p><div className="flex rounded-full border border-slate-200/80 bg-slate-100/70 p-1">{(["9:16", "1:1", "16:9"] as ClipAspect[]).map((value) => <Segment key={value} value={value} current={draft.aspect} onClick={(next) => updateDraft("aspect", next)}>{value}</Segment>)}</div></div><div><p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.06em] text-slate-500">Subject focus</p><div className="flex rounded-full border border-slate-200/80 bg-slate-100/70 p-1">{(["left", "center", "right"] as CropFocus[]).map((value) => <Segment key={value} value={value} current={draft.cropFocus} onClick={(next) => updateDraft("cropFocus", next)}>{value}</Segment>)}</div></div><div className="sm:col-span-2"><p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.06em] text-slate-500">Face tracking</p><div className="flex rounded-full border border-slate-200/80 bg-slate-100/70 p-1">{(["off", "smooth", "responsive"] as FaceTrackingMode[]).map((value) => <Segment key={value} value={value} current={draft.faceTracking} onClick={(next) => updateDraft("faceTracking", next)}>{value === "off" ? "Off" : value === "smooth" ? "Smooth" : "Responsive"}</Segment>)}</div><p className="mt-2 text-[11px] leading-4 text-slate-400">Smooth follows the speaker cinematically. Responsive tracks faster motion. Off keeps a fixed crop.</p></div></div></div><div className={cn("relative mx-auto w-full overflow-hidden rounded-2xl bg-[#111318] shadow-md", draft.aspect === "9:16" ? "aspect-[9/16] max-h-[220px]" : draft.aspect === "1:1" ? "aspect-square max-h-[220px]" : "aspect-video max-h-[180px]")}><div className="absolute inset-0 bg-[linear-gradient(145deg,#3b4350,#090a0d_72%)]" />{draft.captionsEnabled ? <p className={cn("absolute left-[7%] right-[7%] text-center font-black uppercase leading-none text-white [text-shadow:-2px_-2px_0_#000,2px_-2px_0_#000,-2px_2px_0_#000,2px_2px_0_#000]", draft.position === "top" ? "top-[18%]" : draft.position === "centre" ? "top-1/2 -translate-y-1/2" : "bottom-[16%]")} style={{ fontFamily: draft.font, fontSize: `${Math.min(18, draft.fontSize * .2)}px`, color: draft.colour }}>YOUR BEST MOMENT</p> : null}</div></div> : null}
-              {wizardStep === 3 ? <div className="h-full overflow-y-auto"><div className="grid gap-4 sm:grid-cols-2"><div><p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.06em] text-slate-500">Clip length</p><div className="flex rounded-full border border-slate-200/80 bg-slate-100/70 p-1">{[15, 30, 45, 60].map((value) => <Segment key={value} value={value} current={draft.clipLength} onClick={(next) => updateDraft("clipLength", next)}>{value}s</Segment>)}</div></div><div><p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.06em] text-slate-500">Number of clips</p><div className="flex rounded-full border border-slate-200/80 bg-slate-100/70 p-1">{[1, 3, 5, 8].map((value) => <Segment key={value} value={value} current={draft.clipCount} onClick={(next) => updateDraft("clipCount", next)}>{value}</Segment>)}</div></div></div><dl className="mt-6 divide-y divide-slate-100 rounded-2xl border border-slate-200/80 bg-white px-4 text-[11px] shadow-sm">{[["Source", draft.source.name || draft.source.url || "Ready"], ["Moments", objective], ["Output", `${draft.clipCount} distinct clips · ${draft.clipLength}s each`], ["Format", `${draft.aspect} · ${draft.captionsEnabled ? "word-timed captions" : "clean video"}`]].map(([label, value]) => <div key={label} className="flex justify-between gap-4 py-3"><dt className="text-slate-400">{label}</dt><dd className="max-w-[70%] truncate text-right font-medium text-slate-700">{value}</dd></div>)}</dl></div> : null}
-              {error ? <p className="mt-4 flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-[11px] leading-4 text-red-600"><AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{error}</p> : null}
-            </motion.div>
-          </AnimatePresence>
-          <div className="flex shrink-0 items-center border-t border-slate-100 px-6 py-4 sm:px-8"><button type="button" disabled={wizardStep === 0} onClick={() => setWizardStep((step) => Math.max(0, step - 1))} className="flex h-10 items-center gap-1.5 rounded-full px-4 text-[12px] font-medium text-slate-500 transition-colors duration-200 hover:bg-slate-100 disabled:opacity-0"><ChevronLeft className="h-3.5 w-3.5" />Back</button>{wizardStep < 3 ? <button type="button" disabled={!canContinue} onClick={() => setWizardStep((step) => Math.min(3, step + 1))} className="ml-auto flex h-10 items-center gap-1.5 rounded-full bg-slate-800 px-6 text-[12px] font-semibold text-white shadow-sm transition-[background-color,transform] duration-200 hover:bg-slate-900 active:scale-[.98] disabled:opacity-35">Continue<ChevronRight className="h-3.5 w-3.5" /></button> : <button type="button" disabled={!sourceReady || !objective} onClick={() => void run()} className="ml-auto flex h-10 items-center gap-2 rounded-full bg-slate-800 px-6 text-[12px] font-semibold text-white shadow-[0_6px_16px_rgba(2,132,199,.25)] transition-[background-color,transform] duration-200 hover:bg-slate-900 active:scale-[.98] disabled:opacity-35"><WandSparkles className="h-3.5 w-3.5" />Generate clips</button>}</div>
-        </motion.section>
+              {wizardStep === 2 ? (
+                <div className="space-y-5">
+                  <Toggle label="Dynamic captions" detail="Burn word-timed captions into every exported MP4." checked={draft.captionsEnabled} onChange={(value) => updateDraft("captionsEnabled", value)} />
+                  <Toggle label="Remove filler words" detail="Hide common fillers without cutting the audio." checked={draft.removeFillers} onChange={(value) => updateDraft("removeFillers", value)} />
+                  <Toggle
+                    label="Face tracking"
+                    detail="Lock the 9:16 crop to one selected person and skip shots without them."
+                    checked={draft.faceTracking !== "off"}
+                    onChange={(value) => updateDraft("faceTracking", value ? "smooth" : "off")}
+                  />
+                  {draft.faceTracking !== "off" ? (
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <p className="mb-1.5 text-[10px] font-semibold text-slate-500">Tracking feel</p>
+                        <div className="flex rounded-md border border-slate-200 bg-slate-100/70 p-1">
+                          {(["smooth", "responsive"] as FaceTrackingMode[]).map((value) => (
+                            <Segment key={value} value={value} current={draft.faceTracking} onClick={(next) => updateDraft("faceTracking", next)}>
+                              {value === "smooth" ? "Smooth" : "Responsive"}
+                            </Segment>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <p className="mb-1.5 text-[10px] font-semibold text-slate-500">Scene mode</p>
+                        <div className="flex rounded-md border border-slate-200 bg-slate-100/70 p-1">
+                          {(["strict", "flexible"] as SceneMode[]).map((value) => (
+                            <Segment key={value} value={value} current={draft.sceneMode} onClick={(next) => updateDraft("sceneMode", next)}>
+                              {value === "strict" ? "Strict" : "Flexible"}
+                            </Segment>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="text-[10px] font-semibold text-slate-500">Caption font
+                      <select value={draft.font} onChange={(event) => updateDraft("font", event.target.value)} className="mt-1.5 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-[11px] font-medium outline-none">
+                        <option>Impact</option><option>Arial Black</option><option>Helvetica</option>
+                      </select>
+                    </label>
+                    <label className="text-[10px] font-semibold text-slate-500">Position
+                      <select value={draft.position} onChange={(event) => updateDraft("position", event.target.value as CaptionPosition)} className="mt-1.5 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-[11px] font-medium outline-none">
+                        <option value="top">Top</option><option value="centre">Middle</option><option value="bottom">Bottom safe zone</option>
+                      </select>
+                    </label>
+                    <div>
+                      <p className="mb-1.5 text-[10px] font-semibold text-slate-500">Aspect ratio</p>
+                      <div className="flex rounded-md border border-slate-200 bg-slate-100/70 p-1">
+                        {(["9:16", "1:1", "16:9"] as ClipAspect[]).map((value) => <Segment key={value} value={value} current={draft.aspect} onClick={(next) => updateDraft("aspect", next)}>{value}</Segment>)}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="mb-1.5 text-[10px] font-semibold text-slate-500">Subject focus</p>
+                      <div className="flex rounded-md border border-slate-200 bg-slate-100/70 p-1">
+                        {(["left", "center", "right"] as CropFocus[]).map((value) => <Segment key={value} value={value} current={draft.cropFocus} onClick={(next) => updateDraft("cropFocus", next)}>{value}</Segment>)}
+                      </div>
+                    </div>
+                  </div>
+                  <div className={cn("relative mx-auto w-full overflow-hidden rounded-md bg-[#111318] shadow-sm", draft.aspect === "9:16" ? "aspect-[9/16] max-h-[220px]" : draft.aspect === "1:1" ? "aspect-square max-h-[220px]" : "aspect-video max-h-[180px]")}>
+                    <div className="absolute inset-0 bg-[linear-gradient(145deg,#3b4350,#090a0d_72%)]" />
+                    {draft.captionsEnabled ? (
+                      <p className={cn("absolute left-[7%] right-[7%] text-center font-black uppercase leading-none text-white [text-shadow:-2px_-2px_0_#000,2px_-2px_0_#000,-2px_2px_0_#000,2px_2px_0_#000]", draft.position === "top" ? "top-[18%]" : draft.position === "centre" ? "top-1/2 -translate-y-1/2" : "bottom-[16%]")} style={{ fontFamily: draft.font, fontSize: `${Math.min(18, draft.fontSize * .2)}px`, color: draft.colour }}>
+                        YOUR BEST MOMENT
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+              {wizardStep === 3 ? (
+                <div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <p className="mb-1.5 text-[10px] font-semibold text-slate-500">Clip length</p>
+                      <div className="flex rounded-md border border-slate-200 bg-slate-100/70 p-1">
+                        {[15, 30, 45, 60].map((value) => <Segment key={value} value={value} current={draft.clipLength} onClick={(next) => updateDraft("clipLength", next)}>{value}s</Segment>)}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="mb-1.5 text-[10px] font-semibold text-slate-500">Number of clips</p>
+                      <div className="flex rounded-md border border-slate-200 bg-slate-100/70 p-1">
+                        {[1, 3, 5, 8].map((value) => <Segment key={value} value={value} current={draft.clipCount} onClick={(next) => updateDraft("clipCount", next)}>{value}</Segment>)}
+                      </div>
+                    </div>
+                  </div>
+                  <dl className="mt-6 divide-y divide-slate-100 rounded-md border border-slate-200 bg-white px-4 text-[11px]">
+                    {[["Source", draft.source.name || draft.source.url || "Ready"], ["Moments", objective], ["Output", `${draft.clipCount} clips · ${draft.clipLength}s`], ["Face tracking", draft.faceTracking === "off" ? "Off" : `${draft.faceTracking} · ${draft.sceneMode}`]].map(([label, value]) => (
+                      <div key={label} className="flex justify-between gap-4 py-3">
+                        <dt className="text-slate-400">{label}</dt>
+                        <dd className="max-w-[70%] truncate text-right font-medium text-slate-700">{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              ) : null}
+              {error ? <p className="mt-4 text-[10px] font-medium text-red-600">{error}</p> : null}
+            </div>
+
+            <div className="mt-7 flex items-center justify-between">
+              <button type="button" disabled={wizardStep === 0} onClick={() => setWizardStep((step) => Math.max(0, step - 1))} className="text-[10px] font-semibold text-slate-400 hover:text-slate-950 disabled:opacity-0">
+                Back
+              </button>
+              {wizardStep < 3 ? (
+                <button type="button" disabled={!canContinue} onClick={() => setWizardStep((step) => Math.min(3, step + 1))} className="h-10 rounded-md bg-slate-950 px-5 text-[10px] font-semibold text-white transition-transform active:scale-[.98] disabled:opacity-35">
+                  Continue
+                </button>
+              ) : (
+                <button type="button" disabled={!sourceReady || !objective} onClick={() => void run()} className="flex h-11 items-center gap-2 rounded-md bg-slate-950 px-6 text-[10px] font-semibold text-white transition-transform active:scale-[.98] disabled:opacity-35">
+                  <WandSparkles className="h-3.5 w-3.5" />
+                  Generate clips
+                </button>
+              )}
+            </div>
+          </motion.section>
+        </div>
       </div>
     </div>
   );
@@ -1110,9 +1355,52 @@ export default function AIClipper({
                   </div>
 
                   <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
-                    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-950 shadow-[0_12px_28px_rgba(15,23,42,.12)]">
-                      <div className="aspect-[9/16] max-h-[360px]">
-                        <video key={selected.output} controls playsInline preload="metadata" src={outputUrl(selected.output)} className="h-full w-full object-cover" />
+                    <div className="overflow-hidden rounded-md border border-slate-200 bg-slate-950 shadow-[0_12px_28px_rgba(15,23,42,.12)]">
+                      <div className="relative aspect-[9/16] max-h-[360px]">
+                        <video
+                          key={selected.output}
+                          ref={previewVideoRef}
+                          controls
+                          playsInline
+                          preload="metadata"
+                          src={outputUrl(selected.output)}
+                          onTimeUpdate={(event) => setPreviewTimeMs(Math.round(event.currentTarget.currentTime * 1000))}
+                          className="h-full w-full object-cover"
+                        />
+                        {liveOverlayFaces.length && draft.faceTracking !== "off" ? (
+                          <div className="pointer-events-none absolute inset-0">
+                            {liveOverlayFaces.map((face) => {
+                              const active = selectedFaceId === face.id || (!selectedFaceId && face.id === liveOverlayFaces[0]?.id);
+                              return (
+                                <button
+                                  key={face.id}
+                                  type="button"
+                                  onClick={() => setSelectedFaceId(face.id)}
+                                  className={cn(
+                                    "pointer-events-auto absolute rounded-md border-2 transition-[left,top,width,height,border-color,box-shadow] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]",
+                                    active
+                                      ? "border-sky-300 shadow-[0_0_0_1px_rgba(125,211,252,.55)]"
+                                      : "border-white/50 hover:border-white",
+                                  )}
+                                  style={{
+                                    left: `${face.bbox.x * 100}%`,
+                                    top: `${face.bbox.y * 100}%`,
+                                    width: `${face.bbox.width * 100}%`,
+                                    height: `${face.bbox.height * 100}%`,
+                                  }}
+                                  aria-label={`Select ${face.label}`}
+                                >
+                                  <span className={cn(
+                                    "absolute -top-5 left-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]",
+                                    active ? "bg-sky-300 text-slate-900" : "bg-black/55 text-white",
+                                  )}>
+                                    {active ? "Primary" : face.label}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
 
@@ -1122,30 +1410,49 @@ export default function AIClipper({
 
                       <div className="mt-4">
                         <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">Face tracking</p>
-                        <div className="mt-2 flex rounded-full border border-slate-200 bg-slate-100/70 p-1">
+                        <div className="mt-2 flex rounded-md border border-slate-200 bg-slate-100/70 p-1">
                           {(["off", "smooth", "responsive"] as FaceTrackingMode[]).map((value) => (
                             <Segment key={value} value={value} current={draft.faceTracking} onClick={(next) => updateDraft("faceTracking", next)}>
                               {value === "off" ? "Off" : value === "smooth" ? "Smooth" : "Responsive"}
                             </Segment>
                           ))}
                         </div>
-                        {(selected.available_faces?.length || 0) > 1 ? (
-                          <div className="mt-2 flex flex-wrap gap-1.5">
-                            {selected.available_faces!.map((face) => (
-                              <button
-                                key={face.id}
-                                type="button"
-                                onClick={() => setSelectedFaceId(face.id)}
-                                className={cn(
-                                  "rounded-full border px-2.5 py-1 text-[10px] font-medium transition-colors",
-                                  selectedFaceId === face.id
-                                    ? "border-slate-900 bg-slate-900 text-white"
-                                    : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
-                                )}
-                              >
-                                {face.label || face.id}
-                              </button>
-                            ))}
+                        <div className="mt-2 flex rounded-md border border-slate-200 bg-slate-100/70 p-1">
+                          {(["strict", "flexible"] as SceneMode[]).map((value) => (
+                            <Segment key={value} value={value} current={draft.sceneMode} onClick={(next) => updateDraft("sceneMode", next)}>
+                              {value === "strict" ? "Strict" : "Flexible"}
+                            </Segment>
+                          ))}
+                        </div>
+                        <p className="mt-2 text-[10px] leading-4 text-slate-400">Tap a face square in the preview to set the primary person, then re-render.</p>
+                        {(selected.available_faces?.length || 0) > 0 ? (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {selected.available_faces!.map((face) => {
+                              const thumb = face.thumbnailUrl || face.thumbnail || (selected.artifact_id ? `/api/clipper/artifact/${selected.artifact_id}/faces/${face.id}.jpg` : "");
+                              const active = selectedFaceId === face.id;
+                              return (
+                                <button
+                                  key={face.id}
+                                  type="button"
+                                  onClick={() => setSelectedFaceId(face.id)}
+                                  className={cn(
+                                    "group flex items-center gap-2 rounded-md border px-1.5 py-1.5 text-[10px] font-medium transition-[border-color,background-color,transform] duration-200",
+                                    active
+                                      ? "border-slate-900 bg-slate-900 text-white"
+                                      : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
+                                  )}
+                                >
+                                  <span className={cn("relative h-8 w-8 overflow-hidden rounded bg-slate-200", active && "ring-1 ring-white/70")}>
+                                    {thumb ? (
+                                      <img src={thumb} alt="" className="h-full w-full object-cover" />
+                                    ) : (
+                                      <span className="grid h-full w-full place-items-center text-[9px] text-slate-400">Face</span>
+                                    )}
+                                  </span>
+                                  <span className="pr-1">{face.label || face.personId || face.id}</span>
+                                </button>
+                              );
+                            })}
                           </div>
                         ) : null}
                       </div>
