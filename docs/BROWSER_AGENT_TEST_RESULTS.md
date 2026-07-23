@@ -7,29 +7,37 @@ Date: 2026-07-23
 | Check | Result |
 | --- | --- |
 | `npx tsc --noEmit` | Pass |
-| Clipper unit tests (`npm run test:clipper`) | Pass (42 assertions) from earlier session; Clipper UI restyle is className-only |
-| Browser e2e (`npm run test:browser`) | Skipped in CI-less agent session (requires live Chromium + keys); covered by manual localhost smoke after rebuild |
+| Clipper unit tests (`npm run test:clipper`) | Pass (60 assertions) |
+| Browser e2e (`npm run test:browser`) | Skipped (needs live Chromium + keys); covered by manual localhost smoke |
 
-## Manual smoke (post-rebuild)
+## Manual smoke (localhost + Electron)
 
-Tracked in the final launch pass:
+| Surface | Result |
+| --- | --- |
+| Boot overlay progress (Vibe warmup stages) | Pass — Preparing workspace → coding engine → Almost ready; M1 warmup ready in logs |
+| Chat composer expand (top fixed) | Pass |
+| App Launcher lighter intro | Pass — opens via Apps / Ctrl-K path |
+| Study Pal Sources / Quiz | Pass — light theme; quiz topic form generates via `/api/study/quiz` |
+| AI Browser workspace | Pass — address bar, tabs, Show assistant present |
+| AI Clipper wizard + YouTube | Pass — URL `https://youtu.be/nowcsh1wDzE` accepted; pipeline produced 3× ~32s 9:16 MP4s with Clip Potential Score |
+| Vibe Coder send | Pass — warm M1; live Agent Canvas opens with Running state (Clyra checklist removed; M1 canvas has its own task list) |
 
-1. Electron desktop boots with local service health OK.
-2. AI Browser opens the visible WebContentsView, agent chat cards render, glowing cursor appears on an assist task.
-3. Study Pal Chat / Quiz / Flashcards / Notes / Sources load and call `/api/study/*`.
-4. Chat composer expands downward only (top edge fixed).
-5. Vibe Coder no longer permanently stalls on unrequested pause.
-6. AI Clipper wizard shows the new rounded stepper and pills.
+## Clipper YouTube run
+
+- Source: We Created Australia’s Most Viral Cookie (~17:30)
+- After duration clamp: clips `32s / 32s / 32s` at 720×1280 with scores 54 / 53 / 49 and reason strings
+- Outputs: `output/clip-858660-*.mp4`
 
 ## Platforms
 
 | Platform | Status |
 | --- | --- |
-| macOS (this machine) | Targeted for smoke after rebuild |
-| Windows | Not exercised in this session; TypeScript surface is shared |
+| macOS (this machine) | Smoke tested |
+| Windows | Shared TypeScript surface; not exercised in this session |
 
 ## Known limitations
 
 - Full Browser Use Python runtime is intentionally not shipped.
-- PageLM is used as a capability reference only (Community License); Study Pal is a native Clyra rewrite.
-- Browser e2e automation still needs a keyed live session for exhaustive action coverage.
+- PageLM is capability reference only (Community License); Study Pal is a native rewrite.
+- Optional MediaPipe / Light-ASD / Silero VAD remain feature-detected hooks, not default on 8GB.
+- Embedded M1 Agent Canvas may still show its own task checklist (external product UI).
