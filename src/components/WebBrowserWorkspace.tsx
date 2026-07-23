@@ -6,8 +6,13 @@ import {
   Bot,
   Check,
   ChevronDown,
+  ChevronsDown,
+  ChevronsUp,
+  CircleCheck,
+  CircleHelp,
   CirclePause,
   CirclePlay,
+  CircleX,
   Clock3,
   Download,
   Ellipsis,
@@ -16,11 +21,14 @@ import {
   EyeOff,
   FileDown,
   Globe2,
+  Hand,
   History,
+  Keyboard,
   Loader2,
   LockKeyhole,
   Minus,
   MousePointer2,
+  MousePointerClick,
   PanelRightClose,
   PanelRightOpen,
   Plus,
@@ -33,10 +41,12 @@ import {
   Square,
   Star,
   Trash2,
+  TriangleAlert,
   UserRound,
   X,
   ZoomIn,
   ZoomOut,
+  type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import {
@@ -158,6 +168,33 @@ type TaskPlan = {
   successCriteria: string[];
 };
 
+type StepEvaluation = { verdict: "Success" | "Failure" | "Uncertain"; reason?: string };
+
+type CompletionEvidence = { url: string; title: string; checks: string[] };
+
+/** A progress event streamed over SSE or replayed from the persisted session. */
+type RunEvent = {
+  phase?: AgentStatus;
+  kind?: string;
+  message?: string;
+  step?: number;
+  action?: Record<string, unknown> & { type?: string };
+  evaluation?: StepEvaluation;
+  memory?: string;
+  nextGoal?: string;
+  actionIndex?: number;
+  actionCount?: number;
+  success?: boolean;
+  evidence?: CompletionEvidence;
+};
+
+type RunItem =
+  | { id: string; kind: "reasoning"; step?: number; evaluation?: StepEvaluation; nextGoal: string; memory?: string }
+  | { id: string; kind: "action"; step?: number; actionType: string; label: string; icon: ActionIconKey; status: "running" | "success" | "error"; detail: string; result?: string }
+  | { id: string; kind: "recovery" | "strategy"; message: string }
+  | { id: string; kind: "ask"; question: string }
+  | { id: string; kind: "complete"; success: boolean; message: string; evidence?: CompletionEvidence };
+
 type AgentSession = {
   id: string;
   task: string;
@@ -169,7 +206,7 @@ type AgentSession = {
   completedCriteria: number;
   totalCriteria: number;
   factCount: number;
-  recentEvents: Array<{ phase: AgentStatus; message: string }>;
+  recentEvents: Array<RunEvent & { phase: AgentStatus; message: string }>;
   result?: {
     message: string;
     steps: string[];
@@ -293,6 +330,166 @@ function responseError(payload: unknown, fallback: string) {
     return String(payload.error.message);
   }
   return fallback;
+}
+
+type ActionIconKey =
+  | "click" | "keyboard" | "navigate" | "search" | "scrollDown" | "scrollUp"
+  | "back" | "forward" | "reload" | "tab" | "wait" | "read" | "check" | "hover" | "done" | "ask" | "generic";
+
+const ACTION_ICONS: Record<ActionIconKey, LucideIcon> = {
+  click: MousePointerClick,
+  keyboard: Keyboard,
+  navigate: Globe2,
+  search: Search,
+  scrollDown: ChevronsDown,
+  scrollUp: ChevronsUp,
+  back: ArrowLeft,
+  forward: ArrowRight,
+  reload: RefreshCw,
+  tab: Plus,
+  wait: Clock3,
+  read: Eye,
+  check: Check,
+  hover: MousePointer2,
+  done: CircleCheck,
+  ask: CircleHelp,
+  generic: Sparkles,
+};
+
+function truncateLabel(value: string, max = 30) {
+  const clean = value.replace(/\s+/g, " ").trim();
+  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
+}
+
+function describeTarget(target: unknown): string {
+  if (typeof target === "number") return `element ${target}`;
+  if (target && typeof target === "object") {
+    const record = target as Record<string, unknown>;
+    const name = record.name || record.label || record.text || record.placeholder || record.testId || record.elementId;
+    if (name) return `'${truncateLabel(String(name), 26)}'`;
+  }
+  return "the element";
+}
+
+/** One-line, browser-use style summary of a runtime action for the chat feed. */
+function actionSummary(action: Record<string, unknown> & { type?: string }): { label: string; icon: ActionIconKey } {
+  const type = String(action.type || "");
+  switch (type) {
+    case "click": case "double_click": case "right_click": case "click_at":
+      return { label: `Clicking ${"x" in action ? "the page" : describeTarget(action.target)}`, icon: "click" };
+    case "type":
+      return { label: action.text ? `Typing "${truncateLabel(String(action.text), 24)}"` : "Typing into a field", icon: "keyboard" };
+    case "press": case "press_key":
+      return { label: `Pressing ${truncateLabel(String(action.key || "a key"), 16)}`, icon: "keyboard" };
+    case "key_combination":
+      return { label: `Pressing ${(Array.isArray(action.keys) ? action.keys : []).join("+") || "keys"}`, icon: "keyboard" };
+    case "navigate": case "open_tab":
+      return { label: `Opening ${displayHost(String(action.url || "")) || "a new tab"}`, icon: type === "open_tab" ? "tab" : "navigate" };
+    case "search":
+      return { label: `Searching "${truncateLabel(String(action.query || ""), 26)}"`, icon: "search" };
+    case "scroll":
+      return { label: `Scrolling ${String(action.direction || "down")}`, icon: action.direction === "up" ? "scrollUp" : "scrollDown" };
+    case "scroll_to":
+      return { label: `Scrolling to ${describeTarget(action.target)}`, icon: "scrollDown" };
+    case "scroll_to_top": return { label: "Scrolling to the top", icon: "scrollUp" };
+    case "scroll_to_bottom": return { label: "Scrolling to the bottom", icon: "scrollDown" };
+    case "go_back": case "back": return { label: "Going back", icon: "back" };
+    case "go_forward": case "forward": return { label: "Going forward", icon: "forward" };
+    case "reload": return { label: "Reloading the page", icon: "reload" };
+    case "stop_loading": return { label: "Stopping the page load", icon: "reload" };
+    case "switch_tab": return { label: "Switching tab", icon: "tab" };
+    case "close_tab": return { label: "Closing a tab", icon: "tab" };
+    case "duplicate_tab": return { label: "Duplicating the tab", icon: "tab" };
+    case "restore_closed_tab": return { label: "Restoring a closed tab", icon: "tab" };
+    case "wait": return { label: "Waiting for the page", icon: "wait" };
+    case "read_page": case "extract": case "inspect_element": return { label: "Reading the page", icon: "read" };
+    case "find_text": return { label: `Finding "${truncateLabel(String(action.text || ""), 22)}"`, icon: "search" };
+    case "select_option": return { label: `Selecting ${truncateLabel(String(action.label || action.value || "an option"), 22)}`, icon: "check" };
+    case "check": return { label: `Checking ${describeTarget(action.target)}`, icon: "check" };
+    case "uncheck": return { label: `Unchecking ${describeTarget(action.target)}`, icon: "check" };
+    case "hover": case "focus": return { label: `${type === "hover" ? "Hovering over" : "Focusing"} ${describeTarget(action.target)}`, icon: "hover" };
+    case "drag": return { label: "Dragging an element", icon: "hover" };
+    case "download": return { label: "Downloading a file", icon: "generic" };
+    case "done": return { label: "Finishing up", icon: "done" };
+    case "ask_user": return { label: "Asking you a question", icon: "ask" };
+    default: return { label: truncateLabel(type.replace(/_/g, " ") || "Working", 30), icon: "generic" };
+  }
+}
+
+let runItemSequence = 0;
+const nextRunItemId = () => `run-${++runItemSequence}`;
+const MAX_RUN_ITEMS = 80;
+
+/** Folds one streamed progress event into the browser-use style run feed. */
+function reduceRunItems(items: RunItem[], event: RunEvent): RunItem[] {
+  const phase = event.phase;
+  if (!phase) return items;
+  const next = [...items];
+  const finishRunning = (status: "success" | "error", result?: string) => {
+    for (let index = next.length - 1; index >= 0; index -= 1) {
+      const item = next[index];
+      if (item.kind === "action" && item.status === "running") {
+        next[index] = { ...item, status, result: result ?? item.result };
+        return;
+      }
+    }
+  };
+  if (event.kind === "reasoning" && (event.nextGoal || event.evaluation || event.memory)) {
+    next.push({
+      id: nextRunItemId(),
+      kind: "reasoning",
+      step: event.step,
+      evaluation: event.evaluation,
+      nextGoal: event.nextGoal || event.message || "Deciding the next step",
+      memory: event.memory,
+    });
+    return next.slice(-MAX_RUN_ITEMS);
+  }
+  if (phase === "executing" && event.action) {
+    // A previous action still marked running had no explicit verification event.
+    finishRunning("success");
+    const summary = actionSummary(event.action);
+    next.push({
+      id: nextRunItemId(),
+      kind: "action",
+      step: event.step,
+      actionType: String(event.action.type || ""),
+      label: summary.label,
+      icon: summary.icon,
+      status: "running",
+      detail: JSON.stringify(event.action, null, 2),
+    });
+    return next.slice(-MAX_RUN_ITEMS);
+  }
+  if (phase === "verifying" && event.action) {
+    finishRunning("success", event.message);
+    return next.slice(-MAX_RUN_ITEMS);
+  }
+  if (phase === "recovering") {
+    finishRunning("error", event.message);
+    const message = event.message || "Recovering";
+    const last = next[next.length - 1];
+    if (!(last && (last.kind === "recovery" || last.kind === "strategy") && last.message === message)) {
+      next.push({ id: nextRunItemId(), kind: event.kind === "strategy" ? "strategy" : "recovery", message });
+    }
+    return next.slice(-MAX_RUN_ITEMS);
+  }
+  if (phase === "waiting_for_user") {
+    next.push({ id: nextRunItemId(), kind: "ask", question: event.message || "The agent needs your input." });
+    return next.slice(-MAX_RUN_ITEMS);
+  }
+  if (phase === "completed" || phase === "failed" || phase === "cancelled") {
+    finishRunning(phase === "completed" ? "success" : "error");
+    next.push({
+      id: nextRunItemId(),
+      kind: "complete",
+      success: event.success ?? phase === "completed",
+      message: event.message || "",
+      evidence: event.evidence,
+    });
+    return next.slice(-MAX_RUN_ITEMS);
+  }
+  return items;
 }
 
 const TYPEWRITER_MS = 15;
@@ -467,6 +664,10 @@ export default function WebBrowserWorkspace() {
   const [frameTick, setFrameTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [messagesByTab, setMessagesByTab] = useState<Record<string, AgentMessage[]>>(initialAgentConversations);
+  const [runItems, setRunItems] = useState<RunItem[]>([]);
+  const [runTask, setRunTask] = useState("");
+  const [completedStepsOpen, setCompletedStepsOpen] = useState(false);
+  const streamingRunRef = useRef(false);
   const previewRef = useRef<HTMLDivElement>(null);
   const typingBufferRef = useRef("");
   const typingTimerRef = useRef<number | null>(null);
@@ -573,6 +774,12 @@ export default function WebBrowserWorkspace() {
     setFactCount(session.factCount || 0);
     if (session.recentEvents?.length) {
       setLiveSteps(session.recentEvents.slice(-20).map((event) => `${event.phase}: ${event.message}`));
+      // While an SSE stream is live it owns the run feed; the polled session
+      // is only used to rebuild it after a reload/reconnect.
+      if (!streamingRunRef.current) {
+        setRunTask(session.task || "");
+        setRunItems(session.recentEvents.reduce((acc, event) => reduceRunItems(acc, event), [] as RunItem[]));
+      }
     }
     if (!active && session.result?.message && !handledAgentSessionsRef.current.has(session.id)) {
       handledAgentSessionsRef.current.add(session.id);
@@ -751,6 +958,10 @@ export default function WebBrowserWorkspace() {
     setPlan(null);
     setCriteriaProgress({ complete: 0, total: 0 });
     setFactCount(0);
+    streamingRunRef.current = true;
+    setRunItems([]);
+    setRunTask(cleanTask);
+    setCompletedStepsOpen(false);
     setMessages((current) => [...current, { id: `user-${Date.now()}`, role: "user", content: cleanTask }], originTabId);
     try {
       const response = await fetch("/api/openbrowser/assist", {
@@ -805,6 +1016,7 @@ export default function WebBrowserWorkspace() {
           if (next.type === "progress" && next.phase) {
             setAgentPhase(next.phase as AgentStatus);
             setLiveSteps((current) => [...current.slice(-19), `${next.phase}: ${next.message || "Working"}`]);
+            setRunItems((current) => reduceRunItems(current, next as RunEvent));
           }
           if (next.type === "complete") completePayload = next;
         }
@@ -849,6 +1061,7 @@ export default function WebBrowserWorkspace() {
         },
       ], originTabId);
     } finally {
+      streamingRunRef.current = false;
       if (mountedRef.current) {
         setIsAgentBusy(false);
         setAgentPhase("idle");
@@ -1197,6 +1410,18 @@ export default function WebBrowserWorkspace() {
                   transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
                   className="clyra-browser-ai-control pointer-events-none absolute inset-0 z-[18]"
                 >
+                  <motion.div
+                    aria-hidden
+                    className="absolute inset-0 ring-1 ring-inset ring-sky-400/50"
+                    animate={settings.reducedMotion ? { boxShadow: "inset 0 0 28px rgba(56,189,248,0.20)" } : {
+                      boxShadow: [
+                        "inset 0 0 22px rgba(56,189,248,0.14)",
+                        "inset 0 0 42px rgba(56,189,248,0.30)",
+                        "inset 0 0 22px rgba(56,189,248,0.14)",
+                      ],
+                    }}
+                    transition={{ duration: 2.6, repeat: Infinity, ease: "easeInOut" }}
+                  />
                   <div className="absolute left-3 top-3 flex items-center gap-2 rounded-full bg-slate-950/90 px-2.5 py-1.5 text-[9px] font-semibold text-white shadow-[0_8px_24px_rgba(15,23,42,.18)] backdrop-blur-xl">
                     <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-300" />
                     <ShiningText text={agentStatus} play={!settings.reducedMotion} className="!text-[9px] !text-white [--clyra-thinking-base:#dbeafe] [--clyra-thinking-highlight:#ffffff]" />
@@ -1206,7 +1431,26 @@ export default function WebBrowserWorkspace() {
             </AnimatePresence>
 
             <AnimatePresence>
-              {cursor && isAgentBusy && settings.showAiCursor && !browserState?.agent.manualControl ? (
+              {cursor && isAgentBusy && settings.showAiCursor && !browserState?.agent.manualControl ? [
+                <motion.div
+                  key="browser-ai-cursor-trail"
+                  initial={settings.reducedMotion ? false : { opacity: 0 }}
+                  animate={{
+                    opacity: settings.reducedMotion ? 0 : 0.55,
+                    left: `${(cursor.x / (browserState?.viewport.width || 1440)) * 100}%`,
+                    top: `${(cursor.y / (browserState?.viewport.height || 900)) * 100}%`,
+                  }}
+                  exit={{ opacity: 0 }}
+                  transition={{
+                    left: { type: "spring", stiffness: 150, damping: 24, mass: 0.7 },
+                    top: { type: "spring", stiffness: 150, damping: 24, mass: 0.7 },
+                    opacity: { duration: 0.15 },
+                  }}
+                  className="pointer-events-none absolute z-[19] -translate-x-1/2 -translate-y-1/2"
+                  aria-hidden
+                >
+                  <span className="block h-4 w-4 rounded-full bg-sky-400/40 blur-[6px]" />
+                </motion.div>,
                 <motion.div
                   key="browser-ai-cursor"
                   initial={settings.reducedMotion ? false : { opacity: 0, scale: 0.86 }}
@@ -1216,6 +1460,7 @@ export default function WebBrowserWorkspace() {
                     left: `${(cursor.x / (browserState?.viewport.width || 1440)) * 100}%`,
                     top: `${(cursor.y / (browserState?.viewport.height || 900)) * 100}%`,
                   }}
+                  exit={{ opacity: 0, scale: 0.9 }}
                   transition={{
                     left: settings.aiCursorSpeed === "instant" ? { duration: 0.035 } : { type: "spring", stiffness: settings.aiCursorSpeed === "fast" ? 520 : 310, damping: settings.aiCursorSpeed === "fast" ? 38 : 31, mass: 0.46 },
                     top: settings.aiCursorSpeed === "instant" ? { duration: 0.035 } : { type: "spring", stiffness: settings.aiCursorSpeed === "fast" ? 520 : 310, damping: settings.aiCursorSpeed === "fast" ? 38 : 31, mass: 0.46 },
@@ -1224,13 +1469,22 @@ export default function WebBrowserWorkspace() {
                   }}
                   className="clyra-browser-agent-cursor pointer-events-none absolute z-20 -translate-x-[4px] -translate-y-[3px]"
                 >
-                  <MousePointer2 className="h-6 w-6 fill-[#2563eb] text-white [filter:drop-shadow(0_3px_5px_rgba(37,99,235,.34))]" />
-                  {settings.showAiActionLabels ? (
-                    <span className="absolute left-5 top-5 whitespace-nowrap rounded-md bg-slate-950 px-2 py-1 text-[9px] font-semibold text-white shadow-lg">{cursor.label}</span>
+                  <span
+                    aria-hidden
+                    className="absolute -left-3 -top-3 h-12 w-12 rounded-full bg-[radial-gradient(circle,rgba(56,189,248,0.42)_0%,rgba(56,189,248,0.14)_55%,transparent_75%)] blur-[10px]"
+                  />
+                  <MousePointer2 className="relative h-6 w-6 fill-sky-500 text-white [filter:drop-shadow(0_0_10px_rgba(56,189,248,.7))_drop-shadow(0_3px_6px_rgba(14,116,144,.35))]" />
+                  {settings.showAiActionLabels && cursor.label ? (
+                    <span className="absolute left-5 top-5 whitespace-nowrap rounded-md bg-sky-500 px-2 py-1 text-[9px] font-semibold text-white shadow-[0_4px_14px_rgba(56,189,248,.45)]">{cursor.label}</span>
                   ) : null}
-                  {(cursor.kind === "click" || cursor.kind === "double_click") ? <span key={cursor.id} className="absolute left-[3px] top-[2px] h-5 w-5 animate-ping rounded-full border border-blue-500/70" /> : null}
-                </motion.div>
-              ) : null}
+                  {(cursor.kind === "click" || cursor.kind === "double_click") ? (
+                    <span key={cursor.id} className="absolute left-[3px] top-[2px]" aria-hidden>
+                      <span className="absolute h-5 w-5 animate-ping rounded-full border-2 border-sky-400/80" />
+                      <span className="absolute h-5 w-5 animate-ping rounded-full bg-sky-400/25 [animation-duration:1.2s]" />
+                    </span>
+                  ) : null}
+                </motion.div>,
+              ] : null}
             </AnimatePresence>
 
             <AnimatePresence>
@@ -1380,32 +1634,22 @@ export default function WebBrowserWorkspace() {
                         );
                       })}
 
-                      {isAgentBusy && !plan ? (
-                        <motion.div initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -3 }} transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }} className="flex items-center gap-2 py-0.5">
-                          <ShiningBrainIcon className="h-4 w-4 shrink-0" />
-                          <ShiningText text={agentStatus} preset="thinkingChat" play={!settings.reducedMotion} className="min-w-0 flex-1 truncate !text-[12px]" />
-                          <ThinkingDots />
-                          {factCount > 0 ? <span className="text-[9px] font-medium text-slate-400">{factCount} facts</span> : null}
-                        </motion.div>
-                      ) : null}
-
-                      {isAgentBusy && plan ? (
-                        <motion.section initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: settings.reducedMotion ? 0.01 : 0.22, ease: [0.16, 1, 0.3, 1] }} className="clyra-browser-plan overflow-hidden">
-                          <div className="clyra-browser-plan__header">
-                            <span>Task progress</span>
-                            <span>{plan.steps.filter((step) => step.status === "complete").length}/{plan.steps.length}</span>
-                          </div>
-                          <ol className="clyra-browser-plan__steps">
-                            {plan.steps.map((step, index) => (
-                              <li key={step.id} className={cn("clyra-browser-plan__step", `clyra-browser-plan__step--${step.status}`)}>
-                                <span className="clyra-browser-plan__marker" aria-hidden>
-                                  {step.status === "complete" ? <Check className="h-2.5 w-2.5" /> : <span>{index + 1}</span>}
-                                </span>
-                                <span className="truncate">{step.label}</span>
-                              </li>
-                            ))}
-                          </ol>
-                        </motion.section>
+                      {isAgentBusy || (runItems.length > 0 && messages.length > 0) ? (
+                        <AgentRunSection
+                          task={runTask || browserState?.agent.task || ""}
+                          active={isAgentBusy}
+                          phase={agentPhase}
+                          statusText={agentStatus}
+                          plan={plan}
+                          items={runItems}
+                          paused={agentPhase === "paused"}
+                          manualControl={Boolean(browserState?.agent.manualControl)}
+                          reducedMotion={settings.reducedMotion}
+                          factCount={factCount}
+                          completedStepsOpen={completedStepsOpen}
+                          onToggleCompletedSteps={() => setCompletedStepsOpen((value) => !value)}
+                          onControl={(command) => void controlAgent(command)}
+                        />
                       ) : null}
 
                       <AnimatePresence>
@@ -1415,14 +1659,6 @@ export default function WebBrowserWorkspace() {
                           </motion.div>
                         ) : null}
                       </AnimatePresence>
-
-                      {isAgentBusy && !plan ? (
-                        <div className="ml-9 space-y-2.5 animate-pulse">
-                          <div className="h-3 w-2/3 rounded-full bg-slate-100" />
-                          <div className="h-3 w-full rounded-full bg-slate-100" />
-                          <div className="h-3 w-4/5 rounded-full bg-slate-100" />
-                        </div>
-                      ) : null}
                     </div>
                   </div>
 
@@ -1508,6 +1744,317 @@ export default function WebBrowserWorkspace() {
         </div>
       </motion.div>
     </div>
+  );
+}
+
+function statusPillMeta(phase: AgentStatus, manualControl: boolean): { label: string; className: string; live?: boolean } {
+  switch (phase) {
+    case "planning": return { label: "Planning", className: "bg-sky-50 text-sky-600 border-sky-200", live: true };
+    case "observing": return { label: "Observing", className: "bg-sky-50 text-sky-600 border-sky-200", live: true };
+    case "executing": return { label: "Acting", className: "bg-sky-50 text-sky-600 border-sky-200", live: true };
+    case "verifying": return { label: "Verifying", className: "bg-sky-50 text-sky-600 border-sky-200", live: true };
+    case "recovering": return { label: "Recovering", className: "bg-amber-50 text-amber-600 border-amber-200", live: true };
+    case "waiting_for_user": return { label: "Needs you", className: "bg-amber-50 text-amber-600 border-amber-200" };
+    case "paused": return { label: manualControl ? "You have control" : "Paused", className: "bg-slate-100 text-slate-500 border-slate-200" };
+    case "completed": return { label: "Done", className: "bg-emerald-50 text-emerald-600 border-emerald-200" };
+    case "failed": return { label: "Failed", className: "bg-rose-50 text-rose-600 border-rose-200" };
+    case "cancelled": return { label: "Stopped", className: "bg-slate-100 text-slate-500 border-slate-200" };
+    default: return { label: "Idle", className: "bg-slate-100 text-slate-500 border-slate-200" };
+  }
+}
+
+function StatusPill({ phase, manualControl }: { phase: AgentStatus; manualControl: boolean }) {
+  const meta = statusPillMeta(phase, manualControl);
+  return (
+    <span className={cn("flex h-5 shrink-0 items-center gap-1 rounded-full border px-1.5 text-[8.5px] font-semibold", meta.className)}>
+      {meta.live ? <span className="h-1 w-1 animate-pulse rounded-full bg-current" /> : null}
+      {meta.label}
+    </span>
+  );
+}
+
+function VerdictIcon({ verdict }: { verdict?: StepEvaluation["verdict"] }) {
+  if (verdict === "Success") return <CircleCheck className="h-3.5 w-3.5 shrink-0 text-emerald-500" />;
+  if (verdict === "Failure") return <CircleX className="h-3.5 w-3.5 shrink-0 text-rose-500" />;
+  return <CircleHelp className="h-3.5 w-3.5 shrink-0 text-amber-500" />;
+}
+
+function RunControlButton({ label, onClick, tone = "slate", children }: { label: string; onClick: () => void; tone?: "slate" | "rose"; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={onClick}
+      className={cn(
+        "grid h-6 w-6 shrink-0 place-items-center rounded-md transition-[background-color,color,transform] duration-150 active:scale-[0.92]",
+        tone === "rose" ? "text-rose-500 hover:bg-rose-50 hover:text-rose-600" : "text-slate-400 hover:bg-slate-100 hover:text-slate-700",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function PlanChecklistCard({ plan, completedOpen, onToggleCompleted, reducedMotion }: { plan: TaskPlan; completedOpen: boolean; onToggleCompleted: () => void; reducedMotion: boolean }) {
+  const completed = plan.steps.filter((step) => step.status === "complete");
+  const remaining = plan.steps.filter((step) => step.status !== "complete");
+  const collapseCompleted = completed.length > 1;
+  const renderStep = (step: TaskPlan["steps"][number]) => (
+    <li key={step.id} className="flex items-start gap-2 py-[3px]">
+      <span className="mt-[3px] grid h-3 w-3 shrink-0 place-items-center" aria-hidden>
+        {step.status === "complete" ? (
+          <CircleCheck className="h-3 w-3 text-emerald-500" />
+        ) : step.status === "active" ? (
+          <motion.span
+            className="h-2 w-2 rounded-full bg-sky-500"
+            animate={reducedMotion ? undefined : { scale: [1, 1.35, 1], opacity: [1, 0.55, 1] }}
+            transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
+          />
+        ) : step.status === "blocked" ? (
+          <TriangleAlert className="h-3 w-3 text-amber-500" />
+        ) : (
+          <span className="h-2 w-2 rounded-full border border-slate-300" />
+        )}
+      </span>
+      <span className={cn(
+        "min-w-0 flex-1 text-[10px] font-medium leading-4",
+        step.status === "complete" ? "text-slate-400 line-through decoration-slate-300" : step.status === "active" ? "text-slate-800" : "text-slate-500",
+      )}>
+        {step.label}
+      </span>
+    </li>
+  );
+  return (
+    <motion.section initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.2, ease: [0.16, 1, 0.3, 1] }} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-[0_2px_8px_rgba(35,54,76,0.04)]">
+      <div className="mb-1 flex items-center justify-between text-[9px] font-semibold uppercase tracking-wide text-slate-400">
+        <span>Plan</span>
+        <span>{completed.length}/{plan.steps.length}</span>
+      </div>
+      <ol>
+        {collapseCompleted ? (
+          <li>
+            <button type="button" onClick={onToggleCompleted} className="flex w-full items-center gap-2 py-[3px] text-left text-[10px] font-medium text-slate-400 transition-colors hover:text-slate-600">
+              <CircleCheck className="h-3 w-3 shrink-0 text-emerald-500" />
+              <span className="min-w-0 flex-1">{completed.length} steps completed</span>
+              <ChevronDown className={cn("h-3 w-3 shrink-0 transition-transform duration-150", completedOpen && "rotate-180")} />
+            </button>
+            <AnimatePresence initial={false}>
+              {completedOpen ? (
+                <motion.ol initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.18 }} className="overflow-hidden pl-1">
+                  {completed.map(renderStep)}
+                </motion.ol>
+              ) : null}
+            </AnimatePresence>
+          </li>
+        ) : completed.map(renderStep)}
+        {remaining.map(renderStep)}
+      </ol>
+    </motion.section>
+  );
+}
+
+function ReasoningCard({ item, reducedMotion }: { item: Extract<RunItem, { kind: "reasoning" }>; reducedMotion: boolean }) {
+  return (
+    <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.18, ease: [0.16, 1, 0.3, 1] }} className="rounded-lg border border-slate-200 bg-slate-50/60 px-2.5 py-2">
+      <div className="flex items-start gap-2">
+        <span className="mt-[1px]"><VerdictIcon verdict={item.evaluation?.verdict} /></span>
+        <div className="min-w-0 flex-1">
+          <p className="text-[10.5px] font-semibold leading-4 text-slate-700">{item.nextGoal}</p>
+          {item.evaluation?.reason ? <p className="mt-0.5 text-[9px] font-medium leading-3.5 text-slate-400">{item.evaluation.reason}</p> : null}
+          {item.memory ? <p className="mt-1 text-[9px] font-medium leading-3.5 text-slate-400/90">{item.memory}</p> : null}
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+function ActionRow({ item, reducedMotion }: { item: Extract<RunItem, { kind: "action" }>; reducedMotion: boolean }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const Icon = ACTION_ICONS[item.icon] || Sparkles;
+  return (
+    <motion.div initial={{ opacity: 0, x: -4 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.16, ease: [0.16, 1, 0.3, 1] }} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
+      <div className="flex items-center gap-2">
+        <span className="grid h-5 w-5 shrink-0 place-items-center rounded-md bg-sky-50 text-sky-600"><Icon className="h-3 w-3" /></span>
+        <span className="min-w-0 flex-1 truncate text-[10.5px] font-medium text-slate-700">{item.label}</span>
+        {item.status === "running" ? (
+          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-sky-500" />
+        ) : item.status === "success" ? (
+          <CircleCheck className="h-3 w-3 shrink-0 text-emerald-500" />
+        ) : (
+          <CircleX className="h-3 w-3 shrink-0 text-rose-500" />
+        )}
+        <button type="button" onClick={() => setDetailsOpen((value) => !value)} aria-label="Toggle action details" className="grid h-4 w-4 shrink-0 place-items-center rounded text-slate-300 transition-colors hover:text-slate-500">
+          <ChevronDown className={cn("h-3 w-3 transition-transform duration-150", detailsOpen && "rotate-180")} />
+        </button>
+      </div>
+      <AnimatePresence initial={false}>
+        {detailsOpen ? (
+          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.16 }} className="overflow-hidden">
+            {item.result ? <p className="mt-1.5 text-[9px] font-medium leading-3.5 text-slate-500">{item.result}</p> : null}
+            <pre className="mt-1.5 max-h-32 overflow-auto rounded-md bg-slate-50 p-2 text-[8.5px] leading-3.5 text-slate-500">{item.detail}</pre>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+function RecoveryCard({ item, reducedMotion }: { item: Extract<RunItem, { kind: "recovery" | "strategy" }>; reducedMotion: boolean }) {
+  const Icon = item.kind === "strategy" ? RotateCcw : TriangleAlert;
+  return (
+    <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.18, ease: [0.16, 1, 0.3, 1] }} className="flex items-start gap-2 rounded-lg border border-amber-200/80 bg-amber-50/70 px-2.5 py-2">
+      <Icon className="mt-[1px] h-3.5 w-3.5 shrink-0 text-amber-500" />
+      <p className="min-w-0 flex-1 text-[10px] font-medium leading-4 text-amber-800">
+        {item.kind === "strategy" ? <span className="mr-1 font-semibold">Changing strategy —</span> : null}
+        {item.message}
+      </p>
+    </motion.div>
+  );
+}
+
+function AskUserCard({ question, reducedMotion }: { question: string; reducedMotion: boolean }) {
+  return (
+    <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.2, ease: [0.16, 1, 0.3, 1] }} className="rounded-xl border border-sky-200 bg-sky-50/70 px-3 py-2.5">
+      <div className="flex items-start gap-2">
+        <CircleHelp className="mt-[1px] h-3.5 w-3.5 shrink-0 text-sky-500" />
+        <div className="min-w-0 flex-1">
+          <p className="text-[9px] font-semibold uppercase tracking-wide text-sky-500">Clyra needs your input</p>
+          <p className="mt-1 text-[11px] font-medium leading-4.5 text-slate-700">{question}</p>
+          <p className="mt-1.5 text-[9px] font-medium text-slate-400">Reply in the box below to continue.</p>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+function CompletionCard({ item, reducedMotion }: { item: Extract<RunItem, { kind: "complete" }>; reducedMotion: boolean }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 5 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: reducedMotion ? 0.01 : 0.22, ease: [0.16, 1, 0.3, 1] }}
+      className={cn(
+        "rounded-xl border px-3 py-2.5",
+        item.success ? "border-emerald-200 bg-emerald-50/70" : "border-rose-200 bg-rose-50/60",
+      )}
+    >
+      <div className="flex items-start gap-2">
+        {item.success ? <CircleCheck className="mt-[1px] h-4 w-4 shrink-0 text-emerald-500" /> : <CircleX className="mt-[1px] h-4 w-4 shrink-0 text-rose-500" />}
+        <div className="min-w-0 flex-1">
+          <p className={cn("text-[9px] font-semibold uppercase tracking-wide", item.success ? "text-emerald-600" : "text-rose-500")}>
+            {item.success ? "Task completed" : "Task not completed"}
+          </p>
+          {item.message ? <p className="mt-1 whitespace-pre-wrap text-[10.5px] font-medium leading-4.5 text-slate-700">{item.message}</p> : null}
+          {item.evidence?.url ? (
+            <a href={item.evidence.url} target="_blank" rel="noreferrer" className="mt-2 flex h-6 max-w-full items-center gap-1.5 rounded-md border border-slate-200/80 bg-white/80 px-2 text-[9px] font-semibold text-slate-600 transition-colors hover:text-sky-600">
+              <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+              <span className="min-w-0 truncate">{item.evidence.title || displayHost(item.evidence.url)}</span>
+              <span className="shrink-0 text-slate-400">{displayHost(item.evidence.url)}</span>
+            </a>
+          ) : null}
+          {item.evidence?.checks?.length ? (
+            <ul className="mt-1.5 space-y-0.5">
+              {item.evidence.checks.slice(0, 6).map((check, index) => (
+                <li key={`${check}-${index}`} className="flex items-start gap-1.5 text-[9px] font-medium leading-3.5 text-slate-500">
+                  <Check className={cn("mt-[1px] h-2.5 w-2.5 shrink-0", item.success ? "text-emerald-500" : "text-slate-400")} />
+                  <span className="min-w-0">{check}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+function AgentRunSection({
+  task,
+  active,
+  phase,
+  statusText,
+  plan,
+  items,
+  paused,
+  manualControl,
+  reducedMotion,
+  factCount,
+  completedStepsOpen,
+  onToggleCompletedSteps,
+  onControl,
+}: {
+  task: string;
+  active: boolean;
+  phase: AgentStatus;
+  statusText: string;
+  plan: TaskPlan | null;
+  items: RunItem[];
+  paused: boolean;
+  manualControl: boolean;
+  reducedMotion: boolean;
+  factCount: number;
+  completedStepsOpen: boolean;
+  onToggleCompletedSteps: () => void;
+  onControl: (command: "pause" | "resume" | "take_control" | "return_control" | "stop") => void;
+}) {
+  const completeItem = [...items].reverse().find((item): item is Extract<RunItem, { kind: "complete" }> => item.kind === "complete");
+  const askItem = [...items].reverse().find((item): item is Extract<RunItem, { kind: "ask" }> => item.kind === "ask");
+  const displayPhase: AgentStatus = active ? phase : completeItem ? (completeItem.success ? "completed" : "failed") : askItem ? "waiting_for_user" : phase;
+  const feedItems = active ? items.slice(-24) : [];
+  const thinking = active && ["planning", "observing"].includes(phase) && !manualControl;
+  return (
+    <motion.section initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.22, ease: [0.16, 1, 0.3, 1] }} className="space-y-2">
+      <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2.5">
+        <div className="flex items-center gap-2">
+          <span className="grid h-5 w-5 shrink-0 place-items-center rounded-md bg-sky-100/80 text-sky-600"><Bot className="h-3 w-3" /></span>
+          <span className="min-w-0 flex-1 truncate text-[9px] font-semibold uppercase tracking-wide text-slate-400">Browser task</span>
+          <StatusPill phase={displayPhase} manualControl={manualControl} />
+          {active ? (
+            <span className="flex shrink-0 items-center gap-0.5">
+              <RunControlButton label={paused && !manualControl ? "Resume" : "Pause"} onClick={() => onControl(paused && !manualControl ? "resume" : "pause")}>
+                {paused && !manualControl ? <CirclePlay className="h-3.5 w-3.5" /> : <CirclePause className="h-3.5 w-3.5" />}
+              </RunControlButton>
+              <RunControlButton label={manualControl ? "Hand control back to Clyra" : "Take control"} onClick={() => onControl(manualControl ? "return_control" : "take_control")}>
+                {manualControl ? <Sparkles className="h-3.5 w-3.5" /> : <Hand className="h-3.5 w-3.5" />}
+              </RunControlButton>
+              <RunControlButton label="Stop task" tone="rose" onClick={() => onControl("stop")}>
+                <Square className="h-2.5 w-2.5 fill-current" />
+              </RunControlButton>
+            </span>
+          ) : null}
+        </div>
+        {task ? <p className="mt-1.5 line-clamp-3 text-[11px] font-medium leading-4.5 text-slate-700">{task}</p> : null}
+      </div>
+
+      {plan && active ? (
+        <PlanChecklistCard plan={plan} completedOpen={completedStepsOpen} onToggleCompleted={onToggleCompletedSteps} reducedMotion={reducedMotion} />
+      ) : null}
+
+      {feedItems.length ? (
+        <div className="space-y-1.5">
+          {feedItems.map((item) => {
+            if (item.kind === "reasoning") return <ReasoningCard key={item.id} item={item} reducedMotion={reducedMotion} />;
+            if (item.kind === "action") return <ActionRow key={item.id} item={item} reducedMotion={reducedMotion} />;
+            if (item.kind === "ask") return <AskUserCard key={item.id} question={item.question} reducedMotion={reducedMotion} />;
+            if (item.kind === "complete") return <CompletionCard key={item.id} item={item} reducedMotion={reducedMotion} />;
+            return <RecoveryCard key={item.id} item={item} reducedMotion={reducedMotion} />;
+          })}
+        </div>
+      ) : null}
+
+      {!active && askItem && !completeItem ? <AskUserCard question={askItem.question} reducedMotion={reducedMotion} /> : null}
+      {!active && completeItem ? <CompletionCard item={completeItem} reducedMotion={reducedMotion} /> : null}
+
+      {thinking ? (
+        <div className="flex items-center gap-2 px-0.5 py-0.5">
+          <ShiningBrainIcon className="h-4 w-4 shrink-0" />
+          <ShiningText text={statusText || "Thinking"} preset="thinkingChat" play={!reducedMotion} className="min-w-0 flex-1 truncate !text-[11.5px]" />
+          <ThinkingDots />
+          {factCount > 0 ? <span className="shrink-0 text-[9px] font-medium text-slate-400">{factCount} facts</span> : null}
+        </div>
+      ) : null}
+    </motion.section>
   );
 }
 

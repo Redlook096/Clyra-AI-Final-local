@@ -1883,8 +1883,8 @@ export default function App() {
   const regenerationRef = useRef<{ messageId: string; userMessageId: string } | null>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const composerSurfaceRef = useRef<HTMLDivElement>(null);
-  const welcomeComposerCollapsedHeightRef = useRef<number | null>(null);
-  const [welcomeComposerOffset, setWelcomeComposerOffset] = useState(0);
+  const welcomeComposerAnchorRef = useRef<number | null>(null);
+  const [welcomeComposerAnchorHeight, setWelcomeComposerAnchorHeight] = useState<number | null>(null);
 
   useEffect(() => {
     try {
@@ -1983,28 +1983,37 @@ export default function App() {
     selectedAppAgents.length > 0 ||
     activeWorkspaceTab === "vibe";
 
-  // The welcome composer is bottom anchored. Measure its expanding shelf and
-  // offset the rail by the exact added height, keeping the text field's top
-  // edge optically fixed while controls reveal below it.
+  // The welcome composer sits inside a fixed-height anchor box equal to its
+  // collapsed height, so its top edge never depends on its own expansion —
+  // extra height simply overflows downward. Only the collapsed height is ever
+  // measured, and never mid-transition, so nothing compensates a frame late.
   useLayoutEffect(() => {
-    if (messages.length > 0 || !composerSurfaceRef.current) return;
+    if (messages.length > 0 || isExpanded) return;
     const surface = composerSurfaceRef.current;
-    const update = () => {
+    if (!surface) return;
+    let observer: ResizeObserver | null = null;
+    let timer: number | null = null;
+    const commit = () => {
       const height = surface.getBoundingClientRect().height;
-      if (!isExpanded) {
-        welcomeComposerCollapsedHeightRef.current = height;
-        setWelcomeComposerOffset(0);
-        return;
-      }
-      const collapsedHeight = welcomeComposerCollapsedHeightRef.current;
-      if (collapsedHeight != null) {
-        setWelcomeComposerOffset(Math.max(0, height - collapsedHeight));
-      }
+      welcomeComposerAnchorRef.current = height;
+      setWelcomeComposerAnchorHeight((current) => (current === height ? current : height));
     };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(surface);
-    return () => observer.disconnect();
+    const startObserving = () => {
+      commit();
+      observer = new ResizeObserver(commit);
+      observer.observe(surface);
+    };
+    if (welcomeComposerAnchorRef.current == null) {
+      startObserving();
+    } else {
+      // Returning from an expanded state: wait for the 280-300ms collapse
+      // transition to settle before re-measuring the resting height.
+      timer = window.setTimeout(startObserving, 380);
+    }
+    return () => {
+      if (timer != null) window.clearTimeout(timer);
+      observer?.disconnect();
+    };
   }, [isExpanded, messages.length]);
 
   const { textareaRef, adjustHeight } = useAutoResizeTextarea({
@@ -6184,9 +6193,10 @@ Please analyze the code you just wrote and fix this error.`;
                             animate={{
                               opacity: 1,
                               x: 0,
-                              // Preserve the welcome input's top edge while the
-                              // measured lower shelf grows beneath it.
-                              y: messages.length > 0 ? 0 : -142 + welcomeComposerOffset,
+                              // Constant lift in welcome mode: the anchor box
+                              // around the surface keeps the rail's height
+                              // fixed, so no reactive offset is needed.
+                              y: messages.length > 0 ? 0 : -142,
                               scale: 1,
                             }}
                             exit={{
@@ -6209,7 +6219,7 @@ Please analyze the code you just wrote and fix this error.`;
                                 ? "px-3 sm:px-4"
                                 : "px-5 sm:px-8",
                               messages.length === 0
-                                ? cn("pb-5 clyra-composer-welcome", isExpanded && "clyra-composer-welcome--expanded")
+                                ? "pb-5 clyra-composer-welcome"
                                 : "pb-0",
                             )}
                           >
@@ -6279,10 +6289,18 @@ Please analyze the code you just wrote and fix this error.`;
                                 ><Globe className="h-4 w-4" /> Web search</button>
                               </div>
                             ) : null}
+                            <div
+                              className="clyra-composer-anchor"
+                              style={
+                                messages.length === 0 && welcomeComposerAnchorHeight != null
+                                  ? { height: welcomeComposerAnchorHeight }
+                                  : undefined
+                              }
+                            >
                             <motion.div
                               ref={composerSurfaceRef}
                               className={cn(
-                                "input-wrapper relative backdrop-blur-xl border transition-[background-color,border-color,padding,box-shadow,border-radius] duration-[560ms] ease-[cubic-bezier(0.22,1,0.36,1)] cursor-text overflow-visible mx-auto z-[3]",
+                                "input-wrapper relative backdrop-blur-xl border transition-[background-color,border-color,padding,box-shadow,border-radius] duration-[280ms] ease-[cubic-bezier(0.32,0.72,0,1)] cursor-text overflow-visible mx-auto z-[3]",
                                 isVibeWorkspace && "clyra-vibe-composer",
                                 isExpanded && "clyra-composer-expanded",
                                 theme === "Dark"
@@ -6681,7 +6699,7 @@ Please analyze the code you just wrote and fix this error.`;
                                       isExpanded
                                         ? "min-h-[46px] max-h-[160px] py-2.5 px-1"
                                         : "min-h-[42px] max-h-[160px] py-2 px-1",
-                                      "clyra-visible-scrollbar transition-[height,min-height,max-height,padding,opacity,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                                      "clyra-visible-scrollbar transition-[height,min-height,max-height,padding,opacity,transform] duration-[280ms] ease-[cubic-bezier(0.32,0.72,0,1)]",
                                       isFadingInText
                                         ? "opacity-0 translate-y-1 scale-[0.99]"
                                         : "opacity-100 translate-y-0 scale-100",
@@ -6765,13 +6783,12 @@ Please analyze the code you just wrote and fix this error.`;
                                 <AnimatePresence initial={false}>
                                 {isExpanded && (
                                   <motion.div
-                                    initial={{ height: 0, opacity: 0, scaleY: 0.92 }}
-                                    animate={{ height: "auto", opacity: 1, scaleY: 1 }}
-                                    exit={{ height: 0, opacity: 0, scaleY: 0.96 }}
+                                    initial={{ height: 0, opacity: 0 }}
+                                    animate={{ height: "auto", opacity: 1 }}
+                                    exit={{ height: 0, opacity: 0 }}
                                     transition={{
-                                      height: { duration: 0.72, ease: [0.22, 1, 0.36, 1] },
-                                      opacity: { duration: 0.2, ease: "easeOut" },
-                                      scaleY: { duration: 0.56, ease: [0.16, 1, 0.3, 1] },
+                                      height: { duration: 0.3, ease: [0.32, 0.72, 0, 1] },
+                                      opacity: { duration: 0.22, ease: "linear" },
                                     }}
                                     className="clyra-composer-expanded-content overflow-hidden"
                                   >
@@ -6955,6 +6972,7 @@ Please analyze the code you just wrote and fix this error.`;
                                 </AnimatePresence>
                               </motion.div>
                             </motion.div>
+                            </div>
                           </motion.div>
                         )}
                       </AnimatePresence>

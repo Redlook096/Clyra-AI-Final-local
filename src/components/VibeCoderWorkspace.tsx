@@ -532,6 +532,11 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
   const [planDraft, setPlanDraft] = useState<VibePlanDraft | null>(null);
   const [isPreparingPlan, setIsPreparingPlan] = useState(false);
   const [isSavingPlan, setIsSavingPlan] = useState(false);
+  // Whether the user explicitly paused the current run from this window.
+  // Any PAUSED runtime state without this flag is an unrequested stall
+  // (tool hand-off, server restart) that polling should resume on its own.
+  const userPausedRef = useRef(false);
+  const autoResumeRef = useRef({ projectId: "", attempts: 0, lastAt: 0 });
 
   const elapsedSinceStart = state.startedAt ? elapsedNow - state.startedAt : 0;
   const planReadyDelayPassed = elapsedSinceStart >= 10000;
@@ -651,6 +656,33 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
           const merged = [...current, ...data.events];
           return Array.from(new Map(merged.map((event) => [event.id, event])).values()).slice(-60);
         });
+        // Self-heal unrequested pauses. The server watcher normally resumes
+        // these, but after a Clyra restart the watcher is gone and polling is
+        // the only supervisor left. Bounded retries so a genuinely stuck run
+        // still surfaces as PAUSED with a manual Resume button.
+        const snapshot = data.snapshot;
+        const tracker = autoResumeRef.current;
+        if (tracker.projectId !== projectId) {
+          autoResumeRef.current = { projectId, attempts: 0, lastAt: 0 };
+        }
+        if (snapshot.state === "RUNNING") {
+          autoResumeRef.current.attempts = 0;
+        } else if (
+          snapshot.state === "PAUSED" &&
+          !userPausedRef.current &&
+          !/by the user/i.test(snapshot.stateReason || "")
+        ) {
+          const now = Date.now();
+          if (autoResumeRef.current.attempts < 3 && now - autoResumeRef.current.lastAt > 15_000) {
+            autoResumeRef.current.attempts += 1;
+            autoResumeRef.current.lastAt = now;
+            void fetch(`/api/vibe/runtime/${encodeURIComponent(projectId)}/control`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ command: "resume" }),
+            }).catch(() => undefined);
+          }
+        }
       } catch {
         // The runtime can still be booting. Preserve the current event view.
       }
@@ -861,6 +893,10 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
       setM1Launching(true);
       setM1Runtime(null);
       setM1RuntimeEvents([]);
+      // A fresh launch always starts running; stale pause intent must not
+      // block the polling loop's auto-resume for the new conversation.
+      userPausedRef.current = false;
+      autoResumeRef.current = { projectId: "", attempts: 0, lastAt: 0 };
       // Do not hand the shell to the iframe until launch has returned a real
       // conversation. A warmup probe can succeed while M1's ingress is still
       // waiting for its agent server, which otherwise produces a white or
@@ -1310,8 +1346,19 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
   if (state.stage !== "idle") {
     return (
       <div className="relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-white">
+        {/* The four workspace surfaces (error, live canvas, runtime panel,
+            preparing) used to hard-swap. Cross-fade them so the shell never
+            pops between states. */}
+        <AnimatePresence mode="wait" initial={false}>
         {m1LaunchError ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
+          <motion.div
+            key="m1-error"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center"
+          >
             <p className="text-[15px] font-semibold text-slate-900">
               Couldn’t start Vibe Coder M1
             </p>
@@ -1341,9 +1388,16 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
                 Retry
               </button>
             </div>
-          </div>
+          </motion.div>
         ) : m1ConversationUrl ? (
-          <div className="h-full min-h-0 w-full overflow-hidden bg-white">
+          <motion.div
+            key="m1-conversation"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="h-full min-h-0 w-full overflow-hidden bg-white"
+          >
             <ElectronWebContentsSurface
               source={m1ConversationUrl}
               title="Vibe Coder M1"
@@ -1358,13 +1412,25 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
                 />
               }
             />
-          </div>
+          </motion.div>
         ) : m1Runtime ? (
+          <motion.div
+            key="m1-runtime"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            className="flex min-h-0 flex-1 flex-col"
+          >
           <M1RuntimePanel
             projectId={m1Runtime.projectId}
             snapshot={m1Runtime}
             events={m1RuntimeEvents}
             onControl={async (command, message) => {
+              // Record pause intent before the request so a poll landing
+              // mid-flight can't auto-resume a pause the user just asked for.
+              if (command === "pause") userPausedRef.current = true;
+              else userPausedRef.current = false;
               const response = await fetch(
                 `/api/vibe/runtime/${encodeURIComponent(m1Runtime.projectId)}/control`,
                 {
@@ -1378,16 +1444,27 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
               if (data.snapshot) setM1Runtime(data.snapshot);
             }}
           />
+          </motion.div>
         ) : (
-          <div className="flex min-h-0 flex-1 items-center justify-center bg-white px-6">
+          <motion.div
+            key="m1-preparing"
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            className="flex min-h-0 flex-1 items-center justify-center bg-white px-6"
+          >
             <div className="w-full max-w-sm text-center">
-              <div className="clyra-thinking-shimmer inline-flex items-center gap-2 text-[13px] font-medium text-slate-500">
-                <Brain className="h-4 w-4" /> Preparing your Vibe workspace
+              <div className="inline-flex items-center gap-2 text-[13px] font-medium text-slate-500">
+                <ShiningBrainIcon />
+                <span className="clyra-thinking-shimmer">Preparing your Vibe workspace</span>
+                <ThinkingDots />
               </div>
               <p className="mt-2 text-[12px] text-slate-400">Connecting the build runtime and restoring its tools.</p>
             </div>
-          </div>
+          </motion.div>
         )}
+        </AnimatePresence>
       </div>
     );
   }
@@ -1584,26 +1661,56 @@ function M1RuntimePanel({
           <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 pb-4">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Clyra agent runtime</p>
-              <h2 className="mt-1 text-[18px] font-semibold text-slate-950">{snapshot.state.replaceAll("_", " ")}</h2>
+              <h2 className="mt-1 flex items-center gap-2 text-[18px] font-semibold text-slate-950">
+                {active ? (
+                  <>
+                    <ShiningBrainIcon />
+                    <span className="clyra-thinking-shimmer">{snapshot.state.replaceAll("_", " ")}</span>
+                    <ThinkingDots />
+                  </>
+                ) : (
+                  snapshot.state.replaceAll("_", " ")
+                )}
+              </h2>
               <p className="mt-1 max-w-2xl text-[13px] leading-5 text-slate-500">{snapshot.stateReason || "Waiting for the next verified runtime event."}</p>
             </div>
             <div className="flex items-center gap-2">
-              {active ? <button type="button" disabled={busy} onClick={() => void run("pause")} className="rounded-full border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">Pause</button> : null}
-              {snapshot.state === "PAUSED" ? <button type="button" disabled={busy} onClick={() => void run("resume")} className="rounded-full bg-slate-950 px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50">Resume</button> : null}
-              {!terminal ? <button type="button" disabled={busy} onClick={() => void run("cancel")} className="rounded-full border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-600 transition hover:border-rose-200 hover:text-rose-600 disabled:opacity-50">Stop</button> : null}
+              {/* Fade controls in/out instead of mounting them abruptly when
+                  the runtime state flips between running and paused. */}
+              <AnimatePresence initial={false} mode="popLayout">
+                {active ? (
+                  <motion.button key="rt-pause" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} transition={{ duration: 0.18, ease: "easeOut" }} type="button" disabled={busy} onClick={() => void run("pause")} className="rounded-full border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">Pause</motion.button>
+                ) : null}
+                {snapshot.state === "PAUSED" ? (
+                  <motion.button key="rt-resume" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} transition={{ duration: 0.18, ease: "easeOut" }} type="button" disabled={busy} onClick={() => void run("resume")} className="rounded-full bg-slate-950 px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50">Resume</motion.button>
+                ) : null}
+                {!terminal ? (
+                  <motion.button key="rt-stop" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} transition={{ duration: 0.18, ease: "easeOut" }} type="button" disabled={busy} onClick={() => void run("cancel")} className="rounded-full border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-600 transition hover:border-rose-200 hover:text-rose-600 disabled:opacity-50">Stop</motion.button>
+                ) : null}
+              </AnimatePresence>
             </div>
           </div>
           <div className="mt-5 space-y-2">
-            {latest.length ? latest.map((event) => (
-              <div key={event.id} className="flex items-start gap-3 rounded-xl px-3 py-2.5 transition hover:bg-slate-50">
-                <span className={cn("mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full", event.status === "failed" ? "bg-rose-500" : event.status === "completed" ? "bg-emerald-500" : "bg-blue-500")} />
-                <div className="min-w-0 flex-1">
-                  <p className="text-[12px] font-semibold text-slate-800">{event.type.replaceAll(".", " · ").replaceAll("_", " ")}</p>
-                  <p className="mt-0.5 truncate text-[11px] text-slate-500">{String(event.payload.summary || event.payload.reason || event.error?.message || "Runtime activity")}</p>
-                </div>
-                <time className="shrink-0 text-[10px] text-slate-400">{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
-              </div>
-            )) : <PreviewSkeletonLayout message="Connecting to the M1 event stream…" />}
+            <AnimatePresence initial={false}>
+              {latest.length ? latest.map((event) => (
+                <motion.div
+                  key={event.id}
+                  layout
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                  className="flex items-start gap-3 rounded-xl px-3 py-2.5 transition hover:bg-slate-50"
+                >
+                  <span className={cn("mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full", event.status === "failed" ? "bg-rose-500" : event.status === "completed" ? "bg-emerald-500" : "bg-blue-500")} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[12px] font-semibold text-slate-800">{event.type.replaceAll(".", " · ").replaceAll("_", " ")}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-slate-500">{String(event.payload.summary || event.payload.reason || event.error?.message || "Runtime activity")}</p>
+                  </div>
+                  <time className="shrink-0 text-[10px] text-slate-400">{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
+                </motion.div>
+              )) : <PreviewSkeletonLayout message="Connecting to the M1 event stream…" />}
+            </AnimatePresence>
           </div>
         </div>
         <aside className="space-y-4">
@@ -1751,6 +1858,16 @@ function AgentActivityRow({ item }: { item: AgentActivityItem }) {
           <div className="flex flex-wrap items-center gap-2">
             {item.type === "file" && item.filePath ? (
               <FileEditActivity item={item} />
+            ) : item.type === "stage" && item.status === "active" ? (
+              // Active agent thoughts use the same treatment as chat thinking:
+              // shimmering brain, shimmering text, trailing dots.
+              <span className="flex min-w-0 items-center gap-2">
+                <ShiningBrainIcon className="shrink-0" />
+                <span className="clyra-thinking-shimmer min-w-0 truncate text-[13px] font-bold tracking-[-0.01em]">
+                  {item.title}
+                </span>
+                <ThinkingDots className="shrink-0" />
+              </span>
             ) : (
               <p className="min-w-0 truncate text-[13px] font-bold tracking-[-0.01em] text-slate-800">
                 {item.title}
@@ -1817,17 +1934,27 @@ function AnimatedDiffCount({ value, tone, active }: { value: number; tone: "add"
 
 function FileEditActivity({ item }: { item: AgentActivityItem }) {
   const active = item.status === "active";
-  const action = /^edited|^editing/i.test(item.title) ? "Editing" : active ? "Generating" : "Updated";
+  const isEdit = /edit/i.test(item.title);
+  const action = active ? (isEdit ? "Editing" : "Generating") : isEdit ? "Edited" : "Created";
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-      <span className="text-[13px] font-bold text-sky-500">{action}</span>
+      {/* While the agent is writing, the whole "Editing <path>" phrase shimmers
+          like the thinking state; once done it settles into static slate text. */}
+      <span className={cn("text-[13px] font-bold", active ? "clyra-thinking-shimmer" : "text-sky-600")}>{action}</span>
       <span className={cn("max-w-[260px] truncate font-mono text-[12px] font-semibold", active ? "clyra-thinking-shimmer" : "text-slate-600")}>
         {item.filePath}
       </span>
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-50 px-2 py-0.5">
+      {active ? <ThinkingDots className="shrink-0" /> : null}
+      <motion.span
+        layout
+        initial={{ opacity: 0, scale: 0.94 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+        className="inline-flex items-center gap-1.5 rounded-full bg-slate-50 px-2 py-0.5"
+      >
         <AnimatedDiffCount value={item.added ?? 0} tone="add" active={active} />
         <AnimatedDiffCount value={item.removed ?? 0} tone="remove" active={active} />
-      </span>
+      </motion.span>
     </div>
   );
 }

@@ -40,6 +40,7 @@ export class OpenHandsAdapter extends EventEmitter {
   private autoContinues = 0;
   private completedEmitted = false;
   private previewStarted = false;
+  private planApprovalWatchdog?: NodeJS.Timeout;
 
   public async startOpenHandsTask(options: OpenHandsTaskOptions) {
     this.options = options;
@@ -158,6 +159,7 @@ export class OpenHandsAdapter extends EventEmitter {
             this.waitingForPlanApproval = true;
             this.mapper?.setWaitingForPlanApproval(true);
             void this.pause();
+            this.armPlanApprovalWatchdog();
           }
           if (vibeEvent.type === "complete") {
             void this.handlePossibleFinish(vibeEvent);
@@ -333,8 +335,32 @@ export class OpenHandsAdapter extends EventEmitter {
     });
   }
 
+  // The Clyra workspace can run with its plan-review surface disabled, in
+  // which case nothing will ever call approvePlan and the run would stall in
+  // the approval pause forever. Self-approve after a bounded review window so
+  // every task still runs to completion. Set CLYRA_PLAN_APPROVAL_TIMEOUT_MS=0
+  // to disable when a real approval UI is guaranteed to be present.
+  private armPlanApprovalWatchdog() {
+    const timeoutMs = Number(process.env.CLYRA_PLAN_APPROVAL_TIMEOUT_MS ?? 120_000);
+    if (!(timeoutMs > 0)) return;
+    if (this.planApprovalWatchdog) clearTimeout(this.planApprovalWatchdog);
+    this.planApprovalWatchdog = setTimeout(() => {
+      if (!this.waitingForPlanApproval || this.cancelled) return;
+      this.emitEvent({
+        type: "status_update",
+        message: "No plan review received — continuing with the generated plan.",
+      });
+      void this.approvePlan();
+    }, timeoutMs);
+    this.planApprovalWatchdog.unref?.();
+  }
+
   public async approvePlan() {
     if (!this.client || !this.conversationId || !this.options) return;
+    if (this.planApprovalWatchdog) {
+      clearTimeout(this.planApprovalWatchdog);
+      this.planApprovalWatchdog = undefined;
+    }
     this.waitingForPlanApproval = false;
     this.mapper?.setWaitingForPlanApproval(false);
     this.paused = false;
@@ -370,6 +396,10 @@ export class OpenHandsAdapter extends EventEmitter {
 
   public async cancel() {
     this.cancelled = true;
+    if (this.planApprovalWatchdog) {
+      clearTimeout(this.planApprovalWatchdog);
+      this.planApprovalWatchdog = undefined;
+    }
     try {
       if (this.client && this.conversationId) {
         await this.client.interruptConversation(this.conversationId);

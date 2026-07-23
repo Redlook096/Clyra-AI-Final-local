@@ -4748,15 +4748,17 @@ body,
 }
 .clyra-chat-page .clyra-composer-welcome:has(.clyra-composer-expanded) { bottom: 0; }
 
+/* One shared 280ms curve for every geometry property so the surface grows as
+   a single piece — nothing lags behind the expanding shelf. */
 .clyra-chat-page .input-wrapper:not(.loading) {
   transform-origin: top center;
   will-change: border-radius, padding, box-shadow;
   transition:
     border-color 240ms ease,
-    box-shadow 420ms cubic-bezier(.16, 1, .3, 1),
-    border-radius 720ms cubic-bezier(.16, 1, .3, 1),
-    min-height 720ms cubic-bezier(.16, 1, .3, 1),
-    padding 720ms cubic-bezier(.16, 1, .3, 1) !important;
+    box-shadow 280ms cubic-bezier(.32, .72, 0, 1),
+    border-radius 280ms cubic-bezier(.32, .72, 0, 1),
+    min-height 280ms cubic-bezier(.32, .72, 0, 1),
+    padding 280ms cubic-bezier(.32, .72, 0, 1) !important;
 }
 
 .clyra-chat-page .input-wrapper.clyra-composer-expanded {
@@ -5281,8 +5283,7 @@ body,
 /* The top and side edges are static. Only the lower control shelf is revealed,
    which makes expand/collapse feel like the bottom border is travelling. */
 .clyra-chat-page .clyra-composer-expanded-content {
-  transform-origin: top center;
-  will-change: height, transform, opacity;
+  will-change: height, opacity;
 }
 
 /* Assistant controls must never leak through a held thinking state. */
@@ -5439,11 +5440,6 @@ body,
 .clyra-chat-page .clyra-workspace-card[data-workspace-motion] > .text-center:has(.clyra-chat-quick-actions) {
   position: relative;
   top: -42px;
-}
-
-.clyra-chat-page .clyra-composer-welcome--expanded {
-  /* Matches the lower shelf height, keeping the visible text field top still. */
-  padding-bottom: 5px;
 }
 
 .clyra-clip-source-preview__frame {

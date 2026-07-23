@@ -57,6 +57,22 @@ type M1RuntimeControl = {
 
 const activeM1Runtimes = new Map<string, M1RuntimeControl>();
 
+// Projects whose runs the user explicitly paused via the control endpoint.
+// The conversation watcher must never auto-resume these — only unrequested
+// pauses (tool/browser hand-offs, agent-server interruptions) are recovered.
+const userPausedProjects = new Set<string>();
+
+// How many unrequested pauses the watcher may transparently resume in one
+// run. Generous because a long deep build can hand off to the browser tool
+// several times; bounded so a genuinely wedged conversation still surfaces
+// as PAUSED instead of looping forever.
+const MAX_AUTO_RESUMES_PER_RUN = 8;
+
+// Conversations that already have a watcher/event bridge in this process.
+// Reopening a project must not stack duplicate supervisors that would
+// double-resume or double-validate the same conversation.
+const supervisedConversations = new Set<string>();
+
 async function workspaceHasGeneratedFiles(workspacePath: string) {
   try {
     const entries = await fs.readdir(workspacePath);
@@ -295,7 +311,12 @@ function watchM1Conversation(options: {
 }) {
   let validationStarted = false;
   let attempts = 0;
+  let autoResumes = 0;
   const maxAttempts = 360; // 90 minutes at the 15 second interval below.
+
+  // Release the dedupe slot when this watcher stops so a later reopen can
+  // attach a fresh supervisor to the same conversation.
+  const stopSupervising = () => supervisedConversations.delete(options.conversationId);
 
   const poll = async () => {
     attempts += 1;
@@ -306,6 +327,7 @@ function watchM1Conversation(options: {
           currentSnapshot.state,
         )
       ) {
+        stopSupervising();
         return;
       }
       const conversation = await options.client.getConversation<{
@@ -316,27 +338,63 @@ function watchM1Conversation(options: {
       if (["error", "failed"].includes(executionStatus)) {
         await options.store.transition("FAILED", "M1 reported a failed conversation.", { code: "m1_failed", message: executionStatus, recoverable: true });
         await options.writeMeta({ status: "Failed", lastBuildStatus: "failed", lastReviewStatus: "failed", agentExecutionStatus: executionStatus });
+        stopSupervising();
         return;
       }
       if (["cancelled"].includes(executionStatus)) {
         await options.store.transition("CANCELLED", "M1 conversation was cancelled.");
         await options.writeMeta({ status: "Failed", lastBuildStatus: "cancelled", lastReviewStatus: "not_started", agentExecutionStatus: executionStatus });
+        stopSupervising();
         return;
       }
       if (["stopped", "paused"].includes(executionStatus)) {
         const snapshot = await options.store.getSnapshot();
-        // A browser/tool hand-off can pause an M1 conversation after it has
-        // already written the project. Validate that work instead of leaving
-        // the user at a dead end. An explicit Clyra pause has already put the
-        // runtime store in PAUSED, so it remains fully under user control.
-        if (
+        // Only an explicit pause from the control endpoint is honoured as a
+        // user decision. Every other pause here is a side effect (browser or
+        // tool hand-off, agent-server interruption) and must not strand the
+        // task: the watcher resumes it so the run finishes on its own.
+        const pausedByUser =
+          userPausedProjects.has(options.projectId) ||
+          (snapshot.state === "PAUSED" && /by the user/i.test(snapshot.stateReason || ""));
+        if (pausedByUser) {
+          // Keep polling (no return) so a later user resume is observed and
+          // the run still reaches validation and a terminal state.
+          await options.writeMeta({ status: "Building", lastBuildStatus: "paused", lastReviewStatus: "pending", agentExecutionStatus: executionStatus });
+        } else if (autoResumes < MAX_AUTO_RESUMES_PER_RUN) {
+          // Unrequested pause: the hand-off is over (the conversation reports
+          // paused/stopped, not running), so resume the agent immediately.
+          autoResumes += 1;
+          try {
+            await options.client.runConversation(options.conversationId);
+            await options.store.append({
+              type: "task.resumed",
+              harness: "clyra",
+              status: "completed",
+              payload: { autoResume: true, attempt: autoResumes, executionStatus },
+            });
+            if (snapshot.state !== "RUNNING") {
+              await options.store.transition("RUNNING", "Auto-resumed after an unrequested pause (tool hand-off).");
+            }
+            await options.writeMeta({ status: "Building", lastBuildStatus: "building", lastReviewStatus: "pending", agentExecutionStatus: "running" });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            // "Already running" means the pause was a transient status blip.
+            if (!/409|already running/i.test(message)) {
+              console.warn(`[m1-launch] auto-resume failed for ${options.conversationId}:`, message);
+            }
+          }
+        } else if (
           !validationStarted &&
-          snapshot.state !== "PAUSED" &&
           (await workspaceHasGeneratedFiles(options.workspacePath))
         ) {
+          // Auto-resume budget exhausted with real work on disk: validate the
+          // saved project instead of leaving the user at a dead end.
           validationStarted = true;
           const terminal = await validateM1Completion(options);
-          if (terminal) return;
+          if (terminal) {
+            stopSupervising();
+            return;
+          }
           validationStarted = false;
           const repaired = await options.store.getSnapshot();
           await options.writeMeta({
@@ -348,12 +406,14 @@ function watchM1Conversation(options: {
           const timer = setTimeout(poll, 1_500);
           timer.unref();
           return;
+        } else {
+          if (snapshot.state !== "PAUSED") {
+            await options.store.transition("PAUSED", "M1 conversation is paused.");
+          }
+          // Keep polling so the run recovers as soon as the user resumes it.
+          await options.writeMeta({ status: "Building", lastBuildStatus: "paused", lastReviewStatus: "pending", agentExecutionStatus: executionStatus });
         }
-        await options.store.transition("PAUSED", "M1 conversation is paused.");
-        await options.writeMeta({ status: "Building", lastBuildStatus: "paused", lastReviewStatus: "pending", agentExecutionStatus: executionStatus });
-        return;
-      }
-      if (["finished", "completed", "idle"].includes(executionStatus) && !validationStarted) {
+      } else if (["finished", "completed", "idle"].includes(executionStatus) && !validationStarted) {
         validationStarted = true;
         const terminal = await validateM1Completion(options);
         const snapshot = await options.store.getSnapshot();
@@ -364,7 +424,10 @@ function watchM1Conversation(options: {
           agentExecutionStatus: executionStatus,
           runtimeState: snapshot.state,
         });
-        if (terminal) return;
+        if (terminal) {
+          stopSupervising();
+          return;
+        }
         validationStarted = false;
       } else {
         const snapshot = await options.store.getSnapshot();
@@ -375,6 +438,7 @@ function watchM1Conversation(options: {
       }
       if (attempts >= maxAttempts) {
         await options.store.transition("INCOMPLETE", "The runtime reached its configured observation limit.", { code: "runtime_timeout", message: "M1 did not reach a verified terminal state within 90 minutes.", recoverable: true });
+        stopSupervising();
         return;
       }
     } catch (error) {
@@ -382,7 +446,10 @@ function watchM1Conversation(options: {
         `[m1-launch] unable to reconcile conversation ${options.conversationId}:`,
         error instanceof Error ? error.message : error,
       );
-      if (attempts >= maxAttempts) return;
+      if (attempts >= maxAttempts) {
+        stopSupervising();
+        return;
+      }
     }
     const timer = setTimeout(poll, 15_000);
     timer.unref();
@@ -412,6 +479,10 @@ export async function launchM1Conversation(options: {
     : requested && requested !== "project-advanced-vibe"
       ? safeProjectId(requested)
       : `${slugify(requestedPrompt || "clyra-vibe-project")}-${randomUUID().slice(0, 6)}`;
+
+  // A fresh launch/reopen starts a live turn; any stale pause intent from a
+  // previous session must not suppress the watcher's auto-resume.
+  userPausedProjects.delete(projectId);
 
   const workspacePath = path.resolve(
     clyraDataPath("projects"),
@@ -543,6 +614,14 @@ export async function launchM1Conversation(options: {
       await runtime.setConversation(existing.id);
       await runtime.append({ type: "thread.restored", harness: "m1", status: "completed", payload: { conversationId: existing.id } });
       activeM1Runtimes.set(projectId, { client, conversationId: existing.id, store: runtime, workspacePath });
+      // A reopened conversation needs the same supervision as a new one.
+      // Without a watcher, a tool hand-off pause after reopen becomes a
+      // permanent dead end (nothing auto-resumes or validates the run).
+      if (!supervisedConversations.has(existing.id)) {
+        supervisedConversations.add(existing.id);
+        bridgeM1Events({ agentUrl: stack.agentUrl, apiKey: stack.apiKey, projectId, client, conversationId: existing.id, store: runtime, workspacePath: agentWorkspacePath });
+        watchM1Conversation({ client, conversationId: existing.id, projectId, prompt: promptForAgent, workspacePath, store: runtime, writeMeta });
+      }
       return {
         projectId,
         workspacePath,
@@ -586,6 +665,13 @@ export async function launchM1Conversation(options: {
         await runtime.setConversation(match.id);
         await runtime.append({ type: "thread.restored", harness: "m1", status: "completed", payload: { conversationId: match.id } });
         activeM1Runtimes.set(projectId, { client, conversationId: match.id, store: runtime, workspacePath });
+        // See the stored-conversation resume path above: reopened runs must
+        // stay supervised so unrequested pauses are auto-resumed.
+        if (!supervisedConversations.has(match.id)) {
+          supervisedConversations.add(match.id);
+          bridgeM1Events({ agentUrl: stack.agentUrl, apiKey: stack.apiKey, projectId, client, conversationId: match.id, store: runtime, workspacePath: agentWorkspacePath });
+          watchM1Conversation({ client, conversationId: match.id, projectId, prompt: promptForAgent, workspacePath, store: runtime, writeMeta });
+        }
         return {
           projectId,
           workspacePath,
@@ -652,6 +738,7 @@ export async function launchM1Conversation(options: {
     });
   }
   activeM1Runtimes.set(projectId, { client, conversationId: conversation.id, store: runtime, workspacePath });
+  supervisedConversations.add(conversation.id);
   bridgeM1Events({ agentUrl: stack.agentUrl, apiKey: stack.apiKey, projectId, client, conversationId: conversation.id, store: runtime, workspacePath: agentWorkspacePath });
   watchM1Conversation({
     client,
@@ -694,21 +781,30 @@ export async function getM1RuntimeEvents(projectId: string, afterSequence = 0) {
 }
 
 export async function controlM1Runtime(projectId: string, command: "pause" | "resume" | "cancel" | "steer", message?: string) {
-  const runtime = activeM1Runtimes.get(safeProjectId(projectId));
+  const safeId = safeProjectId(projectId);
+  const runtime = activeM1Runtimes.get(safeId);
   if (!runtime) throw new Error("The M1 runtime is not active in this Clyra process. Reopen the project to restore it.");
   if (command === "pause") {
+    // Record the user's intent so the conversation watcher never treats this
+    // pause as a tool hand-off and auto-resumes it behind their back.
+    userPausedProjects.add(safeId);
     await runtime.client.interruptConversation(runtime.conversationId);
     await runtime.store.transition("PAUSED", "Paused by the user.");
   } else if (command === "resume") {
+    userPausedProjects.delete(safeId);
     await runtime.client.runConversation(runtime.conversationId);
     await runtime.store.transition("RUNNING", "Resumed by the user.");
     await runtime.store.append({ type: "task.resumed", harness: "m1", status: "completed", payload: {} });
   } else if (command === "cancel") {
+    userPausedProjects.delete(safeId);
     await runtime.client.interruptConversation(runtime.conversationId);
     await runtime.store.transition("CANCELLED", "Cancelled by the user.");
   } else {
     const instruction = message?.trim();
     if (!instruction) throw new Error("A steering message is required.");
+    // A steer with { run: true } restarts the conversation, so the explicit
+    // pause no longer applies.
+    userPausedProjects.delete(safeId);
     await runtime.client.sendEvent(runtime.conversationId, { role: "user", content: [{ type: "text", text: instruction }] }, { run: true });
     await runtime.store.append({ type: "turn.steered", harness: "m1", status: "completed", payload: { message: instruction.slice(0, 2_000) } });
     const snapshot = await runtime.store.getSnapshot();

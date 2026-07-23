@@ -118,11 +118,14 @@ export function registerClineRoutes(app: import("express").Application) {
             continueExisting: !!continueExisting,
           }),
           new Promise<never>((_, reject) => {
-            // A warmed stack responds promptly, but the first local M1 launch
-            // can spend close to a minute installing and starting uvx. Match
-            // the stack's cold-start window so the user sees one continuous
-            // workspace transition rather than a false error after 20 seconds.
-            timeout = setTimeout(() => reject(new Error("Vibe Coder is still starting. Please try again in a moment.")), 100_000);
+            // A warmed stack responds promptly, but a cold launch first waits
+            // for ensureM1Stack (CLYRA_M1_START_TIMEOUT_MS, default 90s) and
+            // then still has to create the LLM conversation. Derive this race
+            // from the same knob plus headroom so raising the stack timeout
+            // can never make this route kill a healthy launch.
+            const stackStartupTimeout = Math.max(30_000, Number(process.env.CLYRA_M1_START_TIMEOUT_MS || 90_000));
+            const launchTimeout = stackStartupTimeout + 30_000;
+            timeout = setTimeout(() => reject(new Error("Vibe Coder is still starting. Please try again in a moment.")), launchTimeout);
           }),
         ]);
         res.json(result);
