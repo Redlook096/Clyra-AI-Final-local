@@ -69,6 +69,24 @@ edit_plan = module.build_edit_plan([
 shots = module.detect_shot_boundaries("/tmp/does-not-exist.mp4")
 clamped = module.clamp_candidate_duration({"start": 100.0, "end": 250.0, "transcript": "x"}, 30, 1000)
 
+import clipper_face_tracking as face
+face_cfg = face.face_tracking_config({"face_tracking": {"mode": "smooth", "allowZoom": True}})
+face_off = face.face_tracking_config({"face_tracking_mode": "off"})
+caps = face.capability_report()
+fixed = face.track_faces_and_build_crops(
+    "ffmpeg",
+    "/tmp/does-not-exist.mp4",
+    0.0,
+    2.0,
+    720,
+    1280,
+    mode="off",
+    crop_focus="center",
+)
+crop_filter = face.build_crop_filter(720, 1280, keyframes=None, crop_focus="center")
+alpha_smooth = face.smoothing_alpha("smooth")
+alpha_fast = face.smoothing_alpha("responsive")
+
 print(json.dumps({
     "candidates": candidates,
     "shortDuration": module.parse_duration(2),
@@ -87,6 +105,13 @@ print(json.dumps({
     "clamped": clamped,
     "endsConnective": module.ends_on_connective("We tried because"),
     "endsClean": module.ends_on_connective("This is the payoff!"),
+    "faceCfg": face_cfg,
+    "faceOff": face_off,
+    "faceCaps": caps,
+    "faceFixed": fixed,
+    "cropFilter": crop_filter,
+    "alphaSmooth": alpha_smooth,
+    "alphaFast": alpha_fast,
 }))
 `;
 
@@ -113,11 +138,18 @@ const payload = JSON.parse(output.trim()) as {
   scored: { score: number; reason: string };
   scoredBad: { score: number; reason: string };
   deduped: Array<{ id: string }>;
-  editPlan: { clips: Array<{ score: number }>; shotBoundaries: unknown[] };
+  editPlan: { clips: Array<{ score: number; faceTracking?: { mode?: string } }>; shotBoundaries: unknown[]; version?: number };
   shots: unknown[];
   clamped: { start: number; end: number; duration_clamped?: boolean };
   endsConnective: boolean;
   endsClean: boolean;
+  faceCfg: { enabled: boolean; mode: string };
+  faceOff: { enabled: boolean; mode: string };
+  faceCaps: { mediapipeTasks: boolean; fallback: string | null };
+  faceFixed: { faceTracking: { mode: string }; cropKeyframes: Array<{ width: number; height: number }> };
+  cropFilter: string;
+  alphaSmooth: number;
+  alphaFast: number;
 };
 
 assert.equal(payload.candidates.length, 5, "returns requested candidate count");
@@ -185,6 +217,18 @@ assert.deepEqual(
 );
 assert.equal(payload.editPlan.clips.length, 1, "edit plan includes ranked clips");
 assert.equal(payload.editPlan.clips[0].score, 88, "edit plan preserves clip potential score");
+assert.equal(payload.editPlan.version, 2, "edit plan is v2 with face tracking fields");
+assert.equal(payload.editPlan.clips[0].faceTracking?.mode, "smooth", "edit plan defaults talking-head face tracking to smooth");
 assert.deepEqual(payload.shots, [], "missing PySceneDetect / video soft-fails to empty shot list");
 
-console.log("AI Clip unit tests passed (60 assertions)");
+assert.equal(payload.faceCfg.mode, "smooth", "face tracking config defaults to smooth");
+assert.equal(payload.faceCfg.enabled, true, "smooth mode enables tracking");
+assert.equal(payload.faceOff.mode, "off", "off mode is normalised");
+assert.equal(payload.faceOff.enabled, false, "off mode disables tracking");
+assert.equal(payload.faceFixed.faceTracking.mode, "off", "off tracking returns fixed crop plan");
+assert.equal(payload.faceFixed.cropKeyframes[0].width, 720, "fixed crop matches output width");
+assert(payload.cropFilter.includes("crop=720:1280"), "default crop filter covers vertical frame");
+assert(payload.alphaSmooth < payload.alphaFast, "smooth mode uses stronger smoothing than responsive");
+assert.equal(typeof payload.faceCaps.mediapipeTasks, "boolean", "capability report exposes MediaPipe Tasks flag");
+
+console.log("AI Clip unit tests passed (face-tracking + selection assertions)");

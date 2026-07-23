@@ -126,6 +126,10 @@
         "to": "clipper-pipeline.py"
       },
       {
+        "from": "clipper_face_tracking.py",
+        "to": "clipper_face_tracking.py"
+      },
+      {
         "from": "package-lock.json",
         "to": "package-lock.json"
       }
