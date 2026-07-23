@@ -34,6 +34,7 @@ export type ClyraDesktopBridge = {
     setState: (payload: unknown) => Promise<any>;
     serviceUrl: () => Promise<string>;
     insert: (payload: { text: string; target?: unknown }) => Promise<any>;
+    ensurePermissions?: () => Promise<{ ok: boolean; status?: string; error?: string; microphone?: string; accessibility?: boolean }>;
     onTrigger: (callback: (payload: any) => void) => () => void;
     onAction: (callback: (payload: any) => void) => () => void;
   };

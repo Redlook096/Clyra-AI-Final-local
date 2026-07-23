@@ -180,7 +180,7 @@ function GeneratingCard({ label }: { label: string }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
       <div className="mb-4 flex items-center gap-2">
-        <Sparkles className="h-4 w-4 text-sky-500" />
+        <Sparkles className="h-4 w-4 text-slate-500" />
         <ShiningText text={label} className="text-[14px]" />
       </div>
       <SkeletonLines rows={4} />
@@ -202,7 +202,7 @@ function EmptyState({
   return (
     <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-8 py-14 text-center">
       <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white shadow-[0_1px_3px_rgba(15,23,42,0.08)]">
-        <Icon className="h-5 w-5 text-sky-500" />
+        <Icon className="h-5 w-5 text-slate-500" />
       </div>
       <div>
         <p className="text-[14px] font-semibold text-slate-800">{title}</p>
@@ -248,7 +248,7 @@ function CitationChips({ citations }: { citations: string[] }) {
       {citations.map((citation, index) => (
         <span
           key={`${citation}-${index}`}
-          className="inline-flex max-w-[260px] items-center gap-1 truncate rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[11px] font-medium text-sky-700"
+          className="inline-flex max-w-[260px] items-center gap-1 truncate rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-700"
           title={citation}
         >
           <Link2 className="h-3 w-3 shrink-0" />
@@ -333,6 +333,105 @@ function SourcesPanel({
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+      {sources.length === 0 ? (
+        <div className="flex min-h-[min(68vh,640px)] flex-col items-center justify-center px-2 py-8 text-center">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Study Pal</p>
+          <h2 className="mt-3 max-w-xl text-[clamp(28px,5vw,40px)] font-semibold tracking-[-0.03em] text-slate-950">
+            What do you want to study?
+          </h2>
+          <p className="mt-3 max-w-md text-[14px] leading-relaxed text-slate-500">
+            Dump in a URL, notes, or pasted text — Clyra sorts it into sources you can chat with, quiz, and review.
+          </p>
+
+          <AnimatePresence>{error && <div className="mt-5 w-full max-w-xl text-left"><ErrorBanner message={error} onDismiss={() => setError("")} /></div>}</AnimatePresence>
+
+          <div className="mt-8 w-full max-w-xl">
+            <div className="flex items-center gap-2 rounded-[22px] border border-slate-200 bg-white px-4 py-2.5 shadow-[0_12px_40px_rgba(15,23,42,0.06)] focus-within:border-slate-400 focus-within:shadow-[0_0_0_3px_rgba(148,163,184,0.2),0_12px_40px_rgba(15,23,42,0.08)]">
+              <Link2 className="h-4 w-4 shrink-0 text-slate-400" />
+              <input
+                value={url}
+                onChange={(event) => setUrl(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void importUrl();
+                }}
+                placeholder="Paste an article, docs, or lecture URL…"
+                className="w-full bg-transparent text-[14px] text-slate-800 outline-none placeholder:text-slate-400"
+                disabled={fetching}
+              />
+              <PrimaryButton onClick={() => void importUrl()} disabled={!url.trim() || fetching} className="shrink-0 px-5">
+                {fetching ? "Importing…" : "Add"}
+              </PrimaryButton>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 py-2 text-[13px] font-medium text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
+              >
+                <Upload className="h-3.5 w-3.5" /> Upload file
+              </button>
+              <button
+                type="button"
+                onClick={() => setPasteOpen((open) => !open)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full border px-4 py-2 text-[13px] font-medium transition-colors",
+                  pasteOpen
+                    ? "border-slate-900 bg-slate-900 text-white"
+                    : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900",
+                )}
+              >
+                <FilePlus2 className="h-3.5 w-3.5" /> Paste text
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".txt,.md,.markdown,text/plain,text/markdown"
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                  importFiles(event.target.files);
+                  event.target.value = "";
+                }}
+              />
+            </div>
+
+            <AnimatePresence initial={false}>
+              {pasteOpen && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="overflow-hidden"
+                >
+                  <div className="mt-4 space-y-2 rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
+                    <input
+                      value={pasteTitle}
+                      onChange={(event) => setPasteTitle(event.target.value)}
+                      placeholder="Title (optional)"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[13px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-400 focus:bg-white"
+                    />
+                    <textarea
+                      value={pasteBody}
+                      onChange={(event) => setPasteBody(event.target.value)}
+                      placeholder="Paste study material here…"
+                      rows={5}
+                      className="w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[13px] leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-400 focus:bg-white"
+                    />
+                    <div className="flex justify-end">
+                      <PrimaryButton onClick={addPasted} disabled={!pasteBody.trim()}>
+                        <Plus className="h-3.5 w-3.5" /> Add source
+                      </PrimaryButton>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+      ) : (
+        <>
       <div>
         <h2 className="text-[17px] font-semibold text-slate-900">Sources</h2>
         <p className="mt-0.5 text-[13px] text-slate-500">
@@ -344,7 +443,7 @@ function SourcesPanel({
 
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
         <div className="flex items-center gap-2">
-          <div className="flex flex-1 items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-4 py-2 focus-within:border-sky-300 focus-within:bg-white">
+          <div className="flex flex-1 items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-4 py-2 focus-within:border-slate-400 focus-within:bg-white">
             <Link2 className="h-4 w-4 shrink-0 text-slate-400" />
             <input
               value={url}
@@ -366,7 +465,7 @@ function SourcesPanel({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-[12.5px] font-medium text-slate-600 transition-colors hover:border-sky-200 hover:bg-sky-50 hover:text-sky-700"
+            className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-[12.5px] font-medium text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800"
           >
             <Upload className="h-3.5 w-3.5" /> Upload .txt / .md
           </button>
@@ -376,8 +475,8 @@ function SourcesPanel({
             className={cn(
               "inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-[12.5px] font-medium transition-colors",
               pasteOpen
-                ? "border-sky-300 bg-sky-50 text-sky-700"
-                : "border-slate-200 bg-white text-slate-600 hover:border-sky-200 hover:bg-sky-50 hover:text-sky-700",
+                ? "border-slate-900 bg-slate-900 text-white"
+                : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800",
             )}
           >
             <FilePlus2 className="h-3.5 w-3.5" /> Paste text
@@ -409,14 +508,14 @@ function SourcesPanel({
                   value={pasteTitle}
                   onChange={(event) => setPasteTitle(event.target.value)}
                   placeholder="Title (optional)"
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-sky-300"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-400"
                 />
                 <textarea
                   value={pasteBody}
                   onChange={(event) => setPasteBody(event.target.value)}
                   placeholder="Paste study material here…"
                   rows={5}
-                  className="w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:border-sky-300"
+                  className="w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-400"
                 />
                 <div className="flex justify-end">
                   <PrimaryButton onClick={addPasted} disabled={!pasteBody.trim()}>
@@ -429,13 +528,6 @@ function SourcesPanel({
         </AnimatePresence>
       </div>
 
-      {sources.length === 0 ? (
-        <EmptyState
-          icon={BookOpen}
-          title="No sources yet"
-          description="Import a URL, upload a text file, or paste notes to start building your study workspace."
-        />
-      ) : (
         <div className="space-y-2">
           <AnimatePresence initial={false}>
             {sources.map((source, index) => (
@@ -458,8 +550,8 @@ function SourcesPanel({
                   className={cn(
                     "flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-colors",
                     source.selected
-                      ? "border-sky-500 bg-sky-500 text-white"
-                      : "border-slate-300 bg-white text-transparent hover:border-sky-300",
+                      ? "border-slate-900 bg-slate-900 text-white"
+                      : "border-slate-300 bg-white text-transparent hover:border-slate-400",
                   )}
                 >
                   <Check className="h-3.5 w-3.5" strokeWidth={3} />
@@ -485,6 +577,7 @@ function SourcesPanel({
             ))}
           </AnimatePresence>
         </div>
+        </>
       )}
     </div>
   );
@@ -619,7 +712,7 @@ function ChatPanel({
 
       <div className="shrink-0 pt-2">
         <AnimatePresence>{error && <ErrorBanner message={error} onDismiss={() => setError("")} />}</AnimatePresence>
-        <div className="mt-2 flex items-center gap-2 rounded-full border border-slate-200 bg-white py-1.5 pl-5 pr-1.5 shadow-[0_2px_10px_rgba(15,23,42,0.06)] focus-within:border-sky-300">
+        <div className="mt-2 flex items-center gap-2 rounded-full border border-slate-200 bg-white py-1.5 pl-5 pr-1.5 shadow-[0_2px_10px_rgba(15,23,42,0.06)] focus-within:border-slate-300">
           <input
             value={input}
             onChange={(event) => setInput(event.target.value)}
@@ -637,7 +730,7 @@ function ChatPanel({
             type="button"
             onClick={() => void send()}
             disabled={!input.trim() || thinking || !selectedSources.length}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-500 text-white transition-all hover:bg-sky-600 disabled:opacity-30"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-900 text-white transition-all hover:bg-slate-800 disabled:opacity-30"
             aria-label="Send"
           >
             <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
@@ -714,7 +807,7 @@ function QuizPanel({ sources }: { sources: StudySource[] }) {
               if (event.key === "Enter") void generate();
             }}
             placeholder="Topic — e.g. Photosynthesis, The French Revolution…"
-            className="w-full rounded-full border border-slate-200 bg-slate-50 px-4 py-2.5 text-[13.5px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-sky-300 focus:bg-white"
+            className="w-full rounded-full border border-slate-200 bg-slate-50 px-4 py-2.5 text-[13.5px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-300 focus:bg-white"
           />
           <div className="flex flex-wrap items-center gap-4">
             <label className="flex items-center gap-2 text-[13px] text-slate-600">
@@ -722,7 +815,7 @@ function QuizPanel({ sources }: { sources: StudySource[] }) {
               <select
                 value={count}
                 onChange={(event) => setCount(Number(event.target.value))}
-                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[13px] text-slate-800 outline-none focus:border-sky-300"
+                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[13px] text-slate-800 outline-none focus:border-slate-300"
               >
                 {[4, 6, 8, 10, 12].map((value) => (
                   <option key={value} value={value}>
@@ -739,7 +832,7 @@ function QuizPanel({ sources }: { sources: StudySource[] }) {
                 onClick={() => setUseSources((value) => !value)}
                 className={cn(
                   "relative h-5 w-9 rounded-full transition-colors",
-                  useSources && selectedSources.length ? "bg-sky-500" : "bg-slate-200",
+                  useSources && selectedSources.length ? "bg-slate-500" : "bg-slate-200",
                 )}
               >
                 <span
@@ -776,7 +869,7 @@ function QuizPanel({ sources }: { sources: StudySource[] }) {
           animate={{ opacity: 1, scale: 1 }}
           className="rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-[0_1px_3px_rgba(15,23,42,0.05)]"
         >
-          <p className="text-[12px] font-semibold uppercase tracking-wide text-sky-600">{quiz.topic}</p>
+          <p className="text-[12px] font-semibold uppercase tracking-wide text-slate-600">{quiz.topic}</p>
           <p className="mt-2 text-4xl font-bold text-slate-900">
             {correctCount}
             <span className="text-xl font-semibold text-slate-400"> / {total}</span>
@@ -789,7 +882,7 @@ function QuizPanel({ sources }: { sources: StudySource[] }) {
               initial={{ width: 0 }}
               animate={{ width: `${pct}%` }}
               transition={{ duration: 0.6, ease: "easeOut" }}
-              className={cn("h-full rounded-full", pct >= 80 ? "bg-emerald-500" : pct >= 50 ? "bg-sky-500" : "bg-amber-500")}
+              className={cn("h-full rounded-full", pct >= 80 ? "bg-emerald-500" : pct >= 50 ? "bg-slate-500" : "bg-amber-500")}
             />
           </div>
           <div className="mt-5 flex justify-center gap-2">
@@ -850,7 +943,7 @@ function QuizPanel({ sources }: { sources: StudySource[] }) {
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-4">
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-[12px] font-semibold uppercase tracking-wide text-sky-600">{quiz.topic}</p>
+          <p className="text-[12px] font-semibold uppercase tracking-wide text-slate-600">{quiz.topic}</p>
           <p className="text-[13px] text-slate-500">
             Question {quiz.current + 1} of {quiz.questions.length}
           </p>
@@ -868,7 +961,7 @@ function QuizPanel({ sources }: { sources: StudySource[] }) {
         <motion.div
           animate={{ width: `${((quiz.current + (answered ? 1 : 0)) / quiz.questions.length) * 100}%` }}
           transition={{ duration: 0.35, ease: "easeOut" }}
-          className="h-full rounded-full bg-sky-500"
+          className="h-full rounded-full bg-slate-800"
         />
       </div>
 
@@ -905,7 +998,7 @@ function QuizPanel({ sources }: { sources: StudySource[] }) {
                         ? "border-red-300 bg-red-50 text-red-700"
                         : answered
                           ? "border-slate-100 bg-slate-50/50 text-slate-400"
-                          : "border-slate-200 bg-white text-slate-700 hover:border-sky-300 hover:bg-sky-50/50",
+                          : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50/50",
                   )}
                 >
                   <span
@@ -1114,7 +1207,7 @@ function FlashcardsPanel({
               className="absolute inset-0 flex flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-[0_8px_30px_rgba(15,23,42,0.08)]"
             >
               {card.tag && (
-                <span className="mb-3 rounded-full bg-sky-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-sky-600">
+                <span className="mb-3 rounded-full bg-slate-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
                   {card.tag}
                 </span>
               )}
@@ -1123,7 +1216,7 @@ function FlashcardsPanel({
             </div>
             <div
               style={{ backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}
-              className="absolute inset-0 flex flex-col items-center justify-center rounded-2xl border border-sky-200 bg-sky-50/70 p-8 text-center shadow-[0_8px_30px_rgba(15,23,42,0.08)]"
+              className="absolute inset-0 flex flex-col items-center justify-center rounded-2xl border border-slate-200 bg-slate-50/70 p-8 text-center shadow-[0_8px_30px_rgba(15,23,42,0.08)]"
             >
               <p className="text-[15px] leading-relaxed text-slate-800">{card.back}</p>
             </div>
@@ -1228,7 +1321,7 @@ function FlashcardsPanel({
             if (event.key === "Enter") void generate();
           }}
           placeholder="Deck topic — e.g. Cell biology key terms…"
-          className="w-full rounded-full border border-slate-200 bg-slate-50 px-4 py-2.5 text-[13.5px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-sky-300 focus:bg-white"
+          className="w-full rounded-full border border-slate-200 bg-slate-50 px-4 py-2.5 text-[13.5px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-300 focus:bg-white"
         />
         <div className="flex flex-wrap items-center gap-4">
           <label className="flex items-center gap-2 text-[13px] text-slate-600">
@@ -1236,7 +1329,7 @@ function FlashcardsPanel({
             <select
               value={count}
               onChange={(event) => setCount(Number(event.target.value))}
-              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[13px] text-slate-800 outline-none focus:border-sky-300"
+              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[13px] text-slate-800 outline-none focus:border-slate-300"
             >
               {[6, 8, 10, 14, 18, 24].map((value) => (
                 <option key={value} value={value}>
@@ -1253,7 +1346,7 @@ function FlashcardsPanel({
               onClick={() => setUseSources((value) => !value)}
               className={cn(
                 "relative h-5 w-9 rounded-full transition-colors",
-                useSources && selectedSources.length ? "bg-sky-500" : "bg-slate-200",
+                useSources && selectedSources.length ? "bg-slate-500" : "bg-slate-200",
               )}
             >
               <span
@@ -1285,11 +1378,11 @@ function FlashcardsPanel({
               key={deck.id}
               className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3.5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]"
             >
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sky-50 text-sky-500">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-50 text-slate-500">
                 <Layers className="h-4 w-4" />
               </span>
               <button type="button" onClick={() => openDeck(deck.id)} className="min-w-0 flex-1 text-left">
-                <p className="truncate text-[13.5px] font-semibold text-slate-800 transition-colors hover:text-sky-600">{deck.topic}</p>
+                <p className="truncate text-[13.5px] font-semibold text-slate-800 transition-colors hover:text-slate-600">{deck.topic}</p>
                 <p className="text-[12px] text-slate-400">
                   {deck.cards.length} cards · {new Date(deck.createdAt).toLocaleDateString()}
                 </p>
@@ -1397,7 +1490,7 @@ function NotesPanel({
           <button
             type="button"
             onClick={copyMarkdown}
-            className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-[12.5px] font-medium text-slate-600 transition-colors hover:border-sky-200 hover:bg-sky-50 hover:text-sky-700"
+            className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-[12.5px] font-medium text-slate-600 transition-colors hover:border-slate-200 hover:bg-slate-50 hover:text-slate-700"
           >
             {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
             {copied ? "Copied" : "Copy as Markdown"}
@@ -1415,7 +1508,7 @@ function NotesPanel({
             if (event.key === "Enter") void generate();
           }}
           placeholder="Optional focus — e.g. exam definitions, chapter 3…"
-          className="w-full rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-[13px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-sky-300 focus:bg-white"
+          className="w-full rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-[13px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-300 focus:bg-white"
         />
         <PrimaryButton onClick={() => void generate()} disabled={!selectedSources.length}>
           <NotebookPen className="h-3.5 w-3.5" /> {notes ? "Regenerate" : "Generate"}
@@ -1450,12 +1543,12 @@ function NotesPanel({
                 <div key={index} className="grid grid-cols-[minmax(120px,200px)_1fr] gap-4 px-6 py-4 max-sm:grid-cols-1">
                   <div>
                     <p className="text-[13px] font-semibold text-slate-800">{section.heading}</p>
-                    {section.cue && <p className="mt-1 text-[12px] italic leading-relaxed text-sky-600">{section.cue}</p>}
+                    {section.cue && <p className="mt-1 text-[12px] italic leading-relaxed text-slate-600">{section.cue}</p>}
                   </div>
                   <ul className="space-y-1.5">
                     {section.points.map((point, pointIndex) => (
                       <li key={pointIndex} className="flex gap-2 text-[13px] leading-relaxed text-slate-700">
-                        <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-sky-400" />
+                        <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-slate-400" />
                         {point}
                       </li>
                     ))}
@@ -1577,7 +1670,7 @@ export default function StudyPalWorkspace({
       {/* Sidebar */}
       <nav className="flex w-[190px] shrink-0 flex-col gap-1 border-r border-slate-200 bg-white/80 p-3 backdrop-blur max-md:w-[64px]">
         <div className="mb-3 flex items-center gap-2 px-2 pt-1 max-md:justify-center max-md:px-0">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-sky-500 text-white shadow-[0_2px_8px_rgba(14,165,233,0.35)]">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white shadow-[0_2px_8px_rgba(15,23,42,0.12)]">
             <BookOpen className="h-4 w-4" />
           </span>
           <span className="text-[14px] font-semibold text-slate-900 max-md:hidden">Study Pal</span>
@@ -1592,13 +1685,13 @@ export default function StudyPalWorkspace({
               onClick={() => setTab(item.id)}
               className={cn(
                 "relative flex items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] font-medium transition-colors max-md:justify-center max-md:px-0",
-                active ? "text-sky-700" : "text-slate-500 hover:bg-slate-100 hover:text-slate-700",
+                active ? "text-slate-700" : "text-slate-500 hover:bg-slate-100 hover:text-slate-700",
               )}
             >
               {active && (
                 <motion.span
                   layoutId="study-pal-nav-active"
-                  className="absolute inset-0 rounded-xl border border-sky-100 bg-sky-50"
+                  className="absolute inset-0 rounded-xl border border-slate-200 bg-slate-50"
                   transition={{ type: "spring", stiffness: 420, damping: 34 }}
                 />
               )}

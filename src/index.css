@@ -4205,11 +4205,18 @@ body,
 .clyra-continue-work:hover .clyra-continue-work__arrow { transform: translateX(2px); background: #f1f5f9; }
 
 .clyra-chat-page .clyra-composer-transition { max-width: 920px; }
-.clyra-chat-page .clyra-workspace-card,
+/* Never CSS-transition transform on the swipe card — Framer Motion owns that
+   animation. Applying a second 420ms transform transition under .clyra-chat-page
+   made Vibe/Clip → Chat fight the swipe (wrong speed, spawning, drift). */
+.clyra-chat-page .clyra-workspace-card:not([data-workspace-motion]),
 .clyra-chat-page #chat-container,
 .clyra-chat-page .clyra-composer-transition {
   transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
   will-change: transform;
+}
+.clyra-chat-page .clyra-workspace-card[data-workspace-motion] {
+  /* Motion drives x; keep CSS from interpolating a competing transform. */
+  transition: none !important;
 }
 
 /* The welcome surface is absolutely positioned. Keep it full-width so its
@@ -4341,7 +4348,7 @@ body,
   background-position: 100% center, 0 0;
   background-repeat: no-repeat;
   background-size: 250% 100%, auto;
-  animation: clyra-thinking-shimmer 1.8s linear infinite;
+  animation: clyra-thinking-shimmer 2.35s cubic-bezier(.45, 0, .55, 1) infinite;
   will-change: background-position;
 }
 
@@ -4357,11 +4364,11 @@ body,
   height: 3px;
   border-radius: 999px;
   background: #a1a1aa;
-  animation: clyra-thinking-dot 1.1s ease-in-out infinite;
+  animation: clyra-thinking-dot 1.45s ease-in-out infinite;
 }
 
-.clyra-thinking-dots i:nth-child(2) { animation-delay: .13s; }
-.clyra-thinking-dots i:nth-child(3) { animation-delay: .26s; }
+.clyra-thinking-dots i:nth-child(2) { animation-delay: .16s; }
+.clyra-thinking-dots i:nth-child(3) { animation-delay: .32s; }
 
 @keyframes clyra-text-shine {
   from { background-position: 200% 0; }
@@ -4374,8 +4381,8 @@ body,
 }
 
 @keyframes clyra-thinking-dot {
-  0%, 60%, 100% { transform: translateY(0); opacity: .35; }
-  30% { transform: translateY(-3px); opacity: 1; }
+  0%, 65%, 100% { transform: translateY(0); opacity: .38; }
+  32% { transform: translateY(-2px); opacity: .92; }
 }
 
 @media (max-width: 760px) {
@@ -4399,7 +4406,10 @@ body,
   .clyra-shining-text,
   .clyra-thinking-shimmer,
   .clyra-thinking-dots i,
-  .clyra-boot-progress__fill::after { animation: none; }
+  .clyra-boot-progress__fill::after,
+  .clyra-browser-agent-tab,
+  .clyra-browser-ai-control::after,
+  .clyra-browser-agent-cursor::before { animation: none; }
 }
 
 /* Welcome screen: compact, quietly tactile controls. These rules live at the
@@ -4704,7 +4714,7 @@ body,
 }
 
 .clyra-chat-page .input-wrapper:not(.loading) {
-  transition: border-color 220ms ease, box-shadow 320ms ease, border-radius 680ms cubic-bezier(0.16, 1, 0.3, 1), min-height 680ms cubic-bezier(0.16, 1, 0.3, 1), padding 680ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+  transition: border-color 260ms ease, box-shadow 360ms ease, border-radius 560ms cubic-bezier(0.16, 1, 0.3, 1), min-height 560ms cubic-bezier(0.16, 1, 0.3, 1), padding 560ms cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
 
 /* Compact, app-native feedback instead of a browser prompt. */
@@ -4734,7 +4744,7 @@ body,
 .clyra-youtube-scan p { margin: 0 0 2px; color: #8290a3; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .clyra-youtube-scan strong { display: block; max-width: 420px; overflow: hidden; color: #334155; font-size: 13px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .clyra-youtube-scan__time { margin-left: auto; color: #94a3b8; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.clyra-youtube-scan__beam { position: absolute; inset: 0 auto 0 -34%; width: 28%; background: linear-gradient(90deg, transparent, rgba(135,160,190,.13), transparent); animation: clyra-youtube-scan-beam 1.9s ease-in-out infinite; }
+.clyra-youtube-scan__beam { position: absolute; inset: 0 auto 0 -34%; width: 28%; background: linear-gradient(90deg, transparent, rgba(135,160,190,.13), transparent); animation: clyra-youtube-scan-beam 2.6s cubic-bezier(.45, 0, .55, 1) infinite; }
 @keyframes clyra-youtube-scan-beam { to { transform: translateX(520%); } }
 
 @media (max-width: 760px) {
@@ -4782,21 +4792,21 @@ body,
    entire input toward the greeting. */
 .clyra-chat-page .clyra-composer-welcome {
   bottom: 0;
-  transition: bottom 720ms cubic-bezier(.16, 1, .3, 1);
+  transition: bottom 560ms cubic-bezier(.16, 1, .3, 1);
 }
 .clyra-chat-page .clyra-composer-welcome:has(.clyra-composer-expanded) { bottom: 0; }
 
-/* One shared 280ms curve for every geometry property so the surface grows as
-   a single piece — nothing lags behind the expanding shelf. */
+/* One shared ~560ms ease-out curve for every geometry property so the surface
+   grows as a single piece — decelerates gently toward the end. */
 .clyra-chat-page .input-wrapper:not(.loading) {
   transform-origin: top center;
   will-change: border-radius, padding, box-shadow;
   transition:
-    border-color 240ms ease,
-    box-shadow 280ms cubic-bezier(.32, .72, 0, 1),
-    border-radius 280ms cubic-bezier(.32, .72, 0, 1),
-    min-height 280ms cubic-bezier(.32, .72, 0, 1),
-    padding 280ms cubic-bezier(.32, .72, 0, 1) !important;
+    border-color 300ms ease,
+    box-shadow 560ms cubic-bezier(.16, 1, .3, 1),
+    border-radius 560ms cubic-bezier(.16, 1, .3, 1),
+    min-height 560ms cubic-bezier(.16, 1, .3, 1),
+    padding 560ms cubic-bezier(.16, 1, .3, 1) !important;
 }
 
 .clyra-chat-page .input-wrapper.clyra-composer-expanded {
@@ -4861,13 +4871,13 @@ body,
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transform: translate3d(-3px, 0, 0) scale(.9);
+  transform: translate3d(-2px, 0, 0) scale(.94);
   transform-origin: center;
   will-change: clip-path, filter, opacity, transform;
 }
 
 .clyra-status-wave-icon--reveal {
-  animation: clyra-status-icon-reveal 940ms cubic-bezier(.16, 1, .3, 1) both;
+  animation: clyra-status-icon-reveal 1180ms cubic-bezier(.22, 1, .36, 1) both;
 }
 
 .clyra-status-wave-icon--settle {
@@ -4878,18 +4888,18 @@ body,
 .clyra-status-wave-icon--shimmer {
   opacity: 1;
   transform: none;
-  animation: clyra-status-icon-flow 2.65s ease-in-out infinite;
+  animation: clyra-status-icon-flow 3.2s ease-in-out infinite;
 }
 
 @keyframes clyra-status-icon-reveal {
-  0% { opacity: 0; clip-path: inset(0 100% 0 0 round 8px); transform: translate3d(-3px, 0, 0) scale(.9); filter: saturate(.6); }
-  68% { opacity: 1; clip-path: inset(0 8% 0 0 round 8px); transform: translate3d(0, 0, 0) scale(1.02); filter: saturate(1.35) drop-shadow(0 0 4px rgba(115, 150, 188, .22)); }
+  0% { opacity: 0; clip-path: inset(0 100% 0 0 round 8px); transform: translate3d(-2px, 0, 0) scale(.94); filter: saturate(.75); }
+  72% { opacity: 1; clip-path: inset(0 4% 0 0 round 8px); transform: translate3d(0, 0, 0) scale(1.01); filter: saturate(1.18) drop-shadow(0 0 3px rgba(115, 150, 188, .14)); }
   100% { opacity: 1; clip-path: inset(0 0 0 0 round 8px); transform: none; filter: saturate(1); }
 }
 
 @keyframes clyra-status-icon-flow {
   0%, 100% { filter: saturate(1) drop-shadow(0 0 0 rgba(108, 142, 175, 0)); }
-  48% { filter: saturate(1.35) hue-rotate(12deg) drop-shadow(0 0 4px rgba(108, 142, 175, .24)); }
+  48% { filter: saturate(1.22) hue-rotate(8deg) drop-shadow(0 0 3px rgba(108, 142, 175, .18)); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -4970,7 +4980,7 @@ body,
   background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: clyra-status-text-shimmer 1.8s linear infinite;
+  animation: clyra-status-text-shimmer 2.4s cubic-bezier(.45, 0, .55, 1) infinite;
   will-change: background-position;
 }
 
@@ -5150,7 +5160,7 @@ body,
 }
 
 .clyra-browser-ai-control {
-  box-shadow: inset 0 0 0 1px rgba(59,130,246,.44), inset 0 0 22px rgba(59,130,246,.10);
+  box-shadow: inset 0 0 0 1px rgba(15,23,42,.28), inset 0 0 22px rgba(15,23,42,.06);
 }
 
 .clyra-browser-ai-control::after {
@@ -5158,10 +5168,10 @@ body,
   inset: 1px;
   border-radius: inherit;
   content: "";
-  background: linear-gradient(105deg, transparent 10%, rgba(147,197,253,.72) 48%, transparent 72%);
+  background: linear-gradient(105deg, transparent 10%, rgba(148,163,184,.55) 48%, transparent 72%);
   background-size: 210% 100%;
   animation: clyra-browser-control-glow 1.85s linear infinite;
-  opacity: .62;
+  opacity: .55;
 }
 
 .clyra-browser-agent-cursor::before {
@@ -5172,12 +5182,18 @@ body,
   height: 25px;
   border-radius: 999px;
   content: "";
-  background: rgba(59,130,246,.16);
-  box-shadow: 0 0 18px rgba(59,130,246,.38);
+  background: rgba(15,23,42,.12);
+  box-shadow: 0 0 18px rgba(15,23,42,.22), 0 0 28px rgba(100,116,139,.18);
   animation: clyra-browser-cursor-halo 1.35s ease-in-out infinite;
 }
 
 .clyra-browser-agent-cursor > * { position: relative; }
+
+.clyra-browser-agent-tab {
+  background-image: linear-gradient(110deg, transparent 20%, rgba(148,163,184,.22) 48%, transparent 72%);
+  background-size: 220% 100%;
+  animation: clyra-browser-tab-shimmer 2.1s linear infinite;
+}
 
 .clyra-browser-user-message-entry {
   will-change: transform, opacity;
@@ -5190,6 +5206,11 @@ body,
 
 @keyframes clyra-browser-cursor-halo {
   50% { transform: scale(1.16); opacity: .72; }
+}
+
+@keyframes clyra-browser-tab-shimmer {
+  from { background-position: 180% 0; }
+  to { background-position: -60% 0; }
 }
 
 .clyra-browser-plan {
@@ -5223,10 +5244,10 @@ body,
   font-weight: 600;
   transition: background-color 180ms ease, color 180ms ease, box-shadow 180ms ease;
 }
-.clyra-browser-plan__step--active { background: #f8fbff; color: #334155; box-shadow: inset 0 0 0 1px rgba(147,197,253,.35), 0 2px 8px rgba(35,54,76,.045); }
+.clyra-browser-plan__step--active { background: #f8fafc; color: #334155; box-shadow: inset 0 0 0 1px rgba(203,213,225,.65), 0 2px 8px rgba(35,54,76,.045); }
 .clyra-browser-plan__step--complete { color: #64748b; }
 .clyra-browser-plan__marker { display: grid; width: 16px; height: 16px; flex: 0 0 16px; place-items: center; border: 1px solid #e2e8f0; border-radius: 999px; background: #fff; color: #94a3b8; font-size: 8px; }
-.clyra-browser-plan__step--active .clyra-browser-plan__marker { border-color: #bfdbfe; background: #eff6ff; color: #2563eb; box-shadow: 0 0 0 3px rgba(59,130,246,.07); }
+.clyra-browser-plan__step--active .clyra-browser-plan__marker { border-color: #cbd5e1; background: #f1f5f9; color: #0f172a; box-shadow: 0 0 0 3px rgba(15,23,42,.05); }
 .clyra-browser-plan__step--complete .clyra-browser-plan__marker { border-color: #bbf7d0; background: #f0fdf4; color: #16a34a; }
 
 /* Creator previews are authored in a vertical 9:16 coordinate space.  Keep
@@ -5293,13 +5314,13 @@ body,
    It starts below its final place, then uses a long ease-out to settle like a
    native conversation bubble rather than snapping into the chat rail. */
 .clyra-chat-page .clyra-user-message-entry {
-  animation: clyra-user-message-entry 780ms cubic-bezier(.16, 1, .3, 1) both;
+  animation: clyra-user-message-entry 980ms cubic-bezier(.22, 1, .36, 1) both;
   will-change: transform, opacity;
 }
 
 @keyframes clyra-user-message-entry {
-  0% { opacity: 0; transform: translate3d(0, 38px, 0) scale(.982); }
-  58% { opacity: 1; transform: translate3d(0, 5px, 0) scale(.998); }
+  0% { opacity: 0; transform: translate3d(0, 26px, 0) scale(.988); }
+  64% { opacity: 1; transform: translate3d(0, 2px, 0) scale(.999); }
   100% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
 }
 
@@ -5315,13 +5336,53 @@ body,
   bottom: calc(100% + 10px);
   left: 20px;
   margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   pointer-events: auto;
+  will-change: opacity, transform, filter;
+}
+
+.clyra-chat-page .clyra-composer-tools button {
+  transition:
+    background-color 220ms ease,
+    border-color 220ms ease,
+    color 220ms ease,
+    transform 220ms ease;
 }
 
 /* The top and side edges are static. Only the lower control shelf is revealed,
    which makes expand/collapse feel like the bottom border is travelling. */
 .clyra-chat-page .clyra-composer-expanded-content {
   will-change: height, opacity;
+}
+
+/* Lightweight streaming paint — compositor-friendly; no per-char layout. */
+.clyra-stream-paint {
+  contain: content;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+.clyra-stream-paint__caret {
+  display: inline-block;
+  width: 0.085em;
+  height: 0.95em;
+  margin-left: 1px;
+  vertical-align: -0.1em;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.28;
+  animation: clyra-stream-caret 1.15s ease-in-out infinite;
+}
+
+@keyframes clyra-stream-caret {
+  0%, 100% { opacity: 0.12; }
+  50% { opacity: 0.34; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clyra-stream-paint__caret { animation: none; opacity: 0.22; }
 }
 
 /* Assistant controls must never leak through a held thinking state. */
@@ -5467,15 +5528,17 @@ body,
 
 /* Chat is allowed to use the complete scene even when a previous workspace
    leaves a split-pane shell mounted for a transition. This keeps the welcome
-   composition truly viewport-centred at every desktop window width. */
-.clyra-chat-page .clyra-workspace-card[data-workspace-motion] {
+   composition truly viewport-centred at every desktop window width.
+   Scoped to data-workspace="chat" so an exiting Vibe/Clip panel is not
+   re-laid-out mid-swipe when .clyra-chat-page appears on the parent. */
+.clyra-chat-page .clyra-workspace-card[data-workspace-motion][data-workspace="chat"] {
   left: 50%;
   right: auto;
   width: 100vw;
   margin-left: -50vw;
 }
 
-.clyra-chat-page .clyra-workspace-card[data-workspace-motion] > .text-center:has(.clyra-chat-quick-actions) {
+.clyra-chat-page .clyra-workspace-card[data-workspace-motion][data-workspace="chat"] > .text-center:has(.clyra-chat-quick-actions) {
   position: relative;
   top: -42px;
 }
@@ -5515,7 +5578,7 @@ body,
 
 /* The workspace scene, not an inherited split-pane, owns Chat's centre.
    This survives a return from every other workspace and fullscreen resizing. */
-.clyra-chat-page .clyra-workspace-card[data-workspace-motion] {
+.clyra-chat-page .clyra-workspace-card[data-workspace-motion][data-workspace="chat"] {
   left: 0;
   right: 0;
   width: 100%;
@@ -5529,7 +5592,7 @@ body,
 /* Keep the welcome group centred by the complete viewport-sized scene. This
    deliberately wins over the earlier narrow-card styling for every entry
    path: a cold launch, returning from a tool, and opening from the launcher. */
-.clyra-chat-page .clyra-workspace-card[data-workspace-motion]:has(.clyra-chat-quick-actions) {
+.clyra-chat-page .clyra-workspace-card[data-workspace-motion][data-workspace="chat"]:has(.clyra-chat-quick-actions) {
   justify-content: center;
   align-items: stretch;
 }

@@ -56,7 +56,21 @@ function userFacingDictationError(error: unknown) {
   if (/failed to fetch|networkerror|load failed/i.test(message)) {
     return "Clyra's local voice service is still starting. Try again in a moment.";
   }
+  if (/notallowederror|permission denied|microphone/i.test(message)) {
+    return "Microphone access is blocked. Enable Clyra in System Settings → Privacy & Security → Microphone.";
+  }
+  if (/accessibility/i.test(message)) {
+    return message;
+  }
   return message || "Clyra dictation could not start.";
+}
+
+function microphoneDeniedMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  if (/notallowederror|permission|denied|dismissed/i.test(message) || !message) {
+    return "Microphone access is blocked. Enable Clyra in System Settings → Privacy & Security → Microphone.";
+  }
+  return message;
 }
 
 export function DictationController() {
@@ -67,6 +81,8 @@ export function DictationController() {
   const heardSpeechRef = useRef(false);
   const lastSpeechAtRef = useRef(0);
   const speechStartedAtRef = useRef(0);
+  const pipelineRetryRef = useRef(0);
+  const startRef = useRef<(mode: DictationMode, target: DictationTarget) => Promise<void>>(async () => undefined);
 
   const clearSilenceTimer = useCallback(() => {
     if (silenceTimerRef.current != null) {
@@ -119,6 +135,7 @@ export function DictationController() {
   const cancel = useCallback(() => {
     release();
     previewRef.current = null;
+    pipelineRetryRef.current = 0;
     updateNative({ phase: "idle", detail: "" });
   }, [release, updateNative]);
 
@@ -131,14 +148,14 @@ export function DictationController() {
       updateNative({ phase: "done", detail: "Inserted" });
       window.setTimeout(() => updateNative({ phase: "idle", detail: "" }), 850);
     } catch (error) {
-      updateNative({ phase: "error", detail: error instanceof Error ? error.message : "Clyra could not insert text." });
+      updateNative({ phase: "error", detail: userFacingDictationError(error) });
     }
   }, [updateNative]);
 
   const finishTranscript = useCallback(async (active: ActiveDictation, transcript: string) => {
     const raw = transcript.trim();
     if (!raw) {
-      updateNative({ phase: "error", detail: "No speech was detected." });
+      updateNative({ phase: "error", detail: "No speech was detected. Click the mic area and try again." });
       return;
     }
     if (active.mode === "optimise") {
@@ -169,6 +186,13 @@ export function DictationController() {
     speechStartedAtRef.current = 0;
     updateNative({ phase: mode === "optimise" ? "optimising" : "listening", detail: mode === "optimise" ? "Tell Clyra how to rewrite this" : "Listening", application: target.application || "" });
     try {
+      const desktop = getElectronDesktop();
+      const permissions = await desktop?.dictation.ensurePermissions?.().catch(() => null);
+      if (permissions && permissions.ok === false && permissions.error) {
+        updateNative({ phase: "error", detail: String(permissions.error) });
+        return;
+      }
+
       const session = await postJson("/voice/session", { mode: "dictation", history: [] });
       const socket = new WebSocket(session.websocketUrl);
       const active: ActiveDictation = { target, mode, sessionId: session.sessionId, socket, capture: null, rawTranscript: "", startedAt: Date.now() };
@@ -178,6 +202,7 @@ export function DictationController() {
           const message = JSON.parse(String(event.data));
           if (activeRef.current !== active) return;
           if (message.type === "pipeline_mode" && message.mode === "pipeline" && !active.capture) {
+            pipelineRetryRef.current = 0;
             const capture = new VoicePcmCapturer((data, seq) => {
               if (active.socket.readyState === WebSocket.OPEN) active.socket.send(JSON.stringify({ type: "audio", sessionId: active.sessionId, codec: "pcm16", data, seq }));
             }, Number(message.sampleRate) || 16_000, (level) => {
@@ -214,11 +239,26 @@ export function DictationController() {
             });
             active.capture = capture;
             void capture.start().catch((error) => {
-              updateNative({ phase: "error", detail: error instanceof Error ? error.message : "Microphone permission was denied." });
+              updateNative({ phase: "error", detail: microphoneDeniedMessage(error) });
               release();
             });
           } else if (message.type === "pipeline_mode" && message.mode !== "pipeline") {
-            updateNative({ phase: "error", detail: "Clyra's streaming transcription service is unavailable." });
+            // Local Faster-Whisper often needs a short warmup after launch.
+            // One automatic retry avoids a false "needs attention" flash.
+            if (pipelineRetryRef.current < 1) {
+              pipelineRetryRef.current += 1;
+              release();
+              updateNative({ phase: "processing", detail: "Starting speech engine" });
+              void wait(900).then(() => {
+                void startRef.current(mode, target);
+              });
+              return;
+            }
+            pipelineRetryRef.current = 0;
+            updateNative({
+              phase: "error",
+              detail: "Clyra's speech engine isn't ready yet. Keep the app open for a moment, then try Cmd+Shift+K again.",
+            });
             release();
           } else if (message.type === "transcript_partial") {
             updateNative({ phase: "listening", detail: String(message.text || "Listening").slice(0, 120) });
@@ -243,6 +283,8 @@ export function DictationController() {
       updateNative({ phase: "error", detail: userFacingDictationError(error) });
     }
   }, [clearSilenceTimer, finishTranscript, postJson, release, updateNative]);
+
+  startRef.current = start;
 
   const stop = useCallback(() => {
     const active = activeRef.current;

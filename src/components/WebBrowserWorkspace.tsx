@@ -222,7 +222,8 @@ interface AgentMessage {
   facts?: Array<{ claim: string; sourceUrl: string }>;
 }
 
-const BROWSER_CHAT_STORAGE = "clyra-browser-agent-chat-v2";
+const BROWSER_CHAT_STORAGE = "clyra-browser-agent-chat-v3";
+const BROWSER_CHAT_STORAGE_LEGACY = "clyra-browser-agent-chat-v2";
 const ACTIVE_AGENT_PHASES = new Set<AgentStatus>([
   "planning",
   "observing",
@@ -233,23 +234,30 @@ const ACTIVE_AGENT_PHASES = new Set<AgentStatus>([
   "paused",
 ]);
 
-function initialAgentConversations(): Record<string, AgentMessage[]> {
+/** One shared agent chat for the whole browser workspace (all tabs). */
+function initialAgentMessages(): AgentMessage[] {
   const withoutRetiredWelcome = (messages: AgentMessage[]) => messages.filter((message) =>
     !(message.role === "assistant" && /^Ready when you are\.?$/i.test(message.content.trim())),
   );
   if (typeof window !== "undefined") {
     try {
-      const saved = JSON.parse(window.localStorage.getItem(BROWSER_CHAT_STORAGE) || "{}") as AgentMessage[] | Record<string, AgentMessage[]>;
-      if (Array.isArray(saved) && saved.length) return { default: withoutRetiredWelcome(saved).slice(-60) };
+      const raw = window.localStorage.getItem(BROWSER_CHAT_STORAGE)
+        || window.localStorage.getItem(BROWSER_CHAT_STORAGE_LEGACY)
+        || "[]";
+      const saved = JSON.parse(raw) as AgentMessage[] | Record<string, AgentMessage[]>;
+      if (Array.isArray(saved)) return withoutRetiredWelcome(saved).slice(-60);
       if (saved && typeof saved === "object") {
-        const entries = Object.entries(saved).filter(([, messages]) => Array.isArray(messages));
-        if (entries.length) return Object.fromEntries(entries.map(([key, messages]) => [key, withoutRetiredWelcome(messages).slice(-60)]));
+        // Migrate v2 per-tab transcripts into one shared session.
+        const merged = Object.values(saved)
+          .filter((messages): messages is AgentMessage[] => Array.isArray(messages))
+          .flat();
+        return withoutRetiredWelcome(merged).slice(-60);
       }
     } catch {
       // A malformed local draft should not prevent the browser from opening.
     }
   }
-  return { default: [] };
+  return [];
 }
 
 type SideView = "agent" | "history" | "bookmarks" | "downloads" | "settings";
@@ -663,12 +671,15 @@ export default function WebBrowserWorkspace() {
   const [cursor, setCursor] = useState<AgentCursor | null>(null);
   const [frameTick, setFrameTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [messagesByTab, setMessagesByTab] = useState<Record<string, AgentMessage[]>>(initialAgentConversations);
+  const [messages, setMessagesState] = useState<AgentMessage[]>(initialAgentMessages);
   const [runItems, setRunItems] = useState<RunItem[]>([]);
   const [runTask, setRunTask] = useState("");
   const [completedStepsOpen, setCompletedStepsOpen] = useState(false);
+  const [agentControlledTabId, setAgentControlledTabId] = useState<string | null>(null);
   const streamingRunRef = useRef(false);
   const previewRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
   const typingBufferRef = useRef("");
   const typingTimerRef = useRef<number | null>(null);
   const scrollTimerRef = useRef<number | null>(null);
@@ -679,40 +690,22 @@ export default function WebBrowserWorkspace() {
   const previousActiveTabRef = useRef("default");
   const agentOriginTabRef = useRef<string | null>(null);
   const handledAgentSessionsRef = useRef(new Set(
-    Object.values(messagesByTab)
-      .flat()
+    messages
       .map((message) => message.id)
       .filter((id) => id.startsWith("session-"))
       .map((id) => id.slice("session-".length)),
   ));
-  const hydratedMessageIdsRef = useRef(new Set(
-    Object.values(messagesByTab).flat().map((message) => message.id),
-  ));
+  const hydratedMessageIdsRef = useRef(new Set(messages.map((message) => message.id)));
 
-  const activeChatKey = browserState?.activeTabId || previousActiveTabRef.current || "default";
-
-  const messages = messagesByTab[activeChatKey] || [];
-  const setMessages = useCallback((update: React.SetStateAction<AgentMessage[]>, tabId = activeChatKey) => {
-    setMessagesByTab((current) => {
-      const existing = current[tabId] || [];
-      const next = typeof update === "function" ? update(existing) : update;
-      return { ...current, [tabId]: next.slice(-60) };
+  const setMessages = useCallback((update: React.SetStateAction<AgentMessage[]>) => {
+    setMessagesState((current) => {
+      const next = typeof update === "function" ? update(current) : update;
+      return next.slice(-60);
     });
-  }, [activeChatKey]);
+  }, []);
 
   const applyState = useCallback((state: BrowserState) => {
     const previousActive = previousActiveTabRef.current;
-    setMessagesByTab((current) => {
-      let changed = false;
-      const next = { ...current };
-      for (const tab of state.tabs) {
-        if (!next[tab.id]) {
-          next[tab.id] = [];
-          changed = true;
-        }
-      }
-      return changed ? next : current;
-    });
     previousActiveTabRef.current = state.activeTabId || previousActive;
     setBrowserState(state);
     setAddress(state.url);
@@ -783,7 +776,6 @@ export default function WebBrowserWorkspace() {
     }
     if (!active && session.result?.message && !handledAgentSessionsRef.current.has(session.id)) {
       handledAgentSessionsRef.current.add(session.id);
-      const destinationTab = agentOriginTabRef.current || previousActiveTabRef.current;
       setMessages((current) => {
         const alreadyPresent = current.some((message) => message.role === "assistant" && message.content === session.result?.message);
         if (alreadyPresent) return current;
@@ -797,8 +789,9 @@ export default function WebBrowserWorkspace() {
             facts: session.result.facts,
           },
         ].slice(-60);
-      }, destinationTab);
+      });
       agentOriginTabRef.current = null;
+      setAgentControlledTabId(null);
     }
   }, [setMessages]);
 
@@ -840,8 +833,8 @@ export default function WebBrowserWorkspace() {
   }, [applyState]);
 
   useEffect(() => {
-    window.localStorage.setItem(BROWSER_CHAT_STORAGE, JSON.stringify(messagesByTab));
-  }, [messagesByTab]);
+    window.localStorage.setItem(BROWSER_CHAT_STORAGE, JSON.stringify(messages));
+  }, [messages]);
 
   useEffect(() => {
     const timer = window.setInterval(() => void syncAgentSession(), isAgentBusy ? 650 : 2_400);
@@ -946,8 +939,9 @@ export default function WebBrowserWorkspace() {
   const runAgentTask = async (taskOverride?: string) => {
     const cleanTask = (taskOverride ?? task).trim();
     if (!cleanTask || isAgentBusy) return;
-    const originTabId = activeChatKey;
+    const originTabId = browserState?.activeTabId || previousActiveTabRef.current || "default";
     agentOriginTabRef.current = originTabId;
+    setAgentControlledTabId(originTabId);
     setTask("");
     setIsAgentBusy(true);
     setSideOpen(true);
@@ -962,7 +956,7 @@ export default function WebBrowserWorkspace() {
     setRunItems([]);
     setRunTask(cleanTask);
     setCompletedStepsOpen(false);
-    setMessages((current) => [...current, { id: `user-${Date.now()}`, role: "user", content: cleanTask }], originTabId);
+    setMessages((current) => [...current, { id: `user-${Date.now()}`, role: "user", content: cleanTask }]);
     try {
       const response = await fetch("/api/openbrowser/assist", {
         method: "POST",
@@ -1002,7 +996,7 @@ export default function WebBrowserWorkspace() {
                   role: "assistant",
                   content: "I’ll work through this in the browser, verify each result, and then bring back the outcome.",
                 },
-              ], originTabId);
+              ]);
             }
           }
           if (next.cursor) setCursor({ ...(next.cursor as Omit<AgentCursor, "id">), id: ++cursorSequenceRef.current });
@@ -1050,7 +1044,7 @@ export default function WebBrowserWorkspace() {
           steps: Array.isArray(payload.steps) ? payload.steps : undefined,
           facts: uniqueSources,
         },
-      ], originTabId);
+      ]);
     } catch (nextError) {
       setMessages((current) => [
         ...current,
@@ -1059,13 +1053,15 @@ export default function WebBrowserWorkspace() {
           role: "assistant",
           content: nextError instanceof Error ? nextError.message : "The browser agent could not complete that task.",
         },
-      ], originTabId);
+      ]);
     } finally {
       streamingRunRef.current = false;
       if (mountedRef.current) {
         setIsAgentBusy(false);
         setAgentPhase("idle");
         setAgentStatus("Ready");
+        setAgentControlledTabId(null);
+        agentOriginTabRef.current = null;
         // A completed task hands the page straight back to the user.  Leaving
         // the last cursor coordinate on screen made an idle browser look as if
         // the agent still had the controls.
@@ -1168,6 +1164,14 @@ export default function WebBrowserWorkspace() {
   const settings = browserState?.settings || defaultSettings;
 
   useEffect(() => {
+    if (settings.reducedMotion) {
+      chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight });
+      return;
+    }
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages.length, isAgentBusy, runItems.length, settings.reducedMotion]);
+
+  useEffect(() => {
     if (!desktopChromium) return;
     const desktop = getElectronDesktop();
     if (!desktop) return;
@@ -1218,7 +1222,14 @@ export default function WebBrowserWorkspace() {
           sideOpen && "lg:mr-[clamp(310px,27vw,430px)]",
         )}>
           <AnimatePresence initial={false} mode="popLayout">
-            {browserState?.tabs.map((tab) => (
+            {browserState?.tabs.map((tab) => {
+              const agentOwnsTab = Boolean(
+                agentControlledTabId
+                && tab.id === agentControlledTabId
+                && isAgentBusy
+                && !browserState.agent.manualControl,
+              );
+              return (
               <motion.button
                 key={tab.id}
                 layout="position"
@@ -1232,18 +1243,22 @@ export default function WebBrowserWorkspace() {
                   if (event.button === 1 && browserState.tabs.length > 1) void performAction({ type: "close_tab", tabId: tab.id });
                 }}
                 className={cn(
-                  "group/tab relative flex h-8 min-w-[142px] max-w-[250px] items-center gap-2 rounded-[15px] px-3 text-left text-[12px] font-medium transition-[background-color,color,box-shadow] duration-200 ease-out",
+                  "group/tab relative flex h-8 min-w-[142px] max-w-[250px] items-center gap-2 overflow-hidden rounded-[15px] px-3 text-left text-[12px] font-medium transition-[background-color,color,box-shadow] duration-200 ease-out",
                   tab.active ? "bg-[#f1f1f1] text-slate-800" : "text-slate-500 hover:bg-[#f1f1f1] hover:text-slate-800",
+                  agentOwnsTab && "clyra-browser-agent-tab ring-1 ring-slate-300/80",
                 )}
+                title={agentOwnsTab ? "Clyra is controlling this tab" : undefined}
               >
                 {tab.loading ? (
-                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-500" />
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-slate-500" />
                 ) : tab.favicon ? (
                   <img src={tab.favicon} alt="" className="h-3.5 w-3.5 shrink-0 rounded-sm" />
                 ) : (
                   <Globe2 className="h-3.5 w-3.5 shrink-0 text-slate-400" />
                 )}
-                <span className="min-w-0 flex-1 truncate">{tab.title || "New tab"}</span>
+                <span className={cn("min-w-0 flex-1 truncate", agentOwnsTab && "clyra-thinking-shimmer [--clyra-thinking-base:#64748b] [--clyra-thinking-highlight:#0f172a]")}>
+                  {tab.title || "New tab"}
+                </span>
                 <span
                   role="button"
                   tabIndex={0}
@@ -1257,7 +1272,8 @@ export default function WebBrowserWorkspace() {
                   <X className="h-3 w-3" />
                 </span>
               </motion.button>
-            ))}
+              );
+            })}
           </AnimatePresence>
             <IconButton label="New tab" onClick={() => void performAction({ type: "open_tab" })} className="h-7 w-7 rounded-full text-slate-500 hover:bg-slate-100 hover:text-slate-800">
               <Plus className="h-4 w-4" />
@@ -1412,19 +1428,19 @@ export default function WebBrowserWorkspace() {
                 >
                   <motion.div
                     aria-hidden
-                    className="absolute inset-0 ring-1 ring-inset ring-sky-400/50"
-                    animate={settings.reducedMotion ? { boxShadow: "inset 0 0 28px rgba(56,189,248,0.20)" } : {
+                    className="absolute inset-0 ring-1 ring-inset ring-slate-400/40"
+                    animate={settings.reducedMotion ? { boxShadow: "inset 0 0 28px rgba(15,23,42,0.10)" } : {
                       boxShadow: [
-                        "inset 0 0 22px rgba(56,189,248,0.14)",
-                        "inset 0 0 42px rgba(56,189,248,0.30)",
-                        "inset 0 0 22px rgba(56,189,248,0.14)",
+                        "inset 0 0 22px rgba(15,23,42,0.06)",
+                        "inset 0 0 42px rgba(15,23,42,0.14)",
+                        "inset 0 0 22px rgba(15,23,42,0.06)",
                       ],
                     }}
                     transition={{ duration: 2.6, repeat: Infinity, ease: "easeInOut" }}
                   />
                   <div className="absolute left-3 top-3 flex items-center gap-2 rounded-full bg-slate-950/90 px-2.5 py-1.5 text-[9px] font-semibold text-white shadow-[0_8px_24px_rgba(15,23,42,.18)] backdrop-blur-xl">
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-300" />
-                    <ShiningText text={agentStatus} play={!settings.reducedMotion} className="!text-[9px] !text-white [--clyra-thinking-base:#dbeafe] [--clyra-thinking-highlight:#ffffff]" />
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-slate-300" />
+                    <ShiningText text={agentStatus} play={!settings.reducedMotion} className="!text-[9px] !text-white [--clyra-thinking-base:#cbd5e1] [--clyra-thinking-highlight:#ffffff]" />
                   </div>
                 </motion.div>
               ) : null}
@@ -1436,20 +1452,20 @@ export default function WebBrowserWorkspace() {
                   key="browser-ai-cursor-trail"
                   initial={settings.reducedMotion ? false : { opacity: 0 }}
                   animate={{
-                    opacity: settings.reducedMotion ? 0 : 0.55,
+                    opacity: settings.reducedMotion ? 0 : 0.5,
                     left: `${(cursor.x / (browserState?.viewport.width || 1440)) * 100}%`,
                     top: `${(cursor.y / (browserState?.viewport.height || 900)) * 100}%`,
                   }}
                   exit={{ opacity: 0 }}
                   transition={{
-                    left: { type: "spring", stiffness: 150, damping: 24, mass: 0.7 },
-                    top: { type: "spring", stiffness: 150, damping: 24, mass: 0.7 },
-                    opacity: { duration: 0.15 },
+                    left: { type: "spring", stiffness: 120, damping: 26, mass: 0.85 },
+                    top: { type: "spring", stiffness: 120, damping: 26, mass: 0.85 },
+                    opacity: { duration: 0.18 },
                   }}
                   className="pointer-events-none absolute z-[19] -translate-x-1/2 -translate-y-1/2"
                   aria-hidden
                 >
-                  <span className="block h-4 w-4 rounded-full bg-sky-400/40 blur-[6px]" />
+                  <span className="block h-5 w-5 rounded-full bg-slate-400/35 blur-[8px]" />
                 </motion.div>,
                 <motion.div
                   key="browser-ai-cursor"
@@ -1471,16 +1487,16 @@ export default function WebBrowserWorkspace() {
                 >
                   <span
                     aria-hidden
-                    className="absolute -left-3 -top-3 h-12 w-12 rounded-full bg-[radial-gradient(circle,rgba(56,189,248,0.42)_0%,rgba(56,189,248,0.14)_55%,transparent_75%)] blur-[10px]"
+                    className="absolute -left-3 -top-3 h-12 w-12 rounded-full bg-[radial-gradient(circle,rgba(15,23,42,0.22)_0%,rgba(100,116,139,0.12)_50%,transparent_75%)] blur-[10px]"
                   />
-                  <MousePointer2 className="relative h-6 w-6 fill-sky-500 text-white [filter:drop-shadow(0_0_10px_rgba(56,189,248,.7))_drop-shadow(0_3px_6px_rgba(14,116,144,.35))]" />
+                  <MousePointer2 className="relative h-6 w-6 fill-slate-800 text-white [filter:drop-shadow(0_0_8px_rgba(15,23,42,.28))_drop-shadow(0_3px_6px_rgba(15,23,42,.28))]" />
                   {settings.showAiActionLabels && cursor.label ? (
-                    <span className="absolute left-5 top-5 whitespace-nowrap rounded-md bg-sky-500 px-2 py-1 text-[9px] font-semibold text-white shadow-[0_4px_14px_rgba(56,189,248,.45)]">{cursor.label}</span>
+                    <span className="absolute left-5 top-5 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[9px] font-semibold text-white shadow-[0_4px_14px_rgba(15,23,42,.35)]">{cursor.label}</span>
                   ) : null}
                   {(cursor.kind === "click" || cursor.kind === "double_click") ? (
                     <span key={cursor.id} className="absolute left-[3px] top-[2px]" aria-hidden>
-                      <span className="absolute h-5 w-5 animate-ping rounded-full border-2 border-sky-400/80" />
-                      <span className="absolute h-5 w-5 animate-ping rounded-full bg-sky-400/25 [animation-duration:1.2s]" />
+                      <span className="absolute h-5 w-5 animate-ping rounded-full border-2 border-slate-500/70" />
+                      <span className="absolute h-5 w-5 animate-ping rounded-full bg-slate-400/30 [animation-duration:1.2s]" />
                     </span>
                   ) : null}
                 </motion.div>,
@@ -1489,15 +1505,15 @@ export default function WebBrowserWorkspace() {
 
             <AnimatePresence>
               {isBrowserBusy || (isAgentBusy && browserState?.loading) ? (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="pointer-events-none absolute inset-x-0 top-0 z-30 h-[2px] overflow-hidden bg-blue-100">
-                  <motion.div className="h-full w-1/3 bg-blue-500" animate={{ x: ["-100%", "400%"] }} transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut" }} />
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="pointer-events-none absolute inset-x-0 top-0 z-30 h-[2px] overflow-hidden bg-slate-100">
+                  <motion.div className="h-full w-1/3 bg-slate-700" animate={{ x: ["-100%", "400%"] }} transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut" }} />
                 </motion.div>
               ) : null}
             </AnimatePresence>
 
             {browserState?.agent.manualControl ? (
               <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-1.5 rounded-md border border-slate-200 bg-white/94 px-2 py-1 text-[9px] font-semibold text-slate-600 shadow-sm backdrop-blur-md">
-                <UserRound className="h-3 w-3 text-blue-600" /> Manual control
+                <UserRound className="h-3 w-3 text-slate-700" /> Manual control
               </div>
             ) : null}
 
@@ -1566,12 +1582,12 @@ export default function WebBrowserWorkspace() {
 
               {sideView === "agent" ? (
                 <>
-                  <div className="clyra-visible-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-3.5">
+                  <div ref={chatScrollRef} className="clyra-visible-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-3.5">
                     <div className="space-y-5">
                       <AnimatePresence initial={false} mode="wait">
                         {messages.length === 0 && !isAgentBusy ? (
                           <motion.section key="browser-welcome" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8, height: 0 }} transition={{ duration: settings.reducedMotion ? 0.01 : 0.22, ease: [0.16, 1, 0.3, 1] }} className="mx-auto flex min-h-[calc(100vh-330px)] max-w-[300px] flex-col justify-center pb-8 pt-4 text-center">
-                            <span className="mx-auto mb-4 grid h-10 w-10 place-items-center rounded-2xl border border-blue-100 bg-blue-50 text-[#587da8] shadow-[0_6px_18px_rgba(77,115,160,0.10)]"><Sparkles className="h-4 w-4" /></span>
+                            <span className="mx-auto mb-4 grid h-10 w-10 place-items-center rounded-2xl border border-slate-200 bg-slate-50 text-slate-600 shadow-[0_6px_18px_rgba(15,23,42,0.06)]"><Sparkles className="h-4 w-4" /></span>
                             <h2 className="text-[17px] font-semibold tracking-[-0.02em] text-slate-800">Browse with Clyra</h2>
                             <p className="mx-auto mt-2 max-w-[270px] text-[11px] font-medium leading-5 text-slate-500">Ask about this page, find information, compare options, or let Clyra complete a browser task.</p>
                             <div className="mt-5 grid gap-2 text-left">
@@ -1580,8 +1596,8 @@ export default function WebBrowserWorkspace() {
                                 { label: "Find something on this page", detail: "Search the visible content", icon: Search, prompt: "Find the most relevant information on the current page." },
                                 { label: "Complete a task", detail: "Plan and act in this browser", icon: MousePointer2, prompt: "Help me complete a task on the current page." },
                               ].map((action) => (
-                                <button key={action.label} type="button" onClick={() => void runAgentTask(action.prompt)} className="group flex min-h-14 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 text-left shadow-[0_4px_14px_rgba(35,54,76,0.035)] transition-[transform,border-color,background-color,box-shadow] duration-200 hover:-translate-y-px hover:border-blue-200 hover:bg-blue-50/40 hover:shadow-[0_8px_20px_rgba(57,95,145,0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-200">
-                                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-slate-100 bg-slate-50 text-slate-500 transition-colors group-hover:border-blue-100 group-hover:bg-white group-hover:text-[#5d7fa8]"><action.icon className="h-3.5 w-3.5" /></span>
+                                <button key={action.label} type="button" onClick={() => void runAgentTask(action.prompt)} className="group flex min-h-14 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 text-left shadow-[0_4px_14px_rgba(35,54,76,0.035)] transition-[transform,border-color,background-color,box-shadow] duration-200 hover:-translate-y-px hover:border-slate-300 hover:bg-slate-50 hover:shadow-[0_8px_20px_rgba(15,23,42,0.06)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300">
+                                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-slate-100 bg-slate-50 text-slate-500 transition-colors group-hover:border-slate-200 group-hover:bg-white group-hover:text-slate-800"><action.icon className="h-3.5 w-3.5" /></span>
                                   <span className="min-w-0"><span className="block text-[10.5px] font-semibold text-slate-700">{action.label}</span><span className="mt-0.5 block text-[9px] font-medium text-slate-400">{action.detail}</span></span>
                                 </button>
                               ))}
@@ -1659,13 +1675,14 @@ export default function WebBrowserWorkspace() {
                           </motion.div>
                         ) : null}
                       </AnimatePresence>
+                      <div ref={chatEndRef} aria-hidden className="h-px w-full shrink-0" />
                     </div>
                   </div>
 
                   <div className="shrink-0 border-t border-slate-200/80 px-3 pb-3 pt-2.5">
                     <form
                       onSubmit={(event) => { event.preventDefault(); void runAgentTask(); }}
-                      className="rounded-2xl border border-slate-200 bg-white p-3.5 shadow-[0_12px_30px_rgba(35,54,76,0.08)] transition-[border-color,box-shadow] duration-200 focus-within:border-blue-200 focus-within:shadow-[0_0_0_3px_rgba(96,145,202,0.10),0_12px_34px_rgba(35,54,76,0.12)]"
+                      className="rounded-2xl border border-slate-200 bg-white p-3.5 shadow-[0_12px_30px_rgba(35,54,76,0.08)] transition-[border-color,box-shadow] duration-200 focus-within:border-slate-400 focus-within:shadow-[0_0_0_3px_rgba(148,163,184,0.18),0_12px_34px_rgba(35,54,76,0.10)]"
                     >
                       <textarea
                         value={task}
@@ -1717,7 +1734,7 @@ export default function WebBrowserWorkspace() {
                   {browserState?.downloads.length ? browserState.downloads.map((download) => (
                     <div key={download.id} className="flex items-center gap-2.5 rounded-lg px-2 py-2 hover:bg-white">
                       <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-slate-200 bg-white"><FileDown className="h-4 w-4 text-slate-500" /></span>
-                      <span className="min-w-0 flex-1"><span className="block truncate text-[10px] font-semibold text-slate-700">{download.filename}</span><span className={cn("block text-[8px] font-medium", download.status === "failed" ? "text-red-500" : download.status === "complete" ? "text-emerald-600" : "text-blue-600")}>{download.status}</span></span>
+                      <span className="min-w-0 flex-1"><span className="block truncate text-[10px] font-semibold text-slate-700">{download.filename}</span><span className={cn("block text-[8px] font-medium", download.status === "failed" ? "text-red-500" : download.status === "complete" ? "text-emerald-600" : "text-slate-600")}>{download.status}</span></span>
                     </div>
                   )) : <EmptyPanel icon={Download} label="No downloads" />}
                 </div>
@@ -1749,10 +1766,10 @@ export default function WebBrowserWorkspace() {
 
 function statusPillMeta(phase: AgentStatus, manualControl: boolean): { label: string; className: string; live?: boolean } {
   switch (phase) {
-    case "planning": return { label: "Planning", className: "bg-sky-50 text-sky-600 border-sky-200", live: true };
-    case "observing": return { label: "Observing", className: "bg-sky-50 text-sky-600 border-sky-200", live: true };
-    case "executing": return { label: "Acting", className: "bg-sky-50 text-sky-600 border-sky-200", live: true };
-    case "verifying": return { label: "Verifying", className: "bg-sky-50 text-sky-600 border-sky-200", live: true };
+    case "planning": return { label: "Planning", className: "bg-slate-100 text-slate-600 border-slate-200", live: true };
+    case "observing": return { label: "Observing", className: "bg-slate-100 text-slate-600 border-slate-200", live: true };
+    case "executing": return { label: "Acting", className: "bg-slate-100 text-slate-600 border-slate-200", live: true };
+    case "verifying": return { label: "Verifying", className: "bg-slate-100 text-slate-600 border-slate-200", live: true };
     case "recovering": return { label: "Recovering", className: "bg-amber-50 text-amber-600 border-amber-200", live: true };
     case "waiting_for_user": return { label: "Needs you", className: "bg-amber-50 text-amber-600 border-amber-200" };
     case "paused": return { label: manualControl ? "You have control" : "Paused", className: "bg-slate-100 text-slate-500 border-slate-200" };
@@ -1807,7 +1824,7 @@ function PlanChecklistCard({ plan, completedOpen, onToggleCompleted, reducedMoti
           <CircleCheck className="h-3 w-3 text-emerald-500" />
         ) : step.status === "active" ? (
           <motion.span
-            className="h-2 w-2 rounded-full bg-sky-500"
+            className="h-2 w-2 rounded-full bg-slate-700"
             animate={reducedMotion ? undefined : { scale: [1, 1.35, 1], opacity: [1, 0.55, 1] }}
             transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
           />
@@ -1875,10 +1892,10 @@ function ActionRow({ item, reducedMotion }: { item: Extract<RunItem, { kind: "ac
   return (
     <motion.div initial={{ opacity: 0, x: -4 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.16, ease: [0.16, 1, 0.3, 1] }} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
       <div className="flex items-center gap-2">
-        <span className="grid h-5 w-5 shrink-0 place-items-center rounded-md bg-sky-50 text-sky-600"><Icon className="h-3 w-3" /></span>
+        <span className="grid h-5 w-5 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-600"><Icon className="h-3 w-3" /></span>
         <span className="min-w-0 flex-1 truncate text-[10.5px] font-medium text-slate-700">{item.label}</span>
         {item.status === "running" ? (
-          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-sky-500" />
+          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-slate-500" />
         ) : item.status === "success" ? (
           <CircleCheck className="h-3 w-3 shrink-0 text-emerald-500" />
         ) : (
@@ -1915,11 +1932,11 @@ function RecoveryCard({ item, reducedMotion }: { item: Extract<RunItem, { kind: 
 
 function AskUserCard({ question, reducedMotion }: { question: string; reducedMotion: boolean }) {
   return (
-    <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.2, ease: [0.16, 1, 0.3, 1] }} className="rounded-xl border border-sky-200 bg-sky-50/70 px-3 py-2.5">
+    <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.2, ease: [0.16, 1, 0.3, 1] }} className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5">
       <div className="flex items-start gap-2">
-        <CircleHelp className="mt-[1px] h-3.5 w-3.5 shrink-0 text-sky-500" />
+        <CircleHelp className="mt-[1px] h-3.5 w-3.5 shrink-0 text-slate-500" />
         <div className="min-w-0 flex-1">
-          <p className="text-[9px] font-semibold uppercase tracking-wide text-sky-500">Clyra needs your input</p>
+          <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-500">Clyra needs your input</p>
           <p className="mt-1 text-[11px] font-medium leading-4.5 text-slate-700">{question}</p>
           <p className="mt-1.5 text-[9px] font-medium text-slate-400">Reply in the box below to continue.</p>
         </div>
@@ -1947,7 +1964,7 @@ function CompletionCard({ item, reducedMotion }: { item: Extract<RunItem, { kind
           </p>
           {item.message ? <p className="mt-1 whitespace-pre-wrap text-[10.5px] font-medium leading-4.5 text-slate-700">{item.message}</p> : null}
           {item.evidence?.url ? (
-            <a href={item.evidence.url} target="_blank" rel="noreferrer" className="mt-2 flex h-6 max-w-full items-center gap-1.5 rounded-md border border-slate-200/80 bg-white/80 px-2 text-[9px] font-semibold text-slate-600 transition-colors hover:text-sky-600">
+            <a href={item.evidence.url} target="_blank" rel="noreferrer" className="mt-2 flex h-6 max-w-full items-center gap-1.5 rounded-md border border-slate-200/80 bg-white/80 px-2 text-[9px] font-semibold text-slate-600 transition-colors hover:text-slate-900">
               <ExternalLink className="h-2.5 w-2.5 shrink-0" />
               <span className="min-w-0 truncate">{item.evidence.title || displayHost(item.evidence.url)}</span>
               <span className="shrink-0 text-slate-400">{displayHost(item.evidence.url)}</span>
@@ -2007,7 +2024,7 @@ function AgentRunSection({
     <motion.section initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.22, ease: [0.16, 1, 0.3, 1] }} className="space-y-2">
       <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2.5">
         <div className="flex items-center gap-2">
-          <span className="grid h-5 w-5 shrink-0 place-items-center rounded-md bg-sky-100/80 text-sky-600"><Bot className="h-3 w-3" /></span>
+          <span className="grid h-5 w-5 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-600"><Bot className="h-3 w-3" /></span>
           <span className="min-w-0 flex-1 truncate text-[9px] font-semibold uppercase tracking-wide text-slate-400">Browser task</span>
           <StatusPill phase={displayPhase} manualControl={manualControl} />
           {active ? (

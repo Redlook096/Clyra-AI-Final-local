@@ -1,10 +1,13 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import path from "node:path";
-import { BrowserWindow, clipboard, globalShortcut, screen } from "electron";
+import { BrowserWindow, clipboard, globalShortcut, screen, systemPreferences } from "electron";
 
 const execFileAsync = promisify(execFile);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const PILL_WIDTH = 380;
+const PILL_HEIGHT = 96;
+const PILL_MARGIN = 16;
 
 function snapshotClipboard() {
   const formats = clipboard.availableFormats();
@@ -75,6 +78,10 @@ async function readSelectedText() {
   }
 }
 
+function isClyraProcessName(name) {
+  return /^clyra$/i.test(String(name || "").trim());
+}
+
 export class DictationManager {
   constructor({ uiContents, preloadPath, pillPath }) {
     this.uiContents = uiContents;
@@ -86,6 +93,7 @@ export class DictationManager {
     this.target = null;
     this.escapeRegistered = false;
     this.activationId = 0;
+    this.shortcut = process.platform === "darwin" ? "Command+Shift+K" : "Control+Shift+K";
   }
 
   isSender(contents) {
@@ -93,30 +101,112 @@ export class DictationManager {
   }
 
   async initialize() {
-    const shortcut = process.platform === "darwin" ? "Command+Shift+K" : "Control+Shift+K";
-    globalShortcut.unregister(shortcut);
-    if (!globalShortcut.register(shortcut, () => void this.toggle())) {
+    globalShortcut.unregister(this.shortcut);
+    if (!globalShortcut.register(this.shortcut, () => void this.toggle())) {
       throw new Error("Clyra could not register the global dictation shortcut.");
     }
   }
 
   destroy() {
-    globalShortcut.unregisterAll();
+    globalShortcut.unregister(this.shortcut);
+    this.unregisterEscape();
     this.window?.destroy();
     this.window = null;
   }
 
+  /** macOS mic / accessibility status for actionable UI copy. */
+  async permissionStatus() {
+    if (process.platform !== "darwin") {
+      return { microphone: "unknown", accessibility: true, trusted: true };
+    }
+    let microphone = "unknown";
+    try {
+      microphone = systemPreferences.getMediaAccessStatus("microphone");
+    } catch {
+      microphone = "unknown";
+    }
+    let accessibility = true;
+    try {
+      accessibility = systemPreferences.isTrustedAccessibilityClient(false);
+    } catch {
+      accessibility = true;
+    }
+    return { microphone, accessibility, trusted: accessibility };
+  }
+
+  async ensureMicrophoneAccess() {
+    if (process.platform !== "darwin") return { ok: true, status: "unknown" };
+    let status = "unknown";
+    try {
+      status = systemPreferences.getMediaAccessStatus("microphone");
+    } catch {
+      return { ok: true, status: "unknown" };
+    }
+    if (status === "granted") return { ok: true, status };
+    if (status === "denied" || status === "restricted") {
+      return {
+        ok: false,
+        status,
+        error: "Microphone access is blocked. Enable Clyra in System Settings → Privacy & Security → Microphone, then try Cmd+Shift+K again.",
+      };
+    }
+    // not-determined / unknown — prompt once from the main process so a
+    // background renderer does not silently fail getUserMedia.
+    try {
+      const granted = await systemPreferences.askForMediaAccess("microphone");
+      return granted
+        ? { ok: true, status: "granted" }
+        : {
+            ok: false,
+            status: "denied",
+            error: "Microphone permission was denied. Enable Clyra in System Settings → Privacy & Security → Microphone.",
+          };
+    } catch {
+      return { ok: true, status };
+    }
+  }
+
+  /**
+   * Place the pill on the display under the cursor (not always the primary
+   * display), near the pointer, clamped into that display's work area.
+   */
+  positionPill() {
+    if (!this.window || this.window.isDestroyed()) return;
+    const cursor = screen.getCursorScreenPoint();
+    const display = screen.getDisplayNearestPoint(cursor);
+    const { x, y, width, height } = display.workArea;
+    let px = Math.round(cursor.x - PILL_WIDTH / 2);
+    // Prefer just below the cursor so the expanding pill does not cover the
+    // insertion caret; flip above when the pointer sits near the bottom edge.
+    let py = Math.round(cursor.y + 28);
+    if (py + PILL_HEIGHT > y + height - PILL_MARGIN) {
+      py = Math.round(cursor.y - PILL_HEIGHT - 28);
+    }
+    // If the cursor is somehow outside a usable band, centre on this display.
+    if (py < y + PILL_MARGIN || py + PILL_HEIGHT > y + height - PILL_MARGIN) {
+      px = Math.round(x + (width - PILL_WIDTH) / 2);
+      py = Math.round(y + Math.max(PILL_MARGIN, height * 0.38 - PILL_HEIGHT / 2));
+    }
+    px = Math.min(Math.max(px, x + PILL_MARGIN), x + width - PILL_WIDTH - PILL_MARGIN);
+    py = Math.min(Math.max(py, y + PILL_MARGIN), y + height - PILL_HEIGHT - PILL_MARGIN);
+    this.window.setBounds({ x: px, y: py, width: PILL_WIDTH, height: PILL_HEIGHT });
+  }
+
   ensurePill() {
-    if (this.window && !this.window.isDestroyed()) return this.window;
-    const display = screen.getPrimaryDisplay();
+    if (this.window && !this.window.isDestroyed()) {
+      this.positionPill();
+      return this.window;
+    }
+    const cursor = screen.getCursorScreenPoint();
+    const display = screen.getDisplayNearestPoint(cursor);
     const { x, y, width, height } = display.workArea;
     this.window = new BrowserWindow({
       // The content grows from a circle within this transparent canvas, which
       // keeps the expansion optically centred on any display.
-      width: 380,
-      height: 96,
-      x: Math.round(x + (width - 380) / 2),
-      y: Math.round(y + height - 122),
+      width: PILL_WIDTH,
+      height: PILL_HEIGHT,
+      x: Math.round(x + (width - PILL_WIDTH) / 2),
+      y: Math.round(y + Math.max(PILL_MARGIN, height * 0.38 - PILL_HEIGHT / 2)),
       show: false,
       frame: false,
       transparent: true,
@@ -126,16 +216,26 @@ export class DictationManager {
       skipTaskbar: true,
       alwaysOnTop: true,
       hasShadow: false,
+      fullscreenable: false,
       title: "Clyra Dictation",
       webPreferences: {
         preload: this.preloadPath,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
+        backgroundThrottling: false,
       },
     });
     this.window.setAlwaysOnTop(true, "floating");
     this.window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    if (process.platform === "darwin") {
+      try {
+        this.window.setWindowButtonVisibility(false);
+      } catch {
+        // Older Electron builds may not expose this helper.
+      }
+    }
+    this.positionPill();
     this.window.loadFile(this.pillPath).catch(() => undefined);
     this.window.webContents.once("did-finish-load", () => this.emitPill());
     this.window.on("closed", () => { this.window = null; });
@@ -160,7 +260,10 @@ export class DictationManager {
       const current = this.window;
       if (current && !current.isDestroyed()) setTimeout(() => current.hide(), 650);
     } else {
-      this.ensurePill().showInactive();
+      const pill = this.ensurePill();
+      this.positionPill();
+      // showInactive keeps the user's target app focused while the overlay appears.
+      pill.showInactive();
       this.registerEscape();
     }
     this.emitPill();
@@ -186,12 +289,27 @@ export class DictationManager {
       this.cancel();
       return;
     }
+    if (this.phase === "error" || this.phase === "done") {
+      // Same shortcut clears a prior failure and starts a fresh capture so the
+      // user is not stuck on an error pill until Escape.
+      this.activationId += 1;
+      this.emitUi("dictation:trigger", { type: "cancel" });
+      this.target = null;
+    }
     // Do not wait on macOS accessibility APIs before showing the shortcut UI.
     // They can be slow when another app is busy, which used to make Cmd+Shift+K
     // feel broken even though the global shortcut had fired.
     const activationId = ++this.activationId;
     this.target = { application: "", selectedText: "" };
     this.setState({ phase: "arming", detail: "" });
+
+    const mic = await this.ensureMicrophoneAccess();
+    if (activationId !== this.activationId || this.phase === "idle") return;
+    if (!mic.ok) {
+      this.setState({ phase: "error", detail: mic.error });
+      return;
+    }
+
     const [application, selectedText] = await Promise.all([
       frontmostApplication().catch(() => ""),
       readSelectedText().catch(() => ""),
@@ -237,10 +355,25 @@ export class DictationManager {
     if (process.platform !== "darwin") {
       throw new Error("Native insertion is not available on this platform yet. The text remains ready to copy.");
     }
-    const current = await frontmostApplication();
-    if (!target?.application || current !== target.application) {
-      throw new Error("The active application changed while dictation was processing. Nothing was pasted.");
+    const intended = String(target?.application || "").trim();
+    let current = await frontmostApplication().catch(() => "");
+
+    if (intended && current !== intended) {
+      await focusApplication(intended).catch(() => undefined);
+      current = await frontmostApplication().catch(() => "");
+      if (current !== intended) {
+        throw new Error(`Focus moved away from ${intended}. Click back into that app, then press Cmd+Shift+K again.`);
+      }
+    } else if (!intended && isClyraProcessName(current)) {
+      // We never learned the target app (usually missing Accessibility) and
+      // Clyra is frontmost — refuse to paste into ourselves with a vague error.
+      const trusted = systemPreferences.isTrustedAccessibilityClient(false);
+      if (!trusted) {
+        throw new Error("Clyra needs Accessibility permission in System Settings → Privacy & Security → Accessibility to paste into other apps.");
+      }
+      throw new Error("Click into the app where you want the text, then press Cmd+Shift+K again.");
     }
+
     const saved = snapshotClipboard();
     try {
       clipboard.writeText(text);
@@ -248,6 +381,12 @@ export class DictationManager {
       await runAppleScript('tell application "System Events" to keystroke "v" using command down');
       await wait(150);
       return { ok: true };
+    } catch (error) {
+      const trusted = systemPreferences.isTrustedAccessibilityClient(false);
+      if (!trusted) {
+        throw new Error("Clyra needs Accessibility permission in System Settings → Privacy & Security → Accessibility to paste into other apps.");
+      }
+      throw error instanceof Error ? error : new Error("Clyra could not paste the transcribed text.");
     } finally {
       restoreClipboard(saved);
     }

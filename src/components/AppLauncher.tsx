@@ -39,13 +39,13 @@ interface LauncherTool {
 }
 
 const tools: LauncherTool[] = [
-  { id: "vibe", label: "Vibe Coder", shortLabel: "Vibe Coder", detail: "Build and preview production applications", icon: Code2, accent: "#4f46e5" },
-  { id: "chat", label: "Chat", shortLabel: "Chat", detail: "Think, write and reason with Clyra", icon: MessageCircle, accent: "#2563eb" },
-  { id: "clip", label: "AI Clipper", shortLabel: "Clip", detail: "Turn long videos into polished social clips", icon: Clapperboard, accent: "#e11d48" },
-  { id: "fake-text", label: "Message Story", shortLabel: "Text Story", detail: "Create narrated iMessage story videos", icon: MessagesSquare, accent: "#0891b2" },
-  { id: "study", label: "Study Pal", shortLabel: "Study Pal", detail: "Research, connect evidence, and learn on a visual canvas", icon: GraduationCap, accent: "#0f766e" },
-  { id: "would-rather", label: "Would You Rather", shortLabel: "Would You Rather", detail: "Make narrated choice and poll videos", icon: Heart, accent: "#c026d3" },
-  { id: "browser", label: "AI Browser", shortLabel: "Browser", detail: "Research and act across live websites", icon: Globe2, accent: "#059669" },
+  { id: "vibe", label: "Vibe Coder", shortLabel: "Vibe Coder", detail: "Build and preview production applications", icon: Code2, accent: "#0f172a" },
+  { id: "chat", label: "Chat", shortLabel: "Chat", detail: "Think, write and reason with Clyra", icon: MessageCircle, accent: "#1e293b" },
+  { id: "clip", label: "AI Clipper", shortLabel: "Clip", detail: "Turn long videos into polished social clips", icon: Clapperboard, accent: "#334155" },
+  { id: "fake-text", label: "Message Story", shortLabel: "Text Story", detail: "Create narrated iMessage story videos", icon: MessagesSquare, accent: "#475569" },
+  { id: "study", label: "Study Pal", shortLabel: "Study Pal", detail: "Research, connect evidence, and learn on a visual canvas", icon: GraduationCap, accent: "#0f172a" },
+  { id: "would-rather", label: "Would You Rather", shortLabel: "Would You Rather", detail: "Make narrated choice and poll videos", icon: Heart, accent: "#334155" },
+  { id: "browser", label: "AI Browser", shortLabel: "Browser", detail: "Research and act across live websites", icon: Globe2, accent: "#1e293b" },
 ];
 
 const CENTER = 320;

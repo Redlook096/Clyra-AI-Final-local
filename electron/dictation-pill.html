@@ -21,6 +21,7 @@
     #pill[data-expanded="true"] .meter { opacity: 1; transform: scale(1); }
     .bar { display: block; width: 3px; height: 8px; flex: 0 0 3px; border-radius: 999px; background: linear-gradient(180deg, #7db4ff, #347ce4); box-shadow: 0 0 7px rgba(59,130,246,.15); transform-origin: center; will-change: height, opacity; }
     .status { display: none; flex: 1; min-width: 0; align-items: center; justify-content: center; gap: 8px; color: #55657d; font-size: 11px; font-weight: 650; opacity: 0; transform: translateY(4px); transition: opacity .2s ease, transform .28s cubic-bezier(.16,1,.3,1); }
+    #status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 190px; text-align: center; }
     .loader { width: 13px; height: 13px; border: 1.5px solid #bfdbfe; border-top-color: #397ce0; border-radius: 50%; animation: spin .8s linear infinite; }
     #pill[data-processing="true"] .meter { display: none; }
     #pill[data-processing="true"] .status { display: flex; opacity: 1; transform: translateY(0); }
@@ -40,7 +41,7 @@
   <main id="stage"><div id="pill" hidden data-ready="false" data-expanded="false">
     <button class="control cancel" id="cancel" type="button" aria-label="Cancel dictation"><b>×</b></button>
     <div class="meter" id="meter" aria-hidden="true"></div>
-    <div class="status" id="status"><span class="loader"></span><span id="status-text">Transcribing</span></div>
+    <div class="status" id="status"><span class="loader" id="status-loader"></span><span id="status-text">Transcribing</span></div>
     <div class="selection"><button class="selection-cancel" id="selection-cancel" type="button" aria-label="Cancel">×</button><button class="choice" id="replace" type="button">Replace</button><button class="choice" id="enhance" type="button">Enhance</button></div>
     <button class="control stop" id="primary" type="button" aria-label="Stop recording"><i></i></button>
   </div></main>
@@ -48,6 +49,7 @@
     const pill = document.getElementById('pill');
     const meter = document.getElementById('meter');
     const statusText = document.getElementById('status-text');
+    const statusLoader = document.getElementById('status-loader');
     const primary = document.getElementById('primary');
     const cancel = document.getElementById('cancel');
     const prefersReducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -106,10 +108,25 @@
       const processing = phase === 'processing' || phase === 'optimising' || phase === 'preview' || phase === 'error';
       pill.dataset.selection = String(selection);
       pill.dataset.processing = String(processing && !selection);
-      statusText.textContent = phase === 'processing' ? 'Transcribing' : phase === 'optimising' ? 'Enhancing' : phase === 'preview' ? 'Ready' : phase === 'error' ? 'Needs attention' : 'Listening';
+      const detail = String(payload.detail || '').trim();
+      if (phase === 'error') {
+        // Surface the real failure (mic, accessibility, STT) instead of a
+        // generic "Needs attention" label that hid actionable fixes.
+        statusText.textContent = (detail || 'Something went wrong. Press Esc to dismiss.').slice(0, 96);
+      } else if (phase === 'processing') {
+        statusText.textContent = detail || 'Transcribing';
+      } else if (phase === 'optimising') {
+        statusText.textContent = detail || 'Enhancing';
+      } else if (phase === 'preview') {
+        statusText.textContent = detail || 'Ready';
+      } else {
+        statusText.textContent = detail || 'Listening';
+      }
       statusText.className = phase === 'error' ? 'error' : '';
+      statusLoader.style.display = phase === 'error' ? 'none' : 'block';
       primary.style.display = selection || processing ? 'none' : 'grid';
-      cancel.style.display = selection || phase === 'error' || phase === 'preview' ? 'none' : 'grid';
+      // Keep dismiss available on errors so users are not stuck until Escape.
+      cancel.style.display = selection || phase === 'preview' ? 'none' : 'grid';
     }
 
     primary.addEventListener('click', () => window.clyraDictationPill.action('stop'));

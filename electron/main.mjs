@@ -347,6 +347,13 @@ function registerIpc() {
     return `http://127.0.0.1:${appPort}`;
   });
   ipcMain.handle("dictation:insert", async (event, payload) => { authorize(event); return dictationManager?.insert(payload || {}); });
+  ipcMain.handle("dictation:ensure-permissions", async (event) => {
+    authorize(event);
+    const mic = await dictationManager?.ensureMicrophoneAccess();
+    const status = await dictationManager?.permissionStatus();
+    if (mic && mic.ok === false) return { ...status, ...mic };
+    return { ok: true, ...(status || {}), ...(mic || {}) };
+  });
   ipcMain.on("dictation:pill-action", (event, action) => { authorizeDictation(event); void dictationManager?.action(String(action || "cancel")); });
 }
 
@@ -380,6 +387,8 @@ async function createWindow() {
       sandbox: true,
       webSecurity: true,
       spellcheck: true,
+      // Keep dictation capture + IPC responsive while Clyra is in the background.
+      backgroundThrottling: false,
     },
   });
   mainWindow.contentView.addChildView(uiView);

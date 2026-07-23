@@ -261,6 +261,10 @@ async function handleFinalTranscript(sessionId: string, ws: WebSocket, text: str
       text: clean,
       confidence: 0.92,
     });
+    // Dictation never enters LLM/TTS, so clear the turn locks that conversation
+    // mode holds until playback_done. Leaving them set would drop later audio.
+    active.busy = false;
+    active.playbackHold = false;
     return;
   }
   const history = [...(session?.messages ?? [])];

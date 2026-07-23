@@ -109,6 +109,16 @@ docker compose -f docker/docker-compose.voice.yml up --build
 
 ```bash
 cd backend/voice-pipeline && python test_pipeline_unit.py
+
+# Full voice-call emulation (Wallace fixture → STT → LLM → TTS)
+# Prefers http://127.0.0.1:31415 (desktop), then :3000, or CLYRA_VOICE_BASE_URL.
+npm run test:voice-e2e
+# Dictation-only STT path (same audio / protocol)
+npm run test:voice-e2e:dictation
+# Or:
+#   node tools/voice-call-e2e.mjs
+#   node tools/voice-call-e2e.mjs --dictation
+# Artifacts land in tmp/voice-bench/e2e-*/
 ```
 
 ## Fallback

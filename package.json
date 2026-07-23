@@ -22,6 +22,8 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "test:voice": "tsx tools/voice-unit-tests.ts",
+    "test:voice-e2e": "node tools/voice-call-e2e.mjs",
+    "test:voice-e2e:dictation": "node tools/voice-call-e2e.mjs --dictation",
     "test:browser": "tsx tools/openbrowser-e2e.ts",
     "test:creator": "tsx tools/creator-unit-tests.ts",
     "test:clipper": "tsx tools/clipper-unit-tests.ts",

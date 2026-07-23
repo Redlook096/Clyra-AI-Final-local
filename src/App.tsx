@@ -79,7 +79,6 @@ import {
   CLYRA_NOTES_MODE_CONTRACT,
   wantsNotesMode,
 } from "./lib/clyraChatPrompt";
-import { BlurredStaggerStream } from "@/components/ui/blurred-stagger-text";
 import { TextFadeIn } from "@/components/ui/text-fade-in";
 import { TextLoop } from "@/components/core/text-loop";
 import { StatusTextReveal } from "@/components/core/status-text-reveal";
@@ -285,7 +284,18 @@ const WORKSPACE_TAB_ORDER: WorkspaceTabId[] = [
   "chat",
   "vibe",
   "clip",
+  "browser",
+  "study",
+  "fake-text",
+  "would-rather",
 ];
+/** Only the main swipe-rail tabs — used for magnetic hover geometry. */
+const WORKSPACE_RAIL_TABS: WorkspaceTabId[] = ["chat", "vibe", "clip"];
+
+function workspaceTabIndex(tabId: WorkspaceTabId) {
+  const index = WORKSPACE_TAB_ORDER.indexOf(tabId);
+  return index >= 0 ? index : 0;
+}
 
 function readEmbeddedWorkspace(): WorkspaceTabId {
   if (typeof window === "undefined") return "chat";
@@ -634,6 +644,92 @@ function useComposerVoiceCapture(onComplete: (text: string) => void) {
   return { phase, level, detail, start, cancel };
 }
 
+/** Soft ease-out used by composer expand and chat status reveals.
+ *  Strong deceleration at the end so the bar settles rather than snapping. */
+const CHAT_EASE_OUT: [number, number, number, number] = [0.16, 1, 0.3, 1];
+const COMPOSER_EXPAND_MS = 560;
+const COMPOSER_TOOLS_EASE: [number, number, number, number] = [0.16, 1, 0.3, 1];
+
+/**
+ * Lightweight streaming paint: advances in word-sized chunks via rAF instead of
+ * per-character DOM/layout thrash. Settled text snaps to the full payload.
+ */
+function SoftStreamText({
+  text,
+  isStreaming,
+  className,
+}: {
+  text: string;
+  isStreaming?: boolean;
+  className?: string;
+}) {
+  const [shown, setShown] = useState(() => (isStreaming ? "" : text));
+  const shownRef = useRef(isStreaming ? "" : text);
+  const targetRef = useRef(text);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    targetRef.current = text;
+    if (!isStreaming) {
+      shownRef.current = text;
+      setShown(text);
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      return;
+    }
+
+    const schedule = () => {
+      if (rafRef.current != null) return;
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        const target = targetRef.current;
+        let current = shownRef.current;
+        if (current.length > target.length) {
+          shownRef.current = target;
+          setShown(target);
+          return;
+        }
+        if (current.length >= target.length) return;
+        // Catch up faster when the network is ahead of the paint cursor.
+        let steps = target.length - current.length > 64 ? 4 : 2;
+        while (steps-- > 0 && current.length < target.length) {
+          const rem = target.slice(current.length);
+          const match = rem.match(/^(?:\s*\S{1,18}|\s+|[\s\S]{1,12})/);
+          current += match?.[0] ?? rem.slice(0, 8);
+        }
+        shownRef.current = current;
+        setShown(current);
+        if (current.length < targetRef.current.length) schedule();
+      });
+    };
+
+    schedule();
+  }, [text, isStreaming]);
+
+  useEffect(
+    () => () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    },
+    [],
+  );
+
+  if (!text && !shown) return null;
+
+  return (
+    <div
+      className={cn(
+        "clyra-stream-paint whitespace-pre-wrap font-medium leading-relaxed",
+        className,
+      )}
+    >
+      {shown}
+      {isStreaming ? <span className="clyra-stream-paint__caret" aria-hidden /> : null}
+    </div>
+  );
+}
+
 /** Standard chat: shimmer until the model emits answer text (`content`), then hide so stagger can print it. */
 function ChatThinkingLabel({
   thinkingMode = "thinking",
@@ -690,14 +786,14 @@ function ChatThinkingLabel({
             {sourceHosts.map((host, index) => (
               <motion.span
                 key={host}
-                initial={{ opacity: 0, scale: 0.55, y: 4 }}
+                initial={{ opacity: 0, scale: 0.82, y: 3 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.8 }}
+                exit={{ opacity: 0, scale: 0.9 }}
                 transition={{
                   type: "tween",
-                  duration: 0.38,
-                  ease: [0.22, 1, 0.36, 1],
-                  delay: Math.min(index * 0.04, 0.12),
+                  duration: 0.52,
+                  ease: CHAT_EASE_OUT,
+                  delay: Math.min(index * 0.055, 0.18),
                 }}
                 className="grid h-5 w-5 place-items-center overflow-hidden rounded-full border border-slate-200/80 bg-white"
                 title={host}
@@ -1246,11 +1342,17 @@ export const AnimatedMessage = ({
       codePresentation="default"
     />
   ) : useCompletedBlurReveal ? (
-    <TextFadeIn className={cn("font-medium leading-relaxed text-inherit", fontSizeClass)} by="character">
+    <TextFadeIn
+      className={cn("font-medium leading-relaxed text-inherit", fontSizeClass)}
+      by="word"
+      duration={0.42}
+      delay={0.04}
+      staggerDelay={0.028}
+    >
       {content}
     </TextFadeIn>
   ) : (
-    <BlurredStaggerStream
+    <SoftStreamText
       text={content}
       isStreaming={!!isStreaming}
       className={cn("text-inherit", fontSizeClass)}
@@ -1268,10 +1370,10 @@ export const AnimatedMessage = ({
         {showThinking ? (
           <motion.div
             key="thinking"
-            initial={{ opacity: 0, y: 0, filter: "blur(4px)" }}
+            initial={{ opacity: 0, y: 0, filter: "blur(3px)" }}
             animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-            exit={{ opacity: 0, y: 0, scale: 0.992, filter: "blur(3px)", clipPath: "inset(0 0 0 100% round 8px)" }}
-            transition={{ duration: 0.36, ease: [0.22, 1, 0.36, 1] }}
+            exit={{ opacity: 0, y: 0, scale: 0.994, filter: "blur(2px)", clipPath: "inset(0 0 0 100% round 8px)" }}
+            transition={{ duration: 0.52, ease: CHAT_EASE_OUT }}
           >
             <ChatThinkingLabel
               thinkingMode={thinkingMode}
@@ -1283,9 +1385,9 @@ export const AnimatedMessage = ({
             key="answer"
             className={cn("markdown-body", isVibe && "markdown-body--vibe")}
             data-invert-ignore
-            initial={{ opacity: 0, y: 0, scale: 0.992, filter: "blur(4px)" }}
+            initial={{ opacity: 0, y: 0, scale: 0.994, filter: "blur(3px)" }}
             animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
-            transition={{ duration: 0.42, ease: [0.16, 1, 0.3, 1] }}
+            transition={{ duration: 0.56, ease: CHAT_EASE_OUT }}
           >
             {answerBody}
             {thinkingMode === "search" ? <SearchSourcesFooter urls={searchSources} /> : null}
@@ -1300,9 +1402,9 @@ export const AnimatedMessage = ({
         <motion.div
           className={cn("markdown-body", isVibe && "markdown-body--vibe")}
           data-invert-ignore
-          initial={{ opacity: 0, y: 0, scale: 0.992, filter: "blur(5px)" }}
+          initial={{ opacity: 0, y: 0, scale: 0.994, filter: "blur(3px)" }}
           animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
-          transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+          transition={{ duration: 0.62, ease: CHAT_EASE_OUT }}
         >
           {answerBody}
           {thinkingMode === "search" ? (
@@ -1734,7 +1836,7 @@ export default function App() {
     const rawIndex = (mouseX - padding) / offsetStep;
     const closestIndex = Math.max(
       0,
-      Math.min(WORKSPACE_TAB_ORDER.length - 1, Math.round(rawIndex)),
+      Math.min(WORKSPACE_RAIL_TABS.length - 1, Math.round(rawIndex)),
     );
     const closestCenter = padding + closestIndex * offsetStep + WORKSPACE_TAB_WIDTH / 2;
 
@@ -1774,7 +1876,7 @@ export default function App() {
     const pillX = springContainerX.get() - 50.5;
     const maxX =
       WORKSPACE_TAB_PADDING +
-      (WORKSPACE_TAB_ORDER.length - 1) *
+      (WORKSPACE_RAIL_TABS.length - 1) *
         (WORKSPACE_TAB_WIDTH + WORKSPACE_TAB_GAP) +
       2;
     return Math.min(maxX, Math.max(7, pillX));
@@ -2088,9 +2190,9 @@ export default function App() {
     if (welcomeComposerAnchorRef.current == null) {
       startObserving();
     } else {
-      // Returning from an expanded state: wait for the 280-300ms collapse
+      // Returning from an expanded state: wait for the ~560ms collapse
       // transition to settle before re-measuring the resting height.
-      timer = window.setTimeout(startObserving, 380);
+      timer = window.setTimeout(startObserving, COMPOSER_EXPAND_MS + 40);
     }
     return () => {
       if (timer != null) window.clearTimeout(timer);
@@ -4943,6 +5045,7 @@ Please analyze the code you just wrote and fix this error.`;
   const workspacePanelVariants = {
     enter: (direction: number) => ({
       x: direction > 0 ? workspaceSwipeTravelPx : -workspaceSwipeTravelPx,
+      opacity: 1,
       zIndex: 2,
       pointerEvents: "none" as const,
     }),
@@ -4951,11 +5054,13 @@ Please analyze the code you just wrote and fix this error.`;
       // a percentage target leaves Motion unable to finish the exit lifecycle
       // in Chromium, which is what made Vibe -> Chat appear to fade or stall.
       x: 0,
+      opacity: 1,
       zIndex: 2,
       pointerEvents: "auto" as const,
     },
     exit: (direction: number) => ({
       x: direction > 0 ? -workspaceSwipeTravelPx : workspaceSwipeTravelPx,
+      opacity: 1,
       zIndex: 1,
       pointerEvents: "none" as const,
     }),
@@ -5112,9 +5217,11 @@ Please analyze the code you just wrote and fix this error.`;
     const currentIsVibeChat = messages.some(
       (message) => message.assistantKind === "vibe",
     );
-    const fromIndex = WORKSPACE_TAB_ORDER.indexOf(activeWorkspaceTab);
-    const toIndex = WORKSPACE_TAB_ORDER.indexOf(tabId);
-    setWorkspaceTransitionDirection(toIndex > fromIndex ? 1 : -1);
+    const fromIndex = workspaceTabIndex(activeWorkspaceTab);
+    const toIndex = workspaceTabIndex(tabId);
+    // Always derive direction from a stable order so Chat ↔ tool swipes are
+    // perfect mirrors (returning to Chat must not reverse or spawn).
+    setWorkspaceTransitionDirection(toIndex >= fromIndex ? 1 : -1);
     setIsWorkspaceSwitching(true);
     if (workspaceSwitchTimeoutRef.current != null) {
       window.clearTimeout(workspaceSwitchTimeoutRef.current);
@@ -5881,6 +5988,7 @@ Please analyze the code you just wrote and fix this error.`;
                   <motion.div
                     key={workspaceViewKey}
                     data-workspace-motion="true"
+                    data-workspace={workspaceViewKey}
                     custom={workspaceTransitionDirection}
                     variants={workspacePanelVariants}
                     layout={false}
@@ -6049,14 +6157,14 @@ Please analyze the code you just wrote and fix this error.`;
                               return (
                                 <motion.div
                                   key={message.id}
-                                  initial={isWorkspaceSwitching || message.role === "user" ? false : { opacity: 0, y: 0, scale: 0.99 }}
+                                  initial={isWorkspaceSwitching || message.role === "user" ? false : { opacity: 0, y: 0, scale: 0.994 }}
                                   animate={{ opacity: 1, y: 0, scale: 1 }}
                                   transition={{
                                     type: "tween",
                                     // A long ease-out gives the bubble a visible glide,
                                     // then lets it settle without a springy rebound.
-                                    ease: [0.16, 1, 0.3, 1],
-                                    duration: message.role === "user" ? (isFirstUserMessage ? 0.78 : 0.68) : 0.42,
+                                    ease: CHAT_EASE_OUT,
+                                    duration: message.role === "user" ? (isFirstUserMessage ? 0.98 : 0.88) : 0.52,
                                   }}
                                   className={cn(
                                     "flex w-full",
@@ -6341,36 +6449,62 @@ Please analyze the code you just wrote and fix this error.`;
                                 </motion.div>
                               )}
                             </AnimatePresence>
-                            {(messages.length > 0 || isExpanded) && !showCommandPalette ? (
-                              <div className="clyra-composer-tools" aria-label="Chat tools">
-                                <button
-                                  type="button"
-                                  onPointerDown={(event) => event.stopPropagation()}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    setIsCommandPalettePinned(true);
-                                    setShowCommandPalette(true);
-                                    setActiveSuggestion(0);
-                                    setIsInputExpanded(true);
+                            <AnimatePresence initial={false}>
+                              {(messages.length > 0 || isExpanded) && !showCommandPalette ? (
+                                <motion.div
+                                  key="composer-tools"
+                                  className="clyra-composer-tools"
+                                  aria-label="Chat tools"
+                                  initial={{ opacity: 0, y: 10, filter: "blur(4px)" }}
+                                  animate={{
+                                    opacity: 1,
+                                    y: 0,
+                                    filter: "blur(0px)",
+                                    transition: {
+                                      duration: COMPOSER_EXPAND_MS / 1000,
+                                      ease: COMPOSER_TOOLS_EASE,
+                                      delay: 0.06,
+                                    },
                                   }}
-                                ><AppWindow className="h-4 w-4" /> Apps</button>
-                                <button
-                                  type="button"
-                                  onPointerDown={(event) => event.stopPropagation()}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    const searchCommand = commandSuggestions.find((command): command is BuiltInCommandSuggestion => command.id === "search");
-                                    if (!searchCommand) return;
-                                    setSelectedCommand(searchCommand);
-                                    // The tool chip carries the mode; keep the user's prompt clean.
-                                    setValue("");
-                                    setIsComposerFocused(true);
-                                    setIsInputExpanded(true);
-                                    window.setTimeout(() => textareaRef.current?.focus(), 0);
+                                  exit={{
+                                    opacity: 0,
+                                    y: 8,
+                                    filter: "blur(3px)",
+                                    transition: {
+                                      duration: (COMPOSER_EXPAND_MS - 80) / 1000,
+                                      ease: COMPOSER_TOOLS_EASE,
+                                    },
                                   }}
-                                ><Globe className="h-4 w-4" /> Web search</button>
-                              </div>
-                            ) : null}
+                                >
+                                  <button
+                                    type="button"
+                                    onPointerDown={(event) => event.stopPropagation()}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setIsCommandPalettePinned(true);
+                                      setShowCommandPalette(true);
+                                      setActiveSuggestion(0);
+                                      setIsInputExpanded(true);
+                                    }}
+                                  ><AppWindow className="h-4 w-4" /> Apps</button>
+                                  <button
+                                    type="button"
+                                    onPointerDown={(event) => event.stopPropagation()}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      const searchCommand = commandSuggestions.find((command): command is BuiltInCommandSuggestion => command.id === "search");
+                                      if (!searchCommand) return;
+                                      setSelectedCommand(searchCommand);
+                                      // The tool chip carries the mode; keep the user's prompt clean.
+                                      setValue("");
+                                      setIsComposerFocused(true);
+                                      setIsInputExpanded(true);
+                                      window.setTimeout(() => textareaRef.current?.focus(), 0);
+                                    }}
+                                  ><Globe className="h-4 w-4" /> Web search</button>
+                                </motion.div>
+                              ) : null}
+                            </AnimatePresence>
                             <div
                               className="clyra-composer-anchor"
                               style={
@@ -6382,7 +6516,7 @@ Please analyze the code you just wrote and fix this error.`;
                             <motion.div
                               ref={composerSurfaceRef}
                               className={cn(
-                                "input-wrapper relative backdrop-blur-xl border transition-[background-color,border-color,padding,box-shadow,border-radius] duration-[280ms] ease-[cubic-bezier(0.32,0.72,0,1)] cursor-text overflow-visible mx-auto z-[3]",
+                                "input-wrapper relative backdrop-blur-xl border transition-[background-color,border-color,padding,box-shadow,border-radius] duration-[560ms] ease-[cubic-bezier(0.16,1,0.3,1)] cursor-text overflow-visible mx-auto z-[3]",
                                 isVibeWorkspace && "clyra-vibe-composer",
                                 isExpanded && "clyra-composer-expanded",
                                 theme === "Dark"
@@ -6781,7 +6915,7 @@ Please analyze the code you just wrote and fix this error.`;
                                       isExpanded
                                         ? "min-h-[46px] max-h-[160px] py-2.5 px-1"
                                         : "min-h-[42px] max-h-[160px] py-2 px-1",
-                                      "clyra-visible-scrollbar transition-[height,min-height,max-height,padding,opacity,transform] duration-[280ms] ease-[cubic-bezier(0.32,0.72,0,1)]",
+                                      "clyra-visible-scrollbar transition-[height,min-height,max-height,padding,opacity,transform] duration-[560ms] ease-[cubic-bezier(0.16,1,0.3,1)]",
                                       isFadingInText
                                         ? "opacity-0 translate-y-1 scale-[0.99]"
                                         : "opacity-100 translate-y-0 scale-100",
@@ -6869,8 +7003,8 @@ Please analyze the code you just wrote and fix this error.`;
                                     animate={{ height: "auto", opacity: 1 }}
                                     exit={{ height: 0, opacity: 0 }}
                                     transition={{
-                                      height: { duration: 0.3, ease: [0.32, 0.72, 0, 1] },
-                                      opacity: { duration: 0.22, ease: "linear" },
+                                      height: { duration: COMPOSER_EXPAND_MS / 1000, ease: CHAT_EASE_OUT },
+                                      opacity: { duration: (COMPOSER_EXPAND_MS - 120) / 1000, ease: CHAT_EASE_OUT },
                                     }}
                                     className="clyra-composer-expanded-content overflow-hidden"
                                   >
