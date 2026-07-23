@@ -5,9 +5,11 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Clock3,
   Copy,
   FileText,
   FilePlus2,
+  History,
   Layers,
   Lightbulb,
   Link2,
@@ -26,7 +28,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../lib/utils";
 import { MarkdownMessageContent } from "./MarkdownMessageContent";
-import { ShiningText } from "./ShiningText";
+import { ShiningBrainIcon, ShiningText, ThinkingDots } from "./ShiningText";
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -82,14 +84,24 @@ type NotesDoc = {
 
 type TabId = "chat" | "quiz" | "flashcards" | "notes" | "sources";
 
-type PersistedState = {
+type StudySession = {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
   sources: StudySource[];
   messages: ChatMessage[];
   decks: FlashDeck[];
   notes: NotesDoc | null;
 };
 
-const STORAGE_KEY = "clyra.study-pal.v2";
+type WorkspaceStore = {
+  sessions: StudySession[];
+  activeSessionId: string | null;
+};
+
+const STORAGE_KEY_V2 = "clyra.study-pal.v2";
+const STORAGE_KEY = "clyra.study-pal.v3";
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -97,20 +109,94 @@ const STORAGE_KEY = "clyra.study-pal.v2";
 
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
-function loadPersisted(): PersistedState {
-  const fallback: PersistedState = { sources: [], messages: [], decks: [], notes: null };
+function emptySession(partial?: Partial<StudySession>): StudySession {
+  const now = Date.now();
+  return {
+    id: partial?.id || uid(),
+    title: partial?.title || "New study",
+    createdAt: partial?.createdAt || now,
+    updatedAt: partial?.updatedAt || now,
+    sources: partial?.sources || [],
+    messages: partial?.messages || [],
+    decks: partial?.decks || [],
+    notes: partial?.notes ?? null,
+  };
+}
+
+function titleFromSession(session: StudySession) {
+  const fromMessage = session.messages.find((message) => message.role === "user")?.content?.trim();
+  if (fromMessage) return fromMessage.length > 42 ? `${fromMessage.slice(0, 39).trim()}…` : fromMessage;
+  const fromSource = session.sources[0]?.title?.trim();
+  if (fromSource) return fromSource.length > 42 ? `${fromSource.slice(0, 39).trim()}…` : fromSource;
+  return session.title || "New study";
+}
+
+function loadWorkspace(): WorkspaceStore {
+  const empty: WorkspaceStore = { sessions: [], activeSessionId: null };
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return fallback;
-    const parsed = JSON.parse(raw) as Partial<PersistedState>;
-    return {
-      sources: Array.isArray(parsed.sources) ? parsed.sources : [],
-      messages: Array.isArray(parsed.messages) ? parsed.messages : [],
-      decks: Array.isArray(parsed.decks) ? parsed.decks : [],
-      notes: parsed.notes && typeof parsed.notes === "object" ? (parsed.notes as NotesDoc) : null,
+    const rawV3 = localStorage.getItem(STORAGE_KEY);
+    if (rawV3) {
+      const parsed = JSON.parse(rawV3) as Partial<WorkspaceStore>;
+      const sessions = Array.isArray(parsed.sessions)
+        ? parsed.sessions.map((session) => ({
+            ...emptySession(),
+            ...session,
+            sources: Array.isArray(session.sources) ? session.sources : [],
+            messages: Array.isArray(session.messages) ? session.messages : [],
+            decks: Array.isArray(session.decks) ? session.decks : [],
+            notes: session.notes && typeof session.notes === "object" ? session.notes : null,
+          }))
+        : [];
+      const activeSessionId =
+        typeof parsed.activeSessionId === "string" && sessions.some((session) => session.id === parsed.activeSessionId)
+          ? parsed.activeSessionId
+          : sessions[0]?.id || null;
+      return { sessions, activeSessionId };
+    }
+
+    // Migrate single-workspace v2 blob into one session.
+    const rawV2 = localStorage.getItem(STORAGE_KEY_V2);
+    if (!rawV2) return empty;
+    const legacy = JSON.parse(rawV2) as {
+      sources?: StudySource[];
+      messages?: ChatMessage[];
+      decks?: FlashDeck[];
+      notes?: NotesDoc | null;
     };
+    const hasWork =
+      (legacy.sources?.length || 0) > 0 ||
+      (legacy.messages?.length || 0) > 0 ||
+      (legacy.decks?.length || 0) > 0 ||
+      Boolean(legacy.notes);
+    if (!hasWork) return empty;
+    const session = emptySession({
+      title: legacy.sources?.[0]?.title || legacy.messages?.[0]?.content?.slice(0, 42) || "Previous study",
+      sources: Array.isArray(legacy.sources) ? legacy.sources : [],
+      messages: Array.isArray(legacy.messages) ? legacy.messages : [],
+      decks: Array.isArray(legacy.decks) ? legacy.decks : [],
+      notes: legacy.notes && typeof legacy.notes === "object" ? legacy.notes : null,
+    });
+    return { sessions: [session], activeSessionId: session.id };
   } catch {
-    return fallback;
+    return empty;
+  }
+}
+
+function saveWorkspace(store: WorkspaceStore) {
+  try {
+    const payload: WorkspaceStore = {
+      activeSessionId: store.activeSessionId,
+      sessions: store.sessions.slice(0, 40).map((session) => ({
+        ...session,
+        title: titleFromSession(session),
+        sources: session.sources.map((source) => ({ ...source, body: source.body.slice(0, 120_000) })).slice(0, 32),
+        messages: session.messages.slice(-80),
+        decks: session.decks.slice(0, 20),
+      })),
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // Storage may be full or unavailable; the UI keeps working in-memory.
   }
 }
 
@@ -136,6 +222,14 @@ function formatChars(count: number) {
   return `${count} chars`;
 }
 
+function formatSessionTime(value: number) {
+  const delta = Date.now() - value;
+  if (delta < 60_000) return "Just now";
+  if (delta < 3_600_000) return `${Math.max(1, Math.round(delta / 60_000))}m ago`;
+  if (delta < 86_400_000) return `${Math.max(1, Math.round(delta / 3_600_000))}h ago`;
+  return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 /* ------------------------------------------------------------------ */
 /* Small shared UI pieces                                              */
 /* ------------------------------------------------------------------ */
@@ -146,14 +240,14 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () =>
       initial={{ opacity: 0, y: -6 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -6 }}
-      className="flex items-start justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700"
+      className="flex items-start justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700"
       role="alert"
     >
       <span className="leading-snug">{message}</span>
       <button
         type="button"
         onClick={onDismiss}
-        className="mt-0.5 shrink-0 rounded-full p-0.5 text-red-400 transition-colors hover:bg-red-100 hover:text-red-600"
+        className="mt-0.5 shrink-0 rounded-md p-0.5 text-red-400 transition-colors hover:bg-red-100 hover:text-red-600"
         aria-label="Dismiss error"
       >
         <X className="h-3.5 w-3.5" />
@@ -162,28 +256,29 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () =>
   );
 }
 
-function SkeletonLines({ rows = 3, className }: { rows?: number; className?: string }) {
+function StudyThinkingStatus({ label = "Thinking" }: { label?: string }) {
   return (
-    <div className={cn("space-y-2.5", className)} aria-hidden>
-      {Array.from({ length: rows }).map((_, index) => (
-        <div
-          key={index}
-          className="h-3.5 animate-pulse rounded-full bg-slate-200/80"
-          style={{ width: `${88 - (index % 3) * 18}%` }}
-        />
-      ))}
+    <div className="inline-flex flex-wrap items-center gap-2 text-[13px] font-medium text-slate-500" aria-live="polite">
+      <ShiningBrainIcon />
+      <ShiningText text={label} preset="thinkingChat" className="!text-[13px]" />
+      <ThinkingDots />
     </div>
   );
 }
 
 function GeneratingCard({ label }: { label: string }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
-      <div className="mb-4 flex items-center gap-2">
-        <Sparkles className="h-4 w-4 text-slate-500" />
-        <ShiningText text={label} className="text-[14px]" />
+    <div className="rounded-md border border-slate-200 bg-white p-6">
+      <StudyThinkingStatus label={label} />
+      <div className="mt-5 space-y-2.5" aria-hidden>
+        {[0, 1, 2].map((index) => (
+          <div
+            key={index}
+            className="h-3 animate-pulse rounded-full bg-slate-100"
+            style={{ width: `${86 - index * 16}%` }}
+          />
+        ))}
       </div>
-      <SkeletonLines rows={4} />
     </div>
   );
 }
@@ -200,13 +295,13 @@ function EmptyState({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-8 py-14 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white shadow-[0_1px_3px_rgba(15,23,42,0.08)]">
-        <Icon className="h-5 w-5 text-slate-500" />
-      </div>
+    <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
+      <span className="grid h-10 w-10 place-items-center rounded-md border border-slate-200 bg-white text-slate-500">
+        <Icon className="h-4 w-4" />
+      </span>
       <div>
-        <p className="text-[14px] font-semibold text-slate-800">{title}</p>
-        <p className="mx-auto mt-1 max-w-sm text-[13px] leading-relaxed text-slate-500">{description}</p>
+        <p className="text-[14px] font-semibold text-slate-900">{title}</p>
+        <p className="mx-auto mt-1.5 max-w-sm text-[13px] leading-relaxed text-slate-500">{description}</p>
       </div>
       {action}
     </div>
@@ -232,7 +327,7 @@ function PrimaryButton({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-[13px] font-semibold text-white transition-all hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40",
+        "inline-flex items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-[12px] font-semibold text-white transition-[background-color,transform] duration-150 hover:bg-slate-800 active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-40",
         className,
       )}
     >
@@ -248,7 +343,7 @@ function CitationChips({ citations }: { citations: string[] }) {
       {citations.map((citation, index) => (
         <span
           key={`${citation}-${index}`}
-          className="inline-flex max-w-[260px] items-center gap-1 truncate rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-700"
+          className="inline-flex max-w-[260px] items-center gap-1 truncate rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-600"
           title={citation}
         >
           <Link2 className="h-3 w-3 shrink-0" />
@@ -332,118 +427,20 @@ function SourcesPanel({
   }, [pasteTitle, pasteBody, onAdd]);
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
-      {sources.length === 0 ? (
-        <div className="flex min-h-[min(68vh,640px)] flex-col items-center justify-center px-2 py-8 text-center">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Study Pal</p>
-          <h2 className="mt-3 max-w-xl text-[clamp(28px,5vw,40px)] font-semibold tracking-[-0.03em] text-slate-950">
-            What do you want to study?
-          </h2>
-          <p className="mt-3 max-w-md text-[14px] leading-relaxed text-slate-500">
-            Dump in a URL, notes, or pasted text — Clyra sorts it into sources you can chat with, quiz, and review.
-          </p>
-
-          <AnimatePresence>{error && <div className="mt-5 w-full max-w-xl text-left"><ErrorBanner message={error} onDismiss={() => setError("")} /></div>}</AnimatePresence>
-
-          <div className="mt-8 w-full max-w-xl">
-            <div className="flex items-center gap-2 rounded-[22px] border border-slate-200 bg-white px-4 py-2.5 shadow-[0_12px_40px_rgba(15,23,42,0.06)] focus-within:border-slate-400 focus-within:shadow-[0_0_0_3px_rgba(148,163,184,0.2),0_12px_40px_rgba(15,23,42,0.08)]">
-              <Link2 className="h-4 w-4 shrink-0 text-slate-400" />
-              <input
-                value={url}
-                onChange={(event) => setUrl(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void importUrl();
-                }}
-                placeholder="Paste an article, docs, or lecture URL…"
-                className="w-full bg-transparent text-[14px] text-slate-800 outline-none placeholder:text-slate-400"
-                disabled={fetching}
-              />
-              <PrimaryButton onClick={() => void importUrl()} disabled={!url.trim() || fetching} className="shrink-0 px-5">
-                {fetching ? "Importing…" : "Add"}
-              </PrimaryButton>
-            </div>
-
-            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 py-2 text-[13px] font-medium text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
-              >
-                <Upload className="h-3.5 w-3.5" /> Upload file
-              </button>
-              <button
-                type="button"
-                onClick={() => setPasteOpen((open) => !open)}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-full border px-4 py-2 text-[13px] font-medium transition-colors",
-                  pasteOpen
-                    ? "border-slate-900 bg-slate-900 text-white"
-                    : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900",
-                )}
-              >
-                <FilePlus2 className="h-3.5 w-3.5" /> Paste text
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".txt,.md,.markdown,text/plain,text/markdown"
-                multiple
-                className="hidden"
-                onChange={(event) => {
-                  importFiles(event.target.files);
-                  event.target.value = "";
-                }}
-              />
-            </div>
-
-            <AnimatePresence initial={false}>
-              {pasteOpen && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: "auto", opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="overflow-hidden"
-                >
-                  <div className="mt-4 space-y-2 rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
-                    <input
-                      value={pasteTitle}
-                      onChange={(event) => setPasteTitle(event.target.value)}
-                      placeholder="Title (optional)"
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[13px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-400 focus:bg-white"
-                    />
-                    <textarea
-                      value={pasteBody}
-                      onChange={(event) => setPasteBody(event.target.value)}
-                      placeholder="Paste study material here…"
-                      rows={5}
-                      className="w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[13px] leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-400 focus:bg-white"
-                    />
-                    <div className="flex justify-end">
-                      <PrimaryButton onClick={addPasted} disabled={!pasteBody.trim()}>
-                        <Plus className="h-3.5 w-3.5" /> Add source
-                      </PrimaryButton>
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        </div>
-      ) : (
-        <>
+    <div className="mx-auto flex w-full max-w-[720px] flex-col gap-5">
       <div>
-        <h2 className="text-[17px] font-semibold text-slate-900">Sources</h2>
-        <p className="mt-0.5 text-[13px] text-slate-500">
-          Add material to ground your chat, quizzes, flashcards, and notes. Toggle sources to include them.
+        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Resources</p>
+        <h2 className="mt-1.5 text-[22px] font-semibold tracking-[-0.03em] text-slate-950">Study material</h2>
+        <p className="mt-1 text-[13px] text-slate-500">
+          Add links, notes, or files. Toggle which ones ground chat, quizzes, flashcards, and notes.
         </p>
       </div>
 
       <AnimatePresence>{error && <ErrorBanner message={error} onDismiss={() => setError("")} />}</AnimatePresence>
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
+      <div className="rounded-md border border-slate-200 bg-white p-4">
         <div className="flex items-center gap-2">
-          <div className="flex flex-1 items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-4 py-2 focus-within:border-slate-400 focus-within:bg-white">
+          <div className="flex flex-1 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 focus-within:border-slate-400 focus-within:bg-white">
             <Link2 className="h-4 w-4 shrink-0 text-slate-400" />
             <input
               value={url}
@@ -451,32 +448,31 @@ function SourcesPanel({
               onKeyDown={(event) => {
                 if (event.key === "Enter") void importUrl();
               }}
-              placeholder="Paste an article or docs URL…"
+              placeholder="Paste an article, docs, or lecture URL…"
               className="w-full bg-transparent text-[13px] text-slate-800 outline-none placeholder:text-slate-400"
               disabled={fetching}
             />
           </div>
           <PrimaryButton onClick={() => void importUrl()} disabled={!url.trim() || fetching}>
-            {fetching ? "Importing…" : "Import"}
+            {fetching ? "Importing…" : "Add"}
           </PrimaryButton>
         </div>
-
         <div className="mt-3 flex flex-wrap gap-2">
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-[12.5px] font-medium text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800"
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900"
           >
-            <Upload className="h-3.5 w-3.5" /> Upload .txt / .md
+            <Upload className="h-3.5 w-3.5" /> Upload file
           </button>
           <button
             type="button"
             onClick={() => setPasteOpen((open) => !open)}
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-[12.5px] font-medium transition-colors",
+              "inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12px] font-medium transition-colors",
               pasteOpen
-                ? "border-slate-900 bg-slate-900 text-white"
-                : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800",
+                ? "border-slate-900 bg-slate-950 text-white"
+                : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900",
             )}
           >
             <FilePlus2 className="h-3.5 w-3.5" /> Paste text
@@ -493,7 +489,6 @@ function SourcesPanel({
             }}
           />
         </div>
-
         <AnimatePresence initial={false}>
           {pasteOpen && (
             <motion.div
@@ -503,19 +498,19 @@ function SourcesPanel({
               transition={{ duration: 0.2 }}
               className="overflow-hidden"
             >
-              <div className="mt-3 space-y-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+              <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
                 <input
                   value={pasteTitle}
                   onChange={(event) => setPasteTitle(event.target.value)}
                   placeholder="Title (optional)"
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-400"
+                  className="w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5 text-[13px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-400 focus:bg-white"
                 />
                 <textarea
                   value={pasteBody}
                   onChange={(event) => setPasteBody(event.target.value)}
                   placeholder="Paste study material here…"
                   rows={5}
-                  className="w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-400"
+                  className="w-full resize-y rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5 text-[13px] leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-400 focus:bg-white"
                 />
                 <div className="flex justify-end">
                   <PrimaryButton onClick={addPasted} disabled={!pasteBody.trim()}>
@@ -528,56 +523,57 @@ function SourcesPanel({
         </AnimatePresence>
       </div>
 
+      {sources.length === 0 ? (
+        <EmptyState
+          icon={FileText}
+          title="No resources yet"
+          description="Add a URL, upload notes, or paste text so Study Pal has something to work from."
+        />
+      ) : (
         <div className="space-y-2">
-          <AnimatePresence initial={false}>
-            {sources.map((source, index) => (
-              <motion.div
-                key={source.id}
-                layout
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.97 }}
-                transition={{ duration: 0.18 }}
+          {sources.map((source, index) => (
+            <div
+              key={source.id}
+              className={cn(
+                "flex items-start gap-3 rounded-md border bg-white px-3.5 py-3 transition-colors",
+                source.selected ? "border-slate-300" : "border-slate-200 opacity-70",
+              )}
+            >
+              <button
+                type="button"
+                onClick={() => onToggle(source.id)}
                 className={cn(
-                  "flex items-center gap-3 rounded-2xl border bg-white p-3.5 shadow-[0_1px_3px_rgba(15,23,42,0.04)] transition-colors",
-                  source.selected ? "border-slate-200" : "border-slate-100 opacity-60",
+                  "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded border text-[10px] font-bold transition-colors",
+                  source.selected
+                    ? "border-slate-900 bg-slate-950 text-white"
+                    : "border-slate-300 bg-white text-transparent",
                 )}
+                aria-label={source.selected ? "Deselect source" : "Select source"}
               >
-                <button
-                  type="button"
-                  onClick={() => onToggle(source.id)}
-                  aria-label={source.selected ? "Exclude source" : "Include source"}
-                  className={cn(
-                    "flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-colors",
-                    source.selected
-                      ? "border-slate-900 bg-slate-900 text-white"
-                      : "border-slate-300 bg-white text-transparent hover:border-slate-400",
-                  )}
-                >
-                  <Check className="h-3.5 w-3.5" strokeWidth={3} />
-                </button>
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-[11px] font-bold text-slate-500">
-                  S{index + 1}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13.5px] font-semibold text-slate-800">{source.title}</p>
-                  <p className="truncate text-[12px] text-slate-400">
-                    {source.source} · {formatChars(source.body.length)}
-                  </p>
+                <Check className="h-3 w-3" />
+              </button>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
+                    S{index + 1}
+                  </span>
+                  <p className="truncate text-[13px] font-semibold text-slate-900">{source.title}</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => onRemove(source.id)}
-                  className="shrink-0 rounded-full p-2 text-slate-300 transition-colors hover:bg-red-50 hover:text-red-500"
-                  aria-label="Remove source"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </motion.div>
-            ))}
-          </AnimatePresence>
+                <p className="mt-0.5 truncate text-[11px] text-slate-400">
+                  {source.source} · {formatChars(source.body.length)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => onRemove(source.id)}
+                className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                aria-label="Remove source"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
         </div>
-        </>
       )}
     </div>
   );
@@ -653,44 +649,48 @@ function ChatPanel({
   }, [messages.length, thinking]);
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-3xl flex-col">
-      <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto pb-4 pr-1">
+    <div className="mx-auto flex h-full w-full max-w-[720px] flex-col">
+      <div ref={scrollRef} className="clyra-visible-scrollbar flex-1 space-y-5 overflow-y-auto pb-4 pr-1">
         {messages.length === 0 && !thinking ? (
-          <div className="pt-8">
-            <EmptyState
-              icon={MessageSquare}
-              title="Chat with your sources"
-              description={
-                selectedSources.length
-                  ? "Ask anything about your selected sources. Answers stay grounded in the material and cite it inline."
-                  : "You need at least one selected source before you can chat."
-              }
-              action={
-                selectedSources.length ? undefined : (
-                  <PrimaryButton onClick={goToSources}>
-                    <Plus className="h-3.5 w-3.5" /> Add sources
-                  </PrimaryButton>
-                )
-              }
-            />
-          </div>
+          <EmptyState
+            icon={MessageSquare}
+            title="Ask about your material"
+            description={
+              selectedSources.length
+                ? "Questions stay grounded in the sources you selected."
+                : "Add a resource first, then ask anything about it."
+            }
+            action={
+              selectedSources.length ? undefined : (
+                <PrimaryButton onClick={goToSources}>
+                  <Plus className="h-3.5 w-3.5" /> Add resources
+                </PrimaryButton>
+              )
+            }
+          />
         ) : (
           <AnimatePresence initial={false}>
-            {messages.map((message) => (
+            {messages.map((message, index) => (
               <motion.div
                 key={message.id}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.22 }}
+                transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
                 className={cn("flex", message.role === "user" ? "justify-end" : "justify-start")}
               >
                 {message.role === "user" ? (
-                  <div className="max-w-[82%] rounded-2xl rounded-br-md bg-slate-900 px-4 py-2.5 text-[13.5px] leading-relaxed text-white shadow-[0_1px_3px_rgba(15,23,42,0.15)]">
-                    {message.content}
+                  <div
+                    className={cn(
+                      "clyra-chat-user-bubble max-w-[85%] rounded-[24px] border border-slate-200/70 bg-[#f4f4f4] px-5 py-3.5 sm:max-w-[75%]",
+                      index === 0 && "clyra-chat-user-bubble--first",
+                    )}
+                    style={{ ["--delay" as string]: "0.02" }}
+                  >
+                    <div className="clyra-chat-user-text text-[14px] font-medium leading-relaxed">{message.content}</div>
                   </div>
                 ) : (
-                  <div className="max-w-[92%] rounded-2xl rounded-bl-md border border-slate-200 bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
-                    <div className="prose prose-sm prose-slate max-w-none text-[13.5px] leading-relaxed text-slate-800 [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5">
+                  <div className="max-w-[92%] text-[14px] leading-relaxed text-slate-800">
+                    <div className="prose prose-sm prose-slate max-w-none [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5">
                       <MarkdownMessageContent content={message.content} codePresentation="soft" />
                     </div>
                     <CitationChips citations={message.citations || []} />
@@ -700,20 +700,22 @@ function ChatPanel({
             ))}
           </AnimatePresence>
         )}
-        {thinking && (
-          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex justify-start">
-            <div className="rounded-2xl rounded-bl-md border border-slate-200 bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
-              <ShiningText text="Reading your sources…" preset="thinkingChat" />
-              <SkeletonLines rows={2} className="mt-3 w-64" />
-            </div>
+        {thinking ? (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+            className="flex justify-start"
+          >
+            <StudyThinkingStatus label="Reading your sources" />
           </motion.div>
-        )}
+        ) : null}
       </div>
 
       <div className="shrink-0 pt-2">
         <AnimatePresence>{error && <ErrorBanner message={error} onDismiss={() => setError("")} />}</AnimatePresence>
-        <div className="mt-2 flex items-center gap-2 rounded-full border border-slate-200 bg-white py-1.5 pl-5 pr-1.5 shadow-[0_2px_10px_rgba(15,23,42,0.06)] focus-within:border-slate-300">
-          <input
+        <div className="mt-2 flex items-end gap-2 rounded-[22px] border border-slate-200 bg-white py-2 pl-4 pr-2 shadow-[0_8px_28px_rgba(15,23,42,0.05)] focus-within:border-slate-300">
+          <textarea
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
@@ -722,15 +724,16 @@ function ChatPanel({
                 void send();
               }
             }}
-            placeholder={selectedSources.length ? "Ask about your sources…" : "Add a source first, then ask away…"}
-            className="w-full bg-transparent text-[13.5px] text-slate-800 outline-none placeholder:text-slate-400"
+            rows={1}
+            placeholder={selectedSources.length ? "Ask about your sources…" : "Add a resource first…"}
+            className="max-h-28 min-h-[24px] w-full resize-none bg-transparent py-1.5 text-[14px] text-slate-800 outline-none placeholder:text-slate-400"
             disabled={thinking}
           />
           <button
             type="button"
             onClick={() => void send()}
             disabled={!input.trim() || thinking || !selectedSources.length}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-900 text-white transition-all hover:bg-slate-800 disabled:opacity-30"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-950 text-white transition-all hover:bg-slate-800 disabled:opacity-30"
             aria-label="Send"
           >
             <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
@@ -799,7 +802,7 @@ function QuizPanel({ sources }: { sources: StudySource[] }) {
           </p>
         </div>
         <AnimatePresence>{error && <ErrorBanner message={error} onDismiss={() => setError("")} />}</AnimatePresence>
-        <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
+        <div className="space-y-4 rounded-md border border-slate-200 bg-white p-5">
           <input
             value={topic}
             onChange={(event) => setTopic(event.target.value)}
@@ -867,7 +870,7 @@ function QuizPanel({ sources }: { sources: StudySource[] }) {
         <motion.div
           initial={{ opacity: 0, scale: 0.96 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-[0_1px_3px_rgba(15,23,42,0.05)]"
+          className="rounded-md border border-slate-200 bg-white p-6 text-center"
         >
           <p className="text-[12px] font-semibold uppercase tracking-wide text-slate-600">{quiz.topic}</p>
           <p className="mt-2 text-4xl font-bold text-slate-900">
@@ -904,7 +907,7 @@ function QuizPanel({ sources }: { sources: StudySource[] }) {
             const chosen = quiz.answers[question.id];
             const right = chosen === question.correct;
             return (
-              <div key={question.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+              <div key={question.id} className="rounded-md border border-slate-200 bg-white p-4">
                 <div className="flex items-start gap-2.5">
                   <span
                     className={cn(
@@ -972,7 +975,7 @@ function QuizPanel({ sources }: { sources: StudySource[] }) {
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: -24 }}
           transition={{ duration: 0.22 }}
-          className="rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_1px_3px_rgba(15,23,42,0.05)]"
+          className="rounded-md border border-slate-200 bg-white p-6"
         >
           <p className="text-[15px] font-semibold leading-relaxed text-slate-900">{question.question}</p>
 
@@ -1313,7 +1316,7 @@ function FlashcardsPanel({
       </div>
       <AnimatePresence>{error && <ErrorBanner message={error} onDismiss={() => setError("")} />}</AnimatePresence>
 
-      <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
+      <div className="space-y-4 rounded-md border border-slate-200 bg-white p-5">
         <input
           value={topic}
           onChange={(event) => setTopic(event.target.value)}
@@ -1376,7 +1379,7 @@ function FlashcardsPanel({
           {decks.map((deck) => (
             <div
               key={deck.id}
-              className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3.5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]"
+              className="flex items-center gap-3 rounded-md border border-slate-200 bg-white p-3.5"
             >
               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-50 text-slate-500">
                 <Layers className="h-4 w-4" />
@@ -1470,11 +1473,8 @@ function NotesPanel({
 
   if (loading) {
     return (
-      <div className="mx-auto w-full max-w-3xl space-y-3 pt-4">
-        <GeneratingCard label="Distilling your sources into notes…" />
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
-          <SkeletonLines rows={5} />
-        </div>
+      <div className="mx-auto w-full max-w-[720px] pt-4">
+        <GeneratingCard label="Distilling your sources into notes" />
       </div>
     );
   }
@@ -1500,7 +1500,7 @@ function NotesPanel({
 
       <AnimatePresence>{error && <ErrorBanner message={error} onDismiss={() => setError("")} />}</AnimatePresence>
 
-      <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
+      <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white p-3">
         <input
           value={focus}
           onChange={(event) => setFocus(event.target.value)}
@@ -1534,7 +1534,7 @@ function NotesPanel({
         />
       ) : (
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
+          <div className="rounded-md border border-slate-200 bg-white">
             <div className="border-b border-slate-100 px-6 py-4">
               <h3 className="text-[16px] font-semibold text-slate-900">{notes.title}</h3>
             </div>
@@ -1565,7 +1565,7 @@ function NotesPanel({
           </div>
 
           {notes.questions.length > 0 && (
-            <div className="rounded-2xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
+            <div className="rounded-md border border-slate-200 bg-white">
               <div className="border-b border-slate-100 px-6 py-3.5">
                 <p className="text-[13.5px] font-semibold text-slate-800">Self-test</p>
               </div>
@@ -1608,15 +1608,267 @@ function NotesPanel({
 }
 
 /* ------------------------------------------------------------------ */
+/* Welcome                                                             */
+/* ------------------------------------------------------------------ */
+
+function StudyWelcome({
+  sessions,
+  onStartTopic,
+  onAddResource,
+  onOpenSession,
+  onDeleteSession,
+}: {
+  sessions: StudySession[];
+  onStartTopic: (topic: string) => void;
+  onAddResource: (source: Omit<StudySource, "id" | "selected">) => void;
+  onOpenSession: (id: string) => void;
+  onDeleteSession: (id: string) => void;
+}) {
+  const [topic, setTopic] = useState("");
+  const [mode, setMode] = useState<"study" | "resource">("study");
+  const [url, setUrl] = useState("");
+  const [fetching, setFetching] = useState(false);
+  const [error, setError] = useState("");
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteTitle, setPasteTitle] = useState("");
+  const [pasteBody, setPasteBody] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const importUrl = async () => {
+    const value = url.trim();
+    if (!value || fetching) return;
+    setFetching(true);
+    setError("");
+    try {
+      const normalized = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+      const data = await postJson<{ title: string; text: string; url: string }>("/api/study/fetch", { url: normalized });
+      onAddResource({ title: data.title, source: data.url, body: data.text });
+      setUrl("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The source could not be imported");
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  return (
+    <div className="relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#f8fafc]">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(15,23,42,0.04),transparent_55%)]" />
+      <div className="relative mx-auto flex w-full max-w-[720px] flex-1 flex-col items-center justify-center px-5 py-10">
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.42, ease: [0.16, 1, 0.3, 1] }}
+          className="w-full text-center"
+        >
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Study Pal</p>
+          <h1 className="mt-3 text-[clamp(32px,5vw,48px)] font-semibold tracking-[-0.04em] text-slate-950">
+            What do you want to study?
+          </h1>
+          <p className="mx-auto mt-3 max-w-md text-[14px] leading-relaxed text-slate-500">
+            Start with a topic, or add a resource first. Clyra keeps each study session separate.
+          </p>
+
+          <div className="mx-auto mt-8 flex w-full max-w-xl items-center justify-center gap-1 rounded-md border border-slate-200 bg-white p-1">
+            <button
+              type="button"
+              onClick={() => setMode("study")}
+              className={cn(
+                "flex-1 rounded-md px-3 py-2 text-[12px] font-semibold transition-colors",
+                mode === "study" ? "bg-slate-950 text-white" : "text-slate-500 hover:text-slate-800",
+              )}
+            >
+              Start studying
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("resource")}
+              className={cn(
+                "flex-1 rounded-md px-3 py-2 text-[12px] font-semibold transition-colors",
+                mode === "resource" ? "bg-slate-950 text-white" : "text-slate-500 hover:text-slate-800",
+              )}
+            >
+              Add a resource
+            </button>
+          </div>
+
+          <AnimatePresence>{error ? <div className="mx-auto mt-4 w-full max-w-xl text-left"><ErrorBanner message={error} onDismiss={() => setError("")} /></div> : null}</AnimatePresence>
+
+          {mode === "study" ? (
+            <div className="mx-auto mt-5 w-full max-w-xl">
+              <div className="flex items-center gap-2 rounded-[22px] border border-slate-200 bg-white px-4 py-2.5 shadow-[0_16px_48px_rgba(15,23,42,0.06)] focus-within:border-slate-400">
+                <BookOpen className="h-4 w-4 shrink-0 text-slate-400" />
+                <input
+                  value={topic}
+                  onChange={(event) => setTopic(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && topic.trim()) onStartTopic(topic.trim());
+                  }}
+                  placeholder="e.g. Organic chemistry mechanisms…"
+                  className="w-full bg-transparent text-[15px] text-slate-800 outline-none placeholder:text-slate-400"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  onClick={() => topic.trim() && onStartTopic(topic.trim())}
+                  disabled={!topic.trim()}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-950 text-white transition-opacity disabled:opacity-30"
+                  aria-label="Start study session"
+                >
+                  <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
+                </button>
+              </div>
+              <p className="mt-3 text-[12px] text-slate-400">You can add resources after the session opens.</p>
+            </div>
+          ) : (
+            <div className="mx-auto mt-5 w-full max-w-xl text-left">
+              <div className="flex items-center gap-2 rounded-[22px] border border-slate-200 bg-white px-4 py-2.5 shadow-[0_16px_48px_rgba(15,23,42,0.06)] focus-within:border-slate-400">
+                <Link2 className="h-4 w-4 shrink-0 text-slate-400" />
+                <input
+                  value={url}
+                  onChange={(event) => setUrl(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void importUrl();
+                  }}
+                  placeholder="Paste an article, docs, or lecture URL…"
+                  className="w-full bg-transparent text-[14px] text-slate-800 outline-none placeholder:text-slate-400"
+                  disabled={fetching}
+                />
+                <PrimaryButton onClick={() => void importUrl()} disabled={!url.trim() || fetching} className="shrink-0">
+                  {fetching ? "Importing…" : "Add"}
+                </PrimaryButton>
+              </div>
+              <div className="mt-3 flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:border-slate-300"
+                >
+                  <Upload className="h-3.5 w-3.5" /> Upload file
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPasteOpen((open) => !open)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12px] font-medium",
+                    pasteOpen ? "border-slate-900 bg-slate-950 text-white" : "border-slate-200 bg-white text-slate-600",
+                  )}
+                >
+                  <FilePlus2 className="h-3.5 w-3.5" /> Paste text
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".txt,.md,.markdown,text/plain,text/markdown"
+                  multiple
+                  className="hidden"
+                  onChange={(event) => {
+                    const files = event.target.files;
+                    if (!files) return;
+                    for (const file of Array.from(files)) {
+                      if (!/\.(txt|md|markdown)$/i.test(file.name)) {
+                        setError(`"${file.name}" is not supported — use .txt or .md.`);
+                        continue;
+                      }
+                      const reader = new FileReader();
+                      reader.onload = () => {
+                        const body = String(reader.result || "").trim();
+                        if (body) {
+                          onAddResource({
+                            title: file.name.replace(/\.(txt|md|markdown)$/i, ""),
+                            source: file.name,
+                            body: body.slice(0, 120_000),
+                          });
+                        }
+                      };
+                      reader.readAsText(file);
+                    }
+                    event.target.value = "";
+                  }}
+                />
+              </div>
+              <AnimatePresence initial={false}>
+                {pasteOpen ? (
+                  <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                    <div className="mt-3 space-y-2 rounded-md border border-slate-200 bg-white p-3">
+                      <input value={pasteTitle} onChange={(event) => setPasteTitle(event.target.value)} placeholder="Title (optional)" className="w-full rounded-md border border-slate-200 px-3 py-2 text-[13px] outline-none" />
+                      <textarea value={pasteBody} onChange={(event) => setPasteBody(event.target.value)} rows={4} placeholder="Paste study material…" className="w-full resize-y rounded-md border border-slate-200 px-3 py-2 text-[13px] outline-none" />
+                      <div className="flex justify-end">
+                        <PrimaryButton
+                          disabled={!pasteBody.trim()}
+                          onClick={() => {
+                            const body = pasteBody.trim();
+                            if (!body) return;
+                            onAddResource({
+                              title: pasteTitle.trim() || `Pasted text ${new Date().toLocaleDateString()}`,
+                              source: "Pasted text",
+                              body: body.slice(0, 120_000),
+                            });
+                            setPasteBody("");
+                            setPasteTitle("");
+                            setPasteOpen(false);
+                          }}
+                        >
+                          <Plus className="h-3.5 w-3.5" /> Add resource
+                        </PrimaryButton>
+                      </div>
+                    </div>
+                  </motion.div>
+                ) : null}
+              </AnimatePresence>
+            </div>
+          )}
+
+          {sessions.length > 0 ? (
+            <div className="mx-auto mt-10 w-full max-w-xl text-left">
+              <div className="mb-3 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                <History className="h-3.5 w-3.5" /> Recent sessions
+              </div>
+              <div className="space-y-1.5">
+                {sessions.slice(0, 6).map((session) => (
+                  <div key={session.id} className="group flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => onOpenSession(session.id)}
+                      className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3.5 py-3 text-left transition-colors hover:border-slate-300"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-[13px] font-semibold text-slate-900">{titleFromSession(session)}</span>
+                        <span className="mt-0.5 block text-[11px] text-slate-400">
+                          {session.sources.length} resource{session.sources.length === 1 ? "" : "s"} · {formatSessionTime(session.updatedAt)}
+                        </span>
+                      </span>
+                      <Clock3 className="h-3.5 w-3.5 shrink-0 text-slate-300" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDeleteSession(session.id)}
+                      className="rounded-md p-2 text-slate-300 opacity-0 transition-opacity hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
+                      aria-label="Delete session"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </motion.div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Root component                                                      */
 /* ------------------------------------------------------------------ */
 
 const NAV_ITEMS: { id: TabId; label: string; icon: typeof MessageSquare }[] = [
   { id: "chat", label: "Chat", icon: MessageSquare },
   { id: "quiz", label: "Quiz", icon: ListChecks },
-  { id: "flashcards", label: "Flashcards", icon: Layers },
+  { id: "flashcards", label: "Cards", icon: Layers },
   { id: "notes", label: "Notes", icon: NotebookPen },
-  { id: "sources", label: "Sources", icon: FileText },
+  { id: "sources", label: "Resources", icon: FileText },
 ];
 
 export default function StudyPalWorkspace({
@@ -1626,102 +1878,265 @@ export default function StudyPalWorkspace({
   globalTabsVisible?: boolean;
   agentPrompt?: string;
 }) {
-  const persisted = useRef(loadPersisted());
-  const [tab, setTab] = useState<TabId>(persisted.current.sources.length ? "chat" : "sources");
-  const [sources, setSources] = useState<StudySource[]>(persisted.current.sources);
-  const [messages, setMessages] = useState<ChatMessage[]>(persisted.current.messages);
-  const [decks, setDecks] = useState<FlashDeck[]>(persisted.current.decks);
-  const [notes, setNotes] = useState<NotesDoc | null>(persisted.current.notes);
+  const boot = useRef(loadWorkspace());
+  const [sessions, setSessions] = useState<StudySession[]>(boot.current.sessions);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(boot.current.activeSessionId);
+  const [showWelcome, setShowWelcome] = useState(!boot.current.activeSessionId);
+  const [tab, setTab] = useState<TabId>("chat");
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  const activeSession = useMemo(
+    () => sessions.find((session) => session.id === activeSessionId) || null,
+    [sessions, activeSessionId],
+  );
+
+  const sources = activeSession?.sources || [];
+  const messages = activeSession?.messages || [];
+  const decks = activeSession?.decks || [];
+  const notes = activeSession?.notes || null;
 
   useEffect(() => {
-    try {
-      const state: PersistedState = {
-        sources: sources.map((source) => ({ ...source, body: source.body.slice(0, 120_000) })),
-        messages: messages.slice(-80),
-        decks: decks.slice(0, 20),
-        notes,
-      };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      // Storage may be full or unavailable; the UI keeps working in-memory.
+    saveWorkspace({ sessions, activeSessionId });
+  }, [sessions, activeSessionId]);
+
+  const patchActive = useCallback((mutator: (session: StudySession) => StudySession) => {
+    setSessions((prev) =>
+      prev.map((session) => {
+        if (session.id !== activeSessionId) return session;
+        const next = mutator(session);
+        return { ...next, title: titleFromSession(next), updatedAt: Date.now() };
+      }),
+    );
+  }, [activeSessionId]);
+
+  const setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>> = useCallback((update) => {
+    patchActive((session) => ({
+      ...session,
+      messages: typeof update === "function" ? update(session.messages) : update,
+    }));
+  }, [patchActive]);
+
+  const setDecks: React.Dispatch<React.SetStateAction<FlashDeck[]>> = useCallback((update) => {
+    patchActive((session) => ({
+      ...session,
+      decks: typeof update === "function" ? update(session.decks) : update,
+    }));
+  }, [patchActive]);
+
+  const setNotes: React.Dispatch<React.SetStateAction<NotesDoc | null>> = useCallback((update) => {
+    patchActive((session) => ({
+      ...session,
+      notes: typeof update === "function" ? update(session.notes) : update,
+    }));
+  }, [patchActive]);
+
+  const createSession = useCallback((seed?: Partial<StudySession>) => {
+    const session = emptySession(seed);
+    setSessions((prev) => [session, ...prev].slice(0, 40));
+    setActiveSessionId(session.id);
+    setShowWelcome(false);
+    return session;
+  }, []);
+
+  useEffect(() => {
+    const prompt = (agentPrompt || "").trim();
+    if (!prompt) return;
+    if (!activeSessionId) {
+      createSession({ title: prompt.slice(0, 60) });
+      setTab("chat");
+      return;
     }
-  }, [sources, messages, decks, notes]);
+    setShowWelcome(false);
+    setTab("chat");
+  }, [agentPrompt, activeSessionId, createSession]);
 
-  useEffect(() => {
-    if ((agentPrompt || "").trim()) setTab("chat");
-  }, [agentPrompt]);
+  const openSession = useCallback((id: string) => {
+    setActiveSessionId(id);
+    setShowWelcome(false);
+    setTab("chat");
+    setHistoryOpen(false);
+  }, []);
+
+  const startTopic = useCallback((topic: string) => {
+    createSession({
+      title: topic.slice(0, 60),
+      messages: [
+        {
+          id: uid(),
+          role: "assistant",
+          content: `Ready to study **${topic}**. Add a resource (article, notes, or lecture text), then ask anything about it.`,
+        },
+      ],
+    });
+    setTab("sources");
+  }, [createSession]);
+
+  const addResourceFromWelcome = useCallback((source: Omit<StudySession["sources"][number], "id" | "selected">) => {
+    const session = createSession({
+      title: source.title.slice(0, 60),
+      sources: [{ ...source, id: uid(), selected: true }],
+    });
+    setActiveSessionId(session.id);
+    setTab("chat");
+  }, [createSession]);
 
   const addSource = useCallback((source: Omit<StudySource, "id" | "selected">) => {
-    setSources((prev) => [...prev, { ...source, id: uid(), selected: true }].slice(0, 32));
-  }, []);
+    if (!activeSessionId) {
+      addResourceFromWelcome(source);
+      return;
+    }
+    patchActive((session) => ({
+      ...session,
+      sources: [...session.sources, { ...source, id: uid(), selected: true }].slice(0, 32),
+    }));
+  }, [activeSessionId, addResourceFromWelcome, patchActive]);
 
   const removeSource = useCallback((id: string) => {
-    setSources((prev) => prev.filter((source) => source.id !== id));
-  }, []);
+    patchActive((session) => ({
+      ...session,
+      sources: session.sources.filter((source) => source.id !== id),
+    }));
+  }, [patchActive]);
 
   const toggleSource = useCallback((id: string) => {
-    setSources((prev) => prev.map((source) => (source.id === id ? { ...source, selected: !source.selected } : source)));
-  }, []);
+    patchActive((session) => ({
+      ...session,
+      sources: session.sources.map((source) => (source.id === id ? { ...source, selected: !source.selected } : source)),
+    }));
+  }, [patchActive]);
+
+  const deleteSession = useCallback((id: string) => {
+    setSessions((prev) => {
+      const next = prev.filter((session) => session.id !== id);
+      if (activeSessionId === id) {
+        const fallback = next[0]?.id || null;
+        setActiveSessionId(fallback);
+        setShowWelcome(!fallback);
+      }
+      return next;
+    });
+  }, [activeSessionId]);
 
   const selectedCount = sources.filter((source) => source.selected).length;
+  const orderedSessions = useMemo(
+    () => [...sessions].sort((left, right) => right.updatedAt - left.updatedAt),
+    [sessions],
+  );
+
+  if (showWelcome || !activeSession) {
+    return (
+      <StudyWelcome
+        sessions={orderedSessions}
+        onStartTopic={startTopic}
+        onAddResource={addResourceFromWelcome}
+        onOpenSession={openSession}
+        onDeleteSession={deleteSession}
+      />
+    );
+  }
 
   return (
-    <div className={cn("flex h-full min-h-0 w-full bg-slate-50", globalTabsVisible && "pt-1")}>
-      {/* Sidebar */}
-      <nav className="flex w-[190px] shrink-0 flex-col gap-1 border-r border-slate-200 bg-white/80 p-3 backdrop-blur max-md:w-[64px]">
-        <div className="mb-3 flex items-center gap-2 px-2 pt-1 max-md:justify-center max-md:px-0">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white shadow-[0_2px_8px_rgba(15,23,42,0.12)]">
+    <div className={cn("flex h-full min-h-0 w-full bg-[#f8fafc]", globalTabsVisible && "pt-1")}>
+      <nav className="flex w-[210px] shrink-0 flex-col border-r border-slate-200 bg-white max-md:w-[64px]">
+        <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-3 max-md:justify-center">
+          <span className="grid h-8 w-8 place-items-center rounded-md bg-slate-950 text-white">
             <BookOpen className="h-4 w-4" />
           </span>
-          <span className="text-[14px] font-semibold text-slate-900 max-md:hidden">Study Pal</span>
+          <div className="min-w-0 max-md:hidden">
+            <p className="text-[12px] font-semibold text-slate-900">Study Pal</p>
+            <p className="truncate text-[10px] text-slate-400">{titleFromSession(activeSession)}</p>
+          </div>
         </div>
-        {NAV_ITEMS.map((item) => {
-          const active = tab === item.id;
-          const Icon = item.icon;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => setTab(item.id)}
-              className={cn(
-                "relative flex items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] font-medium transition-colors max-md:justify-center max-md:px-0",
-                active ? "text-slate-700" : "text-slate-500 hover:bg-slate-100 hover:text-slate-700",
-              )}
-            >
-              {active && (
-                <motion.span
-                  layoutId="study-pal-nav-active"
-                  className="absolute inset-0 rounded-xl border border-slate-200 bg-slate-50"
-                  transition={{ type: "spring", stiffness: 420, damping: 34 }}
-                />
-              )}
-              <Icon className="relative z-10 h-4 w-4 shrink-0" />
-              <span className="relative z-10 max-md:hidden">{item.label}</span>
-              {item.id === "sources" && sources.length > 0 && (
-                <span className="relative z-10 ml-auto rounded-full bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-semibold text-slate-500 max-md:hidden">
-                  {selectedCount}/{sources.length}
-                </span>
-              )}
-            </button>
-          );
-        })}
-        <div className="mt-auto px-2 pb-1 max-md:hidden">
-          <p className="text-[11px] leading-relaxed text-slate-400">
-            Grounded answers, quizzes, flashcards and notes from your own material.
-          </p>
+
+        <div className="flex flex-col gap-0.5 p-2">
+          {NAV_ITEMS.map((item) => {
+            const active = tab === item.id;
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setTab(item.id)}
+                className={cn(
+                  "relative flex items-center gap-2.5 rounded-md px-2.5 py-2 text-[12px] font-medium transition-colors max-md:justify-center",
+                  active ? "bg-slate-100 text-slate-950" : "text-slate-500 hover:bg-slate-50 hover:text-slate-800",
+                )}
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+                <span className="max-md:hidden">{item.label}</span>
+                {item.id === "sources" && sources.length > 0 ? (
+                  <span className="ml-auto rounded bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 max-md:hidden">
+                    {selectedCount}/{sources.length}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-auto border-t border-slate-100 p-2">
+          <button
+            type="button"
+            onClick={() => {
+              setShowWelcome(true);
+              setActiveSessionId(null);
+            }}
+            className="mb-1 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-[12px] font-semibold text-slate-700 transition-colors hover:bg-slate-50 max-md:justify-center"
+            aria-label="New study"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            <span className="max-md:hidden">New study</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setHistoryOpen((open) => !open)}
+            className="mb-2 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-700 max-md:justify-center max-md:normal-case max-md:tracking-normal"
+            aria-label="Sessions"
+          >
+            <History className="h-3.5 w-3.5" />
+            <span className="max-md:hidden">Sessions</span>
+          </button>
+          <AnimatePresence initial={false}>
+            {historyOpen ? (
+              <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="max-h-48 space-y-1 overflow-y-auto max-md:absolute max-md:bottom-16 max-md:left-16 max-md:z-20 max-md:w-56 max-md:rounded-md max-md:border max-md:border-slate-200 max-md:bg-white max-md:p-2 max-md:shadow-lg">
+                {orderedSessions.map((session) => (
+                  <div key={session.id} className="group flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => openSession(session.id)}
+                      className={cn(
+                        "min-w-0 flex-1 rounded-md px-2 py-1.5 text-left transition-colors",
+                        session.id === activeSessionId ? "bg-slate-100" : "hover:bg-slate-50",
+                      )}
+                    >
+                      <span className="block truncate text-[12px] font-medium text-slate-800">{titleFromSession(session)}</span>
+                      <span className="block text-[10px] text-slate-400">{formatSessionTime(session.updatedAt)}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteSession(session.id)}
+                      className="rounded p-1 text-slate-300 opacity-0 transition-opacity hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
+                      aria-label="Delete session"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
         </div>
       </nav>
 
-      {/* Main content */}
       <main className="min-w-0 flex-1 overflow-y-auto">
         <div className={cn("h-full px-6 py-6 max-md:px-4", tab === "chat" && "flex flex-col")}>
           <AnimatePresence mode="wait">
             <motion.div
-              key={tab}
+              key={`${activeSessionId}-${tab}`}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.18 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
               className={cn(tab === "chat" ? "flex min-h-0 flex-1 flex-col" : "")}
             >
               {tab === "sources" && (
