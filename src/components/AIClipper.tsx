@@ -78,11 +78,18 @@ type ClipResult = {
   hashtags?: string;
   virality_score?: number;
   score?: number;
+  clip_potential_score?: number;
+  score_source?: string;
   file_size?: number;
   timing_source?: string;
   word_count?: number;
   output_quality?: string;
 };
+
+function clipPotentialScore(result: ClipResult): number {
+  const raw = result.clip_potential_score ?? result.score ?? Math.round((result.virality_score || 0) * 10);
+  return Math.max(1, Math.min(100, Math.round(Number(raw) || 0)));
+}
 
 type ClipDraft = {
   source: ClipSource;
@@ -461,12 +468,17 @@ function ClipCard({
         <span className="absolute inset-0 grid place-items-center bg-black/0 transition-colors duration-200 group-hover:bg-black/15"><span className="grid h-9 w-9 place-items-center rounded-full bg-white/90 text-slate-950 opacity-0 shadow-sm transition-opacity duration-200 group-hover:opacity-100"><Play className="ml-0.5 h-3.5 w-3.5" /></span></span>
       </button>
       <div className={cn("min-w-0", layout === "grid" ? "p-4" : "")}>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[11px] font-semibold text-emerald-600">{result.score ?? Math.round((result.virality_score || 0) * 10)}/100</span>
-          <span className="text-[11px] text-slate-400">{result.clip_duration}</span>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-700/80">Clip Potential</p>
+            <p className="mt-0.5 text-[22px] font-semibold leading-none tracking-tight text-emerald-600">{clipPotentialScore(result)}</p>
+          </div>
+          <span className="shrink-0 text-[11px] text-slate-400">{result.clip_duration}</span>
         </div>
-        <h3 className="mt-1.5 line-clamp-2 text-[13px] font-semibold leading-5 text-slate-900">{result.title}</h3>
-        <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-400">{result.reason}</p>
+        <h3 className="mt-2.5 line-clamp-2 text-[13px] font-semibold leading-5 text-slate-900">{result.title}</h3>
+        {result.reason ? (
+          <p className="mt-1.5 line-clamp-3 text-[11px] leading-4 text-slate-500">{result.reason}</p>
+        ) : null}
         <div className="mt-3 flex items-center gap-1">
           <button type="button" onClick={onLike} aria-label={liked ? "Unlike clip" : "Like clip"} className={cn("grid h-8 w-8 place-items-center rounded-full text-slate-400 transition-colors hover:bg-slate-100", liked && "text-rose-500")}><Heart className={cn("h-3.5 w-3.5", liked && "fill-current")} /></button>
           <a href={outputUrl(result.output)} download className="flex h-8 items-center gap-1.5 rounded-full px-3 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-100"><Download className="h-3 w-3" />Export</a>
@@ -667,7 +679,7 @@ export default function AIClipper({
       ? parseDuration(right.clip_duration) - parseDuration(left.clip_duration)
       : sortMode === "source"
         ? String(left.source_start || "").localeCompare(String(right.source_start || ""))
-        : (right.score ?? (right.virality_score || 0) * 10) - (left.score ?? (left.virality_score || 0) * 10));
+        : clipPotentialScore(right) - clipPotentialScore(left));
     return next;
   }, [results, search, sortMode]);
 
@@ -810,7 +822,7 @@ export default function AIClipper({
           <label className="mt-4 block text-[11px] font-medium text-slate-500">
             Sort by
             <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} className="mt-1.5 h-10 w-full rounded-2xl border border-slate-200/80 bg-white px-3 text-[11px] shadow-sm outline-none transition-[border-color,box-shadow] duration-200 focus:border-sky-300 focus:ring-2 focus:ring-sky-100">
-              <option value="score">Viral score</option>
+              <option value="score">Clip Potential</option>
               <option value="duration">Duration</option>
               <option value="source">Source position</option>
             </select>
@@ -855,12 +867,19 @@ export default function AIClipper({
                 <div className="mx-auto mt-4 aspect-[9/16] max-h-[390px] overflow-hidden rounded-2xl bg-black shadow-md">
                   <video key={selected.output} controls playsInline preload="metadata" src={outputUrl(selected.output)} className="h-full w-full object-cover" />
                 </div>
-                <div className="mt-4 flex items-center justify-between">
-                  <span className="text-[12px] font-semibold text-emerald-600">{selected.score ?? Math.round((selected.virality_score || 0) * 10)}/100</span>
-                  <span className="text-[11px] text-slate-400">{selected.clip_duration} · {fileSize(selected.file_size)}</span>
+                <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50/70 px-3 py-3">
+                  <div className="flex items-end justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-700/80">Clip Potential Score</p>
+                      <p className="mt-1 text-[28px] font-semibold leading-none tracking-tight text-emerald-700">{clipPotentialScore(selected)}</p>
+                    </div>
+                    <span className="text-[11px] text-slate-500">{selected.clip_duration} · {fileSize(selected.file_size)}</span>
+                  </div>
+                  {selected.reason ? (
+                    <p className="mt-2 text-[12px] leading-5 text-emerald-950/80">{selected.reason}</p>
+                  ) : null}
                 </div>
-                <h2 className="mt-2 text-[14px] font-semibold leading-5 text-slate-900">{selected.title}</h2>
-                <p className="mt-2 text-[11px] leading-5 text-slate-500">{selected.reason}</p>
+                <h2 className="mt-4 text-[14px] font-semibold leading-5 text-slate-900">{selected.title}</h2>
                 {selected.caption ? (
                   <div className="mt-4 border-y border-slate-200 py-3">
                     <p className="text-[10px] font-semibold uppercase tracking-[.1em] text-slate-400">Transcript excerpt</p>
