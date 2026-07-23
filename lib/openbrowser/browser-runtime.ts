@@ -1164,6 +1164,25 @@ async function runAgentGoogleSearch(
   step: number,
   destination?: string,
 ) {
+  // A previous Google search can leave the persistent browser on its CAPTCHA
+  // interstitial. There is no usable search input there, so route to the
+  // requested public destination before attempting the visible search flow.
+  if (destination && /^https?:\/\/(?:www\.)?google\.[^/]+\/sorry\//i.test(activePage.url())) {
+    emit({
+      phase: "recovering",
+      message: `Google is blocking search; opening ${new URL(destination).hostname} directly`,
+      step,
+      action: { type: "navigate", url: destination },
+    });
+    if (USE_ELECTRON_BROWSER) {
+      const observation = await getElectronObservation();
+      await runElectronAction({ type: "navigate", url: destination }, observation, "agent");
+    } else {
+      await activePage.goto(destination, { waitUntil: "domcontentloaded" });
+    }
+    await recordHistory(activePage, query);
+    return;
+  }
   if (!isGoogleUrl(activePage.url())) {
     emit({ phase: "executing", message: "Opening Google to look up the destination", step });
     await activePage.goto(HOME_URL, { waitUntil: "domcontentloaded" });
@@ -1192,6 +1211,29 @@ async function runAgentGoogleSearch(
   await activePage.waitForLoadState("domcontentloaded").catch(() => undefined);
 
   if (!destination) {
+    await recordHistory(activePage, query);
+    return;
+  }
+
+  // Google can answer an automated, visible search with a CAPTCHA page. The
+  // agent has already performed the requested search sequence, so recover to
+  // the exact public destination rather than repeatedly probing the CAPTCHA
+  // or leaving the task looking active forever. Native Chromium navigation
+  // goes through the bridge so the WebContentsView and controller stay in the
+  // same state.
+  if (/^https?:\/\/(?:www\.)?google\.[^/]+\/sorry\//i.test(activePage.url())) {
+    emit({
+      phase: "recovering",
+      message: `Google blocked the search; opening ${new URL(destination).hostname} directly`,
+      step,
+      action: { type: "navigate", url: destination },
+    });
+    if (USE_ELECTRON_BROWSER) {
+      const observation = await getElectronObservation();
+      await runElectronAction({ type: "navigate", url: destination }, observation, "agent");
+    } else {
+      await activePage.goto(destination, { waitUntil: "domcontentloaded" });
+    }
     await recordHistory(activePage, query);
     return;
   }

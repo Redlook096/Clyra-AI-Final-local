@@ -50,6 +50,7 @@ import {
 import { cn } from "../lib/utils";
 import { describeControls, type AgentBridge, type AgentBridgeAction, type AgentBridgeActionResult } from "../lib/agentController";
 import { ShiningText } from "./ui/shining-text";
+import { ShiningBrainIcon, ThinkingDots } from "./ShiningText";
 import { MarkdownMessageContent } from "./MarkdownMessageContent";
 import { ElectronWebContentsSurface } from "./ElectronWebContentsSurface";
 
@@ -101,6 +102,8 @@ type AgentActivityItem = {
   details?: string;
   filePath?: string;
   command?: string;
+  added?: number;
+  removed?: number;
 };
 
 type VibePlanDraft = {
@@ -312,6 +315,8 @@ function buildActivityItems({
         : "Streaming through the existing mini code box.",
       timestamp: startedAt + 2200 + items.length * 70,
       filePath: file.path,
+      added: file.added ?? 0,
+      removed: file.removed ?? 0,
     });
   }
 
@@ -1433,6 +1438,25 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
                 />
               </motion.div>
 
+              <AnimatePresence initial={false}>
+                {m1Launching ? (
+                  <motion.div
+                    key="vibe-launching"
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                    className="-mt-2 mb-5 inline-flex items-center gap-2 text-[13px] font-medium text-slate-500"
+                    aria-live="polite"
+                  >
+                    <ShiningBrainIcon />
+                    <span className="clyra-thinking-shimmer">Thinking</span>
+                    <ThinkingDots />
+                    <span className="text-slate-400">Opening your Vibe workspace</span>
+                  </motion.div>
+                ) : null}
+              </AnimatePresence>
+
               <input
                 ref={fileRef}
                 type="file"
@@ -1725,9 +1749,13 @@ function AgentActivityRow({ item }: { item: AgentActivityItem }) {
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="min-w-0 truncate text-[13px] font-bold tracking-[-0.01em] text-slate-800">
-              {item.title}
-            </p>
+            {item.type === "file" && item.filePath ? (
+              <FileEditActivity item={item} />
+            ) : (
+              <p className="min-w-0 truncate text-[13px] font-bold tracking-[-0.01em] text-slate-800">
+                {item.title}
+              </p>
+            )}
             <span
               className={cn(
                 "rounded-full px-2 py-0.5 text-[9.5px] font-black uppercase tracking-[0.1em]",
@@ -1756,6 +1784,51 @@ function AgentActivityRow({ item }: { item: AgentActivityItem }) {
         </span>
       </div>
     </motion.div>
+  );
+}
+
+function AnimatedDiffCount({ value, tone, active }: { value: number; tone: "add" | "remove"; active: boolean }) {
+  const [displayed, setDisplayed] = useState(0);
+
+  useEffect(() => {
+    const target = Math.max(0, value);
+    if (!target) {
+      setDisplayed(0);
+      return;
+    }
+    let frame = 0;
+    const startedAt = performance.now();
+    const duration = active ? 720 : 420;
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      setDisplayed(Math.round(target * (1 - Math.pow(1 - progress, 3))));
+      if (progress < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [active, value]);
+
+  return (
+    <span className={cn("font-mono text-[11px] font-bold tabular-nums", tone === "add" ? "text-emerald-700" : "text-rose-600")}>
+      {tone === "add" ? "+" : "-"}{displayed}
+    </span>
+  );
+}
+
+function FileEditActivity({ item }: { item: AgentActivityItem }) {
+  const active = item.status === "active";
+  const action = /^edited|^editing/i.test(item.title) ? "Editing" : active ? "Generating" : "Updated";
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+      <span className="text-[13px] font-bold text-sky-500">{action}</span>
+      <span className={cn("max-w-[260px] truncate font-mono text-[12px] font-semibold", active ? "clyra-thinking-shimmer" : "text-slate-600")}>
+        {item.filePath}
+      </span>
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-50 px-2 py-0.5">
+        <AnimatedDiffCount value={item.added ?? 0} tone="add" active={active} />
+        <AnimatedDiffCount value={item.removed ?? 0} tone="remove" active={active} />
+      </span>
+    </div>
   );
 }
 

@@ -26,12 +26,30 @@ candidates = module.choose_moments(
     url="https://example.com/video",
 )
 
+semantic_words = [
+    {"word": "Here", "start": 0.0, "end": 0.2},
+    {"word": "is", "start": 0.21, "end": 0.35},
+    {"word": "the", "start": 0.36, "end": 0.5},
+    {"word": "complete", "start": 0.51, "end": 0.78},
+    {"word": "answer.", "start": 0.79, "end": 1.04},
+    {"word": "This", "start": 2.0, "end": 2.18},
+    {"word": "is", "start": 2.19, "end": 2.33},
+    {"word": "the", "start": 2.34, "end": 2.46},
+    {"word": "payoff!", "start": 2.47, "end": 2.75},
+]
+sentences = module.sentence_boundaries(semantic_words)
+semantic = module.semantic_candidates(semantic_words, 12, "viral", 15, 2)
+regions = module.speech_regions(semantic_words)
+
 print(json.dumps({
     "candidates": candidates,
     "shortDuration": module.parse_duration(2),
     "longDuration": module.parse_duration(999),
     "cleanName": module.clean_name("  My Clip: Final!?  "),
     "customKeywords": sorted(module.keyword_set("laughing falls")),
+    "sentences": sentences,
+    "semantic": semantic,
+    "regions": regions,
 }))
 `;
 
@@ -51,6 +69,9 @@ const payload = JSON.parse(output.trim()) as {
   longDuration: number;
   cleanName: string;
   customKeywords: string[];
+  sentences: Array<{ start: number; end: number; text: string }>;
+  semantic: Array<{ start: number; end: number; score: number; transcript: string; reason: string }>;
+  regions: Array<{ startMs: number; endMs: number }>;
 };
 
 assert.equal(payload.candidates.length, 5, "returns requested candidate count");
@@ -83,5 +104,13 @@ assert.equal(payload.longDuration, 60, "maximum clip duration is enforced");
 assert.equal(payload.cleanName, "my-clip-final", "output names are safely normalised");
 assert(payload.customKeywords.includes("laugh"), "custom prompts receive semantic expansion");
 assert(payload.customKeywords.includes("fell"), "multiple custom terms are expanded");
+assert.equal(payload.sentences.length, 2, "sentence boundaries respect punctuation and pauses");
+assert(payload.sentences[0].text.endsWith("answer."), "sentence keeps its complete ending");
+assert(payload.semantic.length >= 1, "semantic candidate generation returns a complete candidate");
+assert(payload.semantic[0].start >= 0, "semantic candidate starts on a safe timestamp");
+assert(payload.semantic[0].end <= 12, "semantic candidate stays inside source bounds");
+assert(Number.isInteger(payload.semantic[0].score), "semantic candidate exposes an explainable score");
+assert(payload.semantic[0].reason.includes("—"), "semantic score includes a user-facing explanation");
+assert.equal(payload.regions.length, 2, "speech regions preserve a meaningful pause");
 
-console.log("AI Clip unit tests passed (34 assertions)");
+console.log("AI Clip unit tests passed (42 assertions)");

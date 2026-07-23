@@ -16,7 +16,7 @@
     "check:openpencil": "node tools/openpencil-check.mjs",
     "vibe-server": "tsx vibe-server.ts",
     "start": "node dist/server.js",
-    "build:server": "esbuild server.ts --platform=node --target=node18 --bundle --format=esm --outfile=dist/server.js",
+    "build:server": "esbuild server.ts --platform=node --target=node18 --bundle --format=esm --outfile=dist/server.js --external:electron --external:vite --external:playwright --external:playwright-core --external:chromium-bidi/*",
     "build": "vite build && npm run build:server",
     "preview": "vite preview",
     "clean": "rm -rf dist",

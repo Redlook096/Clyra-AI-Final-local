@@ -152,6 +152,11 @@ function serviceEnvironment() {
     CLYRA_ELECTRON_BROWSER_BRIDGE: `http://127.0.0.1:${bridgePort}`,
     CLYRA_ELECTRON_BROWSER_TOKEN: bridgeToken,
     CLYRA_BROWSER_CDP_URL: `http://127.0.0.1:${cdpPort}`,
+    // The M1 launcher owns several helper processes. In a packaged Electron
+    // child it can race macOS process cleanup during boot and terminate the
+    // local service before the UI is reachable. Keep the service responsive
+    // first; Vibe launches M1 on demand while its welcome page remains shown.
+    CLYRA_M1_WARMUP: process.env.CLYRA_M1_WARMUP || (isDevelopment ? "1" : "0"),
     // A fixed Vite HMR port prevents a second desktop-development launch from
     // starting at all. Keep it tied to this isolated local service instead.
     HMR_PORT: process.env.HMR_PORT || String(appPort + 1),
@@ -187,9 +192,13 @@ function isRunnableFile(candidate) {
 }
 
 function attachLocalService(child, label, { onSpawnError, onUnexpectedExit } = {}) {
+  let lastStderr = "";
   reportDesktopLifecycle(`service ${label} spawned pid=${child.pid ?? "unknown"}`);
   child.stdout?.on("data", (chunk) => console.log(`[service] ${String(chunk).trimEnd()}`));
-  child.stderr?.on("data", (chunk) => console.error(`[service] ${String(chunk).trimEnd()}`));
+  child.stderr?.on("data", (chunk) => {
+    lastStderr = `${lastStderr}${String(chunk)}`.slice(-4_000);
+    console.error(`[service] ${String(chunk).trimEnd()}`);
+  });
   child.once("error", (error) => {
     console.error(`[service] ${label} could not start:`, error);
     reportDesktopLifecycle(`service ${label} spawn error: ${error.message}`);
@@ -199,6 +208,9 @@ function attachLocalService(child, label, { onSpawnError, onUnexpectedExit } = {
   child.once("exit", (code, signal) => {
     console.log(`[service] ${label} stopped (${code ?? signal})`);
     reportDesktopLifecycle(`service ${label} exited code=${code ?? "null"} signal=${signal ?? "none"}`);
+    if (lastStderr.trim()) {
+      reportDesktopLifecycle(`service ${label} stderr: ${lastStderr.trim().replace(/\s+/g, " ").slice(-1_600)}`);
+    }
     if (!quitting && serviceProcess === child) onUnexpectedExit?.(code, signal);
   });
   return child;

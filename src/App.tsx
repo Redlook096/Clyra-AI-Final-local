@@ -1660,8 +1660,11 @@ export default function App() {
         event.data?.type === "clyra-m1-ready" &&
         typeof event.data.conversationId === "string"
       ) {
-        m1WorkspaceFrameRef.current.dataset.conversationId =
-          event.data.conversationId;
+        // A late message can arrive after the M1 iframe has been removed
+        // during a tab transition. It is informational, not a reason to
+        // interrupt the workspace with a renderer error.
+        const frame = m1WorkspaceFrameRef.current;
+        if (frame) frame.dataset.conversationId = event.data.conversationId;
       }
     };
     window.addEventListener("clyra:m1-navigate", handleM1Navigation);

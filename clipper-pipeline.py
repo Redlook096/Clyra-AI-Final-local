@@ -22,6 +22,7 @@ import xml.etree.ElementTree as ET
 
 TMP_ROOT = "./tmp"
 OUTPUT_DIR = "./output"
+ARTIFACT_CACHE_DIR = "clipper-cache"
 OUTPUT_WIDTH = 720
 OUTPUT_HEIGHT = 1280
 OUTPUT_FPS = 30
@@ -88,6 +89,57 @@ def clean_name(value):
     name = re.sub(r"[^\w\s-]", "", value or "clip").strip()
     name = re.sub(r"\s+", "-", name).lower()[:50]
     return name or "clip"
+
+
+def source_fingerprint(source):
+    """Use a stable source identity so analysis survives an interrupted render."""
+    try:
+        if os.path.isfile(source):
+            stat = os.stat(source)
+            source = f"{os.path.abspath(source)}:{stat.st_size}:{int(stat.st_mtime)}"
+    except OSError:
+        pass
+    return hashlib.sha256(str(source).encode("utf-8")).hexdigest()[:24]
+
+
+def read_json(path, fallback=None):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError, TypeError):
+        return fallback
+
+
+def write_json(path, payload):
+    """Write an artifact atomically so a cancelled job never poisons a cache."""
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    staging = f"{path}.tmp"
+    with open(staging, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    os.replace(staging, path)
+
+
+def normalise_words(words):
+    """Normalise captions and Whisper output into one timestamp representation."""
+    output = []
+    for raw in words or []:
+        token = str(raw.get("word", raw.get("text", ""))).strip()
+        if not token:
+            continue
+        try:
+            start = max(0.0, float(raw.get("start", raw.get("startMs", 0)) or 0))
+            end = max(start + 0.04, float(raw.get("end", raw.get("endMs", start + 0.2)) or start + 0.2))
+        except (TypeError, ValueError):
+            continue
+        output.append({
+            "word": token[:80],
+            "start": round(start, 3),
+            "end": round(end, 3),
+            "confidence": raw.get("confidence"),
+            "speakerId": raw.get("speakerId"),
+        })
+    return sorted(output, key=lambda word: (word["start"], word["end"]))
 
 
 def fmt_time(seconds):
@@ -368,6 +420,144 @@ def rank_candidates_with_llm(candidates, moment_type):
         return sorted(output, key=lambda item: item.get("llm_score", 0), reverse=True)
     except (urllib.error.URLError, TimeoutError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return candidates
+
+
+def sentence_boundaries(words, max_gap=1.15):
+    """Build conservative sentence-like spans without inventing transcript text."""
+    sentences, current = [], []
+    normalised = normalise_words(words)
+    for index, word in enumerate(normalised):
+        if current and word["start"] - current[-1]["end"] > max_gap:
+            sentences.append(current)
+            current = []
+        current.append(word)
+        token = word["word"]
+        next_word = normalised[index + 1] if index + 1 < len(normalised) else None
+        ends_sentence = bool(re.search(r"[.!?][\\\"')]*$", token))
+        if not ends_sentence and next_word:
+            try:
+                ends_sentence = float(next_word.get("start", 0)) - word["end"] > max_gap
+            except (TypeError, ValueError):
+                pass
+        if ends_sentence:
+            sentences.append(current)
+            current = []
+    if current:
+        sentences.append(current)
+    return [
+        {
+            "start": group[0]["start"],
+            "end": group[-1]["end"],
+            "text": " ".join(item["word"] for item in group).strip(),
+            "words": group,
+        }
+        for group in sentences if group
+    ]
+
+
+def speech_regions(words, max_gap=0.72):
+    regions, current = [], []
+    for word in normalise_words(words):
+        if current and word["start"] - current[-1]["end"] > max_gap:
+            regions.append({"startMs": round(current[0]["start"] * 1000), "endMs": round(current[-1]["end"] * 1000)})
+            current = []
+        current.append(word)
+    if current:
+        regions.append({"startMs": round(current[0]["start"] * 1000), "endMs": round(current[-1]["end"] * 1000)})
+    return regions
+
+
+def topic_segments(sentences, target_duration):
+    """Group complete sentences into candidate-sized semantic sections."""
+    if not sentences:
+        return []
+    target = max(15.0, float(target_duration))
+    segments, current = [], []
+    for sentence in sentences:
+        prospective_start = current[0]["start"] if current else sentence["start"]
+        if current and sentence["end"] - prospective_start > target * 1.35:
+            segments.append(current)
+            current = []
+        current.append(sentence)
+    if current:
+        segments.append(current)
+    output = []
+    for index, group in enumerate(segments):
+        transcript = " ".join(item["text"] for item in group).strip()
+        output.append({
+            "id": f"topic_{index + 1:03d}",
+            "startMs": round(group[0]["start"] * 1000),
+            "endMs": round(group[-1]["end"] * 1000),
+            "title": transcript[:72] or f"Topic {index + 1}",
+            "summary": transcript[:500],
+            "contentType": "explanation",
+            "requiredPreviousContext": bool(re.match(r"^(he|she|they|this|that|it)\\b", transcript, re.I)),
+            "importantSentenceIds": list(range(len(group))),
+            "possibleHooks": [group[0]["text"][:180]],
+        })
+    return output
+
+
+def local_clip_score(candidate, moment_type):
+    text = candidate.get("transcript", "")
+    words = re.findall(r"[A-Za-z0-9']+", text.lower())
+    duration = max(0.1, candidate["end"] - candidate["start"])
+    keyword_matches = sum(1 for word in words if word in keyword_set(moment_type))
+    complete = not re.search(r"\\b(and|but|because|so|then|with|to)$", text.strip(), re.I)
+    hook = min(20, 8 + keyword_matches * 3 + (4 if "?" in text[:140] else 0))
+    standalone = 18 if complete and not candidate.get("needs_context") else 8
+    clarity = min(10, 4 + int(len(set(words)) / max(1, len(words)) * 8))
+    pacing = min(5, int(len(words) / duration * 1.8))
+    total = min(100, hook + standalone + min(15, len(words) // 7) + min(10, keyword_matches * 2) + clarity + min(10, len(set(words)) // 5) + pacing + 5 + 5)
+    return {
+        "score": int(total),
+        "reason": f"{int(total)} — {'Clear hook' if hook >= 14 else 'Complete setup'}, {'complete thought' if complete else 'boundary repaired'}, and concise pacing.",
+    }
+
+
+def semantic_candidates(words, video_duration, moment_type, target_duration, count):
+    """Generate sentence-aligned clips before optional LLM ranking."""
+    sentences = sentence_boundaries(words)
+    if not sentences:
+        return choose_moments(words, video_duration, moment_type, target_duration, count, "semantic-fallback")
+
+    topics = topic_segments(sentences, target_duration)
+    candidates = []
+    target = min(target_duration, max(8.0, video_duration - 0.2))
+    for topic in topics:
+        start, end = topic["startMs"] / 1000, topic["endMs"] / 1000
+        matching = [item for item in sentences if item["start"] >= start and item["end"] <= end]
+        if not matching:
+            continue
+        while matching and matching[-1]["end"] - matching[0]["start"] > target:
+            matching.pop(0)
+        clip_start, clip_end = matching[0]["start"], matching[-1]["end"]
+        transcript = " ".join(item["text"] for item in matching).strip()
+        candidate = {
+            "id": f"candidate-{len(candidates) + 1}",
+            "start": round(clip_start, 2),
+            "end": round(min(video_duration, clip_end + 0.16), 2),
+            "transcript": transcript[:900],
+            "needs_context": topic["requiredPreviousContext"],
+            "topic_id": topic["id"],
+        }
+        candidate.update(local_clip_score(candidate, moment_type))
+        candidates.append(candidate)
+
+    selected = []
+    for candidate in sorted(candidates, key=lambda item: item["score"], reverse=True):
+        if any(max(0, min(candidate["end"], chosen["end"]) - max(candidate["start"], chosen["start"])) / max(1, candidate["end"] - candidate["start"]) > 0.42 for chosen in selected):
+            continue
+        selected.append(candidate)
+        if len(selected) >= count:
+            break
+    if len(selected) < count:
+        for candidate in candidates:
+            if candidate not in selected:
+                selected.append(candidate)
+            if len(selected) >= count:
+                break
+    return selected
 
 
 def select_progressive_stream(yt):
@@ -740,9 +930,30 @@ def main():
             word_count=len(words),
         )
 
+        # Analysis artifacts are durable; render intermediates remain job-local.
+        source_cache = os.path.join(TMP_ROOT, ARTIFACT_CACHE_DIR, source_fingerprint(source))
+        normalised = normalise_words(words)
+        write_json(os.path.join(source_cache, "source-metadata.json"), {
+            "source": source, "title": title, "durationMs": round(duration * 1000),
+            "createdAt": int(time.time() * 1000),
+        })
+        write_json(os.path.join(source_cache, "transcript-words.json"), [
+            {"text": word["word"], "startMs": round(word["start"] * 1000), "endMs": round(word["end"] * 1000), "confidence": word.get("confidence"), "speakerId": word.get("speakerId")}
+            for word in normalised
+        ])
+        write_json(os.path.join(source_cache, "speech-regions.json"), speech_regions(normalised))
+        sentences = sentence_boundaries(normalised)
+        write_json(os.path.join(source_cache, "topic-segments.json"), topic_segments(sentences, requested_duration))
+
         emit("analyze", "running", message=f"Finding {clip_count} distinct {int(requested_duration)}s moments...")
-        candidates = choose_moments(words, duration, moment_type, requested_duration, clip_count, source)
+        candidate_cache = os.path.join(source_cache, f"clip-candidates-{clean_name(moment_type)}-{int(requested_duration)}.json")
+        candidates = read_json(candidate_cache)
+        if not isinstance(candidates, list) or not candidates:
+            candidates = semantic_candidates(normalised, duration, moment_type, requested_duration, max(clip_count * 3, 6))
+            write_json(candidate_cache, candidates)
         candidates = rank_candidates_with_llm(candidates, moment_type)
+        candidates = candidates[:clip_count]
+        write_json(os.path.join(source_cache, "ranked-clips.json"), candidates)
         emit(
             "analyze",
             "complete",

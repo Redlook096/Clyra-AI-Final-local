@@ -1,5 +1,13 @@
 import { spawn, type ChildProcess, execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -30,6 +38,7 @@ let m1Process: ChildProcess | null = null;
 let starting: Promise<void> | null = null;
 let backgroundWarmup: Promise<unknown> | null = null;
 let monitorTimer: NodeJS.Timeout | null = null;
+let lastM1LaunchError: Error | null = null;
 
 export function getM1Paths() {
   return {
@@ -96,6 +105,22 @@ function commandForPid(pid: number) {
   } catch {
     return "";
   }
+}
+
+function ensureM1NpmShim(nodeRuntime: string) {
+  // Agent Canvas uses `npm run` for local scripts, but desktop packaging does
+  // not provide a global npm binary. Keep a deliberately tiny, local-only
+  // runner that supports its dev scripts and forwards their output directly.
+  const runtimeDir = path.join(process.env.CLYRA_DATA_ROOT || homedir(), ".clyra", "m1-runtime");
+  const runnerPath = path.join(runtimeDir, "npm-runner.mjs");
+  const commandPath = path.join(runtimeDir, "npm");
+  mkdirSync(runtimeDir, { recursive: true });
+  if (!existsSync(runnerPath)) {
+    writeFileSync(runnerPath, `import { readFileSync } from "node:fs";\nimport { spawnSync } from "node:child_process";\nimport path from "node:path";\nconst args = process.argv.slice(2);\nif (args[0] !== "run" || !args[1]) { console.error("Clyra M1 runtime supports npm run <script> only."); process.exit(64); }\nconst cwd = process.cwd();\nconst pkg = JSON.parse(readFileSync(path.join(cwd, "package.json"), "utf8"));\nconst script = pkg.scripts?.[args[1]];\nif (!script) { console.error(\`Unknown npm script: \${args[1]}\`); process.exit(1); }\nconst localBin = path.join(cwd, "node_modules", ".bin");\nconst shell = process.platform === "win32" ? "cmd.exe" : "/bin/sh";\nconst shellArgs = process.platform === "win32" ? ["/d", "/s", "/c", script] : ["-lc", script];\nconst result = spawnSync(shell, shellArgs, { cwd, stdio: "inherit", env: { ...process.env, PATH: [localBin, process.env.PATH].filter(Boolean).join(path.delimiter) } });\nprocess.exit(typeof result.status === "number" ? result.status : 1);\n`, { mode: 0o700 });
+  }
+  writeFileSync(commandPath, `#!/bin/sh\nexec "${nodeRuntime}" "${runnerPath}" "$@"\n`, { mode: 0o700 });
+  chmodSync(commandPath, 0o700);
+  return runtimeDir;
 }
 
 function isOwnedM1Process(pid: number) {
@@ -215,8 +240,23 @@ export async function ensureM1Stack(): Promise<{
       await delay(1200);
 
       console.log(`[m1] starting full Vibe Coder M1 stack from ${root}`);
-      m1Process = spawn("npm", ["run", "start"], {
-        cwd: root,
+      // The M1 package's `start` script delegates through a Python launcher,
+      // which then shells out to `npm` and `node`. Packaged Electron keeps a
+      // deliberately small PATH, so run Agent Canvas's real Node entry point
+      // with Clyra's already-working runtime instead of depending on global
+      // Node/npm installations.
+      const canvasRoot = path.join(root, "agent-canvas");
+      const launcher = path.join(canvasRoot, "scripts", "dev-with-automation.mjs");
+      const nodeRuntime = process.execPath;
+      const canvasBin = path.join(canvasRoot, "node_modules", ".bin");
+      const userToolBin = process.env.CLYRA_M1_TOOL_BIN?.trim() || path.join(homedir(), ".local", "bin");
+      const npmShimDir = ensureM1NpmShim(nodeRuntime);
+      const launchLogPath = path.join(M1_STATE_DIR, "m1-launch.log");
+      mkdirSync(M1_STATE_DIR, { recursive: true });
+      const launchLogFd = openSync(launchLogPath, "a", 0o600);
+      lastM1LaunchError = null;
+      m1Process = spawn(nodeRuntime, [launcher], {
+        cwd: canvasRoot,
         // Clyra itself commonly runs with PORT=3003. The M1 launcher also
         // reads PORT for its ingress server, so forwarding it makes M1 fight
         // the host app for :3003 and exit before its :8000 UI can start.
@@ -226,15 +266,28 @@ export async function ensureM1Stack(): Promise<{
           OH_CANVAS_SAFE_STATE_DIR: M1_STATE_DIR,
           OH_SESSION_API_KEY_PATH: M1_API_KEY_PATH,
           OH_SECRET_KEY_PATH: M1_SECRET_KEY_PATH,
+          ELECTRON_RUN_AS_NODE: "1",
+          PATH: [npmShimDir, canvasBin, userToolBin, process.env.PATH].filter(Boolean).join(path.delimiter),
         },
-        // Detached services must not inherit pipes from Clyra. A closed parent
-        // pipe can otherwise take down only the UI while leaving the agent up.
-        stdio: "ignore",
+        // Keep launch output in Clyra's isolated runtime directory. This avoids
+        // a fragile parent pipe while preserving the startup evidence needed to
+        // repair a partial M1 boot instead of exposing a blank workspace.
+        stdio: ["ignore", launchLogFd, launchLogFd],
         detached: true,
       });
+      closeSync(launchLogFd);
       m1Process.unref();
+      m1Process.once("error", (error) => {
+        lastM1LaunchError = new Error(
+          `Unable to start Vibe Coder M1 with the bundled Node runtime: ${error.message}`,
+        );
+        console.warn("[m1] launcher error:", error.message);
+      });
       m1Process.on("exit", (code, signal) => {
         console.warn(`[m1] process exited code=${code} signal=${signal}`);
+        lastM1LaunchError = new Error(
+          `M1 stack exited early with ${signal ? `signal ${signal}` : `code ${code ?? "unknown"}`}. Check the Vibe Coder launcher configuration.`,
+        );
         m1Process = null;
         // `npm run start` may hand services off and exit successfully. The
         // startup promise remains authoritative until readiness polling ends;
@@ -247,6 +300,7 @@ export async function ensureM1Stack(): Promise<{
       const startupTimeout = Math.max(30_000, Number(process.env.CLYRA_M1_START_TIMEOUT_MS || 90_000));
       const deadline = Date.now() + startupTimeout;
       while (Date.now() < deadline) {
+        if (lastM1LaunchError) throw lastM1LaunchError;
         if (m1Process?.exitCode != null) {
           throw new Error(
             `M1 stack exited early with code ${m1Process.exitCode}. Check Clyra server logs for [m1] output.`,
