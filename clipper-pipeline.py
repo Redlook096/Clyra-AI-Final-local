@@ -412,14 +412,24 @@ def rank_candidates_with_llm(candidates, moment_type):
             item = by_id.get(str(row.get("id", "")))
             if not item or item in output:
                 continue
-            item["llm_score"] = max(1, min(100, int(row.get("score", 50))))
+            llm_score = max(1, min(100, int(row.get("score", 50))))
+            item["llm_score"] = llm_score
+            item["score"] = llm_score
+            item["score_source"] = "llm"
             item["title"] = str(row.get("title", "Strong moment"))[:80]
-            item["reason"] = str(row.get("reason", item["reason"]))[:220]
+            reason = str(row.get("reason", item.get("reason", "Strong standalone moment")))[:180]
+            item["reason"] = f"{llm_score} — {reason}"[:220]
             output.append(item)
         output.extend(item for item in candidates if item not in output)
         return sorted(output, key=lambda item: item.get("llm_score", 0), reverse=True)
     except (urllib.error.URLError, TimeoutError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return candidates
+
+
+TRAILING_CONNECTIVES = {
+    "and", "but", "because", "so", "then", "with", "to", "or", "if", "when",
+    "while", "although", "though", "as", "than", "of", "for", "from", "into",
+}
 
 
 def sentence_boundaries(words, max_gap=1.15):
@@ -433,7 +443,7 @@ def sentence_boundaries(words, max_gap=1.15):
         current.append(word)
         token = word["word"]
         next_word = normalised[index + 1] if index + 1 < len(normalised) else None
-        ends_sentence = bool(re.search(r"[.!?][\\\"')]*$", token))
+        ends_sentence = bool(re.search(r"[.!?][\"')\]]*$", token))
         if not ends_sentence and next_word:
             try:
                 ends_sentence = float(next_word.get("start", 0)) - word["end"] > max_gap
@@ -491,72 +501,225 @@ def topic_segments(sentences, target_duration):
             "title": transcript[:72] or f"Topic {index + 1}",
             "summary": transcript[:500],
             "contentType": "explanation",
-            "requiredPreviousContext": bool(re.match(r"^(he|she|they|this|that|it)\\b", transcript, re.I)),
+            "requiredPreviousContext": bool(re.match(r"^(he|she|they|this|that|it)\b", transcript, re.I)),
             "importantSentenceIds": list(range(len(group))),
             "possibleHooks": [group[0]["text"][:180]],
         })
     return output
 
 
+def _last_token(text):
+    tokens = re.findall(r"[A-Za-z0-9']+", (text or "").lower())
+    return tokens[-1] if tokens else ""
+
+
+def ends_on_connective(text):
+    return _last_token(text) in TRAILING_CONNECTIVES
+
+
+def repair_clip_boundaries(candidate, sentences, video_duration, target_duration):
+    """Snap cuts to sentence edges and avoid hanging on and/but/because endings."""
+    if not sentences:
+        return candidate
+
+    start = float(candidate["start"])
+    end = float(candidate["end"])
+    target = max(8.0, min(float(target_duration), max(8.0, float(video_duration) - 0.2)))
+
+    # Prefer the first sentence that overlaps the window as the in-point.
+    start_sentence = next((item for item in sentences if item["end"] > start), sentences[0])
+    # Prefer the last complete sentence fully inside the window as the out-point.
+    end_candidates = [item for item in sentences if item["start"] < end and item["end"] <= end + 0.35]
+    end_sentence = end_candidates[-1] if end_candidates else next(
+        (item for item in reversed(sentences) if item["start"] >= start_sentence["start"]),
+        start_sentence,
+    )
+
+    matching = [item for item in sentences if item["start"] >= start_sentence["start"] and item["end"] <= end_sentence["end"]]
+    if not matching:
+        matching = [start_sentence]
+
+    while len(matching) > 1 and matching[-1]["end"] - matching[0]["start"] > target * 1.15:
+        matching.pop()
+    while len(matching) > 1 and ends_on_connective(matching[-1]["text"]):
+        matching.pop()
+    # If still connective-ended (single sentence), extend one sentence when possible.
+    if ends_on_connective(matching[-1]["text"]):
+        next_index = next((index for index, item in enumerate(sentences) if item is matching[-1] or (
+            item["start"] == matching[-1]["start"] and item["end"] == matching[-1]["end"]
+        )), None)
+        if next_index is not None and next_index + 1 < len(sentences):
+            extension = sentences[next_index + 1]
+            if extension["end"] - matching[0]["start"] <= target * 1.25:
+                matching.append(extension)
+
+    transcript = " ".join(item["text"] for item in matching).strip()
+    repaired = dict(candidate)
+    repaired["start"] = round(max(0.0, matching[0]["start"]), 2)
+    repaired["end"] = round(min(float(video_duration), matching[-1]["end"] + 0.12), 2)
+    repaired["transcript"] = transcript[:900]
+    repaired["boundary_repaired"] = True
+    return repaired
+
+
+def dedupe_by_overlap(candidates, max_overlap=0.42, limit=None):
+    """Keep highest-scoring clips that do not heavily overlap."""
+    selected = []
+    for candidate in sorted(candidates, key=lambda item: item.get("score", 0), reverse=True):
+        duration = max(1.0, float(candidate["end"]) - float(candidate["start"]))
+        if any(
+            max(0.0, min(candidate["end"], chosen["end"]) - max(candidate["start"], chosen["start"])) / duration > max_overlap
+            for chosen in selected
+        ):
+            continue
+        selected.append(candidate)
+        if limit is not None and len(selected) >= limit:
+            break
+    return selected
+
+
 def local_clip_score(candidate, moment_type):
+    """Transparent 0–100 Clip Potential Score used when LLM ranking is unavailable."""
     text = candidate.get("transcript", "")
     words = re.findall(r"[A-Za-z0-9']+", text.lower())
-    duration = max(0.1, candidate["end"] - candidate["start"])
+    duration = max(0.1, float(candidate["end"]) - float(candidate["start"]))
     keyword_matches = sum(1 for word in words if word in keyword_set(moment_type))
-    complete = not re.search(r"\\b(and|but|because|so|then|with|to)$", text.strip(), re.I)
-    hook = min(20, 8 + keyword_matches * 3 + (4 if "?" in text[:140] else 0))
-    standalone = 18 if complete and not candidate.get("needs_context") else 8
-    clarity = min(10, 4 + int(len(set(words)) / max(1, len(words)) * 8))
-    pacing = min(5, int(len(words) / duration * 1.8))
-    total = min(100, hook + standalone + min(15, len(words) // 7) + min(10, keyword_matches * 2) + clarity + min(10, len(set(words)) // 5) + pacing + 5 + 5)
+    complete = bool(text) and not ends_on_connective(text) and bool(re.search(r"[.!?]$", text.strip()))
+    hook = min(22, 8 + keyword_matches * 3 + (5 if "?" in text[:160] else 0) + (3 if "!" in text[:160] else 0))
+    standalone = 20 if complete and not candidate.get("needs_context") else (12 if complete else 6)
+    density = min(16, int(len(words) / 6))
+    clarity = min(12, 4 + int(len(set(words)) / max(1, len(words)) * 10))
+    pacing = min(8, int(len(words) / duration * 2.0))
+    relevance = min(14, keyword_matches * 3)
+    total = max(1, min(100, hook + standalone + density + clarity + pacing + relevance))
+    hook_label = "Strong hook" if hook >= 16 else "Solid setup"
+    finish_label = "complete thought" if complete else "needs cleaner ending"
+    reason = f"{total} — {hook_label}, {finish_label}, and prompt-relevant pacing."
+    return {"score": int(total), "reason": reason[:220]}
+
+
+def apply_clip_scores(candidates, moment_type, use_llm=True):
+    """Attach Clip Potential Score locally, then optionally enrich with LLM ranks."""
+    scored = []
+    for index, candidate in enumerate(candidates):
+        item = dict(candidate)
+        item["id"] = item.get("id") or f"candidate-{index + 1}"
+        local = local_clip_score(item, moment_type)
+        item["score"] = int(local["score"])
+        item["reason"] = local["reason"]
+        item["score_source"] = "local"
+        scored.append(item)
+
+    if use_llm:
+        ranked = rank_candidates_with_llm(scored, moment_type)
+        for item in ranked:
+            if "llm_score" in item:
+                item["score"] = int(item["llm_score"])
+                item["score_source"] = "llm"
+                if item.get("reason") and "—" not in str(item["reason"]):
+                    item["reason"] = f"{item['score']} — {item['reason']}"[:220]
+        return ranked
+    return sorted(scored, key=lambda item: item["score"], reverse=True)
+
+
+def detect_shot_boundaries(video_path):
+    """Optional PySceneDetect adapter. Soft-fails when the package is missing."""
+    if not video_path or not os.path.isfile(video_path):
+        return []
+    try:
+        from scenedetect import SceneManager, open_video  # type: ignore
+        from scenedetect.detectors import ContentDetector  # type: ignore
+    except Exception:
+        return []
+    try:
+        video = open_video(video_path)
+        manager = SceneManager()
+        manager.add_detector(ContentDetector(threshold=27.0))
+        manager.detect_scenes(video, show_progress=False)
+        scenes = manager.get_scene_list()
+        return [
+            {
+                "index": index,
+                "startMs": round(start.get_seconds() * 1000),
+                "endMs": round(end.get_seconds() * 1000),
+            }
+            for index, (start, end) in enumerate(scenes)
+        ]
+    except Exception:
+        return []
+
+
+def build_edit_plan(ranked_clips, shot_boundaries=None):
+    """Canonical render plan consumed by the existing FFmpeg crop/subtitle path."""
     return {
-        "score": int(total),
-        "reason": f"{int(total)} — {'Clear hook' if hook >= 14 else 'Complete setup'}, {'complete thought' if complete else 'boundary repaired'}, and concise pacing.",
+        "version": 1,
+        "clips": [
+            {
+                "id": item["id"],
+                "startMs": round(float(item["start"]) * 1000),
+                "endMs": round(float(item["end"]) * 1000),
+                "score": int(item.get("score", 0)),
+                "reason": item.get("reason", ""),
+                "title": item.get("title"),
+                "cropFocus": "center",
+                "captions": True,
+            }
+            for item in ranked_clips
+        ],
+        "shotBoundaries": shot_boundaries or [],
+        "notes": [
+            "Transcript-first selection; visual adapters are optional evidence only.",
+            "MediaPipe / Light-ASD / Silero VAD remain feature-detected hooks for later passes.",
+        ],
     }
 
 
 def semantic_candidates(words, video_duration, moment_type, target_duration, count):
-    """Generate sentence-aligned clips before optional LLM ranking."""
+    """Generate sentence-aligned clips, repair boundaries, score, then dedupe."""
     sentences = sentence_boundaries(words)
     if not sentences:
-        return choose_moments(words, video_duration, moment_type, target_duration, count, "semantic-fallback")
+        fallback = choose_moments(words, video_duration, moment_type, target_duration, count, "semantic-fallback")
+        return apply_clip_scores(fallback, moment_type, use_llm=False)
 
     topics = topic_segments(sentences, target_duration)
     candidates = []
     target = min(target_duration, max(8.0, video_duration - 0.2))
     for topic in topics:
-        start, end = topic["startMs"] / 1000, topic["endMs"] / 1000
-        matching = [item for item in sentences if item["start"] >= start and item["end"] <= end]
+        start, end = topic["startMs"] / 1000.0, topic["endMs"] / 1000.0
+        matching = [item for item in sentences if item["start"] >= start - 0.05 and item["end"] <= end + 0.05]
+        if not matching:
+            matching = [item for item in sentences if item["end"] > start and item["start"] < end]
         if not matching:
             continue
-        while matching and matching[-1]["end"] - matching[0]["start"] > target:
+        while len(matching) > 1 and matching[-1]["end"] - matching[0]["start"] > target:
+            # Drop leading setup first so the ending payoff survives.
             matching.pop(0)
-        clip_start, clip_end = matching[0]["start"], matching[-1]["end"]
-        transcript = " ".join(item["text"] for item in matching).strip()
-        candidate = {
+        draft = {
             "id": f"candidate-{len(candidates) + 1}",
-            "start": round(clip_start, 2),
-            "end": round(min(video_duration, clip_end + 0.16), 2),
-            "transcript": transcript[:900],
+            "start": matching[0]["start"],
+            "end": matching[-1]["end"],
+            "transcript": " ".join(item["text"] for item in matching).strip()[:900],
             "needs_context": topic["requiredPreviousContext"],
             "topic_id": topic["id"],
         }
-        candidate.update(local_clip_score(candidate, moment_type))
-        candidates.append(candidate)
+        repaired = repair_clip_boundaries(draft, sentences, video_duration, target)
+        candidates.append(repaired)
 
-    selected = []
-    for candidate in sorted(candidates, key=lambda item: item["score"], reverse=True):
-        if any(max(0, min(candidate["end"], chosen["end"]) - max(candidate["start"], chosen["start"])) / max(1, candidate["end"] - candidate["start"]) > 0.42 for chosen in selected):
-            continue
-        selected.append(candidate)
-        if len(selected) >= count:
-            break
+    if not candidates:
+        fallback = choose_moments(words, video_duration, moment_type, target_duration, count, "semantic-fallback")
+        return apply_clip_scores(fallback, moment_type, use_llm=False)
+
+    scored = apply_clip_scores(candidates, moment_type, use_llm=False)
+    selected = dedupe_by_overlap(scored, max_overlap=0.42, limit=count)
     if len(selected) < count:
-        for candidate in candidates:
-            if candidate not in selected:
-                selected.append(candidate)
+        for candidate in scored:
+            if candidate in selected:
+                continue
+            selected.append(candidate)
             if len(selected) >= count:
                 break
+    for index, candidate in enumerate(selected):
+        candidate["id"] = f"candidate-{index + 1}"
     return selected
 
 
@@ -934,26 +1097,63 @@ def main():
         source_cache = os.path.join(TMP_ROOT, ARTIFACT_CACHE_DIR, source_fingerprint(source))
         normalised = normalise_words(words)
         write_json(os.path.join(source_cache, "source-metadata.json"), {
-            "source": source, "title": title, "durationMs": round(duration * 1000),
+            "source": source,
+            "title": title,
+            "durationMs": round(duration * 1000),
             "createdAt": int(time.time() * 1000),
+            "fingerprint": source_fingerprint(source),
         })
         write_json(os.path.join(source_cache, "transcript-words.json"), [
-            {"text": word["word"], "startMs": round(word["start"] * 1000), "endMs": round(word["end"] * 1000), "confidence": word.get("confidence"), "speakerId": word.get("speakerId")}
+            {
+                "text": word["word"],
+                "startMs": round(word["start"] * 1000),
+                "endMs": round(word["end"] * 1000),
+                "confidence": word.get("confidence"),
+                "speakerId": word.get("speakerId"),
+            }
             for word in normalised
         ])
         write_json(os.path.join(source_cache, "speech-regions.json"), speech_regions(normalised))
         sentences = sentence_boundaries(normalised)
         write_json(os.path.join(source_cache, "topic-segments.json"), topic_segments(sentences, requested_duration))
 
+        shot_path = os.path.join(source_cache, "shot-boundaries.json")
+        shot_boundaries = read_json(shot_path, [])
+        if not isinstance(shot_boundaries, list) or not shot_boundaries:
+            probe_path = source if local_source else fallback_path
+            shot_boundaries = detect_shot_boundaries(probe_path)
+            write_json(shot_path, shot_boundaries)
+
         emit("analyze", "running", message=f"Finding {clip_count} distinct {int(requested_duration)}s moments...")
         candidate_cache = os.path.join(source_cache, f"clip-candidates-{clean_name(moment_type)}-{int(requested_duration)}.json")
         candidates = read_json(candidate_cache)
         if not isinstance(candidates, list) or not candidates:
-            candidates = semantic_candidates(normalised, duration, moment_type, requested_duration, max(clip_count * 3, 6))
+            pool = max(clip_count * 3, 6)
+            candidates = semantic_candidates(normalised, duration, moment_type, requested_duration, pool)
             write_json(candidate_cache, candidates)
-        candidates = rank_candidates_with_llm(candidates, moment_type)
-        candidates = candidates[:clip_count]
-        write_json(os.path.join(source_cache, "ranked-clips.json"), candidates)
+
+        ranked = apply_clip_scores(candidates, moment_type, use_llm=True)
+        ranked = dedupe_by_overlap(ranked, max_overlap=0.42, limit=clip_count)
+        if len(ranked) < clip_count:
+            for candidate in sorted(candidates, key=lambda item: item.get("score", 0), reverse=True):
+                if candidate in ranked:
+                    continue
+                ranked.append(candidate)
+                if len(ranked) >= clip_count:
+                    break
+        for index, candidate in enumerate(ranked):
+            candidate["id"] = f"candidate-{index + 1}"
+            candidate["start"] = round(float(candidate["start"]), 2)
+            candidate["end"] = round(float(candidate["end"]), 2)
+            if candidate.get("score_source") != "llm" or not candidate.get("reason"):
+                score_payload = local_clip_score(candidate, moment_type)
+                candidate["score"] = score_payload["score"]
+                candidate["reason"] = score_payload["reason"]
+                candidate["score_source"] = candidate.get("score_source") or "local"
+            candidate["score"] = int(max(1, min(100, int(candidate.get("score", 50)))))
+        write_json(os.path.join(source_cache, "ranked-clips.json"), ranked)
+        write_json(os.path.join(source_cache, "edit-plan.json"), build_edit_plan(ranked, shot_boundaries))
+        candidates = ranked
         emit(
             "analyze",
             "complete",
@@ -1015,7 +1215,8 @@ def main():
                 fail(f"Encoder did not produce candidate {candidate_index + 1}")
 
             caption_words = [word["word"] for word in transcribed_words if len(word["word"]) > 2]
-            score = candidate.get("llm_score") or round(min(100, 55 + candidate.get("score", 0) * 4))
+            score = int(max(1, min(100, int(candidate.get("score", 50)))))
+            reason = str(candidate.get("reason") or f"{score} — Strong standalone moment")[:220]
             result = {
                 "id": candidate["id"],
                 "rank": candidate_index + 1,
@@ -1025,11 +1226,13 @@ def main():
                 "source_start": fmt_time(clip_start),
                 "source_end": fmt_time(clip_end),
                 "clip_duration": f"{round(clip_duration)}s",
-                "reason": candidate.get("reason", "Strong standalone moment"),
+                "reason": reason,
                 "caption": " ".join(caption_words[:24])[:220],
                 "hashtags": {"viral": "#viral #shorts", "funny": "#funny #shorts", "dramatic": "#story #shorts"}.get(moment_type, "#shorts"),
                 "virality_score": round(float(score) / 10, 1),
-                "score": int(score),
+                "score": score,
+                "clip_potential_score": score,
+                "score_source": candidate.get("score_source", "local"),
                 "file_size": os.path.getsize(output_path),
                 "timing_source": timing_source,
                 "word_count": subtitle_count,
