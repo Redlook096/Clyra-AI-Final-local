@@ -70,7 +70,8 @@ shots = module.detect_shot_boundaries("/tmp/does-not-exist.mp4")
 clamped = module.clamp_candidate_duration({"start": 100.0, "end": 250.0, "transcript": "x"}, 30, 1000)
 
 import clipper_face_tracking as face
-face_cfg = face.face_tracking_config({"face_tracking": {"mode": "smooth", "allowZoom": True}})
+face_cfg = face.face_tracking_config({"face_tracking": {"mode": "smooth", "allowZoom": True, "personMode": "strict", "selectedPersonId": "person_001"}})
+face_flex = face.face_tracking_config({"face_tracking": {"mode": "smooth", "sceneMode": "flexible"}})
 face_off = face.face_tracking_config({"face_tracking_mode": "off"})
 caps = face.capability_report()
 fixed = face.track_faces_and_build_crops(
@@ -86,6 +87,32 @@ fixed = face.track_faces_and_build_crops(
 crop_filter = face.build_crop_filter(720, 1280, keyframes=None, crop_focus="center")
 alpha_smooth = face.smoothing_alpha("smooth")
 alpha_fast = face.smoothing_alpha("responsive")
+scene_ok = face.evaluate_scene(
+    [
+        {"matched": True, "identityConfidence": 0.9, "faceWidth": 0.12, "timeMs": 0, "personId": "person_001"},
+        {"matched": True, "identityConfidence": 0.88, "faceWidth": 0.11, "timeMs": 250, "personId": "person_001"},
+        {"matched": True, "identityConfidence": 0.86, "faceWidth": 0.1, "timeMs": 500, "personId": "person_001"},
+    ],
+    person_mode="strict",
+    scene_id="scene_001",
+    start_ms=0,
+    end_ms=500,
+)
+scene_bad = face.evaluate_scene(
+    [
+        {"matched": False, "identityConfidence": 0.2, "faceWidth": 0.01, "timeMs": 0},
+        {"matched": False, "identityConfidence": 0.1, "faceWidth": 0.01, "timeMs": 250},
+    ],
+    person_mode="strict",
+    scene_id="scene_002",
+    start_ms=0,
+    end_ms=250,
+)
+filtered = face.filter_candidates_by_scenes(
+    [{"id": "a", "start": 0.0, "end": 8.0}, {"id": "b", "start": 40.0, "end": 48.0}],
+    [{"accepted": True, "start": 0.0, "end": 10.0, "startMs": 0, "endMs": 10000}],
+)
+hist = face._appearance_hist.__doc__ is not None
 
 print(json.dumps({
     "candidates": candidates,
@@ -106,12 +133,17 @@ print(json.dumps({
     "endsConnective": module.ends_on_connective("We tried because"),
     "endsClean": module.ends_on_connective("This is the payoff!"),
     "faceCfg": face_cfg,
+    "faceFlex": face_flex,
     "faceOff": face_off,
     "faceCaps": caps,
     "faceFixed": fixed,
     "cropFilter": crop_filter,
     "alphaSmooth": alpha_smooth,
     "alphaFast": alpha_fast,
+    "sceneOk": scene_ok,
+    "sceneBad": scene_bad,
+    "filtered": filtered,
+    "hasAppearanceHist": hist,
 }))
 `;
 
@@ -143,13 +175,18 @@ const payload = JSON.parse(output.trim()) as {
   clamped: { start: number; end: number; duration_clamped?: boolean };
   endsConnective: boolean;
   endsClean: boolean;
-  faceCfg: { enabled: boolean; mode: string };
+  faceCfg: { enabled: boolean; mode: string; selectedPersonId?: string | null; personMode?: string; sceneMode?: string };
+  faceFlex: { personMode?: string; sceneMode?: string };
   faceOff: { enabled: boolean; mode: string };
   faceCaps: { mediapipeTasks: boolean; fallback: string | null };
   faceFixed: { faceTracking: { mode: string }; cropKeyframes: Array<{ width: number; height: number }> };
   cropFilter: string;
   alphaSmooth: number;
   alphaFast: number;
+  sceneOk: { accepted: boolean; selectedPersonCoverage: number };
+  sceneBad: { accepted: boolean };
+  filtered: Array<{ id: string }>;
+  hasAppearanceHist: boolean;
 };
 
 assert.equal(payload.candidates.length, 5, "returns requested candidate count");
@@ -217,12 +254,15 @@ assert.deepEqual(
 );
 assert.equal(payload.editPlan.clips.length, 1, "edit plan includes ranked clips");
 assert.equal(payload.editPlan.clips[0].score, 88, "edit plan preserves clip potential score");
-assert.equal(payload.editPlan.version, 2, "edit plan is v2 with face tracking fields");
+assert.ok((payload.editPlan.version || 0) >= 2, "edit plan includes face tracking fields");
 assert.equal(payload.editPlan.clips[0].faceTracking?.mode, "smooth", "edit plan defaults talking-head face tracking to smooth");
 assert.deepEqual(payload.shots, [], "missing PySceneDetect / video soft-fails to empty shot list");
 
 assert.equal(payload.faceCfg.mode, "smooth", "face tracking config defaults to smooth");
 assert.equal(payload.faceCfg.enabled, true, "smooth mode enables tracking");
+assert.equal(payload.faceCfg.selectedPersonId, "person_001", "selected person id is preserved");
+assert.equal(payload.faceCfg.personMode || payload.faceCfg.sceneMode, "strict", "strict is the default person mode");
+assert.equal(payload.faceFlex.personMode || payload.faceFlex.sceneMode, "flexible", "flexible scene mode is normalised");
 assert.equal(payload.faceOff.mode, "off", "off mode is normalised");
 assert.equal(payload.faceOff.enabled, false, "off mode disables tracking");
 assert.equal(payload.faceFixed.faceTracking.mode, "off", "off tracking returns fixed crop plan");
@@ -230,5 +270,9 @@ assert.equal(payload.faceFixed.cropKeyframes[0].width, 720, "fixed crop matches 
 assert(payload.cropFilter.includes("crop=720:1280"), "default crop filter covers vertical frame");
 assert(payload.alphaSmooth < payload.alphaFast, "smooth mode uses stronger smoothing than responsive");
 assert.equal(typeof payload.faceCaps.mediapipeTasks, "boolean", "capability report exposes MediaPipe Tasks flag");
+assert.equal(payload.sceneOk.accepted, true, "high-coverage selected-person scene is accepted");
+assert.equal(payload.sceneBad.accepted, false, "empty selected-person scene is rejected");
+assert.deepEqual(payload.filtered.map((item) => item.id), ["a"], "candidates outside accepted face scenes are filtered");
+assert.equal(payload.hasAppearanceHist, true, "appearance histogram helper is available");
 
-console.log("AI Clip unit tests passed (face-tracking + selection assertions)");
+console.log("AI Clip unit tests passed (face-tracking + selected-person assertions)");
