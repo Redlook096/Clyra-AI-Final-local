@@ -1,6 +1,13 @@
-import { ArrowLeft, ArrowRight, RefreshCw } from "lucide-react";
-import { PreviewTabBar } from "./PreviewTabBar";
-import { PreviewToolbar } from "./PreviewToolbar";
+import {
+  ArrowLeft,
+  ArrowRight,
+  ExternalLink,
+  Maximize2,
+  Minimize2,
+  MoreHorizontal,
+  RefreshCw,
+  RotateCcw,
+} from "lucide-react";
 import { PreviewUrlInput } from "./PreviewUrlInput";
 
 export function PreviewBrowserChrome({
@@ -17,6 +24,7 @@ export function PreviewBrowserChrome({
   onCopyUrl,
   isFullscreen,
   onToggleFullscreen,
+  statusLabel,
 }: {
   title: string;
   address: string;
@@ -31,17 +39,27 @@ export function PreviewBrowserChrome({
   onCopyUrl: () => void;
   isFullscreen: boolean;
   onToggleFullscreen: () => void;
+  statusLabel?: string;
 }) {
+  const routeLabel = (() => {
+    try {
+      if (!address) return "/";
+      const url = new URL(address);
+      return `${url.pathname}${url.search}` || "/";
+    } catch {
+      return address || "/";
+    }
+  })();
+
   return (
-    <div className="group relative z-10 bg-white/40 backdrop-blur-2xl border-b border-white/50 shadow-sm rounded-t-2xl overflow-hidden">
-      <PreviewTabBar title={title} onNewTab={() => onNavigate("about:blank")} />
-      <div className="flex min-h-12 items-center gap-2 px-3 py-2">
-        <div className="flex shrink-0 items-center gap-1">
+    <div className="relative z-10 shrink-0 border-b border-slate-200/80 bg-white">
+      <div className="flex h-[50px] items-center gap-2 px-3">
+        <div className="flex shrink-0 items-center gap-0.5">
           <button
             type="button"
             onClick={onBack}
             disabled={!canNavigate}
-            className="grid h-8 w-8 place-items-center rounded-full text-slate-500 transition-all hover:bg-white/60 hover:text-slate-900 disabled:opacity-35 hover:shadow-sm"
+            className="grid h-8 w-8 place-items-center rounded-[8px] text-slate-500 transition-colors duration-150 hover:bg-[#f1f5f9] hover:text-slate-900 disabled:opacity-35"
             aria-label="Go back"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
@@ -50,7 +68,7 @@ export function PreviewBrowserChrome({
             type="button"
             onClick={onForward}
             disabled={!canNavigate}
-            className="grid h-8 w-8 place-items-center rounded-full text-slate-500 transition-all hover:bg-white/60 hover:text-slate-900 disabled:opacity-35 hover:shadow-sm"
+            className="grid h-8 w-8 place-items-center rounded-[8px] text-slate-500 transition-colors duration-150 hover:bg-[#f1f5f9] hover:text-slate-900 disabled:opacity-35"
             aria-label="Go forward"
           >
             <ArrowRight className="h-3.5 w-3.5" />
@@ -58,25 +76,70 @@ export function PreviewBrowserChrome({
           <button
             type="button"
             onClick={onRefresh}
-            className="grid h-8 w-8 place-items-center rounded-full text-slate-500 transition-all hover:bg-white/60 hover:text-slate-900 hover:shadow-sm"
-            aria-label="Refresh preview"
+            className="grid h-8 w-8 place-items-center rounded-[8px] text-slate-500 transition-colors duration-150 hover:bg-[#f1f5f9] hover:text-slate-900"
+            aria-label="Reload preview"
           >
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
         </div>
-        <PreviewUrlInput
-          value={address}
-          onChange={onAddressChange}
-          onNavigate={onNavigate}
-        />
-        <PreviewToolbar
-          onOpenExternal={onOpenExternal}
-          onRestart={onRestart}
-          onCopyUrl={onCopyUrl}
-          isFullscreen={isFullscreen}
-          onToggleFullscreen={onToggleFullscreen}
-        />
+
+        <div className="min-w-0 flex-1">
+          <PreviewUrlInput
+            value={address}
+            onChange={onAddressChange}
+            onNavigate={onNavigate}
+            placeholder={routeLabel}
+          />
+        </div>
+
+        <div className="hidden min-w-0 max-w-[140px] truncate text-[12px] font-medium text-slate-500 sm:block" title={title}>
+          {title}
+        </div>
+
+        <div className="flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            onClick={onOpenExternal}
+            className="grid h-8 w-8 place-items-center rounded-[8px] text-slate-500 transition-colors duration-150 hover:bg-[#f1f5f9] hover:text-slate-900"
+            aria-label="Open in browser"
+            title="Open externally"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={onRestart}
+            className="grid h-8 w-8 place-items-center rounded-[8px] text-slate-500 transition-colors duration-150 hover:bg-[#f1f5f9] hover:text-slate-900"
+            aria-label="Restart preview"
+            title="Restart development server"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={onToggleFullscreen}
+            className="grid h-8 w-8 place-items-center rounded-[8px] text-slate-500 transition-colors duration-150 hover:bg-[#f1f5f9] hover:text-slate-900"
+            aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen preview"}
+          >
+            {isFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+          </button>
+          <button
+            type="button"
+            onClick={onCopyUrl}
+            className="grid h-8 w-8 place-items-center rounded-[8px] text-slate-500 transition-colors duration-150 hover:bg-[#f1f5f9] hover:text-slate-900"
+            aria-label="More preview actions"
+            title="Copy preview URL"
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
+      {statusLabel ? (
+        <div className="flex h-7 items-center gap-2 border-t border-slate-100 bg-[#f8fafc] px-3 text-[11.5px] font-medium text-slate-500">
+          <span className="h-1.5 w-1.5 rounded-full bg-blue-500/80" aria-hidden />
+          {statusLabel}
+        </div>
+      ) : null}
     </div>
   );
 }

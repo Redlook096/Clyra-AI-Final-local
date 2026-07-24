@@ -1,9 +1,0 @@
-{
-  "id": "checkpoint-after-plan",
-  "label": "After PLAN.md generation",
-  "createdAt": "2026-07-01T06:46:07.177Z",
-  "files": [
-    "PLAN.md",
-    "implementation_plan.md"
-  ]
-}

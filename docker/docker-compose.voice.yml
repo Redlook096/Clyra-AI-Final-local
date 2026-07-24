@@ -1,0 +1,54 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  livekit:
+    image: livekit/livekit-server:latest
+    command: --dev --bind 0.0.0.0
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+    restart: unless-stopped
+
+  voice-pipeline:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.voice
+    environment:
+      VOICE_STT_MODEL: distil-large-v3
+      VOICE_TTS_VOICE: af_heart
+      VOICE_SAMPLE_RATE: 16000
+      VOICE_WHISPER_DEVICE: cpu
+      VOICE_WHISPER_COMPUTE: int8
+      VOICE_TTS_ENGINE: auto
+      VOICE_ENDPOINT_SILENCE_MS: 420
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      MY_LLM_API_KEY: ${MY_LLM_API_KEY:-}
+      MY_LLM_BASE_URL: ${MY_LLM_BASE_URL:-https://api.deepseek.com}
+      MY_LLM_MODEL: ${MY_LLM_MODEL:-deepseek-chat}
+    ports:
+      - "8787:8787"
+    restart: unless-stopped
+
+  clyra:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.clyra
+    environment:
+      PORT: 3000
+      VOICE_PIPELINE_URL: http://voice-pipeline:8787
+      LIVEKIT_URL: ws://livekit:7880
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: secret
+      REDIS_URL: redis://redis:6379
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - voice-pipeline
+      - livekit
+      - redis
+    restart: unless-stopped

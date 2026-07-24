@@ -95,7 +95,9 @@ if (embedParams.get("vibe_embed") === "1") {
   root.render(
     <StrictMode>
       <RootErrorBoundary>
-        <App />
+        <Suspense fallback={null}>
+          <App />
+        </Suspense>
       </RootErrorBoundary>
     </StrictMode>,
   );

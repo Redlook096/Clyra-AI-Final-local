@@ -15,15 +15,45 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 import xml.etree.ElementTree as ET
+
+from clipper_face_tracking import (
+    annotate_scenes,
+    build_crop_filter,
+    capability_report as face_capability_report,
+    face_tracking_config,
+    filter_candidates_by_scenes,
+    probe_video_size,
+    scan_people,
+    track_faces_and_build_crops,
+)
 
 
 TMP_ROOT = "./tmp"
-OUTPUT_DIR = "./output"
+ARTIFACT_CACHE_DIR = "clipper-cache"
+CLIP_ARTIFACT_DIR = "clipper-artifacts"
+
+
+def resolve_output_dir():
+    """Prefer the Electron/data root so renders land where Express serves them."""
+    explicit = (os.environ.get("CLYRA_OUTPUT_DIR") or "").strip()
+    if explicit:
+        return explicit
+    data_root = (os.environ.get("CLYRA_DATA_ROOT") or "").strip()
+    if data_root:
+        return os.path.join(data_root, "output")
+    return "./output"
+
+
+OUTPUT_DIR = resolve_output_dir()
 OUTPUT_WIDTH = 720
 OUTPUT_HEIGHT = 1280
 OUTPUT_FPS = 30
-MAX_CLIP_LENGTH = 30.0
+MAX_CLIP_LENGTH = 60.0
+_FASTER_WHISPER_MODEL = None
+_OPENAI_WHISPER_MODEL = None
 
 
 def emit(step, status, **data):
@@ -55,6 +85,22 @@ def resolve_ffmpeg():
 FFMPEG = resolve_ffmpeg()
 
 
+def resolve_ffprobe():
+    candidates = [
+        os.environ.get("FFPROBE_BINARY"),
+        shutil.which("ffprobe"),
+    ]
+    if FFMPEG and FFMPEG != "ffmpeg":
+        candidates.insert(1, os.path.join(os.path.dirname(os.path.abspath(FFMPEG)), "ffprobe"))
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+FFPROBE = resolve_ffprobe()
+
+
 def expose_ffmpeg_to_subprocesses():
     if not FFMPEG or FFMPEG == "ffmpeg":
         return
@@ -70,13 +116,67 @@ def clean_name(value):
     return name or "clip"
 
 
+def source_fingerprint(source):
+    """Use a stable source identity so analysis survives an interrupted render."""
+    try:
+        if os.path.isfile(source):
+            stat = os.stat(source)
+            source = f"{os.path.abspath(source)}:{stat.st_size}:{int(stat.st_mtime)}"
+    except OSError:
+        pass
+    return hashlib.sha256(str(source).encode("utf-8")).hexdigest()[:24]
+
+
+def read_json(path, fallback=None):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError, TypeError):
+        return fallback
+
+
+def write_json(path, payload):
+    """Write an artifact atomically so a cancelled job never poisons a cache."""
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    staging = f"{path}.tmp"
+    with open(staging, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    os.replace(staging, path)
+
+
+def normalise_words(words):
+    """Normalise captions and Whisper output into one timestamp representation."""
+    output = []
+    for raw in words or []:
+        token = str(raw.get("word", raw.get("text", ""))).strip()
+        if not token:
+            continue
+        try:
+            start = max(0.0, float(raw.get("start", raw.get("startMs", 0)) or 0))
+            end = max(start + 0.04, float(raw.get("end", raw.get("endMs", start + 0.2)) or start + 0.2))
+        except (TypeError, ValueError):
+            continue
+        output.append({
+            "word": token[:80],
+            "start": round(start, 3),
+            "end": round(end, 3),
+            "confidence": raw.get("confidence"),
+            "speakerId": raw.get("speakerId"),
+        })
+    return sorted(output, key=lambda word: (word["start"], word["end"]))
+
+
 def fmt_time(seconds):
     minutes = int(seconds // 60)
     return f"{minutes}:{int(seconds % 60):02d}"
 
 
 def parse_duration(value, default=MAX_CLIP_LENGTH):
-    return MAX_CLIP_LENGTH
+    try:
+        return min(MAX_CLIP_LENGTH, max(15.0, float(value)))
+    except (TypeError, ValueError):
+        return min(MAX_CLIP_LENGTH, max(15.0, float(default)))
 
 
 def parse_captions(caption_track):
@@ -215,6 +315,490 @@ def choose_moment(words, video_duration, moment_type, target_duration, clip_name
     return round(start, 1), round(min(video_duration, start + target), 1), best[2]
 
 
+def choose_moments(words, video_duration, moment_type, target_duration, count, url):
+    """Return diverse candidate windows, ranked without guessing raw timestamps in the LLM."""
+    if video_duration <= 0:
+        return [{
+            "id": "candidate-1",
+            "start": 0.0,
+            "end": target_duration,
+            "score": 5.0,
+            "reason": "Selected the strongest available source window",
+            "transcript": "",
+        }]
+
+    target = min(target_duration, max(8.0, video_duration - 0.5))
+    max_start = max(0.0, video_duration - target)
+    keywords = keyword_set(moment_type)
+    seed = int(hashlib.sha1(f"{url}|{moment_type}|{target}".encode()).hexdigest()[:8], 16)
+    starts = {0.0, max_start}
+    step = max(6.0, target * 0.38)
+    cursor = 0.0
+    while cursor <= max_start:
+        starts.add(round(cursor, 2))
+        cursor += step
+    starts.update(min(max_start, word["start"]) for index, word in enumerate(words) if index % 16 == 0)
+
+    ranked = []
+    for raw_start in starts:
+        start = min(max(0.0, float(raw_start)), max_start)
+        end = min(video_duration, start + target)
+        window = [word for word in words if start <= word["start"] <= end]
+        transcript = " ".join(word["word"] for word in window)
+        density = len(window) / max(target, 1.0)
+        matches = sum(1 for word in window if word["word"].lower() in keywords)
+        unique_ratio = len({word["word"] for word in window}) / max(len(window), 1)
+        long_words = sum(1 for word in window if len(word["word"]) >= 8)
+        position_bonus = 0.25 if video_duration * 0.06 <= start <= video_duration * 0.86 else 0
+        jitter = ((seed + int(start * 10)) % 13) / 100
+        score = density * 3.2 + matches * 0.9 + unique_ratio * 1.4 + long_words * 0.025 + position_bonus + jitter
+        ranked.append({
+            "start": start,
+            "end": end,
+            "score": score,
+            "reason": "Dense, self-contained transcript window with strong prompt relevance" if window else "Stable visual source window",
+            "transcript": transcript[:700],
+        })
+
+    selected = []
+    for candidate in sorted(ranked, key=lambda item: item["score"], reverse=True):
+        overlap = False
+        for existing in selected:
+            intersection = max(0.0, min(candidate["end"], existing["end"]) - max(candidate["start"], existing["start"]))
+            if intersection / max(1.0, target) > 0.42:
+                overlap = True
+                break
+        if overlap:
+            continue
+        selected.append(candidate)
+        if len(selected) >= count:
+            break
+
+    if len(selected) < count:
+        for candidate in sorted(ranked, key=lambda item: item["score"], reverse=True):
+            if candidate not in selected:
+                selected.append(candidate)
+            if len(selected) >= count:
+                break
+    for index, candidate in enumerate(selected):
+        candidate["id"] = f"candidate-{index + 1}"
+        candidate["start"] = round(candidate["start"], 2)
+        candidate["end"] = round(candidate["end"], 2)
+    return selected
+
+
+def rank_candidates_with_llm(candidates, moment_type):
+    """Use the existing OpenAI-compatible server credential for transcript ranking."""
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if not api_key or len(candidates) < 2:
+        return candidates
+    compact = [
+        {
+            "id": item["id"],
+            "duration": round(item["end"] - item["start"], 1),
+            "transcript": item["transcript"],
+        }
+        for item in candidates
+    ]
+    system = (
+        "Rank short-video transcript candidates. Return JSON only as "
+        "{\"ranked\":[{\"id\":\"candidate-1\",\"score\":84,\"title\":\"short title\","
+        "\"reason\":\"one sentence\"}]}. Score hook strength, standalone clarity, information density, "
+        "emotional payoff, and shareability. Never invent facts or timestamps."
+    )
+    payload = json.dumps({
+        "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
+        "temperature": 0.2,
+        "max_tokens": 1000,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps({"objective": moment_type, "candidates": compact})},
+        ],
+    }).encode("utf-8")
+    base_url = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
+    request = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=payload,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=35) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        raw = str(body.get("choices", [{}])[0].get("message", {}).get("content", ""))
+        start = raw.find("{")
+        end = raw.rfind("}")
+        ranked_payload = json.loads(raw[start:end + 1] if start >= 0 and end > start else raw)
+        rows = ranked_payload.get("ranked", [])
+        by_id = {item["id"]: item for item in candidates}
+        output = []
+        for row in rows:
+            item = by_id.get(str(row.get("id", "")))
+            if not item or item in output:
+                continue
+            llm_score = max(1, min(100, int(row.get("score", 50))))
+            item["llm_score"] = llm_score
+            item["score"] = llm_score
+            item["score_source"] = "llm"
+            item["title"] = str(row.get("title", "Strong moment"))[:80]
+            reason = str(row.get("reason", item.get("reason", "Strong standalone moment")))[:180]
+            item["reason"] = f"{llm_score} — {reason}"[:220]
+            output.append(item)
+        output.extend(item for item in candidates if item not in output)
+        return sorted(output, key=lambda item: item.get("llm_score", 0), reverse=True)
+    except (urllib.error.URLError, TimeoutError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return candidates
+
+
+TRAILING_CONNECTIVES = {
+    "and", "but", "because", "so", "then", "with", "to", "or", "if", "when",
+    "while", "although", "though", "as", "than", "of", "for", "from", "into",
+}
+
+
+def sentence_boundaries(words, max_gap=1.15):
+    """Build conservative sentence-like spans without inventing transcript text."""
+    sentences, current = [], []
+    normalised = normalise_words(words)
+    for index, word in enumerate(normalised):
+        if current and word["start"] - current[-1]["end"] > max_gap:
+            sentences.append(current)
+            current = []
+        current.append(word)
+        token = word["word"]
+        next_word = normalised[index + 1] if index + 1 < len(normalised) else None
+        ends_sentence = bool(re.search(r"[.!?][\"')\]]*$", token))
+        if not ends_sentence and next_word:
+            try:
+                ends_sentence = float(next_word.get("start", 0)) - word["end"] > max_gap
+            except (TypeError, ValueError):
+                pass
+        if ends_sentence:
+            sentences.append(current)
+            current = []
+    if current:
+        sentences.append(current)
+    return [
+        {
+            "start": group[0]["start"],
+            "end": group[-1]["end"],
+            "text": " ".join(item["word"] for item in group).strip(),
+            "words": group,
+        }
+        for group in sentences if group
+    ]
+
+
+def speech_regions(words, max_gap=0.72):
+    regions, current = [], []
+    for word in normalise_words(words):
+        if current and word["start"] - current[-1]["end"] > max_gap:
+            regions.append({"startMs": round(current[0]["start"] * 1000), "endMs": round(current[-1]["end"] * 1000)})
+            current = []
+        current.append(word)
+    if current:
+        regions.append({"startMs": round(current[0]["start"] * 1000), "endMs": round(current[-1]["end"] * 1000)})
+    return regions
+
+
+def topic_segments(sentences, target_duration):
+    """Group complete sentences into candidate-sized semantic sections."""
+    if not sentences:
+        return []
+    target = max(15.0, float(target_duration))
+    segments, current = [], []
+    for sentence in sentences:
+        prospective_start = current[0]["start"] if current else sentence["start"]
+        if current and sentence["end"] - prospective_start > target * 1.35:
+            segments.append(current)
+            current = []
+        current.append(sentence)
+    if current:
+        segments.append(current)
+    output = []
+    for index, group in enumerate(segments):
+        transcript = " ".join(item["text"] for item in group).strip()
+        output.append({
+            "id": f"topic_{index + 1:03d}",
+            "startMs": round(group[0]["start"] * 1000),
+            "endMs": round(group[-1]["end"] * 1000),
+            "title": transcript[:72] or f"Topic {index + 1}",
+            "summary": transcript[:500],
+            "contentType": "explanation",
+            "requiredPreviousContext": bool(re.match(r"^(he|she|they|this|that|it)\b", transcript, re.I)),
+            "importantSentenceIds": list(range(len(group))),
+            "possibleHooks": [group[0]["text"][:180]],
+        })
+    return output
+
+
+def _last_token(text):
+    tokens = re.findall(r"[A-Za-z0-9']+", (text or "").lower())
+    return tokens[-1] if tokens else ""
+
+
+def ends_on_connective(text):
+    return _last_token(text) in TRAILING_CONNECTIVES
+
+
+def repair_clip_boundaries(candidate, sentences, video_duration, target_duration):
+    """Snap cuts to sentence edges and avoid hanging on and/but/because endings."""
+    if not sentences:
+        return clamp_candidate_duration(candidate, target_duration, video_duration)
+
+    start = float(candidate["start"])
+    end = float(candidate["end"])
+    target = max(8.0, min(float(target_duration), max(8.0, float(video_duration) - 0.2)))
+
+    # Prefer the first sentence that overlaps the window as the in-point.
+    start_sentence = next((item for item in sentences if item["end"] > start), sentences[0])
+    # Prefer the last complete sentence fully inside the window as the out-point.
+    end_candidates = [item for item in sentences if item["start"] < end and item["end"] <= end + 0.35]
+    end_sentence = end_candidates[-1] if end_candidates else next(
+        (item for item in reversed(sentences) if item["start"] >= start_sentence["start"]),
+        start_sentence,
+    )
+
+    matching = [item for item in sentences if item["start"] >= start_sentence["start"] and item["end"] <= end_sentence["end"]]
+    if not matching:
+        matching = [start_sentence]
+
+    while len(matching) > 1 and matching[-1]["end"] - matching[0]["start"] > target * 1.08:
+        # Drop leading setup first so the ending payoff survives.
+        matching.pop(0)
+    while len(matching) > 1 and ends_on_connective(matching[-1]["text"]):
+        matching.pop()
+    # If still connective-ended (single sentence), extend one sentence when possible.
+    if ends_on_connective(matching[-1]["text"]):
+        next_index = next((index for index, item in enumerate(sentences) if item is matching[-1] or (
+            item["start"] == matching[-1]["start"] and item["end"] == matching[-1]["end"]
+        )), None)
+        if next_index is not None and next_index + 1 < len(sentences):
+            extension = sentences[next_index + 1]
+            if extension["end"] - matching[0]["start"] <= target * 1.12:
+                matching.append(extension)
+
+    transcript = " ".join(item["text"] for item in matching).strip()
+    repaired = dict(candidate)
+    repaired["start"] = round(max(0.0, matching[0]["start"]), 2)
+    repaired["end"] = round(min(float(video_duration), matching[-1]["end"] + 0.12), 2)
+    repaired["transcript"] = transcript[:900]
+    repaired["boundary_repaired"] = True
+    return clamp_candidate_duration(repaired, target, video_duration)
+
+
+def clamp_candidate_duration(candidate, target_duration, video_duration):
+    """Hard-cap clip length so a long caption sentence cannot produce a 2+ minute short."""
+    item = dict(candidate)
+    start = max(0.0, float(item.get("start", 0)))
+    end = max(start + 0.5, float(item.get("end", start + 1)))
+    target = max(8.0, min(float(target_duration), max(8.0, float(video_duration) - 0.2)))
+    max_end = start + target * 1.08
+    if end > max_end:
+        end = max_end
+        item["duration_clamped"] = True
+    end = min(float(video_duration), end)
+    item["start"] = round(start, 2)
+    item["end"] = round(end, 2)
+    return item
+
+
+def dedupe_by_overlap(candidates, max_overlap=0.42, limit=None):
+    """Keep highest-scoring clips that do not heavily overlap."""
+    selected = []
+    for candidate in sorted(candidates, key=lambda item: item.get("score", 0), reverse=True):
+        duration = max(1.0, float(candidate["end"]) - float(candidate["start"]))
+        if any(
+            max(0.0, min(candidate["end"], chosen["end"]) - max(candidate["start"], chosen["start"])) / duration > max_overlap
+            for chosen in selected
+        ):
+            continue
+        selected.append(candidate)
+        if limit is not None and len(selected) >= limit:
+            break
+    return selected
+
+
+def local_clip_score(candidate, moment_type):
+    """Transparent 0–100 Clip Potential Score used when LLM ranking is unavailable."""
+    text = candidate.get("transcript", "")
+    words = re.findall(r"[A-Za-z0-9']+", text.lower())
+    duration = max(0.1, float(candidate["end"]) - float(candidate["start"]))
+    keyword_matches = sum(1 for word in words if word in keyword_set(moment_type))
+    complete = bool(text) and not ends_on_connective(text) and bool(re.search(r"[.!?]$", text.strip()))
+    hook = min(22, 8 + keyword_matches * 3 + (5 if "?" in text[:160] else 0) + (3 if "!" in text[:160] else 0))
+    standalone = 20 if complete and not candidate.get("needs_context") else (12 if complete else 6)
+    density = min(16, int(len(words) / 6))
+    clarity = min(12, 4 + int(len(set(words)) / max(1, len(words)) * 10))
+    pacing = min(8, int(len(words) / duration * 2.0))
+    relevance = min(14, keyword_matches * 3)
+    total = max(1, min(100, hook + standalone + density + clarity + pacing + relevance))
+    hook_label = "Strong hook" if hook >= 16 else "Solid setup"
+    finish_label = "complete thought" if complete else "needs cleaner ending"
+    reason = f"{total} — {hook_label}, {finish_label}, and prompt-relevant pacing."
+    return {"score": int(total), "reason": reason[:220]}
+
+
+def apply_clip_scores(candidates, moment_type, use_llm=True):
+    """Attach Clip Potential Score locally, then optionally enrich with LLM ranks."""
+    scored = []
+    for index, candidate in enumerate(candidates):
+        item = dict(candidate)
+        item["id"] = item.get("id") or f"candidate-{index + 1}"
+        local = local_clip_score(item, moment_type)
+        item["score"] = int(local["score"])
+        item["reason"] = local["reason"]
+        item["score_source"] = "local"
+        scored.append(item)
+
+    if use_llm:
+        ranked = rank_candidates_with_llm(scored, moment_type)
+        for item in ranked:
+            if "llm_score" in item:
+                item["score"] = int(item["llm_score"])
+                item["score_source"] = "llm"
+                if item.get("reason") and "—" not in str(item["reason"]):
+                    item["reason"] = f"{item['score']} — {item['reason']}"[:220]
+        return ranked
+    return sorted(scored, key=lambda item: item["score"], reverse=True)
+
+
+def detect_shot_boundaries(video_path):
+    """Optional PySceneDetect adapter. Soft-fails when the package is missing."""
+    if not video_path or not os.path.isfile(video_path):
+        return []
+    try:
+        from scenedetect import SceneManager, open_video  # type: ignore
+        from scenedetect.detectors import ContentDetector  # type: ignore
+    except Exception:
+        return []
+    try:
+        video = open_video(video_path)
+        manager = SceneManager()
+        manager.add_detector(ContentDetector(threshold=27.0))
+        manager.detect_scenes(video, show_progress=False)
+        scenes = manager.get_scene_list()
+        return [
+            {
+                "index": index,
+                "startMs": round(start.get_seconds() * 1000),
+                "endMs": round(end.get_seconds() * 1000),
+            }
+            for index, (start, end) in enumerate(scenes)
+        ]
+    except Exception:
+        return []
+
+
+def build_edit_plan(ranked_clips, shot_boundaries=None, face_cfg=None, crop_plans=None):
+    """Canonical render plan consumed by the existing FFmpeg crop/subtitle path."""
+    face_cfg = face_cfg or {
+        "enabled": True,
+        "mode": "smooth",
+        "selectedTrackId": None,
+        "selectedPersonId": None,
+        "personMode": "strict",
+        "sceneMode": "strict",
+        "allowZoom": True,
+    }
+    crop_plans = crop_plans or {}
+    clips = []
+    for item in ranked_clips:
+        plan = crop_plans.get(item["id"], {})
+        face = plan.get("faceTracking") or {
+            "enabled": bool(face_cfg.get("enabled", True)),
+            "mode": face_cfg.get("mode", "smooth"),
+            "selectedTrackId": face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId"),
+            "selectedPersonId": face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId"),
+            "personMode": face_cfg.get("personMode") or face_cfg.get("sceneMode", "strict"),
+            "sceneMode": face_cfg.get("sceneMode") or face_cfg.get("personMode", "strict"),
+            "allowZoom": bool(face_cfg.get("allowZoom", True)),
+        }
+        clips.append(
+            {
+                "id": item["id"],
+                "startMs": round(float(item["start"]) * 1000),
+                "endMs": round(float(item["end"]) * 1000),
+                "score": int(item.get("score", 0)),
+                "reason": item.get("reason", ""),
+                "title": item.get("title"),
+                "cropFocus": item.get("cropFocus", "center"),
+                "captions": True,
+                "faceTracking": face,
+                "cropKeyframes": plan.get("cropKeyframes") or [],
+                "availableFaces": plan.get("availableFaces") or [],
+                "scenes": plan.get("scenes") or [],
+                "faceOverlay": plan.get("faceOverlay") or [],
+            }
+        )
+    return {
+        "version": 3,
+        "clips": clips,
+        "shotBoundaries": shot_boundaries or [],
+        "faceCapabilities": face_capability_report(),
+        "sceneMode": face_cfg.get("sceneMode") or face_cfg.get("personMode", "strict"),
+        "personMode": face_cfg.get("personMode") or face_cfg.get("sceneMode", "strict"),
+        "selectedPersonId": face_cfg.get("selectedPersonId"),
+        "notes": [
+            "Transcript-first selection; visual adapters are optional evidence only.",
+            "Selected-person identity uses lightweight appearance histograms (InsightFace optional later).",
+            "Strict/Flexible sceneMode filters scenes without the selected person when possible.",
+            "Changing faceTracking / selectedPersonId regenerates crop keyframes only — not download/transcription.",
+        ],
+    }
+
+
+def semantic_candidates(words, video_duration, moment_type, target_duration, count):
+    """Generate sentence-aligned clips, repair boundaries, score, then dedupe."""
+    sentences = sentence_boundaries(words)
+    if not sentences:
+        fallback = choose_moments(words, video_duration, moment_type, target_duration, count, "semantic-fallback")
+        return apply_clip_scores(fallback, moment_type, use_llm=False)
+
+    topics = topic_segments(sentences, target_duration)
+    candidates = []
+    target = min(target_duration, max(8.0, video_duration - 0.2))
+    for topic in topics:
+        start, end = topic["startMs"] / 1000.0, topic["endMs"] / 1000.0
+        matching = [item for item in sentences if item["start"] >= start - 0.05 and item["end"] <= end + 0.05]
+        if not matching:
+            matching = [item for item in sentences if item["end"] > start and item["start"] < end]
+        if not matching:
+            continue
+        while len(matching) > 1 and matching[-1]["end"] - matching[0]["start"] > target:
+            # Drop leading setup first so the ending payoff survives.
+            matching.pop(0)
+        draft = {
+            "id": f"candidate-{len(candidates) + 1}",
+            "start": matching[0]["start"],
+            "end": matching[-1]["end"],
+            "transcript": " ".join(item["text"] for item in matching).strip()[:900],
+            "needs_context": topic["requiredPreviousContext"],
+            "topic_id": topic["id"],
+        }
+        repaired = repair_clip_boundaries(draft, sentences, video_duration, target)
+        candidates.append(repaired)
+
+    if not candidates:
+        fallback = choose_moments(words, video_duration, moment_type, target_duration, count, "semantic-fallback")
+        return apply_clip_scores(fallback, moment_type, use_llm=False)
+
+    scored = apply_clip_scores(candidates, moment_type, use_llm=False)
+    selected = dedupe_by_overlap(scored, max_overlap=0.42, limit=count)
+    if len(selected) < count:
+        for candidate in scored:
+            if candidate in selected:
+                continue
+            selected.append(candidate)
+            if len(selected) >= count:
+                break
+    for index, candidate in enumerate(selected):
+        candidate["id"] = f"candidate-{index + 1}"
+        selected[index] = clamp_candidate_duration(candidate, target, video_duration)
+    return selected
+
+
 def select_progressive_stream(yt):
     streams = list(yt.streams.filter(progressive=True, file_extension="mp4"))
     if not streams:
@@ -326,12 +910,89 @@ def run_ffmpeg(args, timeout=90):
     subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y", *args], check=True, capture_output=True, timeout=timeout)
 
 
-def extract_clean_clip(input_url, local_fallback_path, clip_path, clip_start, clip_duration):
-    video_filter = (
-        f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:flags=bicubic:force_original_aspect_ratio=increase,"
-        f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:(iw-ow)/2:(ih-oh)/2,"
-        f"fps={OUTPUT_FPS}"
+def probe_duration(path_value):
+    if FFPROBE:
+        result = subprocess.run(
+            [FFPROBE, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path_value],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        return max(0.0, float(result.stdout.strip()))
+
+    result = subprocess.run(
+        [FFMPEG, "-hide_banner", "-i", path_value],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
     )
+    match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", result.stderr)
+    if not match:
+        raise RuntimeError("Unable to read source duration with ffmpeg")
+    hours, minutes, seconds = match.groups()
+    return max(0.0, (int(hours) * 3600) + (int(minutes) * 60) + float(seconds))
+
+
+def extract_plate_clip(input_url, local_fallback_path, plate_path, clip_start, clip_duration):
+    """Time-cut only (no vertical crop) so face tracking can be refined later."""
+    base = [
+        "-ss",
+        str(clip_start),
+        "-i",
+        input_url,
+        "-t",
+        str(clip_duration),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-movflags",
+        "+faststart",
+        plate_path,
+    ]
+    try:
+        run_ffmpeg(base, timeout=90)
+        return
+    except subprocess.CalledProcessError:
+        if not local_fallback_path:
+            raise
+    fallback = base.copy()
+    fallback[fallback.index(input_url)] = local_fallback_path
+    run_ffmpeg(fallback, timeout=90)
+
+
+def extract_clean_clip(
+    input_url,
+    local_fallback_path,
+    clip_path,
+    clip_start,
+    clip_duration,
+    crop_focus="center",
+    crop_keyframes=None,
+    sendcmd_path=None,
+):
+    crop_part = build_crop_filter(
+        OUTPUT_WIDTH,
+        OUTPUT_HEIGHT,
+        keyframes=crop_keyframes,
+        crop_focus=crop_focus,
+        sendcmd_path=sendcmd_path,
+    )
+    video_filter = f"{crop_part},fps={OUTPUT_FPS}"
     base = [
         "-ss",
         str(clip_start),
@@ -376,7 +1037,152 @@ def extract_clean_clip(input_url, local_fallback_path, clip_path, clip_start, cl
     run_ffmpeg(fallback, timeout=90)
 
 
+def render_from_plate(plate_path, clip_path, crop_focus="center", crop_keyframes=None, sendcmd_path=None):
+    crop_part = build_crop_filter(
+        OUTPUT_WIDTH,
+        OUTPUT_HEIGHT,
+        keyframes=crop_keyframes,
+        crop_focus=crop_focus,
+        sendcmd_path=sendcmd_path,
+    )
+    video_filter = f"{crop_part},fps={OUTPUT_FPS}"
+    run_ffmpeg(
+        [
+            "-i",
+            plate_path,
+            "-vf",
+            video_filter,
+            "-r",
+            str(OUTPUT_FPS),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "22",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "256k",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-movflags",
+            "+faststart",
+            clip_path,
+        ],
+        timeout=90,
+    )
+
+
+def artifact_dir_for(output_name):
+    root = os.path.join(TMP_ROOT, CLIP_ARTIFACT_DIR)
+    os.makedirs(root, exist_ok=True)
+    base = os.path.splitext(os.path.basename(output_name))[0]
+    path = os.path.join(root, base)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _faces_with_urls(artifact_id, faces):
+    out = []
+    for face in faces or []:
+        item = dict(face)
+        url = item.get("thumbnailUrl")
+        thumb = item.get("thumbnailPath") or item.get("thumbnail")
+        if url and str(url).startswith("/"):
+            item["thumbnailUrl"] = url
+        elif url:
+            item["thumbnailUrl"] = f"/api/clipper/artifact/{artifact_id}/{url}"
+        elif thumb and isinstance(thumb, str) and thumb.startswith("/"):
+            item["thumbnailUrl"] = thumb
+        elif item.get("id"):
+            item["thumbnailUrl"] = f"/api/clipper/artifact/{artifact_id}/faces/{item['id']}.jpg"
+        # Normalize bbox for the studio overlay from sampleBbox / bboxSamples.
+        if not item.get("bbox") and item.get("sampleBbox"):
+            box = item["sampleBbox"]
+            if isinstance(box, (list, tuple)) and len(box) >= 4:
+                item["bbox"] = {
+                    "x": float(box[0]),
+                    "y": float(box[1]),
+                    "width": float(box[2] - box[0]),
+                    "height": float(box[3] - box[1]),
+                }
+            elif isinstance(box, dict):
+                item["bbox"] = box
+        out.append(item)
+    return out
+
+
+def _relocate_face_thumbs(artifact_dir, crop_plan):
+    """Copy person thumbnails into the artifact and rewrite paths for the API."""
+    if not isinstance(crop_plan, dict):
+        return crop_plan
+    faces_dir = os.path.join(artifact_dir, "faces")
+    os.makedirs(faces_dir, exist_ok=True)
+    available = []
+    for face in crop_plan.get("availableFaces") or crop_plan.get("people") or []:
+        item = dict(face)
+        src = item.get("thumbnailPath") or item.get("thumbnail")
+        if src and os.path.isfile(str(src)):
+            dest_name = f"{item.get('id') or 'person'}.jpg"
+            dest = os.path.join(faces_dir, dest_name)
+            try:
+                if os.path.abspath(src) != os.path.abspath(dest):
+                    shutil.copy2(src, dest)
+                item["thumbnailPath"] = dest
+                item["thumbnail"] = dest
+                item["thumbnailUrl"] = f"faces/{dest_name}"
+            except Exception:
+                pass
+        available.append(item)
+    crop_plan = dict(crop_plan)
+    crop_plan["availableFaces"] = available
+    if crop_plan.get("selectedPerson") and isinstance(crop_plan["selectedPerson"], dict):
+        selected = dict(crop_plan["selectedPerson"])
+        match = next((face for face in available if face.get("id") == selected.get("id")), None)
+        if match:
+            selected["thumbnailPath"] = match.get("thumbnailPath")
+            selected["thumbnailUrl"] = match.get("thumbnailUrl")
+        crop_plan["selectedPerson"] = selected
+    write_json(os.path.join(artifact_dir, "detected-people.json"), available)
+    scenes = crop_plan.get("scenes") or crop_plan.get("acceptedScenes") or []
+    write_json(os.path.join(artifact_dir, "accepted-face-scenes.json"), [s for s in scenes if s.get("accepted")])
+    write_json(os.path.join(artifact_dir, "crop-keyframes.json"), crop_plan.get("cropKeyframes") or [])
+    if crop_plan.get("selectedPerson") or crop_plan.get("faceTracking"):
+        write_json(
+            os.path.join(artifact_dir, "selected-person.json"),
+            crop_plan.get("selectedPerson")
+            or {
+                "personId": (crop_plan.get("faceTracking") or {}).get("selectedPersonId"),
+                "sceneMode": (crop_plan.get("faceTracking") or {}).get("sceneMode"),
+            },
+        )
+    return crop_plan
+
+
+def persist_clip_artifacts(artifact_dir, *, words, meta, plate_path=None, subtitle_path=None, crop_plan=None):
+    write_json(os.path.join(artifact_dir, "words.json"), words)
+    write_json(os.path.join(artifact_dir, "meta.json"), meta)
+    if crop_plan is not None:
+        crop_plan = _relocate_face_thumbs(artifact_dir, crop_plan)
+        write_json(os.path.join(artifact_dir, "crop-plan.json"), crop_plan)
+    if plate_path and os.path.isfile(plate_path):
+        dest = os.path.join(artifact_dir, "plate.mp4")
+        if os.path.abspath(plate_path) != os.path.abspath(dest):
+            shutil.copy2(plate_path, dest)
+    if subtitle_path and os.path.isfile(subtitle_path):
+        dest = os.path.join(artifact_dir, "captions.ass")
+        if os.path.abspath(subtitle_path) != os.path.abspath(dest):
+            shutil.copy2(subtitle_path, dest)
+    return crop_plan
+
+
 def transcribe_clip_words(clip_path):
+    global _FASTER_WHISPER_MODEL, _OPENAI_WHISPER_MODEL
     expose_ffmpeg_to_subprocesses()
 
     words = []
@@ -385,8 +1191,9 @@ def transcribe_clip_words(clip_path):
 
         model_name = os.environ.get("CLIPPER_WHISPER_MODEL", "base.en")
         compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
-        model = WhisperModel(model_name, device="cpu", compute_type=compute_type)
-        segments, _info = model.transcribe(
+        if _FASTER_WHISPER_MODEL is None:
+            _FASTER_WHISPER_MODEL = WhisperModel(model_name, device="cpu", compute_type=compute_type)
+        segments, _info = _FASTER_WHISPER_MODEL.transcribe(
             clip_path,
             word_timestamps=True,
             vad_filter=True,
@@ -410,8 +1217,9 @@ def transcribe_clip_words(clip_path):
     import whisper
 
     model_name = os.environ.get("CLIPPER_WHISPER_MODEL", "base.en")
-    model = whisper.load_model(model_name)
-    result = model.transcribe(
+    if _OPENAI_WHISPER_MODEL is None:
+        _OPENAI_WHISPER_MODEL = whisper.load_model(model_name)
+    result = _OPENAI_WHISPER_MODEL.transcribe(
         clip_path,
         word_timestamps=True,
         language="en",
@@ -471,11 +1279,252 @@ def burn_subtitles(source_clip_path, output_path, subtitle_path):
     )
 
 
-def main():
-    if len(sys.argv) < 2:
-        fail("Usage: clipper-pipeline.py <url> [config]")
+def refine_clip(cfg):
+    """Re-crop + subtitle burn from persisted plate/words without re-download/ASR."""
+    global OUTPUT_WIDTH, OUTPUT_HEIGHT
+    artifact_id = str(cfg.get("artifact_id") or cfg.get("clip_id") or "").strip()
+    if not artifact_id:
+        fail("refine requires artifact_id")
+    artifact_dir = os.path.join(TMP_ROOT, CLIP_ARTIFACT_DIR, os.path.basename(artifact_id))
+    # Allow either basename of output or explicit artifact folder name.
+    if not os.path.isdir(artifact_dir):
+        artifact_dir = os.path.join(TMP_ROOT, CLIP_ARTIFACT_DIR, os.path.splitext(os.path.basename(artifact_id))[0])
+    if not os.path.isdir(artifact_dir):
+        fail(f"Clip artifacts not found for {artifact_id}")
 
-    url = sys.argv[1].strip()
+    meta = read_json(os.path.join(artifact_dir, "meta.json"), {})
+    words = read_json(os.path.join(artifact_dir, "words.json"), [])
+    plate_path = os.path.join(artifact_dir, "plate.mp4")
+    if not os.path.isfile(plate_path):
+        fail("Plate clip missing; cannot refine face tracking without re-download")
+
+    aspect = str(cfg.get("aspect_ratio") or meta.get("aspect_ratio") or "9:16")
+    OUTPUT_WIDTH, OUTPUT_HEIGHT = {
+        "1:1": (1080, 1080),
+        "16:9": (1280, 720),
+    }.get(aspect, (720, 1280))
+    crop_focus = str(cfg.get("crop_focus") or meta.get("crop_focus") or "center")
+    face_cfg = face_tracking_config(cfg)
+    font = str(cfg.get("font") or meta.get("font") or "Impact")
+    font_size = min(92, max(44, int(cfg.get("font_size") or meta.get("font_size") or 74)))
+    text_color = str(cfg.get("text_colour") or meta.get("text_colour") or "#FFFFFF")
+    position = str(cfg.get("position") or meta.get("position") or "bottom")
+    captions_enabled = bool(cfg.get("captions_enabled", meta.get("captions_enabled", True)))
+
+    edited_words = cfg.get("words")
+    if isinstance(edited_words, list) and edited_words:
+        words = edited_words
+    ass_override = cfg.get("ass")
+    clip_duration = float(meta.get("clip_duration") or probe_duration(plate_path))
+    shot_boundaries = read_json(os.path.join(artifact_dir, "shot-boundaries.json"), [])
+    if not isinstance(shot_boundaries, list):
+        shot_boundaries = []
+
+    emit("clip", "running", message="Refining crop from saved plate...")
+    frame_w, frame_h = probe_video_size(FFPROBE, FFMPEG, plate_path)
+    faces_dir = os.path.join(artifact_dir, "faces")
+    crop_plan = track_faces_and_build_crops(
+        FFMPEG,
+        plate_path,
+        0.0,
+        clip_duration,
+        OUTPUT_WIDTH,
+        OUTPUT_HEIGHT,
+        mode=face_cfg["mode"],
+        selected_track_id=face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId"),
+        selected_person_id=face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId"),
+        person_mode=face_cfg.get("personMode") or face_cfg.get("sceneMode", "strict"),
+        scene_mode=face_cfg.get("sceneMode") or face_cfg.get("personMode", "strict"),
+        allow_zoom=face_cfg.get("allowZoom", True),
+        crop_focus=crop_focus,
+        cache_root=os.path.join(TMP_ROOT, "clipper-face-cache"),
+        frame_w=frame_w,
+        frame_h=frame_h,
+        shot_boundaries=shot_boundaries,
+        scene_rules=face_cfg.get("sceneRules"),
+        thumb_dir=faces_dir,
+    )
+    selected_id = face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId")
+    if selected_id:
+        crop_plan["faceTracking"]["selectedTrackId"] = selected_id
+        crop_plan["faceTracking"]["selectedPersonId"] = selected_id
+    mode_value = face_cfg.get("personMode") or face_cfg.get("sceneMode", "strict")
+    crop_plan["faceTracking"]["personMode"] = mode_value
+    crop_plan["faceTracking"]["sceneMode"] = mode_value
+
+    clean_clip_path = os.path.join(artifact_dir, "clean-refined.mp4")
+    sendcmd_path = os.path.join(artifact_dir, "crop.sendcmd")
+    render_from_plate(
+        plate_path,
+        clean_clip_path,
+        crop_focus=crop_focus,
+        crop_keyframes=crop_plan.get("cropKeyframes") if face_cfg["enabled"] else None,
+        sendcmd_path=sendcmd_path if face_cfg["enabled"] else None,
+    )
+
+    subtitle_path = os.path.join(artifact_dir, "captions.ass")
+    if isinstance(ass_override, str) and ass_override.strip():
+        with open(subtitle_path, "w", encoding="utf-8") as handle:
+            handle.write(ass_override)
+        subtitle_count = ass_override.count("Dialogue:")
+    else:
+        subtitle_count = write_subtitles(subtitle_path, words, 0.0, clip_duration, font, font_size, text_color, position)
+
+    output_name = str(cfg.get("output_name") or meta.get("output_name") or f"{os.path.basename(artifact_dir)}-refined.mp4")
+    if not output_name.endswith(".mp4"):
+        output_name += ".mp4"
+    output_path = os.path.join(OUTPUT_DIR, output_name)
+    emit("render", "running", message="Re-encoding refined clip...")
+    if captions_enabled and subtitle_count > 0:
+        burn_subtitles(clean_clip_path, output_path, subtitle_path)
+    else:
+        shutil.copy2(clean_clip_path, output_path)
+
+    crop_plan = persist_clip_artifacts(
+        artifact_dir,
+        words=words,
+        meta={**meta, "face_tracking": crop_plan.get("faceTracking"), "aspect_ratio": aspect, "crop_focus": crop_focus},
+        plate_path=plate_path,
+        subtitle_path=subtitle_path,
+        crop_plan=crop_plan,
+    ) or crop_plan
+    write_json(os.path.join(artifact_dir, "edit-plan-clip.json"), {
+        "faceTracking": crop_plan.get("faceTracking"),
+        "cropKeyframes": crop_plan.get("cropKeyframes"),
+        "scenes": crop_plan.get("scenes") or [],
+        "faceOverlay": crop_plan.get("faceOverlay") or [],
+    })
+
+    result = {
+        "id": meta.get("clip_id") or "candidate-1",
+        "rank": int(meta.get("rank") or 1),
+        "output": f"./output/{output_name}",
+        "title": meta.get("title") or "Refined clip",
+        "source_title": meta.get("source_title"),
+        "source_start": meta.get("source_start"),
+        "source_end": meta.get("source_end"),
+        "clip_duration": f"{round(clip_duration)}s",
+        "reason": meta.get("reason") or "Refined crop / captions",
+        "caption": " ".join(w.get("word", "") for w in words if len(w.get("word", "")) > 2)[:220],
+        "words": words,
+        "hashtags": meta.get("hashtags") or "#shorts",
+        "virality_score": meta.get("virality_score") or 7.0,
+        "score": int(meta.get("score") or 70),
+        "clip_potential_score": int(meta.get("score") or 70),
+        "file_size": os.path.getsize(output_path),
+        "timing_source": "refine",
+        "word_count": subtitle_count,
+        "output_quality": f"{OUTPUT_WIDTH}x{OUTPUT_HEIGHT} {aspect} 30fps AAC 256k",
+        "artifact_id": os.path.basename(artifact_dir),
+        "face_tracking": crop_plan.get("faceTracking"),
+        "available_faces": _faces_with_urls(os.path.basename(artifact_dir), crop_plan.get("availableFaces") or []),
+        "crop_keyframes": crop_plan.get("cropKeyframes") or [],
+        "face_overlay": crop_plan.get("faceOverlay") or [],
+        "face_scenes": crop_plan.get("scenes") or [],
+        "plate_url": f"/api/clipper/artifact/{os.path.basename(artifact_dir)}/plate.mp4",
+    }
+    emit("render", "complete", message="Refined clip ready")
+    emit("complete", "complete", message="Refine complete", results=[result], output=result["output"], **{k: result[k] for k in ("title", "clip_duration", "reason", "caption", "file_size")})
+    print(json.dumps({"type": "clip_result", "step": "result", "status": "complete", "message": "Refined clip ready", "result": result}), flush=True)
+
+
+def _public_face_thumb(job_id, thumb_path):
+    """Map an on-disk face thumb to the Express face-cache URL the UI can load."""
+    if not thumb_path or not job_id:
+        return ""
+    name = os.path.basename(str(thumb_path))
+    if not name or ".." in name:
+        return ""
+    return f"/api/clipper/face-cache/{job_id}/thumbs/{name}"
+
+
+def scan_people_cli(cfg):
+    """Scan a local video for recurring people (picker helper for the create wizard)."""
+    source = str(cfg.get("source") or cfg.get("path") or "").strip()
+    if not source or not os.path.isfile(source):
+        fail("scan-people requires a local video path in config.source")
+    start = float(cfg.get("start") or 0.0)
+    duration = cfg.get("duration")
+    duration = float(duration) if duration is not None else None
+    cache_root = os.path.join(TMP_ROOT, "clipper-face-cache")
+    emit("analyze", "running", message="Scanning people for face picker...")
+    payload = scan_people(
+        FFMPEG,
+        source,
+        start=start,
+        duration=duration,
+        cache_root=cache_root,
+        job_id=str(cfg.get("job_id") or cfg.get("jobId") or "") or None,
+        max_people=int(cfg.get("max_people") or cfg.get("maxPeople") or 8),
+    )
+    job_id = str(payload.get("jobId") or "")
+    people = []
+    for person in payload.get("people") or []:
+        row = dict(person)
+        thumb = row.get("thumbnail") or row.get("thumbnailPath") or ""
+        public = _public_face_thumb(job_id, thumb)
+        if public:
+            row["thumbnailUrl"] = public
+            row["thumbnail"] = public
+        row["personId"] = row.get("personId") or row.get("id")
+        people.append(row)
+    payload["people"] = people
+    emit(
+        "complete",
+        "complete",
+        message=f"Found {len(people)} people",
+        people=people,
+        scenes=payload.get("scenes") or [],
+        jobId=job_id,
+        cacheDir=payload.get("cacheDir"),
+        capabilities=payload.get("capabilities"),
+        selectedPersonId=(people[0].get("id") if people else None),
+    )
+    print(
+        json.dumps(
+            {
+                "type": "people_scan",
+                "status": "complete",
+                **payload,
+                "selectedPersonId": (people[0].get("id") if people else None),
+            }
+        ),
+        flush=True,
+    )
+
+
+def main():
+    global OUTPUT_WIDTH, OUTPUT_HEIGHT, TMP_ROOT, OUTPUT_DIR
+    if len(sys.argv) < 2:
+        fail("Usage: clipper-pipeline.py <url-or-file|--refine|--scan-people> [config]")
+
+    # Allow CLYRA_TMP_DIR / CLYRA_OUTPUT_DIR overrides set by Electron/Express.
+    env_tmp = (os.environ.get("CLYRA_TMP_DIR") or "").strip()
+    if env_tmp:
+        TMP_ROOT = env_tmp
+    OUTPUT_DIR = resolve_output_dir()
+
+    if sys.argv[1].strip() in {"--refine", "refine"}:
+        cfg = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
+        try:
+            refine_clip(cfg)
+        except SystemExit:
+            raise
+        except Exception as exc:
+            fail(f"{type(exc).__name__}: {exc}")
+        return
+
+    if sys.argv[1].strip() in {"--scan-people", "scan-people"}:
+        cfg = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
+        try:
+            scan_people_cli(cfg)
+        except SystemExit:
+            raise
+        except Exception as exc:
+            fail(f"{type(exc).__name__}: {exc}")
+        return
+
+    source = sys.argv[1].strip()
     cfg = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
     font = str(cfg.get("font", "Impact"))
     font_size = min(92, max(44, int(cfg.get("font_size", 74))))
@@ -483,9 +1532,18 @@ def main():
     position = str(cfg.get("position", "bottom"))
     moment_type = str(cfg.get("moment_type", "viral"))
     requested_duration = parse_duration(cfg.get("clip_duration", MAX_CLIP_LENGTH))
+    aspect = str(cfg.get("aspect_ratio", "9:16"))
+    crop_focus = str(cfg.get("crop_focus", "center"))
+    captions_enabled = bool(cfg.get("captions_enabled", True))
+    remove_fillers = bool(cfg.get("remove_fillers", True))
+    clip_count = min(8, max(1, int(cfg.get("clip_count", 3))))
+    face_cfg = face_tracking_config(cfg)
+    OUTPUT_WIDTH, OUTPUT_HEIGHT = {
+        "1:1": (1080, 1080),
+        "16:9": (1280, 720),
+    }.get(aspect, (720, 1280))
     base_name = clean_name(str(cfg.get("clip_name", "clip")))
     job_id = f"{base_name}-{int(time.time() * 1000) % 1000000}"
-    output_name = f"{job_id}.mp4"
 
     os.makedirs(TMP_ROOT, exist_ok=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -494,13 +1552,50 @@ def main():
     started = time.time()
 
     try:
-        from pytubefix import YouTube
-
         emit("captions", "running", message="Reading captions and video metadata...")
-        yt = YouTube(url)
-        title = yt.title or "YouTube video"
-        duration = float(yt.length or requested_duration)
-        words = load_caption_words(yt)
+        local_source = os.path.isfile(source)
+        yt = None
+        stream_url = source
+        fallback_path = source if local_source else ""
+        if local_source:
+            title = os.path.splitext(os.path.basename(source))[0].replace("-", " ").replace("_", " ").strip() or "Uploaded video"
+            duration = probe_duration(source)
+            words = transcribe_clip_words(source)
+        else:
+            try:
+                from pytubefix import YouTube
+
+                yt = YouTube(source)
+                title = yt.title or "YouTube video"
+                duration = float(yt.length or requested_duration)
+                words = load_caption_words(yt)
+                stream_url = select_progressive_stream(yt).url
+            except Exception:
+                from yt_dlp import YoutubeDL
+
+                emit("captions", "running", message="Preparing the public video source...")
+                template = os.path.join(job_tmp, "source.%(ext)s")
+                with YoutubeDL({
+                    "format": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+                    "merge_output_format": "mp4",
+                    "outtmpl": template,
+                    "quiet": True,
+                    "no_warnings": True,
+                }) as downloader:
+                    info = downloader.extract_info(source, download=True)
+                    title = str(info.get("title") or "Public video")
+                    duration = float(info.get("duration") or requested_duration)
+                downloaded = next(
+                    (os.path.join(job_tmp, name) for name in os.listdir(job_tmp) if name.startswith("source.") and not name.endswith(".part")),
+                    "",
+                )
+                if not downloaded or not os.path.exists(downloaded):
+                    fail("The public video source could not be downloaded")
+                source = downloaded
+                stream_url = downloaded
+                fallback_path = downloaded
+                local_source = True
+                words = transcribe_clip_words(downloaded)
         emit(
             "captions",
             "complete",
@@ -510,81 +1605,354 @@ def main():
             word_count=len(words),
         )
 
-        emit("analyze", "running", message=f"Finding the best {int(requested_duration)}s moment...")
-        clip_start, clip_end, reason = choose_moment(words, duration, moment_type, requested_duration, base_name, url)
-        clip_duration = max(6.0, clip_end - clip_start)
+        # Analysis artifacts are durable; render intermediates remain job-local.
+        source_cache = os.path.join(TMP_ROOT, ARTIFACT_CACHE_DIR, source_fingerprint(source))
+        normalised = normalise_words(words)
+        write_json(os.path.join(source_cache, "source-metadata.json"), {
+            "source": source,
+            "title": title,
+            "durationMs": round(duration * 1000),
+            "createdAt": int(time.time() * 1000),
+            "fingerprint": source_fingerprint(source),
+        })
+        write_json(os.path.join(source_cache, "transcript-words.json"), [
+            {
+                "text": word["word"],
+                "startMs": round(word["start"] * 1000),
+                "endMs": round(word["end"] * 1000),
+                "confidence": word.get("confidence"),
+                "speakerId": word.get("speakerId"),
+            }
+            for word in normalised
+        ])
+        write_json(os.path.join(source_cache, "speech-regions.json"), speech_regions(normalised))
+        sentences = sentence_boundaries(normalised)
+        write_json(os.path.join(source_cache, "topic-segments.json"), topic_segments(sentences, requested_duration))
+
+        shot_path = os.path.join(source_cache, "shot-boundaries.json")
+        shot_boundaries = read_json(shot_path, [])
+        if not isinstance(shot_boundaries, list) or not shot_boundaries:
+            probe_path = source if local_source else fallback_path
+            shot_boundaries = detect_shot_boundaries(probe_path)
+            write_json(shot_path, shot_boundaries)
+
+        emit("analyze", "running", message=f"Finding {clip_count} distinct {int(requested_duration)}s moments...")
+        candidate_cache = os.path.join(source_cache, f"clip-candidates-{clean_name(moment_type)}-{int(requested_duration)}.json")
+        candidates = read_json(candidate_cache)
+        if not isinstance(candidates, list) or not candidates:
+            pool = max(clip_count * 3, 6)
+            candidates = semantic_candidates(normalised, duration, moment_type, requested_duration, pool)
+            write_json(candidate_cache, candidates)
+
+        ranked = apply_clip_scores(candidates, moment_type, use_llm=True)
+        ranked = dedupe_by_overlap(ranked, max_overlap=0.42, limit=clip_count)
+        if len(ranked) < clip_count:
+            for candidate in sorted(candidates, key=lambda item: item.get("score", 0), reverse=True):
+                if candidate in ranked:
+                    continue
+                ranked.append(candidate)
+                if len(ranked) >= clip_count:
+                    break
+        # When a person is already selected, prefer candidates that overlap accepted face scenes.
+        if face_cfg.get("selectedPersonId") and (local_source or (fallback_path and os.path.isfile(fallback_path))):
+            try:
+                scan_source = source if local_source and os.path.isfile(source) else fallback_path
+                people_scan = scan_people(
+                    FFMPEG,
+                    scan_source,
+                    start=0.0,
+                    duration=min(float(duration), 180.0),
+                    cache_root=os.path.join(source_cache, "face-cache"),
+                    job_id=f"{source_fingerprint(source)}-people",
+                )
+                write_json(os.path.join(source_cache, "detected-people.json"), people_scan.get("people") or [])
+                write_json(os.path.join(source_cache, "detected-scenes.json"), people_scan.get("scenes") or [])
+                # Mark scenes accepted for the selected person using presence from people bbox samples.
+                presence = []
+                for person in people_scan.get("people") or []:
+                    if person.get("id") != face_cfg.get("selectedPersonId"):
+                        continue
+                    for sample in person.get("bboxSamples") or []:
+                        presence.append(float(sample.get("timeMs", 0)) / 1000.0)
+                annotated = annotate_scenes(
+                    people_scan.get("scenes") or [],
+                    presence,
+                    face_cfg.get("personMode") or face_cfg.get("sceneMode") or "strict",
+                    face_cfg.get("selectedPersonId"),
+                )
+                write_json(os.path.join(source_cache, "accepted-face-scenes.json"), [s for s in annotated if s.get("accepted")])
+                ranked = filter_candidates_by_scenes(
+                    ranked,
+                    annotated,
+                    person_mode=face_cfg.get("personMode") or face_cfg.get("sceneMode") or "strict",
+                )
+            except Exception:
+                pass
+        for index, candidate in enumerate(ranked):
+            candidate["id"] = f"candidate-{index + 1}"
+            candidate["start"] = round(float(candidate["start"]), 2)
+            candidate["end"] = round(float(candidate["end"]), 2)
+            if candidate.get("score_source") != "llm" or not candidate.get("reason"):
+                score_payload = local_clip_score(candidate, moment_type)
+                candidate["score"] = score_payload["score"]
+                candidate["reason"] = score_payload["reason"]
+                candidate["score_source"] = candidate.get("score_source") or "local"
+            candidate["score"] = int(max(1, min(100, int(candidate.get("score", 50)))))
+        write_json(os.path.join(source_cache, "ranked-clips.json"), ranked)
+        write_json(os.path.join(source_cache, "edit-plan.json"), build_edit_plan(ranked, shot_boundaries, face_cfg))
+        candidates = ranked
         emit(
             "analyze",
             "complete",
-            message=reason,
-            reason=reason,
-            clip_start=clip_start,
-            clip_end=clip_end,
-            clip_duration=round(clip_duration, 1),
+            message=f"{len(candidates)} non-overlapping candidates ranked",
+            candidate_count=len(candidates),
+            face_tracking=face_capability_report(),
         )
 
-        emit("clip", "running", message="Cutting the exact clip for transcription...")
-        stream = select_progressive_stream(yt)
-        fallback_path = ""
-        clean_clip_path = os.path.join(job_tmp, f"{base_name}-clean.mp4")
-        output_path = os.path.join(OUTPUT_DIR, output_name)
+        probe_source = fallback_path if fallback_path and os.path.isfile(fallback_path) else (source if local_source else stream_url)
         try:
-            extract_clean_clip(stream.url, fallback_path, clean_clip_path, clip_start, clip_duration)
+            frame_w, frame_h = probe_video_size(FFPROBE, FFMPEG, probe_source if os.path.isfile(str(probe_source)) else (fallback_path or source))
         except Exception:
-            fallback_path = os.path.join(job_tmp, "source.mp4")
-            stream.download(job_tmp, filename="source.mp4")
-            extract_clean_clip(fallback_path, fallback_path, clean_clip_path, clip_start, clip_duration)
+            frame_w, frame_h = 1280, 720
 
-        if not os.path.exists(clean_clip_path) or os.path.getsize(clean_clip_path) <= 1024:
-            fail("Clip extraction did not produce a playable source MP4")
-        emit("clip", "complete", message=f"Exact {round(clip_duration)}s clip extracted")
+        results = []
+        crop_plans = {}
+        for candidate_index, candidate in enumerate(candidates):
+            clip_start = float(candidate["start"])
+            clip_end = float(candidate["end"])
+            candidate = clamp_candidate_duration(
+                {"start": clip_start, "end": clip_end, **{k: v for k, v in candidate.items() if k not in {"start", "end"}}},
+                requested_duration,
+                duration,
+            )
+            clip_start = float(candidate["start"])
+            clip_end = float(candidate["end"])
+            clip_duration = max(6.0, min(requested_duration * 1.08, clip_end - clip_start))
+            clip_end = clip_start + clip_duration
+            item_name = f"{base_name}-{candidate_index + 1}"
+            output_name = f"{job_id}-{candidate_index + 1}.mp4"
+            clean_clip_path = os.path.join(job_tmp, f"{item_name}-clean.mp4")
+            plate_path = os.path.join(job_tmp, f"{item_name}-plate.mp4")
+            output_path = os.path.join(OUTPUT_DIR, output_name)
+            artifact_dir = artifact_dir_for(output_name)
+            sendcmd_path = os.path.join(job_tmp, f"{item_name}.sendcmd")
 
-        emit("transcribe", "running", message="Transcribing exact clip audio for word timing...")
-        transcribed_words = transcribe_clip_words(clean_clip_path)
-        if len(transcribed_words) < 5:
-            fallback_words = caption_words_relative(words, clip_start, clip_end)
-            if len(fallback_words) < 5:
-                fail("Could not produce enough word timestamps for accurate subtitles")
-            transcribed_words = fallback_words
-            timing_source = "caption fallback"
-        else:
-            timing_source = os.environ.get("CLIPPER_WHISPER_MODEL", "base.en")
-        emit("transcribe", "complete", message=f"{len(transcribed_words)} word timestamps from {timing_source}", word_count=len(transcribed_words), timing_source=timing_source)
+            emit("clip", "running", message=f"Cutting candidate {candidate_index + 1} of {len(candidates)}...")
+            # Persist an uncropped plate so face-tracking changes can re-render without re-download.
+            try:
+                extract_plate_clip(stream_url, fallback_path, plate_path, clip_start, clip_duration)
+            except Exception:
+                if local_source or not yt:
+                    raise
+                if not fallback_path:
+                    fallback_path = os.path.join(job_tmp, "source.mp4")
+                    yt.streams.filter(progressive=True, file_extension="mp4").order_by("resolution").desc().first().download(job_tmp, filename="source.mp4")
+                extract_plate_clip(fallback_path, fallback_path, plate_path, clip_start, clip_duration)
 
-        emit("subtitles", "running", message="Building fixed-position one-word subtitle track...")
-        subtitle_path = os.path.join(job_tmp, f"{base_name}.ass")
-        subtitle_count = write_subtitles(subtitle_path, transcribed_words, 0.0, clip_duration, font, font_size, text_color, position)
-        emit("subtitles", "complete", message=f"{subtitle_count} frame-safe subtitle beats prepared", word_count=subtitle_count)
+            track_source = plate_path if os.path.isfile(plate_path) else (fallback_path or stream_url)
+            emit("clip", "running", message=f"Face tracking candidate {candidate_index + 1} ({face_cfg['mode']})...")
+            faces_dir = os.path.join(artifact_dir, "faces")
+            crop_plan = track_faces_and_build_crops(
+                FFMPEG,
+                track_source,
+                0.0 if os.path.isfile(plate_path) else clip_start,
+                clip_duration,
+                OUTPUT_WIDTH,
+                OUTPUT_HEIGHT,
+                mode=face_cfg["mode"],
+                selected_track_id=face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId"),
+                selected_person_id=face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId"),
+                person_mode=face_cfg.get("personMode") or face_cfg.get("sceneMode", "strict"),
+                scene_mode=face_cfg.get("sceneMode") or face_cfg.get("personMode", "strict"),
+                allow_zoom=face_cfg.get("allowZoom", True),
+                crop_focus=crop_focus,
+                cache_root=os.path.join(source_cache, "face-cache"),
+                frame_w=frame_w,
+                frame_h=frame_h,
+                shot_boundaries=[
+                    {
+                        "startMs": max(0, int(item.get("startMs", 0)) - int(clip_start * 1000)),
+                        "endMs": max(0, int(item.get("endMs", 0)) - int(clip_start * 1000)),
+                    }
+                    for item in (shot_boundaries or [])
+                    if isinstance(item, dict)
+                ],
+                scene_rules=face_cfg.get("sceneRules"),
+                thumb_dir=faces_dir,
+            )
+            # When a person is locked and the clip fails scene acceptance, keep render but annotate.
+            if face_cfg.get("selectedPersonId") and (crop_plan.get("scenes") or crop_plan.get("acceptedScenes")):
+                scenes = crop_plan.get("acceptedScenes") or [s for s in (crop_plan.get("scenes") or []) if s.get("accepted")]
+                if not scenes and (face_cfg.get("personMode") or face_cfg.get("sceneMode")) == "strict":
+                    candidate["face_rejected"] = True
+            crop_plans[candidate["id"]] = crop_plan
+            write_json(os.path.join(artifact_dir, "shot-boundaries.json"), shot_boundaries or [])
 
-        emit("render", "running", message="Burning accurate subtitles into final MP4...")
-        burn_subtitles(clean_clip_path, output_path, subtitle_path)
+            try:
+                if os.path.isfile(plate_path):
+                    render_from_plate(
+                        plate_path,
+                        clean_clip_path,
+                        crop_focus=crop_focus,
+                        crop_keyframes=crop_plan.get("cropKeyframes") if face_cfg["enabled"] else None,
+                        sendcmd_path=sendcmd_path if face_cfg["enabled"] else None,
+                    )
+                else:
+                    extract_clean_clip(
+                        stream_url,
+                        fallback_path,
+                        clean_clip_path,
+                        clip_start,
+                        clip_duration,
+                        crop_focus,
+                        crop_keyframes=crop_plan.get("cropKeyframes") if face_cfg["enabled"] else None,
+                        sendcmd_path=sendcmd_path if face_cfg["enabled"] else None,
+                    )
+            except Exception:
+                if local_source or not yt:
+                    raise
+                if not fallback_path:
+                    fallback_path = os.path.join(job_tmp, "source.mp4")
+                    yt.streams.filter(progressive=True, file_extension="mp4").order_by("resolution").desc().first().download(job_tmp, filename="source.mp4")
+                extract_clean_clip(
+                    fallback_path,
+                    fallback_path,
+                    clean_clip_path,
+                    clip_start,
+                    clip_duration,
+                    crop_focus,
+                    crop_keyframes=crop_plan.get("cropKeyframes") if face_cfg["enabled"] else None,
+                    sendcmd_path=sendcmd_path if face_cfg["enabled"] else None,
+                )
 
-        if not os.path.exists(output_path) or os.path.getsize(output_path) <= 1024:
-            fail("Encoder did not produce a playable MP4")
+            if not os.path.exists(clean_clip_path) or os.path.getsize(clean_clip_path) <= 1024:
+                fail(f"Candidate {candidate_index + 1} did not produce a playable source MP4")
+            emit("clip", "complete", message=f"Candidate {candidate_index + 1} exact source extracted")
 
-        emit("render", "complete", message=f"720x1280 30fps MP4 ready ({os.path.getsize(output_path) // 1024} KB)")
+            emit("transcribe", "running", message=f"Transcribing candidate {candidate_index + 1} for exact word timing...")
+            transcribed_words = transcribe_clip_words(clean_clip_path)
+            if len(transcribed_words) < 5:
+                fallback_words = caption_words_relative(words, clip_start, clip_end)
+                if len(fallback_words) < 5:
+                    fail(f"Candidate {candidate_index + 1} has insufficient speech for accurate captions")
+                transcribed_words = fallback_words
+                timing_source = "caption fallback"
+            else:
+                timing_source = os.environ.get("CLIPPER_WHISPER_MODEL", "base.en")
+            if remove_fillers:
+                filler_words = {"UM", "UH", "ERM", "AH", "LIKE"}
+                transcribed_words = [word for word in transcribed_words if word["word"] not in filler_words]
+            emit("transcribe", "complete", message=f"Candidate {candidate_index + 1}: {len(transcribed_words)} timed words", word_count=len(transcribed_words), timing_source=timing_source)
+
+            emit("subtitles", "running", message=f"Styling captions for candidate {candidate_index + 1}..." if captions_enabled else "Preparing clean output...")
+            subtitle_path = os.path.join(job_tmp, f"{item_name}.ass")
+            subtitle_count = write_subtitles(subtitle_path, transcribed_words, 0.0, clip_duration, font, font_size, text_color, position)
+            emit("subtitles", "complete", message=f"{subtitle_count} frame-safe caption beats prepared", word_count=subtitle_count)
+
+            emit("render", "running", message=f"Encoding candidate {candidate_index + 1} of {len(candidates)}...")
+            if captions_enabled:
+                burn_subtitles(clean_clip_path, output_path, subtitle_path)
+            else:
+                shutil.copy2(clean_clip_path, output_path)
+            if not os.path.exists(output_path) or os.path.getsize(output_path) <= 1024:
+                fail(f"Encoder did not produce candidate {candidate_index + 1}")
+
+            persist_clip_artifacts(
+                artifact_dir,
+                words=transcribed_words,
+                meta={
+                    "clip_id": candidate["id"],
+                    "rank": candidate_index + 1,
+                    "title": candidate.get("title") or f"{title[:58]} - moment {candidate_index + 1}",
+                    "source_title": title,
+                    "source_start": fmt_time(clip_start),
+                    "source_end": fmt_time(clip_end),
+                    "clip_duration": clip_duration,
+                    "reason": str(candidate.get("reason") or ""),
+                    "score": int(candidate.get("score", 50)),
+                    "hashtags": {"viral": "#viral #shorts", "funny": "#funny #shorts", "dramatic": "#story #shorts"}.get(moment_type, "#shorts"),
+                    "virality_score": round(float(candidate.get("score", 50)) / 10, 1),
+                    "aspect_ratio": aspect,
+                    "crop_focus": crop_focus,
+                    "font": font,
+                    "font_size": font_size,
+                    "text_colour": text_color,
+                    "position": position,
+                    "captions_enabled": captions_enabled,
+                    "output_name": output_name,
+                    "face_tracking": crop_plan.get("faceTracking"),
+                },
+                plate_path=plate_path if os.path.isfile(plate_path) else None,
+                subtitle_path=subtitle_path,
+                crop_plan=crop_plan,
+            )
+            # Reload relocated thumb URLs from persisted plan.
+            persisted = read_json(os.path.join(artifact_dir, "crop-plan.json"), crop_plan)
+            crop_plan = persisted if isinstance(persisted, dict) else crop_plan
+            crop_plans[candidate["id"]] = crop_plan
+
+            caption_words = [word["word"] for word in transcribed_words if len(word["word"]) > 2]
+            score = int(max(1, min(100, int(candidate.get("score", 50)))))
+            reason = str(candidate.get("reason") or f"{score} — Strong standalone moment")[:220]
+            available_faces = _faces_with_urls(os.path.basename(artifact_dir), crop_plan.get("availableFaces") or [])
+            result = {
+                "id": candidate["id"],
+                "rank": candidate_index + 1,
+                "output": f"./output/{output_name}",
+                "title": candidate.get("title") or f"{title[:58]} - moment {candidate_index + 1}",
+                "source_title": title,
+                "source_start": fmt_time(clip_start),
+                "source_end": fmt_time(clip_end),
+                "clip_duration": f"{round(clip_duration)}s",
+                "reason": reason,
+                "caption": " ".join(caption_words[:24])[:220],
+                "words": transcribed_words,
+                "hashtags": {"viral": "#viral #shorts", "funny": "#funny #shorts", "dramatic": "#story #shorts"}.get(moment_type, "#shorts"),
+                "virality_score": round(float(score) / 10, 1),
+                "score": score,
+                "clip_potential_score": score,
+                "score_source": candidate.get("score_source", "local"),
+                "file_size": os.path.getsize(output_path),
+                "timing_source": timing_source,
+                "word_count": subtitle_count,
+                "output_quality": f"{OUTPUT_WIDTH}x{OUTPUT_HEIGHT} {aspect} 30fps AAC 256k",
+                "artifact_id": os.path.basename(artifact_dir),
+                "face_tracking": crop_plan.get("faceTracking"),
+                "available_faces": available_faces,
+                "crop_keyframes": crop_plan.get("cropKeyframes") or [],
+                "face_overlay": crop_plan.get("faceOverlay") or [],
+                "face_scenes": crop_plan.get("scenes") or [],
+                "plate_url": f"/api/clipper/artifact/{os.path.basename(artifact_dir)}/plate.mp4",
+            }
+            results.append(result)
+            print(json.dumps({"type": "clip_result", "step": "result", "status": "complete", "message": f"Candidate {candidate_index + 1} ready", "result": result}), flush=True)
+
+        write_json(os.path.join(source_cache, "edit-plan.json"), build_edit_plan(ranked, shot_boundaries, face_cfg, crop_plans))
+        emit("render", "complete", message=f"{len(results)} MP4 clips rendered")
         elapsed = time.time() - started
-        caption_words = [word["word"] for word in transcribed_words if len(word["word"]) > 2]
+        first = results[0]
         emit(
             "complete",
             "complete",
             message=f"Done in {round(elapsed)}s",
-            output=f"./output/{output_name}",
-            title=title,
+            results=results,
+            output=first["output"],
+            title=first["title"],
             original_duration=fmt_time(duration),
-            clip_duration=f"{round(clip_duration)}s",
+            clip_duration=first["clip_duration"],
             font=font,
             font_size=font_size,
             position=position,
-            reason=reason,
+            reason=first["reason"],
             moment_type=moment_type,
-            caption=" ".join(caption_words[:18])[:160],
-            hashtags={"viral": "#viral #shorts", "funny": "#funny #shorts", "dramatic": "#story #shorts"}.get(moment_type, "#shorts"),
-            virality_score=round(min(10, 6.5 + min(len(caption_words), 120) / 60), 1),
+            caption=first["caption"],
+            hashtags=first["hashtags"],
+            virality_score=first["virality_score"],
             total_seconds=round(elapsed),
-            file_size=os.path.getsize(output_path),
-            timing_source=timing_source,
-            output_quality="720x1280 vertical 30fps AAC 256k",
+            file_size=first["file_size"],
+            timing_source=first["timing_source"],
+            output_quality=first["output_quality"],
+            face_tracking=face_cfg,
         )
     except SystemExit:
         raise

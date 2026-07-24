@@ -2,6 +2,19 @@ import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { AiOrb, type OrbColorTheme } from "./AiOrb";
 type HarnessMode = "plan" | "fast";
+// Keep the plan-review implementation available, but do not route normal Vibe
+// requests through it until the approval workflow is reintroduced.
+// Plan mode is a first-class Clyra flow: it stays in the native workspace
+// until the generated PLAN.md is explicitly accepted or revised.
+// Keep the proven Vibe workspace flow as the default while the optional plan review
+// surface remains behind a flag for future iteration.
+const VIBE_PLAN_REVIEW_ENABLED = false;
+
+// The full Vibe Coder M1 fork is the product surface for Vibe. The older Clyra
+// workspace remains below as a fallback while its project/session code is
+// retained, but it must not replace the actual OpenHands canvas with a summary
+// of agent events.
+const VIBE_CODER_M1_EMBED_ENABLED = false;
 import {
   AlertTriangle,
   Brain,
@@ -29,24 +42,27 @@ import {
   TerminalSquare,
   Trash2,
   ArrowUp,
-  Filter,
   FolderOpen,
+  Globe2,
   Grid3X3,
   LayoutList,
   X,
 } from "lucide-react";
 import { cn } from "../lib/utils";
-import { ShiningText } from "./ui/shining-text";
+import { describeControls, type AgentBridge, type AgentBridgeAction, type AgentBridgeActionResult } from "../lib/agentController";
+import { ShiningBrainIcon, ShiningText, ThinkingDots } from "./ShiningText";
 import { MarkdownMessageContent } from "./MarkdownMessageContent";
+import { ElectronWebContentsSurface } from "./ElectronWebContentsSurface";
 
 // --- New Imports for the Advanced Workspace ---
 import { useVibeCoderWorkspace, type ProjectFile } from "../hooks/useVibeCoderWorkspace";
-import { ThinkingStatus } from "./vibe-coder/thinking/ThinkingStatus";
 import { MiniCodeBoxQueue } from "./vibe-coder/code/MiniCodeBoxQueue";
 import { LivePreviewPanel } from "./vibe-coder/preview/LivePreviewPanel";
+import { PreviewSkeletonLayout } from "./vibe-coder/preview/PreviewSkeletonLayout";
 import {
   buildSessionFromApi,
   deleteProjectSession,
+  loadProjectSession,
   loadProjectSessionAsync,
   mergeSessionWithCache,
   projectThumbnailUrl,
@@ -61,6 +77,82 @@ import {
 // Fallback/Mock Composer for the Welcome Page
 
 // Relative time util
+function isVibeEngineWarm() {
+  try {
+    return window.sessionStorage.getItem("clyra-vibe-boot-ready") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function vibeThinkingHoldMs(prompt: string) {
+  // Prefer an instant handoff when the coding engine is already warm so
+  // welcome → OpenHands never sits on a multi-second loading ritual.
+  if (isVibeEngineWarm()) return 0;
+  const words = prompt.trim().split(/\s+/).filter(Boolean).length;
+  const hard = /\b(auth|oauth|database|postgres|deploy|fullstack|realtime|payment|stripe|multi[- ]?tenant|kubernetes|electron)\b/i.test(prompt);
+  const base = hard ? 1_200 : words > 48 ? 900 : words > 18 ? 650 : 420;
+  return Math.min(1_400, Math.max(280, base));
+}
+
+function vibeHandoffSummary(prompt: string) {
+  const cleaned = prompt.replace(/\s+/g, " ").trim();
+  const short = cleaned.length > 92 ? `${cleaned.slice(0, 89).trim()}…` : cleaned;
+  return short ? `Got it — ${short} Getting to work.` : "Got it. Getting to work.";
+}
+
+function SoftVibeStreamText({ text, active }: { text: string; active: boolean }) {
+  const [shown, setShown] = useState(active ? "" : text);
+  useEffect(() => {
+    if (!active) {
+      setShown(text);
+      return;
+    }
+    setShown("");
+    let index = 0;
+    let frame = 0;
+    const tokens = text.match(/\s+|\S+/g) || [text];
+    const tick = () => {
+      index = Math.min(tokens.length, index + 1);
+      setShown(tokens.slice(0, index).join(""));
+      if (index < tokens.length) frame = window.setTimeout(tick, 28);
+    };
+    frame = window.setTimeout(tick, 40);
+    return () => window.clearTimeout(frame);
+  }, [active, text]);
+  return (
+    <p className="clyra-stream-paint max-w-[85%] text-left text-[14px] font-medium leading-relaxed text-slate-700">
+      {shown}
+      {active && shown.length < text.length ? <span className="clyra-stream-paint__caret" aria-hidden /> : null}
+    </p>
+  );
+}
+
+function VibeThinkingStatus({
+  label = "Thinking",
+  hint,
+  className,
+}: {
+  label?: string;
+  hint?: string;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "inline-flex flex-wrap items-center gap-2 text-[13px] font-medium text-slate-500",
+        className,
+      )}
+      aria-live="polite"
+    >
+      <ShiningBrainIcon />
+      <ShiningText text={label} preset="thinkingChat" className="!text-[13px] sm:!text-[13px]" />
+      <ThinkingDots />
+      {hint ? <span className="text-slate-400">{hint}</span> : null}
+    </div>
+  );
+}
+
 function relativeTime(iso: string) {
   const d = new Date(iso);
   const diff = Date.now() - d.getTime();
@@ -86,6 +178,37 @@ type AgentActivityItem = {
   details?: string;
   filePath?: string;
   command?: string;
+  added?: number;
+  removed?: number;
+};
+
+type VibePlanDraft = {
+  projectId: string;
+  prompt: string;
+  title: string;
+  summary: string;
+  markdown: string;
+  taskGraph: unknown[];
+};
+
+type RuntimeEvent = {
+  id: string;
+  sequence: number;
+  type: string;
+  timestamp: string;
+  status: string;
+  payload: Record<string, unknown>;
+  error?: { message: string };
+};
+
+type RuntimeSnapshot = {
+  projectId: string;
+  state: string;
+  stateReason?: string;
+  sequence: number;
+  validation: Array<{ name: string; status: string }>;
+  completionEvidence: string[];
+  workspaceAlias: string;
 };
 
 function isUserVisibleTerminalCommand(command?: string) {
@@ -268,6 +391,8 @@ function buildActivityItems({
         : "Streaming through the existing mini code box.",
       timestamp: startedAt + 2200 + items.length * 70,
       filePath: file.path,
+      added: file.added ?? 0,
+      removed: file.removed ?? 0,
     });
   }
 
@@ -334,10 +459,122 @@ function buildActivityItems({
   return items;
 }
 
-export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbColorTheme?: OrbColorTheme }) {
-  const { state, startTask, cancelTask, approvePlan, loadSavedProject, resetToIdle } = useVibeCoderWorkspace("project-advanced-vibe");
+type VibeCoderWorkspaceProps = {
+  orbColorTheme?: OrbColorTheme;
+  onEngaged?: () => void;
+};
 
-  const [mode, setMode] = useState<"plan" | "fast">("plan");
+type M1Status = {
+  ready: boolean;
+  uiReady: boolean;
+  agentReady: boolean;
+  uiUrl: string;
+  error?: string;
+};
+
+function VibeCoderM1Surface({ onEngaged }: Pick<VibeCoderWorkspaceProps, "onEngaged">) {
+  const [status, setStatus] = useState<M1Status | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const check = async () => {
+      try {
+        const response = await fetch("/api/vibe/m1-status", { cache: "no-store" });
+        const next = (await response.json()) as M1Status;
+        if (cancelled) return;
+        if (!response.ok) throw new Error(next.error || "Vibe Coder M1 could not start.");
+        setStatus(next);
+        setLoadError(null);
+        if (next.ready) {
+          onEngaged?.();
+          return;
+        }
+        timer = window.setTimeout(() => void check(), 1200);
+      } catch (error) {
+        if (cancelled) return;
+        setLoadError(error instanceof Error ? error.message : "Vibe Coder M1 could not start.");
+      }
+    };
+
+    void fetch("/api/vibe/m1-warmup", { method: "POST" }).catch(() => undefined);
+    void check();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [reloadKey, onEngaged]);
+
+  if (status?.ready && status.uiUrl) {
+    const src = `${status.uiUrl.replace(/\/$/, "")}/conversations`;
+    return (
+      <div className="h-full min-h-0 w-full overflow-hidden bg-white">
+        <ElectronWebContentsSurface
+          key={reloadKey}
+          source={src}
+          title="Vibe Coder"
+          surfaceId="m1-workspace"
+          kind="vibe-runtime"
+          fallback={
+            <iframe
+              title="Vibe Coder"
+              src={src}
+              className="h-full w-full border-0 bg-white"
+              allow="clipboard-read; clipboard-write; fullscreen"
+            />
+          }
+        />
+      </div>
+    );
+  }
+
+  const phase = status?.uiReady
+    ? "Connecting the OpenHands workspace"
+    : status?.agentReady
+      ? "Loading the Vibe Coder interface"
+      : "Starting Vibe Coder M1";
+
+  return (
+    <div className="flex h-full min-h-0 w-full items-center justify-center bg-white px-6">
+      <div className="flex w-full max-w-[300px] flex-col items-center text-center">
+        <div className="relative mb-7 h-12 w-12 rounded-full bg-slate-950 shadow-[0_10px_24px_rgba(15,23,42,0.12)]">
+          <div className="absolute inset-[9px] rounded-full border border-white/45" />
+          <div className="absolute inset-[16px] rounded-full bg-white/90" />
+        </div>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+          <div className="clyra-m1-boot h-full w-[42%] rounded-full bg-slate-900" />
+        </div>
+        <p className="mt-3 text-[13px] font-medium text-slate-600">{loadError || phase}</p>
+        {loadError ? (
+          <button
+            type="button"
+            onClick={() => {
+              setLoadError(null);
+              setStatus(null);
+              setReloadKey((current) => current + 1);
+            }}
+            className="mt-5 rounded-full border border-slate-200 bg-white px-3.5 py-2 text-[12px] font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+          >
+            Retry Vibe Coder
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+export default function VibeCoderWorkspace(props: VibeCoderWorkspaceProps) {
+  if (VIBE_CODER_M1_EMBED_ENABLED) return <VibeCoderM1Surface onEngaged={props.onEngaged} />;
+  return <LegacyVibeCoderWorkspace {...props} />;
+}
+
+function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: VibeCoderWorkspaceProps) {
+  const { state, resetToIdle, setState, loadSavedProject, restoreProject } = useVibeCoderWorkspace("project-advanced-vibe");
+
+  const [mode, setMode] = useState<"plan" | "fast">("fast");
   const [promptInput, setPromptInput] = useState("");
   const [projects, setProjects] = useState<any[]>([]);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
@@ -359,12 +596,123 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
   const [elapsedNow, setElapsedNow] = useState(Date.now());
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [thinkingCollapsed, setThinkingCollapsed] = useState(false);
+  const [m1LaunchError, setM1LaunchError] = useState<string | null>(null);
+  const [m1Launching, setM1Launching] = useState(false);
+  const [m1Runtime, setM1Runtime] = useState<RuntimeSnapshot | null>(null);
+  const [m1RuntimeEvents, setM1RuntimeEvents] = useState<RuntimeEvent[]>([]);
+  const [m1ConversationUrl, setM1ConversationUrl] = useState<string | null>(null);
+  const [m1UiUrl, setM1UiUrl] = useState(() => {
+    if (typeof window === "undefined") return "http://127.0.0.1:8000";
+    return window.sessionStorage.getItem("clyra-m1-ui-url") || "http://127.0.0.1:8000";
+  });
+  const [planDraft, setPlanDraft] = useState<VibePlanDraft | null>(null);
+  const [isPreparingPlan, setIsPreparingPlan] = useState(false);
+  const [isSavingPlan, setIsSavingPlan] = useState(false);
+  const [warmupStatusHint, setWarmupStatusHint] = useState<string | null>(null);
+  const [pendingM1Url, setPendingM1Url] = useState<string | null>(null);
+  const [thinkingHoldMs, setThinkingHoldMs] = useState(0);
+  const [thinkingStartedAt, setThinkingStartedAt] = useState<number | null>(null);
+  const [handoffSummary, setHandoffSummary] = useState<string | null>(null);
+  const [handoffReady, setHandoffReady] = useState(false);
+  // Whether the user explicitly paused the current run from this window.
+  // Any PAUSED runtime state without this flag is an unrequested stall
+  // (tool hand-off, server restart) that polling should resume on its own.
+  const userPausedRef = useRef(false);
+  const autoResumeRef = useRef({ projectId: "", attempts: 0, lastAt: 0 });
 
   const elapsedSinceStart = state.startedAt ? elapsedNow - state.startedAt : 0;
   const planReadyDelayPassed = elapsedSinceStart >= 10000;
-  const canReviewPlan = Boolean(state.planMd) && state.planMode;
+  const canReviewPlan = VIBE_PLAN_REVIEW_ENABLED && Boolean(state.planMd) && state.planMode;
   const planReady = canReviewPlan && state.fileQueue.length > 0 && planReadyDelayPassed;
-  const thinkingIsResting = state.stage === "complete" || (state.planMode && planReady);
+  const thinkingIsResting = state.stage === "complete" || (VIBE_PLAN_REVIEW_ENABLED && state.planMode && planReady);
+
+  useEffect(() => {
+    const snapshot = () => ({
+        route: window.location.pathname,
+        workspace: "vibe",
+        activeTab: state.stage === "idle" ? "welcome" : "build",
+        projectId: state.projectId === "project-advanced-vibe" ? undefined : state.projectId,
+        projectName: activeProjectName,
+        buildStatus: m1LaunchError ? "failed" : m1Runtime?.state || state.stage,
+        previewReady: state.preview.status === "ready" || m1Runtime?.validation.some((check) => check.name === "preview health" && check.status === "passed"),
+        loading: m1Launching || state.stage === "task-created" || state.stage === "generating-file",
+        notifications: [],
+        errors: m1LaunchError || state.error ? [m1LaunchError || state.error || ""] : [],
+        controls: describeControls(document),
+        scroll: { x: window.scrollX, y: window.scrollY, width: window.innerWidth, height: window.innerHeight },
+        capturedAt: Date.now(),
+      });
+
+    const resolve = (ref: string) => Array.from(
+      document.querySelectorAll<HTMLElement>("[data-agent-id], [data-testid], button, input, textarea, select, [role=button]"),
+    ).find((element) =>
+      element.dataset.agentId === ref ||
+      element.dataset.testid === ref ||
+      element.getAttribute("aria-label") === ref ||
+      element.textContent?.trim() === ref,
+    ) || null;
+
+    const act = (action: AgentBridgeAction): AgentBridgeActionResult => {
+      const before = snapshot();
+      let success = false;
+      let changed = false;
+      let message: string | undefined;
+      try {
+        if (action.type === "navigate") {
+          const target = new URL(action.url, window.location.href);
+          if (target.origin !== window.location.origin) throw new Error("Navigation must stay inside Vibe Coder.");
+          window.location.assign(target.href);
+          success = changed = true;
+        } else {
+          const control = action.type === "scroll" && !action.ref ? null : resolve("ref" in action && action.ref ? action.ref : "");
+          if (action.type !== "scroll" || action.ref) {
+            if (!control) throw new Error("The requested Vibe control is not available.");
+            if (control.matches("[disabled], [aria-disabled=true]")) throw new Error("The requested Vibe control is disabled.");
+          }
+          if (action.type === "click") {
+            control!.scrollIntoView({ block: "center", behavior: "smooth" });
+            control!.click();
+            success = changed = true;
+          } else if (action.type === "focus") {
+            control!.focus();
+            success = changed = document.activeElement === control;
+          } else if (action.type === "type") {
+            const field = control as HTMLInputElement | HTMLTextAreaElement;
+            if (!(field instanceof HTMLInputElement) && !(field instanceof HTMLTextAreaElement)) throw new Error("The requested Vibe control does not accept text.");
+            const previous = field.value;
+            const next = action.clearFirst ? action.text : `${previous}${action.text}`;
+            const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value");
+            descriptor?.set?.call(field, next);
+            field.dispatchEvent(new Event("input", { bubbles: true }));
+            field.dispatchEvent(new Event("change", { bubbles: true }));
+            field.focus();
+            success = true;
+            changed = previous !== next;
+          } else if (action.type === "press") {
+            const target = control || document.activeElement || document.body;
+            target.dispatchEvent(new KeyboardEvent("keydown", { key: action.key, bubbles: true }));
+            target.dispatchEvent(new KeyboardEvent("keyup", { key: action.key, bubbles: true }));
+            success = changed = true;
+          } else if (action.type === "scroll") {
+            const target = control || document.scrollingElement || document.documentElement;
+            const amount = (action.amount ?? 480) * (action.direction === "down" ? 1 : -1);
+            if (target instanceof HTMLElement) target.scrollBy({ top: amount, behavior: "smooth" });
+            else window.scrollBy({ top: amount, behavior: "smooth" });
+            success = changed = true;
+          }
+        }
+      } catch (error) {
+        message = error instanceof Error ? error.message : "The Vibe action failed.";
+      }
+      const after = snapshot();
+      return { success, changed, beforeSnapshotId: String(before.capturedAt), afterSnapshotId: String(after.capturedAt), message };
+    };
+    const bridge: AgentBridge = { snapshot, act };
+    window.__CLYRA_AGENT_BRIDGE__ = bridge;
+    return () => {
+      if (window.__CLYRA_AGENT_BRIDGE__ === bridge) delete window.__CLYRA_AGENT_BRIDGE__;
+    };
+  }, [activeProjectName, m1LaunchError, m1Launching, m1Runtime, state.error, state.preview.status, state.projectId, state.stage]);
 
   useEffect(() => {
     if (thinkingIsResting) {
@@ -374,6 +722,89 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
       setThinkingCollapsed(false);
     }
   }, [thinkingIsResting]);
+
+  useEffect(() => {
+    const projectId = state.projectId;
+    if (!projectId || projectId === "project-advanced-vibe" || state.stage === "idle") return;
+    let cancelled = false;
+    const loadRuntime = async () => {
+      try {
+        const response = await fetch(`/api/vibe/runtime/${encodeURIComponent(projectId)}`);
+        if (!response.ok) return;
+        const data = await response.json() as { snapshot: RuntimeSnapshot; events: RuntimeEvent[] };
+        if (cancelled) return;
+        // Always keep runtime snapshot for follow-up controls and activity.
+        // The Clyra chat | preview shell is stable — no legacy panel flash.
+        if (!m1ConversationUrl && (m1Launching || pendingM1Url || thinkingStartedAt)) {
+          setM1RuntimeEvents((current) => {
+            const merged = [...current, ...data.events];
+            return Array.from(new Map(merged.map((event) => [event.id, event])).values()).slice(-60);
+          });
+          if (data.snapshot) setM1Runtime(data.snapshot);
+          return;
+        }
+        setM1Runtime(data.snapshot);
+        setM1RuntimeEvents((current) => {
+          const merged = [...current, ...data.events];
+          return Array.from(new Map(merged.map((event) => [event.id, event])).values()).slice(-60);
+        });
+        // Self-heal unrequested pauses. The server watcher normally resumes
+        // these, but after a Clyra restart the watcher is gone and polling is
+        // the only supervisor left. Bounded retries so a genuinely stuck run
+        // still surfaces as PAUSED with a manual Resume button.
+        const snapshot = data.snapshot;
+        const tracker = autoResumeRef.current;
+        if (tracker.projectId !== projectId) {
+          autoResumeRef.current = { projectId, attempts: 0, lastAt: 0 };
+        }
+        if (snapshot.state === "RUNNING") {
+          autoResumeRef.current.attempts = 0;
+        } else if (
+          snapshot.state === "PAUSED" &&
+          !userPausedRef.current &&
+          !/by the user/i.test(snapshot.stateReason || "")
+        ) {
+          const now = Date.now();
+          if (autoResumeRef.current.attempts < 3 && now - autoResumeRef.current.lastAt > 15_000) {
+            autoResumeRef.current.attempts += 1;
+            autoResumeRef.current.lastAt = now;
+            void fetch(`/api/vibe/runtime/${encodeURIComponent(projectId)}/control`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ command: "resume" }),
+            }).catch(() => undefined);
+          }
+        }
+      } catch {
+        // The runtime can still be booting. Preserve the current event view.
+      }
+    };
+    void loadRuntime();
+    const timer = window.setInterval(() => void loadRuntime(), 1000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [m1ConversationUrl, m1Launching, pendingM1Url, state.projectId, state.stage, thinkingStartedAt]);
+
+  useEffect(() => {
+    if (state.stage === "idle") return;
+    const latest = [...m1RuntimeEvents].reverse().find((event) => {
+      const path =
+        (typeof event.payload?.path === "string" && event.payload.path) ||
+        (typeof event.payload?.filePath === "string" && event.payload.filePath) ||
+        (typeof event.payload?.file === "string" && event.payload.file) ||
+        "";
+      return Boolean(path) && /edit|write|file|generat/i.test(`${event.type} ${event.status}`);
+    });
+    const path =
+      (typeof latest?.payload?.path === "string" && latest.payload.path) ||
+      (typeof latest?.payload?.filePath === "string" && latest.payload.filePath) ||
+      (typeof latest?.payload?.file === "string" && latest.payload.file) ||
+      null;
+    if (!path) return;
+    setState((prev) => {
+      if (prev.currentStreamingFile === path) return prev;
+      return { ...prev, currentStreamingFile: path, stage: prev.stage === "task-created" ? "editing-file" : prev.stage };
+    });
+  }, [m1RuntimeEvents, setState, state.stage]);
 
   const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
     const response = await fetch(url, init);
@@ -393,6 +824,18 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
   useEffect(() => {
     void loadProjects();
   }, [loadProjects]);
+
+  useEffect(() => {
+    if (state.stage !== "idle") return;
+    void fetch("/api/vibe/m1-status", { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((status: { uiUrl?: string } | null) => {
+        if (!status?.uiUrl) return;
+        setM1UiUrl(status.uiUrl);
+        window.sessionStorage.setItem("clyra-m1-ui-url", status.uiUrl);
+      })
+      .catch(() => undefined);
+  }, [state.stage]);
 
   const persistCurrentSession = useCallback(() => {
     if (state.stage === "idle" || !state.projectId) return;
@@ -432,7 +875,7 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
       loadSavedProject(session.workspace);
       setActiveProjectName(session.projectName);
       setChatMessages(session.chatMessages);
-      setMode(session.ui.mode);
+      setMode(session.ui.mode === "plan" ? "fast" : session.ui.mode);
       setPlanApproved(session.ui.planApproved);
       setPlanExpanded(session.ui.planExpanded);
       setThinkingCollapsed(session.ui.thinkingCollapsed);
@@ -507,7 +950,7 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
   }, [previewAutofixActive, state.stage]);
 
   useEffect(() => {
-    if (!state.planMode || !state.planMd || planApproved) return;
+    if (!VIBE_PLAN_REVIEW_ENABLED || !state.planMode || !state.planMd || planApproved) return;
     setPlanExpanded(true);
   }, [state.planMd, state.planMode, planApproved]);
 
@@ -552,11 +995,220 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
     return () => window.cancelAnimationFrame(frame);
   }, [activeScrollSignal, state.stage]);
 
+  const launchM1 = useCallback(
+    async (opts: {
+      prompt?: string;
+      projectId?: string;
+      planMode?: boolean;
+      continueExisting?: boolean;
+      projectName?: string;
+    }) => {
+      setM1LaunchError(null);
+      setM1Launching(true);
+      setM1Runtime(null);
+      setM1RuntimeEvents([]);
+      // A fresh launch always starts running; stale pause intent must not
+      // block the polling loop's auto-resume for the new conversation.
+      userPausedRef.current = false;
+      autoResumeRef.current = { projectId: "", attempts: 0, lastAt: 0 };
+      // Do not hand the shell to the iframe until launch has returned a real
+      // conversation. A warmup probe can succeed while M1's ingress is still
+      // waiting for its agent server, which otherwise produces a white or
+      // "refused to connect" workspace immediately after Send.
+      setSkipEnterAnimation(false);
+      setWelcomeView("home");
+      if (opts.projectName) setActiveProjectName(opts.projectName);
+
+      const engineWarm = isVibeEngineWarm();
+      if (!engineWarm) {
+        setWarmupStatusHint("Starting coding engine…");
+        // Non-blocking nudge — boot usually already warmed this.
+        void fetch("/api/vibe/m1-warmup", { method: "POST" }).catch(() => undefined);
+      } else {
+        setWarmupStatusHint(null);
+      }
+
+      try {
+        const requestLaunch = () =>
+          fetch("/api/vibe/m1-launch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: AbortSignal.timeout(85_000),
+            body: JSON.stringify({
+              prompt: opts.prompt,
+              projectId: opts.projectId,
+              planMode: !!opts.planMode,
+              continueExisting: !!opts.continueExisting,
+            }),
+          });
+
+        let res: Response;
+        try {
+          res = await requestLaunch();
+        } catch (error) {
+          // The M1 warmup process can briefly overlap a local dev-server HMR
+          // reconnect. One quiet retry keeps Send deterministic without
+          // masking a persistent network failure behind a spinner.
+          if (!(error instanceof TypeError)) throw error;
+          await new Promise((resolve) => window.setTimeout(resolve, 650));
+          res = await requestLaunch();
+        }
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data?.error || "Failed to launch Vibe Coder M1");
+        }
+        const conversationId = String(data.conversationId || "");
+        const uiUrl = typeof data.uiUrl === "string" ? data.uiUrl.replace(/\/$/, "") : "";
+        if (uiUrl) {
+          setM1UiUrl(uiUrl);
+          window.sessionStorage.setItem("clyra-m1-ui-url", uiUrl);
+        }
+        const conversationUrl =
+          typeof data.conversationUrl === "string" && data.conversationUrl
+            ? String(data.conversationUrl).replace(/\?openPreview=1&/, "?").replace(/\?openPreview=1$/, "").replace(/&openPreview=1/, "")
+            : uiUrl && conversationId
+              ? `${uiUrl}/conversations/${encodeURIComponent(conversationId)}`
+              : "";
+        if (!conversationUrl) throw new Error("Vibe Coder M1 did not return a conversation workspace.");
+        setWarmupStatusHint(null);
+        onEngaged?.();
+        // Hold the chat-style thinking surface for a short, difficulty-scaled
+        // beat so the iframe never flashes the optimistic bubble away mid-thought.
+        const holdMs = opts.continueExisting ? 720 : vibeThinkingHoldMs(opts.prompt || "");
+        setThinkingHoldMs((current) => (current > 0 && !opts.continueExisting ? current : holdMs));
+        setThinkingStartedAt((current) => current ?? Date.now());
+        setHandoffSummary(vibeHandoffSummary(opts.prompt || ""));
+        setHandoffReady(true);
+        setPendingM1Url(conversationUrl);
+        setState((prev) => ({
+          ...prev,
+          projectId: String(data.projectId || prev.projectId),
+          stage: "generating-file",
+          taskId: conversationId,
+          prompt: opts.prompt || prev.prompt || "",
+          planMode: !!opts.planMode,
+          startedAt: prev.startedAt || Date.now(),
+          error: null,
+        }));
+        setActiveProjectName(
+          opts.projectName ||
+            String(opts.prompt || "").slice(0, 70) ||
+            "Vibe project",
+        );
+        const launchedId = String(data.projectId || opts.projectId || "");
+        void loadProjects();
+        if (launchedId && launchedId !== "project-advanced-vibe") {
+          // Capture a fresh card preview after the workspace updates.
+          window.setTimeout(() => {
+            void fetch(
+              `/api/vibe/projects/${encodeURIComponent(launchedId)}/thumbnail/refresh`,
+              { method: "POST" },
+            )
+              .then(() => loadProjects())
+              .catch(() => undefined);
+          }, 8000);
+          window.setTimeout(() => {
+            void fetch(
+              `/api/vibe/projects/${encodeURIComponent(launchedId)}/thumbnail/refresh`,
+              { method: "POST" },
+            )
+              .then(() => loadProjects())
+              .catch(() => undefined);
+          }, 45000);
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to launch M1";
+        setM1LaunchError(message);
+        setWarmupStatusHint(null);
+        setState((prev) => ({ ...prev, stage: "failed", error: message }));
+      } finally {
+        setM1Launching(false);
+      }
+    },
+    [loadProjects, onEngaged, setState],
+  );
+
+  const preparePlanReview = useCallback(async (prompt: string, projectId?: string) => {
+    const cleanPrompt = prompt.trim();
+    if (!cleanPrompt) return;
+    setIsPreparingPlan(true);
+    setPlanApproved(false);
+    setPlanChangeMode(false);
+    setPlanExpanded(false);
+    setM1LaunchError(null);
+    try {
+      const projectPromise = projectId
+        ? Promise.resolve({ project: { id: projectId } })
+        : fetchJson<{ project: { id: string } }>("/api/vibe/projects", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt: cleanPrompt, mode: "plan" }),
+          });
+      const planPromise = fetchJson<{
+        title: string;
+        summary: string;
+        markdown: string;
+        taskGraph: unknown[];
+      }>("/api/vibe/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: cleanPrompt }),
+      });
+      const [projectResult, planResult] = await Promise.all([projectPromise, planPromise]);
+      setPlanDraft({
+        projectId: projectResult.project.id,
+        prompt: cleanPrompt,
+        title: planResult.title || cleanPrompt.slice(0, 80),
+        summary: planResult.summary.replace(/^Clyra will build Build\s+/i, "Clyra will build "),
+        markdown: planResult.markdown,
+        taskGraph: planResult.taskGraph || [],
+      });
+      setActiveProjectName(planResult.title || cleanPrompt.slice(0, 70));
+      void loadProjects();
+    } catch (error) {
+      setM1LaunchError(error instanceof Error ? error.message : "Couldn’t prepare that plan.");
+    } finally {
+      setIsPreparingPlan(false);
+    }
+  }, [fetchJson, loadProjects]);
+
+  const approvePlanAndBuild = useCallback(async () => {
+    if (!planDraft || isSavingPlan) return;
+    setIsSavingPlan(true);
+    setPlanApproved(true);
+    try {
+      await fetchJson("/api/vibe/write-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: planDraft.projectId,
+          plan: planDraft.markdown,
+          taskGraph: planDraft.taskGraph,
+        }),
+      });
+      // Keep the confirmation visible long enough to acknowledge the decision,
+      // then pass the saved project to the real M1 workspace.
+      await new Promise((resolve) => window.setTimeout(resolve, 420));
+      await launchM1({
+        prompt: `${planDraft.prompt}\n\nA review-approved implementation plan is saved at plan.md in the workspace root. Read it, inspect the workspace, and follow it before changing files.`,
+        planMode: false,
+        projectId: planDraft.projectId,
+        projectName: planDraft.title,
+      });
+      setPlanDraft(null);
+    } catch (error) {
+      setPlanApproved(false);
+      setM1LaunchError(error instanceof Error ? error.message : "Couldn’t save the approved plan.");
+    } finally {
+      setIsSavingPlan(false);
+    }
+  }, [fetchJson, isSavingPlan, launchM1, planDraft]);
+
   const handleSubmit = async (overridePrompt?: string) => {
     const cleanPrompt = (typeof overridePrompt === "string" ? overridePrompt : promptInput).trim();
     if (!cleanPrompt) return;
     persistCurrentSession();
-    setSkipEnterAnimation(false);
     setPlanExpanded(false);
     setPlanChangeMode(false);
     setPlanApproved(!mode || mode === "fast");
@@ -569,15 +1221,77 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
         timestamp: Date.now(),
       },
     ]);
-    await startTask(cleanPrompt, mode === "plan");
     setPromptInput("");
+    setM1LaunchError(null);
+
+    if (VIBE_PLAN_REVIEW_ENABLED && mode === "plan") {
+      setM1Launching(true);
+      void preparePlanReview(cleanPrompt).finally(() => setM1Launching(false));
+      return;
+    }
+
+    // Leave the welcome surface immediately into a stable Clyra chat | preview
+    // split — no intermediate full-width loading surface that later unmounts.
+    setM1Launching(true);
+    setPendingM1Url(null);
+    setM1ConversationUrl(null);
+    setHandoffReady(true);
+    setHandoffSummary(null);
+    setThinkingHoldMs(vibeThinkingHoldMs(cleanPrompt));
+    setThinkingStartedAt(Date.now());
+    setSkipEnterAnimation(true);
+    setState((prev) => ({
+      ...prev,
+      stage: "task-created",
+      prompt: cleanPrompt,
+      planMode: false,
+      startedAt: Date.now(),
+      error: null,
+      taskId: null,
+    }));
+    const launchTimeout = window.setTimeout(() => {
+      setM1LaunchError("Vibe Coder took too long to start. Check that M1 is running, then retry.");
+      setM1Launching(false);
+      setPendingM1Url(null);
+      setThinkingStartedAt(null);
+      setState((prev) => ({ ...prev, stage: "failed", error: "Launch timed out" }));
+    }, 90_000);
+    void launchM1({
+      prompt: cleanPrompt.replace(/^\/design\s*/i, "").trim() || cleanPrompt,
+      planMode: false,
+      projectId: undefined,
+    }).finally(() => {
+      window.clearTimeout(launchTimeout);
+    });
   };
 
   const handlePlanRevisionSubmit = async () => {
     const requestedChange = promptInput.trim();
-    if (!requestedChange) return;
-    await handleSubmit(`${state.prompt}\n\nPlan revision request: ${requestedChange}`);
+    if (!requestedChange || !planDraft) return;
+    setPromptInput("");
+    setPlanChangeMode(false);
+    await preparePlanReview(
+      `${planDraft.prompt}\n\nPlan revision request: ${requestedChange}`,
+      planDraft.projectId,
+    );
   };
+
+  useEffect(() => {
+    if (!pendingM1Url || !thinkingStartedAt) return;
+    // Keep Clyra chat + preview as the only UI. M1 runs in the background;
+    // never swap to the OpenHands conversation chrome (that duplicated chat).
+    const remaining = Math.max(0, thinkingHoldMs - (Date.now() - thinkingStartedAt));
+    const summary = vibeHandoffSummary(state.prompt || "");
+    const settleAt = window.setTimeout(() => {
+      setHandoffReady(true);
+      setHandoffSummary((current) => current || summary);
+      setM1ConversationUrl(pendingM1Url);
+      setPendingM1Url(null);
+      setThinkingStartedAt(null);
+      setM1Launching(false);
+    }, remaining);
+    return () => window.clearTimeout(settleAt);
+  }, [pendingM1Url, state.prompt, thinkingHoldMs, thinkingStartedAt]);
 
   useEffect(() => {
     if (state.stage !== "idle") return;
@@ -618,316 +1332,408 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
     async (project: any) => {
       try {
         persistCurrentSession();
-        const [cached, data] = await Promise.all([
-          loadProjectSessionAsync(project.id, { id: project.id, name: project.name }),
-          fetchJson<{
-            project: any;
-            files: Array<{ path: string; content: string }>;
-            plan?: string;
-          }>(`/api/vibe/projects/${encodeURIComponent(project.id)}`),
-        ]);
+        setWelcomeView("home");
+        setActiveProjectName(project.name || project.id || "Vibe project");
+        setState((prev) => ({
+          ...prev,
+          projectId: project.id,
+          prompt: project.prompt || prev.prompt,
+          stage: "complete",
+          restored: true,
+          preview: { status: "ready" },
+          taskId: null,
+          currentStreamingFile: null,
+        }));
+        const cachedSession = loadProjectSession(project.id);
+        if (cachedSession) applySavedSession(cachedSession);
 
-        const built = buildSessionFromApi(project, data);
-        let session = cached
-          ? refreshSessionFromApi(mergeSessionWithCache(built, cached), project, data)
-          : built;
+        void restoreProject(project.id).catch((error) => {
+          console.warn("Failed to hydrate saved Vibe project", error);
+        });
 
-        if (cached && sessionWorkspaceRichness(cached) > sessionWorkspaceRichness(session)) {
-          session = refreshSessionFromApi(mergeSessionWithCache(session, cached), project, data);
-        }
+        // Reopen the real workspace immediately. A richer server snapshot can
+        // hydrate in the background without holding the preview behind I/O.
+        void launchM1({
+          projectId: project.id,
+          continueExisting: true,
+          projectName: project.name || cachedSession?.projectName || project.id,
+          planMode: false,
+        });
 
-        saveProjectSession(session);
-        void saveProjectSessionToServer(session);
-        applySavedSession(session);
+        void loadProjectSessionAsync(project.id, {
+          id: project.id,
+          name: project.name || project.id,
+        }).then((saved) => {
+          if (!saved) return;
+          if (!cachedSession || sessionWorkspaceRichness(saved) > sessionWorkspaceRichness(cachedSession)) {
+            applySavedSession(saved);
+          }
+        });
       } catch (error) {
-        console.warn("Failed to open Vibe project", error);
+        console.warn("Failed to open Vibe project in M1", error);
       }
     },
-    [applySavedSession, fetchJson, persistCurrentSession],
+    [applySavedSession, launchM1, persistCurrentSession, restoreProject, setState],
   );
 
-  const handlePreviewAutofix = useCallback(
-    (errMsg: string) => {
-      const fixId = `autofix-${state.projectId}-${Date.now()}`;
-      const userFacing = "I'm seeing an error in the preview. Can you fix it?";
-      setPreviewAutofixActive(true);
-      setPlanChangeMode(false);
-      setPlanApproved(true);
-      setChatMessages((prev) => {
-        if (prev.some((message) => message.id.startsWith(`autofix-${state.projectId}`))) return prev;
-        return [
-          ...prev,
-          {
-            id: fixId,
-            role: "user",
-            content: userFacing,
-            timestamp: Date.now(),
-          },
-          {
-            id: `${fixId}-assistant`,
-            role: "assistant",
-            content: "I'll analyze the preview error and patch the build.",
-            timestamp: Date.now(),
-          },
-        ];
-      });
-      const fixPrompt = `Fix this preview error:\n${errMsg}`;
-      void startTask(fixPrompt, false);
-    },
-    [startTask, state.projectId],
-  );
-
-  useEffect(() => {
-    if (!skipEnterAnimation || state.stage === "idle") return;
-    const frame = window.requestAnimationFrame(() => {
-      activeScrollRef.current?.scrollTo({
-        top: activeScrollRef.current.scrollHeight,
-        behavior: "auto",
-      });
+  const handlePreviewAutofix = useCallback((errMsg: string) => {
+    if (!state.projectId || state.projectId === "project-advanced-vibe") return;
+    void fetch(`/api/vibe/runtime/${encodeURIComponent(state.projectId)}/control`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command: "steer", message: `Preview failure observed by Clyra: ${errMsg}\nInspect the relevant files, repair it, and rerun preview validation.` }),
     });
-    return () => window.cancelAnimationFrame(frame);
-  }, [skipEnterAnimation, state.projectId, state.stage]);
+  }, [state.projectId]);
+
+  const exitM1ToWelcome = useCallback(() => {
+    const projectId = state.projectId;
+    persistCurrentSession();
+    setM1LaunchError(null);
+    setM1Launching(false);
+    setWarmupStatusHint(null);
+    setM1Runtime(null);
+    setM1RuntimeEvents([]);
+    setM1ConversationUrl(null);
+    setPendingM1Url(null);
+    setHandoffSummary(null);
+    setHandoffReady(false);
+    setThinkingStartedAt(null);
+    resetToIdle();
+    setWelcomeView("home");
+    if (projectId && projectId !== "project-advanced-vibe") {
+      void fetch(`/api/vibe/projects/${encodeURIComponent(projectId)}/thumbnail/refresh`, {
+        method: "POST",
+      })
+        .catch(() => undefined)
+        .finally(() => {
+          void loadProjects();
+        });
+    } else {
+      void loadProjects();
+    }
+  }, [loadProjects, persistCurrentSession, resetToIdle, state.projectId]);
+
+  if (VIBE_PLAN_REVIEW_ENABLED && state.stage === "idle" && planDraft) {
+    return (
+      <div className="relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-white">
+        <div className="clyra-visible-scrollbar min-h-0 flex-1 overflow-y-auto px-5 py-6 sm:px-8">
+          <motion.section
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.42, ease: [0.22, 1, 0.36, 1] }}
+            className="relative mx-auto flex h-full w-full max-w-[1180px] flex-col pb-44"
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <span className="inline-flex items-center gap-2 text-[12px] font-semibold text-slate-500">
+                <Brain className="h-4 w-4" /> Plan Mode
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setPlanDraft(null);
+                  setPlanChangeMode(false);
+                  setPromptInput("");
+                }}
+                className="grid h-8 w-8 place-items-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-900"
+                aria-label="Close plan review"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className={cn("max-w-[680px] px-2 py-5 sm:px-3", planExpanded && "max-w-[32%]") }>
+              <p className="text-[12px] font-semibold text-slate-400">Plan</p>
+              <h1 className="mt-4 text-2xl font-semibold tracking-[-0.035em] text-slate-950 sm:text-4xl">
+                {planDraft.title}
+              </h1>
+              <h2 className="mt-7 text-xl font-semibold tracking-[-0.025em] text-slate-950">Summary</h2>
+              <p className="mt-3 max-w-[860px] text-[15px] leading-7 text-slate-600 sm:text-[17px]">
+                {planDraft.summary}
+              </p>
+              <button
+                type="button"
+                data-agent-id="vibe-expand-plan"
+                onClick={() => setPlanExpanded((expanded) => !expanded)}
+                className="mt-6 inline-flex h-9 items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 text-[12px] font-semibold text-slate-700 transition-[background-color,border-color,transform] duration-200 hover:-translate-y-px hover:border-slate-300 hover:bg-slate-50"
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
+                {planExpanded ? "Hide full plan" : "View full plan"}
+              </button>
+            </div>
+
+            <AnimatePresence initial={false}>
+              {planExpanded ? (
+                <motion.div
+                  key="plan-browser-space"
+                  initial={{ opacity: 0, height: 0, y: -10 }}
+                  animate={{ opacity: 1, height: "min(72vh, 760px)", y: 0 }}
+                  exit={{ opacity: 0, height: 0, y: -8 }}
+                  transition={{ duration: 0.48, ease: [0.22, 1, 0.36, 1] }}
+                  className="absolute bottom-40 right-0 top-16 w-[65%] overflow-hidden rounded-[18px] border border-slate-200 bg-slate-50/70 shadow-[0_18px_50px_rgba(15,23,42,0.055)]"
+                >
+                  <div className="flex h-11 items-center justify-between border-b border-slate-200 bg-white px-4">
+                    <span className="text-[12px] font-semibold text-slate-500">Browser space · plan.md</span>
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-400"><CheckCircle2 className="h-3.5 w-3.5" /> Ready to review</span>
+                  </div>
+                  <div className="clyra-visible-scrollbar h-[calc(100%-44px)] overflow-y-auto bg-white px-6 py-5 sm:px-8">
+                    <div className="max-w-none text-[14px] leading-7 text-slate-700">
+                      <MarkdownMessageContent content={planDraft.markdown} />
+                    </div>
+                  </div>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+
+            <AnimatePresence mode="wait">
+              {planApproved ? (
+                <motion.div
+                  key="approved"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  className="mt-5 flex items-center gap-3 rounded-[18px] border border-slate-200 bg-white px-5 py-4 text-slate-900 shadow-[0_10px_30px_rgba(15,23,42,0.04)]"
+                >
+                  <span className="grid h-8 w-8 place-items-center rounded-full bg-slate-950 text-white"><Check className="h-4 w-4" /></span>
+                  <div><p className="text-[14px] font-semibold">Plan approved</p><p className="text-[12px] text-slate-500">Saving plan.md and opening the build workspace.</p></div>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+
+            <div className="absolute bottom-4 left-1/2 w-full max-w-[920px] -translate-x-1/2 px-2 sm:px-6">
+              <Composer
+                compact
+                value={promptInput}
+                onChange={setPromptInput}
+                onSubmit={handlePlanRevisionSubmit}
+                mode={mode}
+                onModeChange={setMode}
+                onAttach={() => fileRef.current?.click()}
+                disabled={!promptInput.trim() || isPreparingPlan || isSavingPlan}
+                isGenerating={isPreparingPlan || isSavingPlan}
+                placeholder="Tell Clyra what to change..."
+                activePlaceholder={planChangeMode ? "Tell Clyra what to do differently..." : undefined}
+                planApprovalActive={!planApproved}
+                onApprovePlan={() => void approvePlanAndBuild()}
+                onRequestPlanChanges={() => setPlanChangeMode(true)}
+                className="max-w-none rounded-[22px]"
+              />
+            </div>
+          </motion.section>
+        </div>
+      </div>
+    );
+  }
 
   if (state.stage !== "idle") {
-    const hasSuccessfulBuild = state.terminalLogs.some((log) =>
-      log.output.includes("Command exited with code 0"),
-    );
-    const shouldShowPreview =
-      state.preview.status === "ready" ||
-      state.stage === "complete" ||
-      hasSuccessfulBuild;
-
-    const generatedFiles = Object.values(state.files);
-    const elapsedSinceStart = state.startedAt ? elapsedNow - state.startedAt : 0;
-    const planBarDelayPassed = elapsedSinceStart > 5000;
-    const canShowPlanCard =
-      state.planMode &&
-      planBarDelayPassed &&
-      state.stage !== "failed" &&
-      state.stage !== "cancelled" &&
-      thinkingCollapsed;
-    const showBuildStream = !state.planMode || planApproved;
-    const restoredWorkspaceKey = skipEnterAnimation ? `restored:${state.projectId}` : null;
-    const visibleChatMessages =
-      chatMessages.length > 0
-        ? skipEnterAnimation
-          ? chatMessages
-          : chatMessages.filter((message) => message.role === "user")
-        : [
-            {
-              id: "prompt",
-              role: "user" as const,
-              content: state.prompt,
-              timestamp: state.startedAt ?? Date.now(),
-            },
-          ];
+    const agentBusy =
+      m1Launching ||
+      Boolean(thinkingStartedAt) ||
+      ["task-created", "generating-file", "editing-file", "running-command", "starting-preview", "planning"].includes(state.stage);
+    const thinkingLabel = isPreparingPlan
+      ? "Planning"
+      : state.currentStreamingFile
+        ? null
+        : agentBusy
+          ? stageLabel(state.stage) === "Starting" || state.stage === "task-created"
+            ? "Thinking"
+            : stageLabel(state.stage)
+          : null;
 
     return (
-      <>
-      <div className="relative flex h-full min-h-0 w-full overflow-hidden bg-white text-slate-950">
-        <motion.section
-          layout
-          transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
-          className={cn(
-            "flex min-h-0 flex-col transition-[width,max-width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
-            shouldShowPreview
-              ? "w-[36%] min-w-[360px] max-w-[500px] border-r border-slate-200/70"
-              : "mx-auto w-full max-w-[920px]",
-            "relative",
-          )}
-        >
-          <div
-            ref={activeScrollRef}
-            onScroll={handleActiveScroll}
-            className="clyra-visible-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-52 pt-14 sm:px-8"
-          >
-            <motion.div
-              initial={skipEnterAnimation ? false : { opacity: 0, y: 24, scale: 0.985 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              transition={{ duration: skipEnterAnimation ? 0 : 0.42, ease: [0.22, 1, 0.36, 1] }}
-              className="space-y-3"
-            >
-              {visibleChatMessages.map((message) => (
-                <div
-                  key={message.id}
-                  className={cn(
-                    "max-w-[78%] rounded-[26px] border px-5 py-3 text-left text-[15px] font-semibold leading-relaxed shadow-[0_18px_52px_rgba(15,23,42,0.055)]",
-                    message.role === "user"
-                      ? "ml-auto border-slate-200/75 bg-white/92 text-slate-900"
-                      : "mr-auto border-slate-200/60 bg-slate-50/90 text-slate-700",
-                  )}
-                >
-                  {message.content}
-                </div>
-              ))}
-            </motion.div>
-
-            <motion.div
-              initial={skipEnterAnimation ? false : { opacity: 0, y: 14 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: skipEnterAnimation ? 0 : 0.12, duration: skipEnterAnimation ? 0 : 0.34, ease: [0.22, 1, 0.36, 1] }}
-              className="mt-8"
-            >
-              {state.webResearch.startedAt ? (
-                <ThinkingStatus
-                  lines={state.webResearch.lines}
-                  stage="researching-web"
-                  isComplete={Boolean(state.webResearch.completedAt)}
-                  hasError={state.stage === "failed"}
-                  thoughtText={state.planMode && !planApproved ? buildPlanThinkingSummary(state.prompt) : undefined}
-                  resetKey={restoredWorkspaceKey ?? `${state.taskId || state.prompt}:research:${state.webResearch.startedAt}`}
-                />
-              ) : null}
-              {state.stage !== "researching-web" ? (
-                <ThinkingStatus
-                  lines={state.thinkingLines.filter((line) => !state.webResearch.lines.some((item) => item.id === line.id))}
-                  stage={state.stage}
-                  isComplete={thinkingIsResting}
-                  hasError={state.stage === "failed"}
-                  thoughtText={!state.webResearch.startedAt && state.planMode && !planApproved ? buildPlanThinkingSummary(state.prompt) : undefined}
-                  resetKey={restoredWorkspaceKey ?? `${state.taskId || state.prompt}:${state.startedAt ?? 0}`}
-                />
-              ) : null}
-            </motion.div>
-
-            {canShowPlanCard ? (
-            <PlanReviewCard
-              markdown={state.planMd}
-              expanded={planExpanded}
-              approved={planApproved}
-              ready={planReady}
-              onToggle={() => setPlanExpanded((value) => !value)}
-            />
-            ) : null}
-
-            {showBuildStream ? (
-              <div className="mt-5">
-                {planApproved && state.stage !== "complete" && state.stage !== "failed" && Object.keys(state.files).length === 0 ? (
-                  <CodeModeThinkingRow resetKey={`${state.taskId}:code:${state.startedAt ?? 0}`} />
-                ) : null}
-                <CodeModeActivityStream
-                  statusUpdates={state.statusUpdates}
-                  files={generatedFiles}
-                  queueList={state.fileQueue}
-                />
-              </div>
-            ) : null}
-
-            {state.terminalLogs.some((log) => isUserVisibleTerminalCommand(log.command)) ? (
-              <TerminalTranscript logs={state.terminalLogs.filter((log) => isUserVisibleTerminalCommand(log.command))} />
-            ) : null}
-
-            {state.stage === "complete" ? (
-              <CompletionSummary
-                filesChanged={generatedFiles.length}
-                checksRun={state.terminalLogs.filter((log) => isUserVisibleTerminalCommand(log.command)).length}
-                previewUrl={state.preview.url}
-              />
-            ) : null}
-          </div>
-
-          <AnimatePresence>
-            {showJumpToLatest ? (
-              <motion.button
+      <div className="relative flex h-full min-h-0 w-full overflow-hidden bg-[#f6f8fa]">
+        {m1LaunchError ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
+            <p className="text-[15px] font-semibold text-slate-900">Couldn’t start Vibe Coder</p>
+            <p className="max-w-lg text-[13px] font-medium text-slate-500">{m1LaunchError}</p>
+            <div className="flex gap-2">
+              <button
                 type="button"
-                onClick={jumpToLatest}
-                initial={{ opacity: 0, y: 8, scale: 0.96 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 8, scale: 0.96 }}
-                transition={{ duration: 0.18, ease: "easeOut" }}
-                className="absolute bottom-28 left-1/2 z-30 -translate-x-1/2 rounded-full border border-slate-200/80 bg-white/92 px-3.5 py-2 text-[12px] font-bold text-slate-600 shadow-[0_14px_34px_rgba(15,23,42,0.08)] backdrop-blur-xl transition-colors hover:bg-slate-50 hover:text-slate-950"
+                onClick={exitM1ToWelcome}
+                className="rounded-full border border-slate-200 bg-white px-4 py-2 text-[12px] font-bold text-slate-700"
               >
-                Jump to latest
-              </motion.button>
-            ) : null}
-          </AnimatePresence>
-
+                Back
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  void launchM1({
+                    projectId: state.projectId,
+                    planMode: state.planMode,
+                    continueExisting: true,
+                    projectName: activeProjectName,
+                  })
+                }
+                className="rounded-full bg-slate-950 px-4 py-2 text-[12px] font-bold text-white"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        ) : (
           <motion.div
-            layout
-            className={cn(
-              "pointer-events-auto absolute bottom-0 z-20 w-full px-5 sm:px-8",
-              shouldShowPreview
-                ? "bottom-0 left-0 max-w-none"
-                : "left-1/2 max-w-[760px] -translate-x-1/2",
-            )}
+            key="vibe-workspace"
+            initial={skipEnterAnimation ? false : { opacity: 0.985 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            className="flex min-h-0 min-w-0 flex-1"
           >
-            <Composer
-              compact
-              placeholder="Add a follow-up or ask for a change..."
-              activePlaceholder={planChangeMode ? "Tell Clyra what to change in the plan..." : undefined}
-              value={promptInput}
-              onChange={setPromptInput}
-              onSubmit={planChangeMode ? handlePlanRevisionSubmit : handleSubmit}
-              mode={mode}
-              onModeChange={setMode}
-              onAttach={() => fileRef?.current?.click()}
-              disabled={!promptInput.trim()}
-              isGenerating={
-                state.stage !== "complete" &&
-                state.stage !== "failed" &&
-                state.stage !== "cancelled" &&
-                !(state.planMode && planApproved)
-              }
-              planApprovalActive={
-                !previewAutofixActive &&
-                state.planMode &&
-                planReady &&
-                state.stage !== "failed" &&
-                state.stage !== "cancelled" &&
-                !(state.planMode && planApproved) &&
-                thinkingCollapsed
-              }
-              onApprovePlan={() => {
-                setPlanApproved(true);
-                setPlanExpanded(false);
-                setPlanChangeMode(false);
-                void approvePlan();
-              }}
-              onRequestPlanChanges={() => {
-                setPlanChangeMode(true);
-                setPromptInput("");
-              }}
-            />
-          </motion.div>
-        </motion.section>
+            <section className="flex w-[min(400px,34%)] shrink-0 flex-col border-r border-slate-200/80 bg-white">
+              <header className="flex h-12 shrink-0 items-center gap-2 border-b border-slate-200/80 px-4">
+                <span className="truncate text-[13px] font-semibold tracking-[-0.01em] text-slate-800">
+                  {activeProjectName || "Vibe Coder"}
+                </span>
+                <span className="ml-auto truncate text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                  {agentBusy ? "Working" : state.stage === "complete" ? "Ready" : stageLabel(state.stage)}
+                </span>
+              </header>
 
-        <AnimatePresence>
-          {shouldShowPreview ? (
-            <motion.aside
-              key="live-preview"
-              initial={skipEnterAnimation ? false : { opacity: 0, x: 80, scale: 0.985 }}
-              animate={{ opacity: 1, x: 0, scale: 1 }}
-              exit={{ opacity: 0, x: 80, scale: 0.985 }}
-              transition={{ duration: skipEnterAnimation ? 0 : 0.58, ease: [0.22, 1, 0.36, 1] }}
-              className="min-w-0 flex-1 bg-white p-5"
-            >
-              <LivePreviewPanel
-                project={{ id: state.projectId, name: activeProjectName, status: state.stage }}
-                onFixError={skipEnterAnimation ? undefined : handlePreviewAutofix}
-              />
-            </motion.aside>
-          ) : null}
-        </AnimatePresence>
+              <div className="clyra-visible-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-4">
+                <div className="mx-auto flex w-full max-w-[420px] flex-col gap-4">
+                  {chatMessages.filter((message) => message.role === "user").map((message) => (
+                    <motion.div
+                      key={message.id}
+                      layout="position"
+                      initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
+                      className="clyra-chat-user-bubble ml-auto max-w-[92%] rounded-[18px] rounded-br-md border border-slate-200/70 bg-[#f4f4f4] px-3.5 py-3 text-left text-[13px] font-medium leading-relaxed text-slate-800"
+                    >
+                      {message.content}
+                    </motion.div>
+                  ))}
+
+                  <div className="flex flex-col gap-3">
+                    {state.currentStreamingFile ? (
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-0.5">
+                        <span className="text-[13px] font-semibold text-sky-500">Editing</span>
+                        <span className="clyra-thinking-shimmer max-w-[260px] truncate font-mono text-[12px] font-semibold text-slate-700">
+                          {state.currentStreamingFile}
+                        </span>
+                      </div>
+                    ) : thinkingLabel ? (
+                      <VibeThinkingStatus
+                        label={thinkingLabel}
+                        hint={warmupStatusHint || undefined}
+                      />
+                    ) : handoffSummary && agentBusy ? (
+                      <SoftVibeStreamText text={handoffSummary} active={false} />
+                    ) : null}
+
+                    <AgentActivityFeed items={activeActivityItems.slice(-10)} />
+                  </div>
+                </div>
+              </div>
+
+              <div className="shrink-0 border-t border-slate-200/80 px-3 py-3">
+                <motion.div layoutId="composer-bar">
+                <Composer
+                  compact
+                  value={promptInput}
+                  onChange={setPromptInput}
+                  onSubmit={() => {
+                    const followUp = promptInput.trim();
+                    if (!followUp) return;
+                    setChatMessages((prev) => [
+                      ...prev,
+                      {
+                        id: `user-${Date.now()}`,
+                        role: "user",
+                        content: followUp,
+                        timestamp: Date.now(),
+                      },
+                    ]);
+                    setPromptInput("");
+                    if (m1Runtime?.projectId) {
+                      void fetch(`/api/vibe/runtime/${encodeURIComponent(m1Runtime.projectId)}/control`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ command: "message", message: followUp }),
+                      }).catch(() => undefined);
+                    }
+                  }}
+                  mode={mode}
+                  onModeChange={setMode}
+                  onAttach={() => fileRef.current?.click()}
+                  disabled={!promptInput.trim()}
+                  isGenerating={agentBusy}
+                  placeholder="Ask Clyra to change something…"
+                  className="max-w-none"
+                />
+                </motion.div>
+              </div>
+            </section>
+
+            <section className="relative min-h-0 min-w-0 flex-1 p-3 sm:p-4">
+              <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[16px] border border-slate-200/80 bg-white shadow-[0_12px_40px_rgba(15,23,42,0.06)]">
+                <div className="flex h-12 shrink-0 items-center gap-2 border-b border-slate-200/80 px-3">
+                  <span className="grid h-7 w-7 place-items-center rounded-lg bg-slate-100 text-slate-500">
+                    <Globe2 className="h-3.5 w-3.5" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[12px] font-semibold text-slate-700">Live preview</p>
+                    <p className="truncate text-[10px] font-medium text-slate-400">
+                      {state.preview.status === "ready" && state.preview.url
+                        ? state.preview.url
+                        : state.projectId
+                          ? "Starting development server…"
+                          : "Preparing workspace…"}
+                    </p>
+                  </div>
+                  {state.preview.status === "starting" || (state.projectId && !state.preview.url) ? (
+                    <LoaderCircle className="h-4 w-4 animate-spin text-slate-400" />
+                  ) : null}
+                </div>
+                <div className="relative min-h-0 flex-1 bg-[#f8fafc]">
+                  {state.projectId ? (
+                    <LivePreviewPanel
+                      project={{
+                        id: state.projectId,
+                        name: activeProjectName,
+                        status: state.preview.status || "starting",
+                      }}
+                      className="h-full"
+                    />
+                  ) : (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
+                      <div className="h-1 w-40 overflow-hidden rounded-full bg-slate-200">
+                        <motion.div
+                          className="h-full w-1/2 rounded-full bg-gradient-to-r from-indigo-400 via-sky-400 to-indigo-400"
+                          animate={{ x: ["-100%", "200%"] }}
+                          transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
+                        />
+                      </div>
+                      <p className="text-[13px] font-semibold text-slate-700">Starting your preview</p>
+                      <p className="text-[11px] font-medium text-slate-400">
+                        {warmupStatusHint || "Clyra is preparing the workspace"}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+          </motion.div>
+        )}
       </div>
-      </>
     );
   }
 
   // IDLE WELCOME PAGE
   return (
-    <>
     <div className="relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-white">
       <div
         ref={welcomeScrollRef}
-        className={cn("clyra-visible-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto px-5 sm:px-8", "pt-16")}
+        className={cn(
+          "clyra-visible-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto px-5 sm:px-8",
+          welcomeView === "projects" ? "pt-3" : "pt-16",
+        )}
       >
         <AnimatePresence mode="wait">
           {welcomeView === "home" && state.stage === "idle" ? (
             <motion.section
               key="welcome"
-              initial={{ opacity: 0, y: 18 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -12 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
               transition={{ duration: 0.42, ease: [0.22, 1, 0.36, 1] }}
               className="mx-auto flex w-full max-w-[900px] flex-col items-center pb-14 pt-8 text-center"
             >
@@ -938,7 +1744,7 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
                 What should we build?
               </h1>
               <p className="mt-3 text-[15px] font-semibold text-slate-500 sm:text-base">
-                Plan, generate, validate, preview, save and reopen real Vibe projects.
+                Generate, validate, preview, save and reopen real Vibe projects.
               </p>
 
               <motion.div layoutId="composer-bar" className="mt-8 mb-6 w-full max-w-[900px] px-5 sm:px-8">
@@ -951,7 +1757,7 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
                   mode={mode}
                   onModeChange={setMode}
                   onAttach={() => fileRef?.current?.click()}
-                  disabled={!promptInput.trim()}
+                  disabled={!promptInput.trim() || m1Launching}
                   isGenerating={false}
                 />
               </motion.div>
@@ -1017,6 +1823,7 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
               key="all-projects"
               projects={projects}
               openProjectMenu={openProjectMenu}
+              orbColorTheme={orbColorTheme}
               onBack={() => setWelcomeView("home")}
               onToggleMenu={(id) => setOpenProjectMenu((current) => (current === id ? null : id))}
               onRename={(project) => {
@@ -1033,7 +1840,6 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
           ) : null}
         </AnimatePresence>
       </div>
-    </div>
       <ProjectActionDialog
         dialog={projectDialog}
         value={projectRename}
@@ -1042,9 +1848,114 @@ export default function VibeCoderWorkspace({ orbColorTheme = "default" }: { orbC
         onRename={renameProject}
         onDelete={deleteProject}
       />
-      </>
+    </div>
     );
   }
+
+function M1RuntimePanel({
+  projectId,
+  snapshot,
+  events,
+  onControl,
+}: {
+  projectId: string;
+  snapshot: RuntimeSnapshot;
+  events: RuntimeEvent[];
+  onControl: (command: "pause" | "resume" | "cancel" | "steer", message?: string) => Promise<void>;
+}) {
+  const [steer, setSteer] = useState("");
+  const [busy, setBusy] = useState(false);
+  const terminal = ["COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED", "INCOMPLETE"].includes(snapshot.state);
+  const active = !terminal && snapshot.state !== "PAUSED" && snapshot.state !== "AWAITING_PLAN_APPROVAL";
+  const latest = events.slice(-18).reverse();
+  const run = async (command: "pause" | "resume" | "cancel" | "steer") => {
+    setBusy(true);
+    try {
+      await onControl(command, command === "steer" ? steer : undefined);
+      if (command === "steer") setSteer("");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+      className="clyra-visible-scrollbar h-full overflow-y-auto bg-white px-5 py-6 sm:px-8"
+    >
+      <div className="mx-auto grid w-full max-w-[1240px] gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="min-w-0 rounded-[20px] border border-slate-200/80 bg-white p-5 shadow-[0_14px_42px_rgba(15,23,42,0.045)]">
+          <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 pb-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Clyra agent runtime</p>
+              {active ? (
+                <div className="mt-1">
+                  <VibeThinkingStatus label={snapshot.state.replaceAll("_", " ")} />
+                </div>
+              ) : (
+                <h2 className="mt-1 text-[18px] font-semibold text-slate-950">
+                  {snapshot.state.replaceAll("_", " ")}
+                </h2>
+              )}
+              <p className="mt-1 max-w-2xl text-[13px] leading-5 text-slate-500">{snapshot.stateReason || "Waiting for the next verified runtime event."}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              {/* Fade controls in/out instead of mounting them abruptly when
+                  the runtime state flips between running and paused. */}
+              <AnimatePresence initial={false} mode="popLayout">
+                {active ? (
+                  <motion.button key="rt-pause" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} transition={{ duration: 0.18, ease: "easeOut" }} type="button" disabled={busy} onClick={() => void run("pause")} className="rounded-full border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">Pause</motion.button>
+                ) : null}
+                {snapshot.state === "PAUSED" ? (
+                  <motion.button key="rt-resume" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} transition={{ duration: 0.18, ease: "easeOut" }} type="button" disabled={busy} onClick={() => void run("resume")} className="rounded-full bg-slate-950 px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50">Resume</motion.button>
+                ) : null}
+                {!terminal ? (
+                  <motion.button key="rt-stop" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} transition={{ duration: 0.18, ease: "easeOut" }} type="button" disabled={busy} onClick={() => void run("cancel")} className="rounded-full border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-600 transition hover:border-rose-200 hover:text-rose-600 disabled:opacity-50">Stop</motion.button>
+                ) : null}
+              </AnimatePresence>
+            </div>
+          </div>
+          <div className="mt-5 space-y-2">
+            <AnimatePresence initial={false}>
+              {latest.length ? latest.map((event) => (
+                <motion.div
+                  key={event.id}
+                  layout
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                  className="flex items-start gap-3 rounded-xl px-3 py-2.5 transition hover:bg-slate-50"
+                >
+                  <span className={cn("mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full", event.status === "failed" ? "bg-rose-500" : event.status === "completed" ? "bg-emerald-500" : "bg-blue-500")} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[12px] font-semibold text-slate-800">{event.type.replaceAll(".", " · ").replaceAll("_", " ")}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-slate-500">{String(event.payload.summary || event.payload.reason || event.error?.message || "Runtime activity")}</p>
+                  </div>
+                  <time className="shrink-0 text-[10px] text-slate-400">{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
+                </motion.div>
+              )) : <PreviewSkeletonLayout message="Connecting to the M1 event stream…" />}
+            </AnimatePresence>
+          </div>
+        </div>
+        <aside className="space-y-4">
+          <div className="rounded-[18px] border border-slate-200/80 bg-slate-50/80 p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Validation</p>
+            <div className="mt-3 space-y-2">
+              {snapshot.validation.length ? snapshot.validation.map((check) => <div key={check.name} className="flex items-center justify-between text-[12px]"><span className="truncate text-slate-600">{check.name}</span><span className={cn("font-semibold", check.status === "passed" ? "text-emerald-600" : check.status === "failed" ? "text-rose-600" : "text-slate-400")}>{check.status}</span></div>) : <p className="text-[12px] leading-5 text-slate-500">Validation starts after M1 reports that implementation is complete.</p>}
+            </div>
+          </div>
+          {!terminal ? <form onSubmit={(event) => { event.preventDefault(); if (steer.trim()) void run("steer"); }} className="rounded-[18px] border border-slate-200/80 bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.035)]">
+            <label className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400" htmlFor={`vibe-steer-${projectId}`}>Steer active task</label>
+            <textarea id={`vibe-steer-${projectId}`} value={steer} onChange={(event) => setSteer(event.target.value)} placeholder="Add a focused instruction…" className="mt-3 min-h-20 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] text-slate-700 outline-none transition focus:border-slate-400" />
+            <button type="submit" disabled={busy || !steer.trim()} className="mt-2 w-full rounded-xl bg-slate-950 px-3 py-2 text-[12px] font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40">Send instruction</button>
+          </form> : null}
+        </aside>
+      </div>
+    </motion.section>
+  );
+}
 
 function AgentStatusHeader({
   prompt,
@@ -1115,12 +2026,8 @@ function AgentStatusHeader({
 function AgentActivityFeed({ items }: { items: AgentActivityItem[] }) {
   if (items.length === 0) return null;
   return (
-    <div className="ml-6 mt-5 max-w-[720px]">
-      <div className="mb-2 flex items-center gap-2 px-1 text-[11px] font-black uppercase tracking-[0.16em] text-slate-300">
-        <Sparkles className="h-3.5 w-3.5" />
-        Activity
-      </div>
-      <div className="space-y-2.5">
+    <div className="mt-1 max-w-[720px]">
+      <div className="space-y-2">
         <AnimatePresence initial={false}>
           {items.map((item) => (
             <AgentActivityRow key={item.id} item={item} />
@@ -1171,9 +2078,27 @@ function AgentActivityRow({ item }: { item: AgentActivityItem }) {
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="min-w-0 truncate text-[13px] font-bold tracking-[-0.01em] text-slate-800">
-              {item.title}
-            </p>
+            {item.type === "file" && item.filePath ? (
+              <FileEditActivity item={item} />
+            ) : item.type === "terminal" ? (
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                <span className={cn("text-[13px] font-semibold", item.status === "active" ? "text-sky-500" : "text-slate-600")}>
+                  {item.status === "active" ? "Running" : item.status === "success" ? "Ran" : "Command"}
+                </span>
+                <span className={cn(
+                  "max-w-[320px] truncate font-mono text-[12px] font-semibold",
+                  item.status === "active" ? "clyra-thinking-shimmer text-slate-700" : "text-slate-500",
+                )}>
+                  {item.command || item.title}
+                </span>
+              </div>
+            ) : item.type === "stage" && item.status === "active" ? (
+              <VibeThinkingStatus label={item.title} className="min-w-0" />
+            ) : (
+              <p className="min-w-0 truncate text-[13px] font-bold tracking-[-0.01em] text-slate-800">
+                {item.title}
+              </p>
+            )}
             <span
               className={cn(
                 "rounded-full px-2 py-0.5 text-[9.5px] font-black uppercase tracking-[0.1em]",
@@ -1202,6 +2127,69 @@ function AgentActivityRow({ item }: { item: AgentActivityItem }) {
         </span>
       </div>
     </motion.div>
+  );
+}
+
+function AnimatedDiffCount({ value, tone, active }: { value: number; tone: "add" | "remove"; active: boolean }) {
+  const [displayed, setDisplayed] = useState(0);
+
+  useEffect(() => {
+    const target = Math.max(0, value);
+    if (!target) {
+      setDisplayed(0);
+      return;
+    }
+    let frame = 0;
+    const startedAt = performance.now();
+    const duration = active ? 720 : 420;
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      setDisplayed(Math.round(target * (1 - Math.pow(1 - progress, 3))));
+      if (progress < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [active, value]);
+
+  return (
+    <span className={cn("font-mono text-[11px] font-bold tabular-nums", tone === "add" ? "text-emerald-700" : "text-rose-600")}>
+      {tone === "add" ? "+" : "-"}{displayed}
+    </span>
+  );
+}
+
+function FileEditActivity({ item }: { item: AgentActivityItem }) {
+  const active = item.status === "active";
+  const isEdit = /edit/i.test(item.title);
+  const action = active ? (isEdit ? "Editing" : "Generating") : isEdit ? "Edited" : "Created";
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+      {active ? (
+        <>
+          <span className="text-[13px] font-semibold text-sky-500">Editing</span>
+          <span className="clyra-thinking-shimmer max-w-[260px] truncate font-mono text-[12px] font-semibold text-slate-700">
+            {item.filePath}
+          </span>
+        </>
+      ) : (
+        <>
+          <span className="text-[13px] font-semibold text-sky-600">{action}</span>
+          <span className="max-w-[260px] truncate font-mono text-[12px] font-medium text-slate-500">
+            {item.filePath}
+          </span>
+        </>
+      )}
+      <motion.span
+        layout
+        initial={{ opacity: 0, scale: 0.94 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+        className="inline-flex items-center gap-1.5 rounded-full bg-slate-50 px-2 py-0.5"
+      >
+        <AnimatedDiffCount value={item.added ?? 0} tone="add" active={active} />
+        <AnimatedDiffCount value={item.removed ?? 0} tone="remove" active={active} />
+      </motion.span>
+    </div>
   );
 }
 
@@ -1234,69 +2222,64 @@ function CodeModeActivityStream({
   );
 }
 
-function CodeModeThinkingRow({ resetKey }: { resetKey: string }) {
-  const [seconds, setSeconds] = useState(1);
-
-  useEffect(() => {
-    setSeconds(1);
-    const timer = window.setInterval(() => {
-      setSeconds((value) => value + 1);
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [resetKey]);
-
-  return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -4 }}
-      transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-      className="mx-auto mb-4 flex w-full max-w-2xl items-center gap-2 text-left"
-    >
-      <Brain className="h-4 w-4 text-slate-400" strokeWidth={1.6} />
-      <ShiningText text="Thinking" className="text-[13px] font-semibold" />
-      <span className="text-[13px] font-semibold text-slate-500">{seconds}s</span>
-    </motion.div>
-  );
-}
-
 function ProjectThumbnail({
   projectId,
   updatedAt,
   alt,
   className,
+  priority = false,
 }: {
   projectId: string;
   updatedAt?: string;
   alt: string;
   className?: string;
+  priority?: boolean;
 }) {
   const [failed, setFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const src = projectThumbnailUrl(projectId, updatedAt);
 
   if (failed) {
     return (
       <div
         className={cn(
-          "grid h-full w-full place-items-center bg-[linear-gradient(135deg,#ffffff_0%,#f8fafc_46%,#eef2f7_100%)] text-[11px] font-bold uppercase tracking-[0.14em] text-slate-300",
+          "relative h-full w-full overflow-hidden bg-[linear-gradient(135deg,#ffffff_0%,#f8fafc_46%,#eef2f7_100%)]",
           className,
         )}
       >
-        Preview
+        <div className="absolute inset-3 rounded-[18px] border border-slate-200/80 bg-white/90 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+          <div className="mb-3 h-2.5 w-16 rounded-full bg-slate-200" />
+          <div className="mb-2 h-3 w-[70%] rounded-full bg-slate-900/80" />
+          <div className="mb-2 h-2 w-[88%] rounded-full bg-slate-200" />
+          <div className="h-2 w-[62%] rounded-full bg-slate-100" />
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <div className="h-16 rounded-[14px] bg-slate-100" />
+            <div className="h-16 rounded-[14px] bg-slate-50" />
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <img
-      src={src}
-      alt={alt}
-      loading="eager"
-      decoding="async"
-      onError={() => setFailed(true)}
-      className={className}
-    />
+    <div className={cn("relative h-full w-full overflow-hidden", className)}>
+      {!loaded ? (
+        <div className="absolute inset-0 animate-pulse bg-[linear-gradient(135deg,#ffffff_0%,#f1f5f9_50%,#e2e8f0_100%)]" />
+      ) : null}
+      <img
+        src={src}
+        alt={alt}
+        loading={priority ? "eager" : "lazy"}
+        decoding="async"
+        fetchPriority={priority ? "high" : "auto"}
+        onLoad={() => setLoaded(true)}
+        onError={() => setFailed(true)}
+        className={cn(
+          "h-full w-full object-cover transition-opacity duration-200",
+          loaded ? "opacity-100" : "opacity-0",
+        )}
+      />
+    </div>
   );
 }
 
@@ -1320,6 +2303,7 @@ function RecentProjectCard({
             updatedAt={item.updatedAt}
             alt={`${item.name} screenshot`}
             className="h-full w-full object-cover transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] group-hover:scale-[1.025]"
+            priority
           />
           <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0)_58%,rgba(255,255,255,0.78)_100%)]" />
         </div>
@@ -1358,18 +2342,23 @@ function ProjectCard({
 }) {
   return (
     <article className="group relative aspect-square overflow-visible rounded-[20px] border border-slate-200/70 bg-white/88 text-left shadow-[0_10px_28px_rgba(15,23,42,0.03)] transition-[border-color,box-shadow,transform] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-0.5 hover:border-slate-300/80 hover:shadow-[0_16px_38px_rgba(15,23,42,0.05)]">
-      <button type="button" onClick={onOpen} className="flex h-full w-full flex-col overflow-hidden rounded-[20px] p-1.5 text-left">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex h-full w-full flex-col overflow-hidden rounded-[20px] p-1.5 text-left"
+      >
         <div className="relative h-[76%] shrink-0 overflow-hidden rounded-[16px] border border-slate-200/70 bg-[linear-gradient(135deg,#ffffff_0%,#f8fafc_46%,#eef2f7_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.95)]">
           <ProjectThumbnail
             projectId={item.id}
             updatedAt={item.updatedAt}
             alt={`${item.name} screenshot`}
             className="h-full w-full object-cover transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] group-hover:scale-[1.025]"
+            priority
           />
           <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0)_58%,rgba(255,255,255,0.78)_100%)]" />
         </div>
-        <div className="flex min-h-0 flex-1 items-center px-1.5 pb-1 pt-1.5">
-          <div className="min-w-0">
+        <div className="flex min-h-0 flex-1 items-center gap-2 px-1.5 pb-1 pt-1.5">
+          <div className="min-w-0 flex-1">
             <p className="truncate text-[12.5px] font-bold leading-snug tracking-[-0.02em] text-slate-950">
               {item.name}
             </p>
@@ -1377,33 +2366,53 @@ function ProjectCard({
               {relativeTime(item.updatedAt)}
             </p>
           </div>
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-slate-200/70 bg-white/92 text-slate-400 transition-all group-hover:border-slate-300 group-hover:text-slate-900">
+            <FolderOpen className="h-3.5 w-3.5" />
+          </span>
         </div>
       </button>
+
       <button
         type="button"
         onClick={(event) => {
           event.stopPropagation();
           onToggleMenu();
         }}
-        className="absolute bottom-3 right-3 z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-200/70 bg-white/92 text-slate-500 shadow-[0_4px_12px_rgba(15,23,42,0.06)] backdrop-blur-md transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900"
+        className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full border border-slate-200/80 bg-white/95 text-slate-500 opacity-0 shadow-sm transition-all hover:border-slate-300 hover:text-slate-900 group-hover:opacity-100"
         aria-label={`Project actions for ${item.name}`}
       >
         <MoreHorizontal className="h-4 w-4" />
       </button>
+
       <AnimatePresence>
         {menuOpen ? (
           <motion.div
-            initial={{ opacity: 0, y: 8, scale: 0.96 }}
+            initial={{ opacity: 0, y: 6, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 6, scale: 0.96 }}
-            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-            className="absolute bottom-14 right-2 z-20 w-44 overflow-hidden rounded-[16px] border border-slate-200/80 bg-white/96 p-1.5 text-[12px] font-semibold text-slate-600 shadow-[0_18px 46px_rgba(15,23,42,0.12)] backdrop-blur-xl"
+            exit={{ opacity: 0, y: 4, scale: 0.96 }}
+            className="absolute right-3 top-12 z-20 w-40 overflow-hidden rounded-[14px] border border-slate-200 bg-white p-1 shadow-xl"
           >
-            <button type="button" onClick={() => { onRename(); onToggleMenu(); }} className="flex w-full items-center gap-2.5 rounded-[12px] px-3 py-2.5 text-left transition-colors hover:bg-slate-50 hover:text-slate-950">
+            <button
+              type="button"
+              onClick={onOpen}
+              className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold hover:bg-slate-50"
+            >
+              <FolderOpen className="h-3.5 w-3.5" />
+              Open
+            </button>
+            <button
+              type="button"
+              onClick={onRename}
+              className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold hover:bg-slate-50"
+            >
               <Pencil className="h-3.5 w-3.5" />
               Rename
             </button>
-            <button type="button" onClick={() => { onDelete(); onToggleMenu(); }} className="flex w-full items-center gap-2.5 rounded-[12px] px-3 py-2.5 text-left text-rose-500 transition-colors hover:bg-rose-50">
+            <button
+              type="button"
+              onClick={onDelete}
+              className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold text-rose-500 hover:bg-rose-50"
+            >
               <Trash2 className="h-3.5 w-3.5" />
               Delete
             </button>
@@ -1417,6 +2426,7 @@ function ProjectCard({
 function AllProjectsView({
   projects,
   openProjectMenu,
+  orbColorTheme = "default",
   onBack,
   onOpen,
   onToggleMenu,
@@ -1425,6 +2435,7 @@ function AllProjectsView({
 }: {
   projects: any[];
   openProjectMenu: string | null;
+  orbColorTheme?: OrbColorTheme;
   onBack: () => void;
   onOpen: (project: any) => void;
   onToggleMenu: (id: string) => void;
@@ -1472,28 +2483,52 @@ function AllProjectsView({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -10 }}
       transition={{ duration: 0.36, ease: [0.22, 1, 0.36, 1] }}
-      className="mx-auto flex w-full max-w-[1100px] flex-col pb-14 pt-4"
+      className="relative -mt-1 mx-auto flex w-full max-w-[760px] flex-col items-center pb-10 pt-0 text-center"
     >
-      <div className="mb-6 flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <button
-            type="button"
-            onClick={onBack}
-            className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-white/80 px-3 py-1.5 text-[11px] font-bold text-slate-500 shadow-[0_8px_20px_rgba(15,23,42,0.03)] transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-800"
-          >
-            ← Back
-          </button>
-          <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-300">Vibe Coder</p>
-          <h2 className="mt-1 text-[32px] font-bold tracking-[-0.04em] text-slate-950 sm:text-[36px]">All projects</h2>
-          <p className="mt-1 text-[13px] font-medium text-slate-500">
-            {filteredProjects.length} of {projects.length} workspaces
-          </p>
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-[-12%] -top-6 h-[180px] rounded-[48%] bg-[radial-gradient(ellipse_at_center,rgba(148,163,184,0.16)_0%,rgba(255,255,255,0)_70%)] blur-2xl"
+      />
+
+      <div className="relative z-[1] mb-2 flex w-full flex-col items-center">
+        <button
+          type="button"
+          onClick={onBack}
+          className="mb-1 self-start rounded-full border border-slate-200/80 bg-white/80 px-3 py-1.5 text-[11px] font-bold text-slate-500 shadow-[0_8px_20px_rgba(15,23,42,0.035)] transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-800"
+        >
+          ← Back
+        </button>
+
+        <div className="mb-0 flex justify-center">
+          <div className="scale-[0.55] origin-top">
+            <AiOrb colorTheme={orbColorTheme} />
+          </div>
         </div>
+        <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-300">
+          Recent projects
+        </p>
+        <h2 className="mt-0.5 text-3xl font-semibold tracking-[-0.055em] text-slate-950 sm:text-[2.35rem]">
+          All projects
+        </h2>
+        <p className="mt-1 max-w-2xl text-[13px] font-semibold text-slate-500 sm:text-[14px]">
+          {filteredProjects.length} of {projects.length} workspaces — reopen, rename, or continue building.
+        </p>
       </div>
 
-      <div className="overflow-hidden rounded-[28px] border border-slate-200/70 bg-white/72 shadow-[0_24px_80px_rgba(15,23,42,0.06)] backdrop-blur-xl">
-        <div className="grid gap-4 border-b border-slate-100/80 px-5 py-4 sm:px-6 lg:grid-cols-[220px_minmax(0,1fr)]">
-          <div className="flex flex-wrap gap-2 lg:flex-col">
+      <div className="relative z-[1] mb-3 w-full max-w-[700px] space-y-2">
+        <div className="relative">
+          <Search className="absolute left-4 top-1/2 h-4.5 w-4.5 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search by name, prompt, or id..."
+            className="w-full rounded-[24px] border border-slate-200/70 bg-white/92 py-4 pl-12 pr-4 text-[15px] font-medium text-slate-700 shadow-[0_10px_28px_rgba(15,23,42,0.03)] placeholder:text-slate-400 outline-none transition-all focus:border-slate-300"
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap justify-center gap-2">
             {([
               ["all", "All", statusCounts.all],
               ["ready", "Ready", statusCounts.ready],
@@ -1505,171 +2540,164 @@ function AllProjectsView({
                 type="button"
                 onClick={() => setStatusFilter(id)}
                 className={cn(
-                  "flex items-center justify-between rounded-[14px] border px-3 py-2 text-left text-[12px] font-bold transition-all duration-200",
+                  "inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-[12px] font-bold transition-all duration-200",
                   statusFilter === id
-                    ? "border-slate-900/90 bg-slate-900 text-white shadow-[0_10px_24px_rgba(15,23,42,0.14)]"
-                    : "border-slate-200/80 bg-white/80 text-slate-600 hover:border-slate-300 hover:text-slate-900",
+                    ? "border-slate-200 bg-white text-slate-900 shadow-[0_8px_20px_rgba(15,23,42,0.06)]"
+                    : "border-transparent bg-transparent text-slate-400 hover:border-slate-200/80 hover:bg-white/70 hover:text-slate-700",
                 )}
               >
                 <span>{label}</span>
-                <span className={cn("rounded-full px-2 py-0.5 text-[10px]", statusFilter === id ? "bg-white/15 text-white" : "bg-slate-100 text-slate-500")}>
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-0.5 text-[11px]",
+                    statusFilter === id
+                      ? "bg-slate-100 text-slate-600"
+                      : "bg-slate-100/70 text-slate-400",
+                  )}
+                >
                   {count}
                 </span>
               </button>
             ))}
           </div>
 
-          <div className="space-y-3">
-            <div className="relative">
-              <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search by name, prompt, or id..."
-                className="w-full rounded-[16px] border border-slate-200/80 bg-white/90 py-3 pl-11 pr-4 text-[13.5px] font-medium text-slate-700 placeholder:text-slate-400 outline-none transition-all focus:border-slate-400"
-              />
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <div className="inline-flex rounded-full border border-slate-200/80 bg-white/90 p-1">
-                <button
-                  type="button"
-                  onClick={() => setViewMode("grid")}
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-bold transition-colors duration-200",
-                    viewMode === "grid" ? "bg-slate-900 text-white" : "text-slate-500 hover:text-slate-800",
-                  )}
-                >
-                  <Grid3X3 className="h-3.5 w-3.5" />
-                  Grid
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode("list")}
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-bold transition-colors duration-200",
-                    viewMode === "list" ? "bg-slate-900 text-white" : "text-slate-500 hover:text-slate-800",
-                  )}
-                >
-                  <LayoutList className="h-3.5 w-3.5" />
-                  List
-                </button>
-              </div>
-              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
-                <Filter className="h-3.5 w-3.5" />
-                Sorted by recent
-              </span>
-            </div>
+          <div className="inline-flex rounded-full border border-slate-200/80 bg-white/88 p-1 shadow-[0_8px_20px_rgba(15,23,42,0.03)]">
+            <button
+              type="button"
+              onClick={() => setViewMode("grid")}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-bold transition-colors duration-200",
+                viewMode === "grid"
+                  ? "bg-slate-100 text-slate-900"
+                  : "text-slate-400 hover:text-slate-700",
+              )}
+            >
+              <Grid3X3 className="h-3.5 w-3.5" />
+              Grid
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("list")}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-bold transition-colors duration-200",
+                viewMode === "list"
+                  ? "bg-slate-100 text-slate-900"
+                  : "text-slate-400 hover:text-slate-700",
+              )}
+            >
+              <LayoutList className="h-3.5 w-3.5" />
+              List
+            </button>
           </div>
         </div>
+      </div>
 
-        <div className="clyra-visible-scrollbar min-h-[420px] overflow-auto p-5 sm:p-6">
-              {filteredProjects.length === 0 ? (
-                <div className="flex h-56 flex-col items-center justify-center rounded-[24px] border border-dashed border-slate-200 bg-slate-50/60 text-center">
-                  <div className="mb-3 grid h-12 w-12 place-items-center rounded-full bg-white text-slate-400 shadow-sm">
-                    <Search className="h-5 w-5" />
-                  </div>
-                  <p className="text-[14px] font-semibold text-slate-700">No projects found</p>
-                  <p className="mt-1 max-w-sm text-[12px] text-slate-400">
-                    {searchQuery || statusFilter !== "all"
-                      ? "Try clearing filters or using a different search term."
-                      : "Start a new Vibe project and it will appear here."}
-                  </p>
-                </div>
-              ) : viewMode === "grid" ? (
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                  {filteredProjects.map((project) => (
-                    <ProjectCard
-                      key={project.id}
-                      item={project}
-                      onOpen={() => onOpen(project)}
-                      menuOpen={openProjectMenu === project.id}
-                      onToggleMenu={() => onToggleMenu(project.id)}
-                      onRename={() => onRename(project)}
-                      onDelete={() => onDelete(project)}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {filteredProjects.map((project) => {
-                    return (
-                      <div
-                        key={project.id}
-                        className="group relative flex items-center gap-4 rounded-[18px] border border-slate-200/80 bg-white px-3 py-3 transition-all hover:border-slate-300 hover:shadow-[0_12px_30px_rgba(15,23,42,0.05)]"
-                      >
-                        <button type="button" onClick={() => onOpen(project)} className="flex min-w-0 flex-1 items-center gap-4 text-left">
-                          <div className="h-14 w-20 shrink-0 overflow-hidden rounded-[12px] border border-slate-200/70 bg-slate-50">
-                            <ProjectThumbnail
-                              projectId={project.id}
-                              updatedAt={project.updatedAt}
-                              alt=""
-                              className="h-full w-full object-cover"
-                            />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-[14px] font-bold text-slate-950">{project.name}</p>
-                            <p className="mt-0.5 truncate text-[12px] font-medium text-slate-500">{project.prompt || "Saved Vibe workspace"}</p>
-                          </div>
-                          <div className="hidden shrink-0 text-right sm:block">
-                            <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-slate-400">{project.status || "Draft"}</p>
-                            <p className="mt-1 text-[11px] font-semibold text-slate-400">{relativeTime(project.updatedAt)}</p>
-                          </div>
-                        </button>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => onRename(project)}
-                            className="rounded-full px-3 py-1.5 text-[11px] font-bold text-slate-500 opacity-0 transition-all hover:bg-slate-50 hover:text-slate-900 group-hover:opacity-100"
-                          >
-                            Rename
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onDelete(project)}
-                            className="rounded-full px-3 py-1.5 text-[11px] font-bold text-rose-500 opacity-0 transition-all hover:bg-rose-50 group-hover:opacity-100"
-                          >
-                            Delete
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onToggleMenu(project.id)}
-                            className="grid h-8 w-8 place-items-center rounded-full border border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-900"
-                            aria-label={`More actions for ${project.name}`}
-                          >
-                            <MoreHorizontal className="h-4 w-4" />
-                          </button>
-                        </div>
-                        <AnimatePresence>
-                          {openProjectMenu === project.id ? (
-                            <motion.div
-                              initial={{ opacity: 0, y: 6, scale: 0.96 }}
-                              animate={{ opacity: 1, y: 0, scale: 1 }}
-                              exit={{ opacity: 0, y: 4, scale: 0.96 }}
-                              className="absolute right-8 z-20 mt-24 w-40 overflow-hidden rounded-[14px] border border-slate-200 bg-white p-1 shadow-xl"
-                            >
-                              <button type="button" onClick={() => onOpen(project)} className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold hover:bg-slate-50">
-                                <FolderOpen className="h-3.5 w-3.5" />
-                                Open
-                              </button>
-                              <button type="button" onClick={() => onRename(project)} className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold hover:bg-slate-50">
-                                <Pencil className="h-3.5 w-3.5" />
-                                Rename
-                              </button>
-                              <button type="button" onClick={() => onDelete(project)} className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold text-rose-500 hover:bg-rose-50">
-                                <Trash2 className="h-3.5 w-3.5" />
-                                Delete
-                              </button>
-                            </motion.div>
-                          ) : null}
-                        </AnimatePresence>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+      <div className="relative z-[1] min-h-[360px] w-full max-w-[700px]">
+        {filteredProjects.length === 0 ? (
+          <div className="flex h-56 flex-col items-center justify-center rounded-[26px] border border-dashed border-slate-200 bg-white/75 text-center">
+            <div className="mb-3 grid h-12 w-12 place-items-center rounded-full bg-white text-slate-400 shadow-sm">
+              <Search className="h-5 w-5" />
             </div>
-        </div>
+            <p className="text-[14px] font-semibold text-slate-700">No projects found</p>
+            <p className="mt-1 max-w-sm text-[12px] text-slate-400">
+              {searchQuery || statusFilter !== "all"
+                ? "Try clearing filters or using a different search term."
+                : "Start a new Vibe project and it will appear here."}
+            </p>
+          </div>
+        ) : viewMode === "grid" ? (
+          <div className="grid gap-2.5 sm:grid-cols-3">
+            {filteredProjects.map((project) => (
+              <ProjectCard
+                key={project.id}
+                item={project}
+                onOpen={() => onOpen(project)}
+                menuOpen={openProjectMenu === project.id}
+                onToggleMenu={() => onToggleMenu(project.id)}
+                onRename={() => onRename(project)}
+                onDelete={() => onDelete(project)}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="space-y-2 text-left">
+            {filteredProjects.map((project) => {
+              return (
+                <div
+                  key={project.id}
+                  className="group relative flex items-center gap-4 rounded-[20px] border border-slate-200/70 bg-white/88 px-3 py-3 shadow-[0_10px_28px_rgba(15,23,42,0.03)] transition-all hover:-translate-y-0.5 hover:border-slate-300/80 hover:shadow-[0_16px_38px_rgba(15,23,42,0.05)]"
+                >
+                  <button type="button" onClick={() => onOpen(project)} className="flex min-w-0 flex-1 items-center gap-4 text-left">
+                    <div className="h-14 w-20 shrink-0 overflow-hidden rounded-[14px] border border-slate-200/70 bg-[linear-gradient(135deg,#ffffff_0%,#f8fafc_46%,#eef2f7_100%)]">
+                      <ProjectThumbnail
+                        projectId={project.id}
+                        updatedAt={project.updatedAt}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[14px] font-bold tracking-[-0.02em] text-slate-950">{project.name}</p>
+                      <p className="mt-0.5 truncate text-[12px] font-medium text-slate-500">{project.prompt || "Saved Vibe workspace"}</p>
+                    </div>
+                    <div className="hidden shrink-0 text-right sm:block">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-slate-400">{project.status || "Draft"}</p>
+                      <p className="mt-1 text-[11px] font-semibold text-slate-400">{relativeTime(project.updatedAt)}</p>
+                    </div>
+                  </button>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => onRename(project)}
+                      className="rounded-full px-3 py-1.5 text-[11px] font-bold text-slate-500 opacity-0 transition-all hover:bg-slate-50 hover:text-slate-900 group-hover:opacity-100"
+                    >
+                      Rename
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDelete(project)}
+                      className="rounded-full px-3 py-1.5 text-[11px] font-bold text-rose-500 opacity-0 transition-all hover:bg-rose-50 group-hover:opacity-100"
+                    >
+                      Delete
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onToggleMenu(project.id)}
+                      className="grid h-8 w-8 place-items-center rounded-full border border-slate-200/70 bg-white/92 text-slate-500 hover:border-slate-300 hover:text-slate-900"
+                      aria-label={`More actions for ${project.name}`}
+                    >
+                      <MoreHorizontal className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <AnimatePresence>
+                    {openProjectMenu === project.id ? (
+                      <motion.div
+                        initial={{ opacity: 0, y: 6, scale: 0.96 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 4, scale: 0.96 }}
+                        className="absolute right-8 z-20 mt-24 w-40 overflow-hidden rounded-[14px] border border-slate-200 bg-white p-1 shadow-xl"
+                      >
+                        <button type="button" onClick={() => onOpen(project)} className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold hover:bg-slate-50">
+                          <FolderOpen className="h-3.5 w-3.5" />
+                          Open
+                        </button>
+                        <button type="button" onClick={() => onRename(project)} className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold hover:bg-slate-50">
+                          <Pencil className="h-3.5 w-3.5" />
+                          Rename
+                        </button>
+                        <button type="button" onClick={() => onDelete(project)} className="flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-[12px] font-semibold text-rose-500 hover:bg-rose-50">
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Delete
+                        </button>
+                      </motion.div>
+                    ) : null}
+                  </AnimatePresence>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </motion.section>
   );
 }
@@ -2136,7 +3164,7 @@ function PlanReviewCard({
                     transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
                     className="overflow-visible whitespace-nowrap pr-2"
                   >
-                    <ShiningText text="Generating plan..." className="text-[15px] font-medium tracking-wide" />
+                    <ShiningText text="Generating plan..." preset="thinkingChat" className="!text-[15px] font-medium tracking-wide" />
                   </motion.div>
                 ) : (
                   <motion.p
@@ -2381,6 +3409,9 @@ export function Composer({
   className,
   compact = false,
   isGenerating = false,
+  isPaused = false,
+  onStop,
+  onResume,
   placeholder,
   activePlaceholder,
   planApprovalActive = false,
@@ -2397,6 +3428,9 @@ export function Composer({
   className?: string;
   compact?: boolean;
   isGenerating?: boolean;
+  isPaused?: boolean;
+  onStop?: () => void;
+  onResume?: () => void;
   placeholder?: string;
   activePlaceholder?: string;
   planApprovalActive?: boolean;
@@ -2528,7 +3562,7 @@ export function Composer({
             >
               <div className="flex items-center justify-between px-3 pb-1 pt-2">
                 <p className="text-[13px] font-semibold tracking-tight text-slate-900">
-                  Plan Ready
+                  Implement this plan?
                 </p>
                 <p className="text-[11px] font-medium text-slate-500">
                   <span className="rounded bg-white/70 px-1.5 py-0.5 shadow-sm">↑</span> / <span className="rounded bg-white/70 px-1.5 py-0.5 shadow-sm">↓</span> to select
@@ -2558,7 +3592,7 @@ export function Composer({
                       "text-[13.5px] font-medium tracking-tight transition-colors duration-200",
                       planChoice === "yes" ? "text-slate-900" : "text-slate-600",
                     )}>
-                      Approve and Build
+                      Yes, implement this plan
                     </span>
                   </div>
                   <span className={cn(
@@ -2623,7 +3657,7 @@ export function Composer({
                       onClick={chooseNo}
                       className="flex-1 truncate bg-transparent text-left text-[13.5px] font-medium tracking-tight text-slate-600 outline-none transition-colors"
                     >
-                      Request changes...
+                      No, tell Clyra what to do differently
                     </button>
                   )}
                 </div>
@@ -2635,6 +3669,7 @@ export function Composer({
       {!planApprovalActive ? (
         <>
           <textarea
+            data-agent-id="vibe-request-input"
             ref={textareaRef}
             value={value}
             onChange={(event) => {
@@ -2664,20 +3699,39 @@ export function Composer({
               <Paperclip className="h-5 w-5" />
             </button>
             <div className="flex shrink-0 items-center gap-1.5">
-              <ModeDropdown mode={mode as any} onChange={onModeChange as any} />
+              {VIBE_PLAN_REVIEW_ENABLED ? <ModeDropdown mode={mode as any} onChange={onModeChange as any} /> : null}
               <button
+                data-agent-id="vibe-send-request"
                 type="button"
-                disabled={disabled}
-                onClick={onSubmit}
-                aria-label="Send Vibe request"
+                disabled={isGenerating || isPaused ? false : disabled}
+                onClick={() => {
+                  if (isGenerating && onStop) {
+                    onStop();
+                    return;
+                  }
+                  if (isPaused && onResume) {
+                    onResume();
+                    return;
+                  }
+                  onSubmit();
+                }}
+                aria-label={
+                  isGenerating ? "Pause agent" : isPaused ? "Resume agent" : "Send Vibe request"
+                }
                 className={cn(
                   "grid h-10 w-10 shrink-0 place-items-center rounded-full border transition-[background-color,border-color,color] duration-[120ms] ease-out",
-                  disabled && !isGenerating
+                  disabled && !isGenerating && !isPaused
                     ? "border-transparent bg-transparent text-slate-300"
                     : "border-transparent bg-transparent text-slate-700 hover:border-slate-200/70 hover:bg-white/72 hover:text-slate-950",
                 )}
               >
-                {isGenerating ? <div className="h-3 w-3 rounded-[2px] bg-slate-700" /> : <Send className="h-5 w-5" />}
+                {isGenerating ? (
+                  <div className="h-3 w-3 rounded-[2px] bg-slate-700" />
+                ) : isPaused ? (
+                  <div className="ml-0.5 h-0 w-0 border-y-[6px] border-l-[10px] border-y-transparent border-l-slate-700" />
+                ) : (
+                  <Send className="h-5 w-5" />
+                )}
               </button>
             </div>
           </div>

@@ -87,6 +87,7 @@ export function AiOrb({ colorTheme = "default", introActive = false }: AiOrbProp
           <span className="clyra-ai-orb-lines" />
           <span className="clyra-ai-orb-rings" />
           <span className="clyra-ai-orb-glow" />
+          <span className="clyra-ai-orb-front" />
         </span>
         <svg className="clyra-ai-orb-filter" focusable="false">
           <filter

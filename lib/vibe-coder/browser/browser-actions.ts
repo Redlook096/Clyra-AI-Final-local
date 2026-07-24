@@ -1,7 +1,9 @@
-import { VibeBrowserAgentAction } from "../../../types/vibe-browser-agent";
+import { actOnManagedBrowser, type BrowserAction } from "../../openbrowser/browser-runtime";
+import { AgentBrowserController } from "./agent-browser-controller";
 
 export class BrowserActions {
-  static execute(action: VibeBrowserAgentAction) {
-    // Execute interactions against the active iframe
+  static async execute(action: BrowserAction, projectId?: string) {
+    if (projectId) return AgentBrowserController.act(projectId, action);
+    return actOnManagedBrowser(action);
   }
 }

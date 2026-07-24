@@ -17,6 +17,7 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
+  "include": ["src"],
   "exclude": [
     "dist",
     "Clyra-AI-Final",
@@ -24,6 +25,12 @@
     "vendor",
     "vibe-sandbox",
     "temp-repo",
-    "projects"
+    "projects",
+    ".venv*",
+    "venv",
+    "coverage",
+    "build",
+    "tmp",
+    "output"
   ]
 }

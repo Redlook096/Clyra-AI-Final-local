@@ -22,6 +22,7 @@ export type AgentStage =
   | "complete"
   | "failed"
   | "cancelled"
+  | "paused"
   | "running-command";
 
 export type VibeCoderEvent =

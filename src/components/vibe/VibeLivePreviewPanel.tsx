@@ -36,6 +36,8 @@ import {
 } from "@/lib/buildVibePreviewSrcDoc";
 import { sandboxVibePath } from "@/lib/parseVibeAgentContent";
 import { cn } from "@/lib/utils";
+import { isElectronRuntime } from "@/lib/electron-runtime";
+import { ElectronWebContentsSurface } from "@/components/ElectronWebContentsSurface";
 import { motion, AnimatePresence } from "framer-motion";
 
 const STORAGE_KEY = "clyra_vibe_preview_files";
@@ -895,37 +897,37 @@ export function VibeLivePreviewPanel({
   return (
     <div
       className={cn(
-        "flex h-full min-h-0 min-w-0 max-h-full flex-1 flex-col bg-[#f7f8fb]",
+        "flex h-full min-h-0 min-w-0 max-h-full flex-1 flex-col bg-transparent",
         isPreviewFullscreen &&
-          "fixed inset-0 z-[300] h-dvh max-h-none shadow-2xl",
+          "fixed inset-0 z-[300] h-dvh max-h-none bg-[#f8fafc] p-3 shadow-2xl sm:p-4",
         className,
       )}
       data-invert-ignore
     >
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-slate-200/75 bg-white/[0.88] px-2.5 shadow-[inset_0_-1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl">
+      <header className="flex h-[50px] shrink-0 items-center gap-2 border-b border-slate-200/80 bg-white px-2.5">
         <button
           type="button"
           onClick={goBack}
-          className="hidden rounded-lg p-1.5 text-slate-500 transition-all hover:bg-slate-100/80 hover:text-slate-800 hover:shadow-sm lg:inline-flex"
+          className="hidden h-8 w-8 place-items-center rounded-[8px] text-slate-500 transition-colors duration-150 hover:bg-[#f1f5f9] hover:text-slate-800 lg:grid"
           aria-label="Back"
         >
-          <ChevronLeft className="h-4.5 w-4.5" strokeWidth={2.2} />
+          <ChevronLeft className="h-4 w-4" strokeWidth={2.2} />
         </button>
         <button
           type="button"
           onClick={goForward}
-          className="hidden rounded-lg p-1.5 text-slate-500 transition-all hover:bg-slate-100/80 hover:text-slate-800 hover:shadow-sm lg:inline-flex"
+          className="hidden h-8 w-8 place-items-center rounded-[8px] text-slate-500 transition-colors duration-150 hover:bg-[#f1f5f9] hover:text-slate-800 lg:grid"
           aria-label="Forward"
         >
-          <ChevronRight className="h-4.5 w-4.5" strokeWidth={2.2} />
+          <ChevronRight className="h-4 w-4" strokeWidth={2.2} />
         </button>
         <button
           type="button"
           onClick={reload}
-          className="hidden rounded-lg p-1.5 text-slate-500 transition-all hover:bg-slate-100/80 hover:text-slate-800 hover:shadow-sm lg:inline-flex"
+          className="hidden h-8 w-8 place-items-center rounded-[8px] text-slate-500 transition-colors duration-150 hover:bg-[#f1f5f9] hover:text-slate-800 lg:grid"
           aria-label="Reload"
         >
-          <RotateCw className="h-4.5 w-4.5" strokeWidth={2} />
+          <RotateCw className="h-4 w-4" strokeWidth={2} />
         </button>
 
         <form
@@ -936,8 +938,8 @@ export function VibeLivePreviewPanel({
             type="text"
             value={addressInput}
             onChange={(e) => setAddressInput(e.target.value)}
-            placeholder="http://localhost:5174/sessions/..."
-            className="h-8 min-w-0 flex-1 rounded-full border border-slate-200/90 bg-white/95 px-4 text-center font-mono text-[12px] text-slate-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_8px_20px_rgba(15,23,42,0.045)] outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-300/60"
+            placeholder="/preview"
+            className="h-8 min-w-0 flex-1 rounded-[10px] border border-slate-200/80 bg-[#f8fafc] px-3 text-[12.5px] font-medium text-slate-700 outline-none transition-[border-color,background-color,box-shadow] duration-150 placeholder:text-slate-400 focus:border-slate-300 focus:bg-white focus:shadow-[0_0_0_3px_rgba(148,163,184,0.12)]"
             spellCheck={false}
             autoComplete="off"
             aria-label="Preview URL"
@@ -951,30 +953,30 @@ export function VibeLivePreviewPanel({
           type="button"
           onClick={() => setFocusMode((enabled) => !enabled)}
           className={cn(
-            "hidden rounded-lg p-1.5 transition-all lg:inline-flex",
+            "hidden h-8 w-8 place-items-center rounded-[8px] transition-colors duration-150 lg:grid",
             focusMode
-              ? "bg-blue-50 text-blue-600 ring-1 ring-blue-200"
-              : "text-slate-500 hover:bg-slate-100/80 hover:text-slate-800 hover:shadow-sm",
+              ? "bg-slate-900 text-white"
+              : "text-slate-500 hover:bg-[#f1f5f9] hover:text-slate-800",
           )}
           aria-label="Inspect preview elements"
           title="Inspect preview elements"
         >
-          <Crosshair className="h-4.5 w-4.5" strokeWidth={2} />
+          <Crosshair className="h-4 w-4" strokeWidth={2} />
         </button>
         <button
           type="button"
           onClick={testPreview}
           disabled={isTesting}
-          className="hidden rounded-lg p-1.5 text-slate-500 transition-all hover:bg-slate-100/80 hover:text-slate-800 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50 lg:inline-flex"
+          className="hidden h-8 w-8 place-items-center rounded-[8px] text-slate-500 transition-colors duration-150 hover:bg-[#f1f5f9] hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-50 lg:grid"
           aria-label="Test preview"
           title="Run Headful Mode preview test"
         >
-          <Sparkles className="h-4.5 w-4.5" strokeWidth={2} />
+          <Sparkles className="h-4 w-4" strokeWidth={2} />
         </button>
         <button
           type="button"
           onClick={() => setIsPreviewFullscreen((full) => !full)}
-          className="hidden rounded-lg p-1.5 text-slate-500 transition-all hover:bg-slate-100/80 hover:text-slate-800 hover:shadow-sm lg:inline-flex"
+          className="hidden h-8 w-8 place-items-center rounded-[8px] text-slate-500 transition-colors duration-150 hover:bg-[#f1f5f9] hover:text-slate-800 lg:grid"
           aria-label={
             isPreviewFullscreen
               ? "Exit full screen preview"
@@ -985,14 +987,14 @@ export function VibeLivePreviewPanel({
           }
         >
           {isPreviewFullscreen ? (
-            <Minimize2 className="h-4.5 w-4.5" strokeWidth={2} />
+            <Minimize2 className="h-4 w-4" strokeWidth={2} />
           ) : (
-            <Maximize2 className="h-4.5 w-4.5" strokeWidth={2} />
+            <Maximize2 className="h-4 w-4" strokeWidth={2} />
           )}
         </button>
 
         <div
-          className="ml-1 flex shrink-0 rounded-full border border-slate-200/90 bg-white/95 p-[2px] shadow-[0_8px_20px_rgba(15,23,42,0.055)] lg:ml-auto"
+          className="ml-1 flex shrink-0 rounded-[10px] border border-slate-200/80 bg-[#f8fafc] p-[2px] lg:ml-auto"
           role="tablist"
           aria-label="Workspace"
         >
@@ -1002,9 +1004,9 @@ export function VibeLivePreviewPanel({
             aria-selected={workspaceMode === "preview"}
             onClick={() => setWorkspaceMode("preview")}
             className={cn(
-              "flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold text-slate-500 transition-all duration-200",
+              "flex items-center gap-1 rounded-[8px] px-2.5 py-1 text-[11px] font-semibold text-slate-500 transition-colors duration-150",
               workspaceMode === "preview"
-                ? "bg-slate-900 text-white shadow-sm"
+                ? "bg-white text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.06)]"
                 : "hover:text-slate-700",
             )}
           >
@@ -1020,9 +1022,9 @@ export function VibeLivePreviewPanel({
             aria-selected={workspaceMode === "code"}
             onClick={() => setWorkspaceMode("code")}
             className={cn(
-              "flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold text-slate-500 transition-all duration-200",
+              "flex items-center gap-1 rounded-[8px] px-2.5 py-1 text-[11px] font-semibold text-slate-500 transition-colors duration-150",
               workspaceMode === "code"
-                ? "bg-slate-900 text-white shadow-sm"
+                ? "bg-white text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.06)]"
                 : "hover:text-slate-700",
             )}
           >
@@ -1168,14 +1170,19 @@ export function VibeLivePreviewPanel({
           {workspaceMode === "preview" ? (
             <div className="relative flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden bg-white">
               {showPreviewSyncOverlay && (
-                <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-white/80">
-                  <div className="flex items-center gap-2 text-slate-400 text-sm font-medium">
-                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
-                    Loading preview
+                <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center bg-white/88">
+                  <div className="flex max-w-sm flex-col items-center gap-3 rounded-[16px] border border-slate-200/80 bg-white px-6 py-5 text-center shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
+                    <div className="grid h-10 w-10 place-items-center rounded-full bg-[#f8fafc] ring-1 ring-slate-200/80">
+                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+                    </div>
+                    <div>
+                      <p className="text-[14px] font-semibold text-slate-900">Starting your preview</p>
+                      <p className="mt-1 text-[12.5px] text-slate-500">Syncing the live workspace session…</p>
+                    </div>
                   </div>
                 </div>
               )}
-              <div className="absolute left-3 top-3 z-40 flex max-w-[calc(100%-1.5rem)] items-center gap-2 rounded-full border border-slate-200/75 bg-white/[0.96] px-2 py-1 text-[11px] font-medium text-slate-600 shadow-[0_12px_30px_rgba(15,23,42,0.10)] backdrop-blur-xl">
+              <div className="absolute left-3 top-3 z-40 flex max-w-[calc(100%-1.5rem)] items-center gap-2 rounded-[10px] border border-slate-200/80 bg-white/96 px-2.5 py-1 text-[11px] font-medium text-slate-600 shadow-[0_8px_20px_rgba(15,23,42,0.08)]">
                 <span
                   className={cn(
                     "h-1.5 w-1.5 shrink-0 rounded-full",
@@ -1207,21 +1214,38 @@ export function VibeLivePreviewPanel({
                   </button>
                 ) : null}
               </div>
-              <iframe
-                key="vibe-preview-stable"
-                title="Vibe live preview"
-                ref={iframeRef}
-                src={sessionUrl || undefined}
-                srcDoc={
-                  !sessionUrl && sessionStatus === "offline"
-                    ? previewSrcDoc
-                    : undefined
-                }
-                onLoad={() => setPreviewLoaded(true)}
-                className="relative z-20 block min-h-0 min-w-0 w-full flex-1 border-0 bg-white"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                referrerPolicy="no-referrer"
-              />
+              {isElectronRuntime() && sessionUrl ? (
+                <ElectronWebContentsSurface
+                  key="vibe-preview-native"
+                  source={sessionUrl}
+                  title="Vibe live preview"
+                  surfaceId="live-preview"
+                  kind="preview"
+                  className="relative z-20 block min-h-0 min-w-0 w-full flex-1"
+                  fallback={
+                    <iframe
+                      title="Vibe live preview"
+                      src={sessionUrl}
+                      onLoad={() => setPreviewLoaded(true)}
+                      className="h-full w-full border-0 bg-white"
+                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                      referrerPolicy="no-referrer"
+                    />
+                  }
+                />
+              ) : (
+                <iframe
+                  key="vibe-preview-stable"
+                  title="Vibe live preview"
+                  ref={iframeRef}
+                  src={sessionUrl || undefined}
+                  srcDoc={!sessionUrl && sessionStatus === "offline" ? previewSrcDoc : undefined}
+                  onLoad={() => setPreviewLoaded(true)}
+                  className="relative z-20 block min-h-0 min-w-0 w-full flex-1 border-0 bg-white"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                  referrerPolicy="no-referrer"
+                />
+              )}
 
               {agentCursor.visible ? (
                 <div

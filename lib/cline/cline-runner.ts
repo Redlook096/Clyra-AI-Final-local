@@ -140,9 +140,13 @@ export class ClineRunner extends EventEmitter {
       name: this.options.prompt.slice(0, 70) || "Vibe project",
       prompt: this.options.prompt,
       mode: this.options.planMode ? "plan" : "fast",
-      status: "Ready",
+      // Legacy Cline has not been connected to Clyra's canonical validation
+      // runtime yet, so it must not claim the same verified Ready state as M1.
+      status: "Building",
       updatedAt: doneAt,
       harness: "cline-sdk",
+      lastBuildStatus: "unverified",
+      lastReviewStatus: "pending",
     });
   }
 

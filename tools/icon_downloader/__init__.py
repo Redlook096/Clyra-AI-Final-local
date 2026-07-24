@@ -1,0 +1,1 @@
+"""Website icon downloader utilities."""

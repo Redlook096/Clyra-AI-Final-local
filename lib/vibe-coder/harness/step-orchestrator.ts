@@ -30,7 +30,11 @@ function generateThinkingText(phase: string, plan?: VibePlan): string {
   }
 }
 
-export function useStepOrchestrator() {
+export function useStepOrchestrator(options?: { planReviewEnabled?: boolean }) {
+  // Plan review is opt-in. When the workspace has no approval surface (the
+  // current default), gating on `awaiting_approval` would pause the run on a
+  // card nobody can click — so the plan renders and the run continues.
+  const planReviewEnabled = options?.planReviewEnabled ?? false;
   const [activeBlocks, setActiveBlocks] = useState<RenderBlock[]>([]);
   const queueRef = useRef(new AgentRenderQueue((active) => {
     setActiveBlocks([...active]);
@@ -52,19 +56,6 @@ export function useStepOrchestrator() {
     });
 
     await delay(800);
-  }, [queue]);
-
-  const onPlanReady = useCallback(async (plan: VibePlan) => {
-    planRef.current = plan;
-    setCurrentPhase("awaiting_approval");
-
-    queue.enqueue({
-      id: `plan-card-${Date.now()}`,
-      type: "plan_card",
-      phase: "awaiting_approval",
-      renderPolicy: "requires_user_action",
-      payload: { plan }
-    });
   }, [queue]);
 
   const onPlanApproved = useCallback(async (plan: VibePlan) => {
@@ -99,6 +90,33 @@ export function useStepOrchestrator() {
     const thinkingBlock = queue.getActiveBlocks().find(b => b.type === "thinking");
     if (thinkingBlock) queue.finishBlock(thinkingBlock.id);
   }, [queue]);
+
+  const onPlanReady = useCallback(async (plan: VibePlan) => {
+    planRef.current = plan;
+
+    if (!planReviewEnabled) {
+      // No approval surface exists: show the plan as an informational card
+      // and proceed straight to execution instead of pausing the run.
+      queue.enqueue({
+        id: `plan-card-${Date.now()}`,
+        type: "plan_card",
+        phase: "task_group_preparing",
+        renderPolicy: "sequential",
+        payload: { plan }
+      });
+      await onPlanApproved(plan);
+      return;
+    }
+
+    setCurrentPhase("awaiting_approval");
+    queue.enqueue({
+      id: `plan-card-${Date.now()}`,
+      type: "plan_card",
+      phase: "awaiting_approval",
+      renderPolicy: "requires_user_action",
+      payload: { plan }
+    });
+  }, [onPlanApproved, planReviewEnabled, queue]);
 
   const onFilesReady = useCallback(async (patches: any[], plan: VibePlan) => {
     planRef.current = plan;

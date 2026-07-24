@@ -319,12 +319,17 @@ export function VibeMiniCodeBox({
         >
           <span className="flex min-w-0 flex-1 items-baseline gap-2 truncate">
             {!collapsed ? (
-              <ShiningText
-                text={file}
-                preset="thinkingChat"
-                play
-                className="max-w-[220px] truncate text-[13px] font-medium sm:max-w-[360px]"
-              />
+              <>
+                <ShiningText
+                  text="Editing"
+                  preset="thinkingChat"
+                  play
+                  className="shrink-0 text-[13px] font-medium"
+                />
+                <span className="max-w-[180px] truncate text-[13px] font-medium text-blue-600 sm:max-w-[280px]">
+                  {file}
+                </span>
+              </>
             ) : (
               <span className="truncate text-[13px] font-medium text-slate-700">
                 {file}

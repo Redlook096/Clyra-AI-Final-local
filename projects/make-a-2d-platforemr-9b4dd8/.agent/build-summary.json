@@ -1,7 +1,0 @@
-{
-  "status": "Ready",
-  "completedAt": "2026-07-01T01:25:48.352Z",
-  "validation": "npm run build exited with 0",
-  "preview": "http://127.0.0.1:5818",
-  "harness": "cline"
-}

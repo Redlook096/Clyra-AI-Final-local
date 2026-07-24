@@ -1,0 +1,334 @@
+Clyra Vibe Coder Technical Audit
+Audited: 2026-07-18
+Scope: the repository at /Users/lukesimpson/Documents/Coding Projects/Clyra-AI-Final.
+
+This report separates confirmed code-path facts from conclusions. The active default
+Vibe path is the external M1/OpenHands stack; Cline and the in-repo OpenHands adapter
+remain alternate harnesses and contain different behavior. A visible card, plan, or
+thumbnail is not treated as proof that an agent completed a task.
+
+## 1. Project overview
+
+Frameworks and dependencies
+- Frontend: React 19, TypeScript, Vite 6, Tailwind utilities, Motion/Framer Motion,
+  Lucide, Monaco and @xyflow/react. See package.json and src/main.tsx.
+- Backend: Express in server.ts, bundled by esbuild to dist/server.js. It serves the
+  Vite middleware/client and all /api routes.
+- Agent integrations: @openhands/typescript-client, @cline/sdk, the Cline CLI package,
+  and a separate local M1 project at /Users/lukesimpson/Documents/Coding Projects/Vibe Coder M1 Clyra.
+- There is no Electron/main-process application in this repository. The desktop shell
+  observed by users is outside this checkout; this repo is the local web/server app.
+
+Opening Vibe Coder
+- src/App.tsx lazy-loads src/components/VibeCoderWorkspace.tsx when the Vibe Coder
+  product tab is selected.
+- VibeCoderWorkspace is the current main UI. Its initial screen is a prompt composer,
+  plan-mode selector, recent-project cards and project menu.
+- The default server harness is M1 because lib/cline/cline-routes.ts uses
+  CLYRA_VIBE_HARNESS || "m1". The values "cline" and "openhands" select the older
+  in-repo harnesses instead.
+
+Storage
+- Project records live in projects/<project-id>/metadata.json.
+- Working files are projects/<project-id>/files/; plans, checkpoints, logs, preview
+  thumbnails and .agent state are siblings of that directory.
+- Browser/UI session snapshots use src/lib/vibe-coder/project-session.ts and local
+  storage plus /api/vibe/projects/:id/session. They are not a database.
+
+## 2. Complete architecture
+
+Default Plan Mode flow (confirmed):
+
+user prompt
+  -> VibeCoderWorkspace.handleSubmit (src/components/VibeCoderWorkspace.tsx)
+  -> preparePlanReview
+  -> POST /api/vibe/projects (server.ts creates project skeleton)
+  -> POST /api/vibe/plan (server.ts scans/classifies/generates plan JSON)
+  -> Plan review UI; optional full plan view and feedback revision
+  -> approval
+  -> POST /api/vibe/write-plan (writes plan.md, starter files, checkpoints/review artifacts)
+  -> POST /api/vibe/m1-launch
+  -> launchM1Conversation (lib/openhands/m1-launch.ts)
+  -> ensureM1Stack (lib/openhands/m1-stack.ts)
+  -> ConversationClient.createConversation against local M1 agent-server
+  -> iframe of M1 UI in VibeCoderWorkspace
+  -> external OpenHands agent reads/edits workspace
+  -> project metadata reconciliation (new watcher in m1-launch.ts)
+  -> project files/thumbnail/reopened project card.
+
+The preflight plan route is partly agentic and partly scripted. server.ts calls DeepSeek
+when DEEPSEEK_API_KEY is available, but it first builds a local markdown/task/file plan
+with buildPlanMarkdown, TaskGroupPlanner, FileSpecPlanner and buildStarterFiles. It also
+adds GeneratedComponentN.tsx files solely to satisfy a "minimum meaningful files" budget.
+Those artifacts can appear before the M1 agent has made any real change.
+
+The actual coding loop in the default mode is external: M1's OpenHands agent-server
+receives a conversation payload and can use file_editor, terminal, task_tracker,
+research_tool, browser_tool_set, canvas_ui and related M1 tools. Clyra embeds that UI;
+it does not currently stream a normalized event feed from the M1 conversation back into
+the Clyra task timeline.
+
+## 3. Agent harness
+
+M1 default harness
+- lib/openhands/m1-launch.ts constructs a ConversationClient and creates/resumes a
+  conversation. lib/openhands/openhands-payload.ts supplies the model, workspace,
+  confirmation policy and initial message.
+- M1 itself owns think/act/observe iterations. The conversation response includes a
+  max_iterations value of 100000. The local Clyra server does not independently enforce
+  per-step iteration or token limits for this default path.
+- M1 does revisit files and can use terminal/browser tools when its model chooses them.
+  Clyra cannot guarantee it will do so; the agent's own prompt and model decide.
+- launchM1Conversation resumes by saved conversationId or matching workspace. It does
+  not contain a Clyra-side correction loop after agent completion.
+- lib/openhands/m1-stack.ts starts the external npm run start stack, owns UI :8000,
+  agent-server :18000 and auxiliary ports. It now preserves active conversations on
+  health-probe misses and reconciles terminal execution state into metadata.
+
+Alternate Cline harness
+- lib/cline/cline-adapter.ts and lib/cline/cline-runner.ts create Cline SDK/CLI sessions.
+- lib/agent/plan-mode-orchestrator.ts prepares a plan and waits for approval; its
+  fallback buildDeepPlanTemplate is explicitly template-driven.
+- lib/agent/code-mode-orchestrator.ts drives Cline, polls workspace changes, runs
+  validation and emits VibeCoderEvent values. It has timeouts around 300-360 seconds.
+- Pause/resume/cancel API routes in lib/cline/cline-routes.ts are wired to these legacy
+  adapters. They do not fully control a default M1 conversation embedded in an iframe.
+
+Alternate OpenHands adapter
+- lib/openhands/openhands-adapter.ts maps OpenHands/WebSocket events via
+  lib/openhands/openhands-events.ts. It can collect file/terminal/preview evidence and
+  supports automatic continuation limits, but is not the default runtime path.
+
+Stopping/recovery
+- M1 status can be running, completed/finished, error, cancelled or stopped. The new
+  watcher in m1-launch.ts maps terminal states to project metadata; before that change
+  seeded preflight review files could say Ready even if M1 later errored.
+- A default M1 agent can be paused/taken over in the M1 UI, but Clyra's legacy pause
+  endpoints are not a reliable global pause/resume abstraction for it.
+
+## 4. Model integration and prompts
+
+Models and routes
+- server.ts /api/vibe/plan calls https://api.deepseek.com/chat/completions with
+  deepseek-reasoner when DEEPSEEK_API_KEY exists. It requests JSON with markdown,
+  taskGraph and starterFiles. Failure falls back silently to local plan/template output.
+- lib/openhands/m1-launch.ts chooses MY_LLM_MODEL, otherwise deepseek-chat when
+  DEEPSEEK_API_KEY exists, otherwise gpt-4.1-mini. It uses MY_LLM_API_KEY, DeepSeek,
+  OPENAI_API_KEY or ANTHROPIC_API_KEY and can use MY_LLM_BASE_URL.
+- The observed M1 landing-page run used openai/deepseek-chat through https://api.deepseek.com.
+
+Prompts/context
+- lib/openhands/openhands-payload.ts builds the conversation. m1-launch appends
+  "A review-approved implementation plan is saved in ../plan.md. Read and follow it
+  before changing files." to the actual user prompt.
+- The M1 system suffix in the observed conversation directs work inside the workspace
+  and asks for canvas_ui calls when a file/preview should be shown.
+- server.ts planner context includes scanProject(), classifyVibeRequest(), task/file
+  planning and the user prompt. No general context-window summarizer is implemented in
+  Clyra for default M1; OpenHands owns its own condenser/context mechanism.
+- M1 streams internally. Clyra's default wrapper mainly receives a conversation URL,
+  not per-token or structured tool events.
+
+Hard-coded content
+- buildPlanMarkdown, buildStarterFiles, TaskGroupPlanner/FileSpecPlanner and
+  buildDeepPlanTemplate are deterministic/fallback content sources.
+- UI queues such as src/components/vibe/VibeMiniCodeBox.tsx are presentation animation.
+  They can animate code/event data but are not proof of a live external tool call.
+
+## 5. Available tools
+
+Tool | Implementation | Reality/limits
+File listing/read/write/edit | M1 agent-server file_editor; legacy Cline SDK | M1 supports these in its workspace. Clyra's default wrapper does not independently inspect every edit.
+Search/grep/glob | M1 file_editor/codebase_search; Cline tools | Available to agents; no Clyra policy forces read-before-write in default M1.
+Terminal/dependencies | M1 terminal; lib/cline/cline-runner.ts | Real terminal capability, subject to M1 confirmation/security policy and environment.
+Planning/task tracker | M1 task_tracker; server.ts plan endpoint | Real in M1; Clyra planner has template fallback and synthetic budget gates.
+Web research/assets | M1 research_tool, website_theme_scraper, image/icon tools | Exposed to M1. Calls depend on agent/model choice; Clyra does not display all results in its wrapper.
+Browser/preview control | M1 browser_tool_set/canvas_ui; lib/openbrowser/browser-runtime.ts | M1 can control its own browser. Clyra's iframe is cross-origin and cannot reliably inspect/control M1 content.
+Preview server/thumbnail | server.ts captureProjectThumbnail and preview routes | Thumbnail generation is real, but a thumbnail can be captured before the agent is complete.
+Lint/test/build | code-mode-orchestrator and M1 terminal | No mandatory final validation is enforced for default M1 before marking UI complete.
+Checkpoints/rollback | server.ts /api/vibe/write-plan and projects/*/checkpoints | Initial checkpoint artifacts are real files, but not a full Git transactional rollback for arbitrary M1 work.
+Git | No dedicated default M1 Git API found in Clyra | Agents can use terminal Git if allowed. A first-class checkpoint/history UI is incomplete.
+
+Expected but missing as a unified default-harness capability: reliable Clyra-side event streaming,
+authoritative completion/validation gating, normalized pause/cancel/resume, full preview DOM access,
+per-tool permission UI, and a model-independent repair loop.
+
+## 6. File editing system
+
+- server.ts creates projects/<id>/files and writes metadata, .agent memory/state,
+  checkpoints and plans. /api/vibe/write-plan persists approved markdown and starter files.
+- M1's file_editor is responsible for real later edits. It can work across files, but Clyra
+  does not enforce that it reads every target before editing or validate each patch before save.
+- VibeMiniCodeBox presents active file, rolling +/− counters and streamed code. This is a
+  useful progress surface, but it is UI state rather than a universal write interceptor.
+- Conflict handling/malformed model output are handled by the external M1 or Cline SDK,
+  not by a common Clyra patch protocol.
+- Checkpoint files record the preflight state; no code establishes automatic diff-based
+  rollback after an M1 failure. User code protection is therefore incomplete.
+
+## 7. Terminal and runtime
+
+- Express is started by server.ts/dist/server.js. tools/dev-full.mjs is the dev entry;
+  package scripts also expose dev:source, dev:app and start.
+- Cline commands run through its runner/orchestrators with workspace paths under projects.
+- M1 is launched by lib/openhands/m1-stack.ts as npm run start in the external M1 root.
+  It expects :8000 (UI), :18000 (agent), :18001/:18002, :3001 and :19000 companions.
+- m1-stack historically frees ports with lsof/SIGTERM/SIGKILL. This is powerful and can
+  disrupt unrelated local work if those ports are in use. It now tears down known stale
+  start.py process trees rather than leaving uvx children behind.
+- The default cold-start allowance is now 90 seconds; /api/vibe/m1-launch waits up to
+  100 seconds. Earlier 20-second UI timeout created false failures.
+- Command output for the default M1 agent stays in M1. Clyra does not persist/stream all
+  it into its own console pane.
+
+## 8. Live preview and browser control
+
+- VibeCoderWorkspace receives m1 conversationUrl and renders an iframe of M1 UI.
+- M1 routes its UI through http://127.0.0.1:8000 and project workspaces through its own
+  agent/preview machinery. Clyra also has thumbnail capture in server.ts.
+- The Clyra browser runtime is lib/openbrowser/browser-runtime.ts. It uses persistent
+  Chromium and structured observation/actions, with MAX_AGENT_STEPS=48.
+- Direct Clyra inspection works for plan screens. Once M1's full iframe mounts, the
+  in-app browser inspector can time out while resolving the nested frame; this was
+  observed in the landing-page test. It is an integration limitation, not evidence that
+  a preview is complete.
+- Because the iframe is cross-origin/independent, Clyra cannot presently offer robust
+  DOM snapshots, console capture, visible cursor playback or end-to-end agent actions
+  inside M1 from the outer app.
+
+## 9. UI and user experience
+
+- src/components/VibeCoderWorkspace.tsx: welcome composer, Plan Mode, plan review,
+  revision affordance, recent project cards and iframe handoff.
+- Plan review is real: it waits for /api/vibe/plan, writes plan.md only after approval,
+  and opens M1 afterward. The browser test confirmed the plan card/full plan/approval
+  transition render.
+- src/components/vibe/VibeThoughtPanel.tsx provides an inline thinking disclosure;
+  src/components/vibe/VibeMiniCodeBox.tsx shows file edits; src/components/vibe-coder/
+  contains legacy thinking/preview/code UI.
+- The current thinking treatment is animated UI. The default M1 iframe owns detailed
+  agent progress, so outer Clyra cannot guarantee every shown thought corresponds to a
+  simultaneous M1 model action.
+- Project sessions can be restored, but the M1 iframe itself may need conversation resume
+  and external-service availability; switching tabs does not guarantee a live task resume.
+
+## 10. State, memory and persistence
+
+- Filesystem: project metadata, files, plan.md, checkpoints, .agent state/memory,
+  logs/validation.log and preview/thumbnail.png.
+- Browser/client: local project-session data and current workspace React state.
+- External M1: ~/.openhands/agent-canvas/dev_conversations/<conversation-id>/ contains
+  events, base_state, metadata, task list and persisted agent context.
+- Refresh/reopen can resume by conversationId or workspace path in m1-launch.ts.
+- An interrupted M1 task is not automatically resumed/repaired by Clyra; a successful
+  external conversation restore is required.
+
+## 11. Planning and validation
+
+- Plan mode writes a plan before M1 receives the approved coding task.
+- The planner can revise after user feedback, but it does not dynamically replan from
+  M1 tool failures in the outer Clyra harness.
+- The alternate code-mode orchestrator performs validation/build/preview attempts.
+  The default M1 path delegates validation to M1 and does not require an outer lint,
+  build, test or browser check before a project is visually presented.
+- This can report success too early. In the landing-page test, preflight artifacts
+  recorded Ready/passed while the actual M1 conversation subsequently reported error.
+  The metadata watcher added during this audit corrects future terminal state but does
+  not create a full validation gate.
+
+## 12. Current problems
+
+1. Preflight completion can masquerade as agent completion. Severity: critical.
+   Symptom: landing project contained seeded App.tsx/styles.css and a Ready review while
+   its M1 conversation execution_status was error.
+   Cause: /api/vibe/write-plan writes starter files/review artifacts before M1; no prior
+   M1 status reconciliation. Files: server.ts, VibeCoderWorkspace.tsx,
+   lib/openhands/m1-launch.ts.
+   Direction: use agent terminal state plus successful build/test/preview evidence as the
+   only Ready gate; retain preflight status as "planned", not "ready".
+
+2. M1 cold startup and restart race. Severity: critical.
+   Symptom: first launches can fail while UI shell loads; orphan uvx children can compete
+   for :18000 after a Clyra server restart.
+   Cause: 20-second API race and stale parent-only cleanup. Files: m1-stack.ts,
+   cline-routes.ts.
+   Direction: keep the longer cold-start window, tree-clean stale known launchers, and
+   add explicit user-visible stack readiness/progress instead of opaque skeleton waiting.
+
+3. Default M1 lacks Clyra-side event bridge. Severity: high.
+   Symptom: outer Vibe cannot authoritatively show every tool, edit, validation or error.
+   Cause: VibeCoderWorkspace embeds conversationUrl in an iframe without subscribing to
+   M1 events. Files: VibeCoderWorkspace.tsx, m1-launch.ts.
+   Direction: proxy a read-only conversation event stream and map it to Clyra task state.
+
+4. Planner uses synthetic/template artifacts. Severity: high.
+   Symptom: repetitive small React file sets, GeneratedComponent placeholders and generic
+   layouts can appear before real code.
+   Cause: server.ts buildStarterFiles/task/file planners and template fallbacks.
+   Direction: label these as scaffold proposals, remove budget-padding files, and require
+   M1 to inspect/revise the actual workspace.
+
+5. Default completion validation is weak. Severity: high.
+   Symptom: a project can have thumbnail/metadata without running app validation.
+   Cause: validation is delegated to external M1 and is not verified by Clyra.
+   Direction: collect build/lint/test results and a preview health/screenshot before Ready.
+
+6. Pause/resume semantics differ by harness. Severity: medium.
+   Symptom: legacy controls may not control the M1 iframe task.
+   Cause: routes target activeTasks adapters, while M1 conversations are external.
+   Direction: implement M1 conversation pause/cancel/resume proxy endpoints or present
+   only controls that are actually wired.
+
+7. Browser/preview observability is incomplete. Severity: medium.
+   Symptom: outer browser automation can freeze at the mounted M1 iframe.
+   Cause: frame isolation/cross-origin integration. Files: VibeCoderWorkspace.tsx,
+   lib/openbrowser/browser-runtime.ts.
+   Direction: expose M1 screenshot/DOM/event bridge or open preview in a separately
+   controllable same-origin surface.
+
+8. Resource pressure on 8 GB machines. Severity: medium.
+   Symptom: Clyra Vite, Express, uvx agent-server, ingress, static server, browser and
+   embedded iframe run together.
+   Cause: multi-process M1 stack plus duplicate/orphan risk.
+   Direction: one managed process group, lazy M1 startup, streaming logs, explicit stop,
+   and no duplicate thumbnail/browser work while an agent is active.
+
+## 13. Final technical map
+
+Read first:
+1. src/components/VibeCoderWorkspace.tsx
+2. server.ts
+3. lib/cline/cline-routes.ts
+4. lib/openhands/m1-launch.ts
+5. lib/openhands/m1-stack.ts
+6. lib/openhands/openhands-payload.ts
+7. lib/openhands/openhands-adapter.ts
+8. lib/agent/plan-mode-orchestrator.ts
+9. lib/agent/code-mode-orchestrator.ts
+10. src/hooks/useVibeCoderWorkspace.ts
+
+Working capabilities: project creation/persistence, plan rendering/revision/approval,
+starter-file persistence, M1 conversation creation when stack is ready, recent project
+cards, external M1 tool availability, and legacy Cline/OpenHands routes.
+
+Partially working: default M1 lifecycle, outer progress display, thumbnails, session
+restore, default validation, pause/resume, and preview control.
+
+Missing: a single reliable agent harness contract, Clyra-side tool/event observability,
+mandatory final validation evidence, unified recovery/replan loop, safe project-level
+rollback, and a controllable outer preview bridge.
+
+Five highest priorities
+1. Make Ready depend on verified M1 completion plus lint/build/test/preview evidence.
+2. Add an M1 conversation event/status proxy for Clyra UI.
+3. Stabilize cold start/process ownership and expose readiness progress.
+4. Replace scaffold/budget filler with real agent inspection and iterative correction.
+5. Unify pause/cancel/resume/checkpoint behavior across M1, Cline and OpenHands modes.
+
+Questions not answerable from this repository alone
+- Exact M1 agent-server internal retry/security behavior is in the separate external
+  Vibe Coder M1 Clyra checkout and its installed OpenHands packages.
+- Provider billing, rate limits and model-side failure details depend on environment keys
+  and the remote model service, not source code here.
+- Desktop shell lifecycle, permission prompts and OS-level browser integration are outside
+  this web application repository.

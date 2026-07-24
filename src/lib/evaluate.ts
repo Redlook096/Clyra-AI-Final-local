@@ -1,18 +1,52 @@
-import { evaluate as mathEvaluate } from "mathjs";
+function evaluateNumericExpression(expr: string): number {
+  const scope = {
+    sin: Math.sin,
+    cos: Math.cos,
+    tan: Math.tan,
+    log: Math.log10,
+    ln: Math.log,
+    sqrt: Math.sqrt,
+    abs: Math.abs,
+    pow: Math.pow,
+    pi: Math.PI,
+  };
+  const sanitized = expr
+    .replace(/\bpi\b/g, "scope.pi")
+    .replace(/\bsin\s*\(/g, "scope.sin(")
+    .replace(/\bcos\s*\(/g, "scope.cos(")
+    .replace(/\btan\s*\(/g, "scope.tan(")
+    .replace(/\blog\s*\(/g, "scope.log(")
+    .replace(/\bln\s*\(/g, "scope.ln(")
+    .replace(/\bsqrt\s*\(/g, "scope.sqrt(")
+    .replace(/\babs\s*\(/g, "scope.abs(")
+    .replace(/\^/g, "**");
+
+  if (!/^[\d+\-*/().,\s*scopeincotalgqrpbw]+$/i.test(sanitized)) {
+    throw new Error("Expression contains unsupported characters");
+  }
+
+  const result = Function("scope", `"use strict"; return (${sanitized});`)(scope);
+  if (typeof result !== "number") throw new Error("Invalid expression");
+  return result;
+}
 
 export function safeEvaluate(expr: string, angleMode: "deg" | "rad"): { value: number | null; error: string | null } {
   try {
-    // Replace × and ÷ with * and /
     let sanitized = expr
       .replace(/×/g, "*")
       .replace(/÷/g, "/")
       .replace(/π/g, "pi")
       .replace(/e(?![xp])/g, "2.718281828459045")
-      .replace(/sin\(/g, angleMode === "deg" ? "sin(deg " : "sin(")
-      .replace(/cos\(/g, angleMode === "deg" ? "cos(deg " : "cos(")
-      .replace(/tan\(/g, angleMode === "deg" ? "tan(deg " : "tan(");
+      .replace(/(\d+(?:\.\d+)?)%/g, "($1/100)");
 
-    const result = mathEvaluate(sanitized);
+    if (angleMode === "deg") {
+      sanitized = sanitized
+        .replace(/\bsin\(([^()]+)\)/g, "sin(($1)*pi/180)")
+        .replace(/\bcos\(([^()]+)\)/g, "cos(($1)*pi/180)")
+        .replace(/\btan\(([^()]+)\)/g, "tan(($1)*pi/180)");
+    }
+
+    const result = evaluateNumericExpression(sanitized);
 
     if (typeof result !== "number") {
       return { value: null, error: "Invalid expression" };

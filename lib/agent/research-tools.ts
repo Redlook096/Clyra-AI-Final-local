@@ -54,33 +54,68 @@ export type ResearchContext = {
 function extractUrlsFromDuckDuckGoHtml(html: string, max = 6) {
   const urls: string[] = [];
   const seen = new Set<string>();
-  const linkMatches = Array.from(html.matchAll(/href="\/l\/\?uddg=([^"&]+)[^"]*"/gi));
-  for (const match of linkMatches) {
+
+  const pushUrl = (raw: string) => {
     try {
-      const decoded = decodeURIComponent(match[1]);
-      if (!decoded.startsWith("http")) continue;
+      const decoded = decodeURIComponent(raw);
+      if (!decoded.startsWith("http")) return;
+      if (/duckduckgo\.com\/y\.js/i.test(decoded)) return;
+      if (/bing\.com\/aclick/i.test(decoded)) return;
       const url = decoded.split("#")[0];
       const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
-      if (!host || seen.has(host)) continue;
+      if (!host || host.includes("duckduckgo.com") || seen.has(host)) return;
       seen.add(host);
       urls.push(url);
     } catch {
       // ignore
     }
-    if (urls.length >= max) break;
+  };
+
+  for (const match of html.matchAll(/[?&]uddg=([^"'&\s]+)/gi)) {
+    pushUrl(match[1]);
+    if (urls.length >= max) return urls;
+  }
+  for (const match of html.matchAll(/href="(\/l\/\?uddg=[^"]+)"/gi)) {
+    const uddg = match[1].match(/uddg=([^&"]+)/i)?.[1];
+    if (uddg) pushUrl(uddg);
+    if (urls.length >= max) return urls;
+  }
+  for (const match of html.matchAll(/\((https?:\/\/[^\s)]+)\)/gi)) {
+    pushUrl(match[1]);
+    if (urls.length >= max) return urls;
+  }
+  for (const match of html.matchAll(/href="(https?:\/\/[^"]+)"/gi)) {
+    pushUrl(match[1]);
+    if (urls.length >= max) return urls;
   }
   return urls;
 }
 
 export async function webSearch(query: string, maxResults = 6): Promise<string[]> {
   const encoded = encodeURIComponent(query);
-  const ddgUrl = `https://r.jina.ai/http://https://duckduckgo.com/html/?q=${encoded}`;
-  const response = await fetch(ddgUrl, {
-    headers: { "user-agent": "Clyra-VibeCoder/1.0" },
-    signal: AbortSignal.timeout(15000),
-  });
-  const html = await response.text();
-  return extractUrlsFromDuckDuckGoHtml(html, maxResults);
+  const candidates = [
+    `https://r.jina.ai/http://https://html.duckduckgo.com/html/?q=${encoded}`,
+    `https://r.jina.ai/http://https://duckduckgo.com/html/?q=${encoded}`,
+    `https://html.duckduckgo.com/html/?q=${encoded}`,
+  ];
+
+  for (const ddgUrl of candidates) {
+    try {
+      const response = await fetch(ddgUrl, {
+        headers: {
+          "user-agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        },
+        signal: AbortSignal.timeout(15000),
+      });
+      const html = await response.text();
+      const urls = extractUrlsFromDuckDuckGoHtml(html, maxResults);
+      if (urls.length > 0) return urls;
+    } catch {
+      // try next source
+    }
+  }
+  return [];
 }
 
 export async function fetchUrl(url: string): Promise<{ url: string; text: string; blocked: boolean }> {
