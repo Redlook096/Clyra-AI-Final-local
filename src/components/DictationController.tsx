@@ -51,13 +51,23 @@ function saveHistory(entry: Record<string, unknown>) {
 
 const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
+function micSettingsAppLabel() {
+  // TCC lists the binary name: Electron during desktop:dev, Clyra when packaged.
+  return "Electron / Clyra";
+}
+
+function openOsMicrophoneSettings() {
+  void getElectronDesktop()?.dictation.openMicrophoneSettings?.().catch(() => undefined);
+}
+
 function userFacingDictationError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || "");
   if (/failed to fetch|networkerror|load failed/i.test(message)) {
     return "Clyra's local voice service is still starting. Try again in a moment.";
   }
-  if (/notallowederror|permission denied|microphone/i.test(message)) {
-    return "Microphone access is blocked. Enable Clyra in System Settings → Privacy & Security → Microphone.";
+  if (/notallowederror|permission denied|microphone|not-allowed/i.test(message)) {
+    openOsMicrophoneSettings();
+    return `Microphone access is blocked. Opening settings so you can enable ${micSettingsAppLabel()}.`;
   }
   if (/accessibility/i.test(message)) {
     return message;
@@ -67,8 +77,9 @@ function userFacingDictationError(error: unknown) {
 
 function microphoneDeniedMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || "");
-  if (/notallowederror|permission|denied|dismissed/i.test(message) || !message) {
-    return "Microphone access is blocked. Enable Clyra in System Settings → Privacy & Security → Microphone.";
+  openOsMicrophoneSettings();
+  if (/notallowederror|permission|denied|dismissed|not-allowed/i.test(message) || !message) {
+    return `Microphone access is blocked. Opening settings so you can enable ${micSettingsAppLabel()}.`;
   }
   return message;
 }
@@ -188,8 +199,14 @@ export function DictationController() {
     try {
       const desktop = getElectronDesktop();
       const permissions = await desktop?.dictation.ensurePermissions?.().catch(() => null);
-      if (permissions && permissions.ok === false && permissions.error) {
-        updateNative({ phase: "error", detail: String(permissions.error) });
+      if (permissions && permissions.ok === false) {
+        // Main process already opens OS settings; call again as a safety net
+        // when IPC returned before the Settings pane finished launching.
+        openOsMicrophoneSettings();
+        updateNative({
+          phase: "error",
+          detail: String(permissions.error || `Microphone access is blocked. Enable ${micSettingsAppLabel()} in system settings.`),
+        });
         return;
       }
 

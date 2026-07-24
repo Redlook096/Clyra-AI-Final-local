@@ -427,20 +427,20 @@ function SourcesPanel({
   }, [pasteTitle, pasteBody, onAdd]);
 
   return (
-    <div className="mx-auto flex w-full max-w-[720px] flex-col gap-5">
+    <div className="mx-auto flex w-full max-w-[760px] flex-col gap-4">
       <div>
-        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Resources</p>
-        <h2 className="mt-1.5 text-[22px] font-semibold tracking-[-0.03em] text-slate-950">Study material</h2>
+        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Nodes</p>
+        <h2 className="mt-1.5 text-[22px] font-semibold tracking-[-0.03em] text-slate-950">Resource graph</h2>
         <p className="mt-1 text-[13px] text-slate-500">
-          Add links, notes, or files. Toggle which ones ground chat, quizzes, flashcards, and notes.
+          Every source is a node you can add, pin into grounding, or remove. Chat, quizzes, cards, and notes only use selected nodes.
         </p>
       </div>
 
       <AnimatePresence>{error && <ErrorBanner message={error} onDismiss={() => setError("")} />}</AnimatePresence>
 
-      <div className="rounded-md border border-slate-200 bg-white p-4">
+      <div className="rounded-2xl border border-slate-200/90 bg-white p-4 shadow-[0_10px_28px_rgba(15,23,42,.04)]">
         <div className="flex items-center gap-2">
-          <div className="flex flex-1 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 focus-within:border-slate-400 focus-within:bg-white">
+          <div className="flex flex-1 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 focus-within:border-slate-400 focus-within:bg-white">
             <Link2 className="h-4 w-4 shrink-0 text-slate-400" />
             <input
               value={url}
@@ -461,7 +461,7 @@ function SourcesPanel({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900"
           >
             <Upload className="h-3.5 w-3.5" /> Upload file
           </button>
@@ -469,7 +469,7 @@ function SourcesPanel({
             type="button"
             onClick={() => setPasteOpen((open) => !open)}
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12px] font-medium transition-colors",
+              "inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[12px] font-medium transition-colors",
               pasteOpen
                 ? "border-slate-900 bg-slate-950 text-white"
                 : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900",
@@ -526,36 +526,39 @@ function SourcesPanel({
       {sources.length === 0 ? (
         <EmptyState
           icon={FileText}
-          title="No resources yet"
-          description="Add a URL, upload notes, or paste text so Study Pal has something to work from."
+          title="No nodes yet"
+          description="Add a URL, upload notes, or paste text. Each item becomes a node in this study graph."
         />
       ) : (
-        <div className="space-y-2">
+        <div className="grid gap-2.5 sm:grid-cols-2">
           {sources.map((source, index) => (
-            <div
+            <motion.div
               key={source.id}
+              layout
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
               className={cn(
-                "flex items-start gap-3 rounded-md border bg-white px-3.5 py-3 transition-colors",
-                source.selected ? "border-slate-300" : "border-slate-200 opacity-70",
+                "flex items-start gap-3 rounded-2xl border bg-white px-3.5 py-3.5 shadow-[0_6px_18px_rgba(15,23,42,.03)] transition-[border-color,box-shadow,opacity]",
+                source.selected ? "border-slate-300 shadow-[0_10px_24px_rgba(15,23,42,.06)]" : "border-slate-200/90 opacity-75",
               )}
             >
               <button
                 type="button"
                 onClick={() => onToggle(source.id)}
                 className={cn(
-                  "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded border text-[10px] font-bold transition-colors",
+                  "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md border text-[10px] font-bold transition-colors",
                   source.selected
                     ? "border-slate-900 bg-slate-950 text-white"
                     : "border-slate-300 bg-white text-transparent",
                 )}
-                aria-label={source.selected ? "Deselect source" : "Select source"}
+                aria-label={source.selected ? "Deselect node" : "Select node"}
               >
                 <Check className="h-3 w-3" />
               </button>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
-                    S{index + 1}
+                  <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
+                    N{index + 1}
                   </span>
                   <p className="truncate text-[13px] font-semibold text-slate-900">{source.title}</p>
                 </div>
@@ -566,12 +569,12 @@ function SourcesPanel({
               <button
                 type="button"
                 onClick={() => onRemove(source.id)}
-                className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
-                aria-label="Remove source"
+                className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                aria-label="Remove node"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
-            </div>
+            </motion.div>
           ))}
         </div>
       )}
@@ -1821,16 +1824,19 @@ function StudyWelcome({
 
           {sessions.length > 0 ? (
             <div className="mx-auto mt-10 w-full max-w-xl text-left">
-              <div className="mb-3 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
-                <History className="h-3.5 w-3.5" /> Recent sessions
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                  <History className="h-3.5 w-3.5" /> Previous sessions
+                </div>
+                <span className="text-[11px] font-medium text-slate-400">Auto-saved · {sessions.length}</span>
               </div>
-              <div className="space-y-1.5">
-                {sessions.slice(0, 6).map((session) => (
+              <div className="max-h-[240px] space-y-1.5 overflow-y-auto pr-1">
+                {sessions.slice(0, 12).map((session) => (
                   <div key={session.id} className="group flex items-center gap-1">
                     <button
                       type="button"
                       onClick={() => onOpenSession(session.id)}
-                      className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3.5 py-3 text-left transition-colors hover:border-slate-300"
+                      className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-[12px] border border-slate-200/80 bg-white px-3.5 py-3 text-left transition-colors duration-150 hover:border-slate-300 hover:bg-[#f8fafc]"
                     >
                       <span className="min-w-0">
                         <span className="block truncate text-[13px] font-semibold text-slate-900">{titleFromSession(session)}</span>
@@ -1843,7 +1849,7 @@ function StudyWelcome({
                     <button
                       type="button"
                       onClick={() => onDeleteSession(session.id)}
-                      className="rounded-md p-2 text-slate-300 opacity-0 transition-opacity hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
+                      className="rounded-[10px] p-2 text-slate-300 opacity-0 transition-opacity hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
                       aria-label="Delete session"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -1868,7 +1874,7 @@ const NAV_ITEMS: { id: TabId; label: string; icon: typeof MessageSquare }[] = [
   { id: "quiz", label: "Quiz", icon: ListChecks },
   { id: "flashcards", label: "Cards", icon: Layers },
   { id: "notes", label: "Notes", icon: NotebookPen },
-  { id: "sources", label: "Resources", icon: FileText },
+  { id: "sources", label: "Nodes", icon: FileText },
 ];
 
 export default function StudyPalWorkspace({
@@ -1880,10 +1886,13 @@ export default function StudyPalWorkspace({
 }) {
   const boot = useRef(loadWorkspace());
   const [sessions, setSessions] = useState<StudySession[]>(boot.current.sessions);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(boot.current.activeSessionId);
-  const [showWelcome, setShowWelcome] = useState(!boot.current.activeSessionId);
+  // Always land on the welcome screen when Study Pal opens. Sessions stay
+  // loaded for history; the user (or agentPrompt) chooses what to resume.
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [showWelcome, setShowWelcome] = useState(true);
   const [tab, setTab] = useState<TabId>("chat");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [hoveredNav, setHoveredNav] = useState<TabId | "new" | "history" | null>(null);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) || null,
@@ -1941,14 +1950,9 @@ export default function StudyPalWorkspace({
   useEffect(() => {
     const prompt = (agentPrompt || "").trim();
     if (!prompt) return;
-    if (!activeSessionId) {
-      createSession({ title: prompt.slice(0, 60) });
-      setTab("chat");
-      return;
-    }
-    setShowWelcome(false);
+    createSession({ title: prompt.slice(0, 60) });
     setTab("chat");
-  }, [agentPrompt, activeSessionId, createSession]);
+  }, [agentPrompt, createSession]);
 
   const openSession = useCallback((id: string) => {
     setActiveSessionId(id);
@@ -2017,7 +2021,6 @@ export default function StudyPalWorkspace({
     });
   }, [activeSessionId]);
 
-  const selectedCount = sources.filter((source) => source.selected).length;
   const orderedSessions = useMemo(
     () => [...sessions].sort((left, right) => right.updatedAt - left.updatedAt),
     [sessions],
@@ -2037,18 +2040,32 @@ export default function StudyPalWorkspace({
 
   return (
     <div className={cn("flex h-full min-h-0 w-full bg-[#f8fafc]", globalTabsVisible && "pt-1")}>
-      <nav className="flex w-[210px] shrink-0 flex-col border-r border-slate-200 bg-white max-md:w-[64px]">
-        <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-3 max-md:justify-center">
-          <span className="grid h-8 w-8 place-items-center rounded-md bg-slate-950 text-white">
-            <BookOpen className="h-4 w-4" />
+      <nav
+        className="relative z-10 flex w-[64px] shrink-0 flex-col items-center border-r border-slate-200/70 bg-transparent py-3"
+        aria-label="Study tools"
+      >
+        <div className="mb-3 grid h-10 w-10 place-items-center" title={titleFromSession(activeSession)}>
+          <span className="grid h-8 w-8 place-items-center rounded-full bg-slate-900 text-white shadow-[0_8px_18px_rgba(15,23,42,0.12)]">
+            <BookOpen className="h-3.5 w-3.5" />
           </span>
-          <div className="min-w-0 max-md:hidden">
-            <p className="text-[12px] font-semibold text-slate-900">Study Pal</p>
-            <p className="truncate text-[10px] text-slate-400">{titleFromSession(activeSession)}</p>
-          </div>
         </div>
 
-        <div className="flex flex-col gap-0.5 p-2">
+        <div
+          className="clyra-workflow-tabs clyra-workflow-tabs--vertical relative flex flex-col items-center gap-1 p-1"
+          onMouseLeave={() => setHoveredNav(null)}
+        >
+          {hoveredNav && NAV_ITEMS.some((item) => item.id === hoveredNav) && tab !== hoveredNav ? (
+            <motion.div
+              layoutId="study-nav-hover"
+              className="clyra-workflow-tab__hover pointer-events-none absolute left-1 right-1"
+              style={{
+                top: 4 + Math.max(0, NAV_ITEMS.findIndex((item) => item.id === hoveredNav)) * 44,
+                height: 40,
+                translate: "0 0",
+              }}
+              transition={{ type: "spring", stiffness: 520, damping: 38, mass: 0.35 }}
+            />
+          ) : null}
           {NAV_ITEMS.map((item) => {
             const active = tab === item.id;
             const Icon = item.icon;
@@ -2057,71 +2074,98 @@ export default function StudyPalWorkspace({
                 key={item.id}
                 type="button"
                 onClick={() => setTab(item.id)}
+                onMouseEnter={() => setHoveredNav(item.id)}
+                onFocus={() => setHoveredNav(item.id)}
+                aria-label={item.label}
+                aria-current={active ? "page" : undefined}
+                title={item.label}
                 className={cn(
-                  "relative flex items-center gap-2.5 rounded-md px-2.5 py-2 text-[12px] font-medium transition-colors max-md:justify-center",
-                  active ? "bg-slate-100 text-slate-950" : "text-slate-500 hover:bg-slate-50 hover:text-slate-800",
+                  "clyra-workflow-tab relative z-[1] !h-10 !w-10 !min-w-0 !rounded-full !p-0",
+                  active && "clyra-workflow-tab--active",
                 )}
               >
-                <Icon className="h-4 w-4 shrink-0" />
-                <span className="max-md:hidden">{item.label}</span>
-                {item.id === "sources" && sources.length > 0 ? (
-                  <span className="ml-auto rounded bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 max-md:hidden">
-                    {selectedCount}/{sources.length}
-                  </span>
+                {active ? (
+                  <motion.span
+                    layoutId="study-nav-active"
+                    className="absolute inset-[2px] rounded-full bg-white shadow-[0_1px_3px_rgba(15,23,42,0.08)] ring-1 ring-slate-200/80"
+                    transition={{ type: "spring", stiffness: 520, damping: 38, mass: 0.35 }}
+                  />
                 ) : null}
+                <Icon className="relative h-4 w-4" strokeWidth={active ? 2.15 : 1.9} />
               </button>
             );
           })}
         </div>
 
-        <div className="mt-auto border-t border-slate-100 p-2">
+        <div className="mt-auto flex flex-col items-center gap-1 pb-1">
           <button
             type="button"
             onClick={() => {
               setShowWelcome(true);
               setActiveSessionId(null);
             }}
-            className="mb-1 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-[12px] font-semibold text-slate-700 transition-colors hover:bg-slate-50 max-md:justify-center"
+            className="clyra-workflow-tab relative !h-10 !w-10 !min-w-0 !rounded-full !p-0"
             aria-label="New study"
+            title="New study"
           >
-            <Plus className="h-3.5 w-3.5" />
-            <span className="max-md:hidden">New study</span>
+            <Plus className="h-4 w-4" />
           </button>
           <button
             type="button"
             onClick={() => setHistoryOpen((open) => !open)}
-            className="mb-2 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-700 max-md:justify-center max-md:normal-case max-md:tracking-normal"
-            aria-label="Sessions"
+            className={cn(
+              "clyra-workflow-tab relative !h-10 !w-10 !min-w-0 !rounded-full !p-0",
+              historyOpen && "clyra-workflow-tab--active",
+            )}
+            aria-label="Previous sessions"
+            title="Previous sessions"
+            aria-expanded={historyOpen}
           >
-            <History className="h-3.5 w-3.5" />
-            <span className="max-md:hidden">Sessions</span>
+            <History className="h-4 w-4" />
           </button>
           <AnimatePresence initial={false}>
             {historyOpen ? (
-              <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="max-h-48 space-y-1 overflow-y-auto max-md:absolute max-md:bottom-16 max-md:left-16 max-md:z-20 max-md:w-56 max-md:rounded-md max-md:border max-md:border-slate-200 max-md:bg-white max-md:p-2 max-md:shadow-lg">
-                {orderedSessions.map((session) => (
-                  <div key={session.id} className="group flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => openSession(session.id)}
-                      className={cn(
-                        "min-w-0 flex-1 rounded-md px-2 py-1.5 text-left transition-colors",
-                        session.id === activeSessionId ? "bg-slate-100" : "hover:bg-slate-50",
-                      )}
-                    >
-                      <span className="block truncate text-[12px] font-medium text-slate-800">{titleFromSession(session)}</span>
-                      <span className="block text-[10px] text-slate-400">{formatSessionTime(session.updatedAt)}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => deleteSession(session.id)}
-                      className="rounded p-1 text-slate-300 opacity-0 transition-opacity hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
-                      aria-label="Delete session"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  </div>
-                ))}
+              <motion.div
+                initial={{ opacity: 0, x: -8, scale: 0.98 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, x: -6, scale: 0.98 }}
+                transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                className="absolute bottom-16 left-[72px] z-30 w-64 overflow-hidden rounded-[12px] border border-slate-200/80 bg-white p-2 shadow-[0_16px_40px_rgba(15,23,42,0.10)]"
+              >
+                <p className="px-2 pb-2 pt-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                  Auto-saved sessions
+                </p>
+                <div className="max-h-56 space-y-1 overflow-y-auto">
+                  {orderedSessions.length === 0 ? (
+                    <p className="px-2 py-3 text-[12px] text-slate-400">No sessions yet.</p>
+                  ) : (
+                    orderedSessions.map((session) => (
+                      <div key={session.id} className="group flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => openSession(session.id)}
+                          className={cn(
+                            "min-w-0 flex-1 rounded-[10px] px-2.5 py-2 text-left transition-colors duration-150",
+                            session.id === activeSessionId ? "bg-slate-100" : "hover:bg-[#f8fafc]",
+                          )}
+                        >
+                          <span className="block truncate text-[12.5px] font-semibold text-slate-800">
+                            {titleFromSession(session)}
+                          </span>
+                          <span className="block text-[10.5px] text-slate-400">{formatSessionTime(session.updatedAt)}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteSession(session.id)}
+                          className="rounded-md p-1.5 text-slate-300 opacity-0 transition-opacity hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
+                          aria-label="Delete session"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
               </motion.div>
             ) : null}
           </AnimatePresence>

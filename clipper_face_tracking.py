@@ -48,8 +48,8 @@ FACE_MODEL_URL = (
 )
 PROXY_HEIGHT = 480
 PROXY_FPS = 4.0
-PROXY_HEIGHT_SCAN = 360
-PROXY_FPS_SCAN = 2.5
+PROXY_HEIGHT_SCAN = 288
+PROXY_FPS_SCAN = 1.5
 DEAD_ZONE = 0.08  # 8% of crop size
 PREFERRED_FACE_Y = 0.38  # upper-middle of the vertical frame
 HEADROOM_FRAC = 0.22
@@ -1252,7 +1252,7 @@ def scan_people(
     os.makedirs(cache_root, exist_ok=True)
     if duration is None:
         # Soft default: scan first 3 minutes for picker UX.
-        duration = 180.0
+        duration = 90.0
     job_key = job_id or _cache_key(source, start, duration, "scan", None, 0, 0, "strict")
     job_dir = _job_cache_dir(cache_root, job_key)
     thumb_dir = os.path.join(job_dir, "thumbs")

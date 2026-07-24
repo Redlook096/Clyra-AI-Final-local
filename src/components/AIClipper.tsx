@@ -506,43 +506,62 @@ function ProcessingScreen({
   elapsed: number;
   onCancel: () => void;
 }) {
+  const finishing = progress >= 96 || activeStep === "complete";
   return createPortal(
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[9999] overflow-y-auto bg-white px-5 py-8">
-      <div className="mx-auto flex min-h-full w-full max-w-[760px] flex-col justify-center">
-        <section className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-[0_16px_44px_rgba(15,23,42,.06)] sm:p-8">
-        <div className="flex items-start justify-between">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600">AI Clip</p>
-            <h2 className="mt-3 text-[clamp(26px,5vw,40px)] font-semibold tracking-[-0.02em] text-slate-950">Finding your strongest moments</h2>
-            <p className="mt-2 text-[13px] text-slate-500">{status || "Preparing the source"}</p>
-          </div>
-          <button type="button" onClick={onCancel} className="grid h-10 w-10 place-items-center rounded-full border border-slate-200/80 bg-white text-slate-500 shadow-sm transition-colors duration-200 hover:bg-slate-50" aria-label="Cancel processing"><X className="h-4 w-4" /></button>
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[9999] grid place-items-center bg-[#f7f8fa]/80 px-5 backdrop-blur-[10px]"
+    >
+      <motion.section
+        initial={{ opacity: 0, y: 10, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+        className="w-full max-w-[380px] rounded-[20px] border border-slate-200/90 bg-white px-7 py-8 text-center shadow-[0_24px_60px_rgba(15,23,42,.08)]"
+      >
+        <div className="mx-auto mb-5 h-10 w-10 overflow-hidden rounded-full bg-slate-100">
+          <motion.div
+            className="h-full w-full rounded-full bg-gradient-to-br from-slate-300 via-slate-800 to-slate-500"
+            animate={{ rotate: finishing ? 0 : 360 }}
+            transition={{ repeat: finishing ? 0 : Infinity, duration: 1.4, ease: "linear" }}
+          />
         </div>
-        <div className="relative mt-10 h-2 overflow-hidden rounded-full bg-slate-100">
-          <motion.div className="relative h-full overflow-hidden rounded-full bg-slate-900" animate={{ width: `${Math.max(2, progress)}%` }} transition={{ duration: 0.22 }}><motion.span className="absolute inset-y-0 w-24 bg-white/35 blur-sm" animate={{ x: [-100, 760] }} transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }} /></motion.div>
+        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">AI Clip</p>
+        <h2 className="mt-2 text-[20px] font-semibold tracking-[-0.03em] text-slate-950">
+          {finishing ? "Finishing up" : "Finding your moments"}
+        </h2>
+        <p className="mt-2 text-[12px] font-medium leading-5 text-slate-500">
+          {status || "Preparing the source"}
+        </p>
+        <div className="relative mx-auto mt-6 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+          <motion.div
+            className="relative h-full overflow-hidden rounded-full bg-slate-900"
+            animate={{ width: `${Math.max(4, Math.min(100, progress))}%` }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+          >
+            {!finishing ? (
+              <motion.span
+                className="absolute inset-y-0 w-16 bg-white/40 blur-[2px]"
+                animate={{ x: [-40, 220] }}
+                transition={{ repeat: Infinity, duration: 1.15, ease: "linear" }}
+              />
+            ) : null}
+          </motion.div>
         </div>
-        <div className="mt-3 flex items-center justify-between text-[11px] font-medium text-slate-400">
-          <span>{readyCount ? `${readyCount} clip${readyCount === 1 ? "" : "s"} ready` : "Analysing source"}</span>
-          <span className="tabular-nums">{progress}% · {elapsed}s</span>
-        </div>
-        <ol className="mt-8 grid gap-2 sm:grid-cols-2">
-          {PIPELINE.slice(0, -1).map(([id, label]) => {
-            const activeIndex = PIPELINE.findIndex(([step]) => step === activeStep);
-            const index = PIPELINE.findIndex(([step]) => step === id);
-            const complete = activeIndex > index || activeStep === "complete";
-            const active = activeStep === id;
-            return (
-              <li key={id} className={cn("flex h-[54px] items-center gap-3 rounded-2xl border px-4 transition-colors duration-200", active ? "border-slate-200 bg-slate-50/70 text-slate-900 shadow-sm" : complete ? "border-emerald-100 bg-emerald-50/35 text-slate-500" : "border-transparent text-slate-400")}>
-                <span className={cn("grid h-6 w-6 place-items-center rounded-full border", complete ? "border-emerald-200 bg-emerald-50 text-emerald-600" : active ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white")}>
-                  {complete ? <Check className="h-3 w-3" /> : active ? <Loader2 className="h-3 w-3 animate-spin" /> : <span className="h-1.5 w-1.5 rounded-full bg-slate-300" />}
-                </span>
-                <span className={cn("text-[12px] font-medium", active && "text-slate-900")}>{label}</span>
-              </li>
-            );
-          })}
-        </ol>
-        </section>
-      </div>
+        <p className="mt-3 text-[10px] font-medium tabular-nums text-slate-400">
+          {readyCount ? `${readyCount} ready · ` : ""}{Math.round(progress)}% · {elapsed}s
+        </p>
+        {!finishing ? (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="mt-5 text-[11px] font-semibold text-slate-400 transition-colors hover:text-slate-700"
+          >
+            Cancel
+          </button>
+        ) : null}
+      </motion.section>
     </motion.div>,
     document.body,
   );
@@ -691,12 +710,16 @@ export default function AIClipper({
   const scanPeopleForUpload = async (uploadId?: string, signal?: AbortSignal) => {
     if (!uploadId) return;
     setPeopleScanning(true);
+    const timeout = window.setTimeout(() => {
+      // Soft wall so face scan stays near ≤2 minutes on 8GB machines.
+      task.current?.abort();
+    }, 110_000);
     try {
       const response = await fetch("/api/clipper/scan-people", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal,
-        body: JSON.stringify({ uploadId, maxPeople: 8 }),
+        body: JSON.stringify({ uploadId, maxPeople: 6, duration: 90 }),
       });
       if (!response.ok) {
         const detail = await response.json().catch(() => ({})) as { error?: string };
@@ -770,6 +793,7 @@ export default function AIClipper({
         console.warn("People scan skipped:", cause);
       }
     } finally {
+      window.clearTimeout(timeout);
       setPeopleScanning(false);
     }
   };
@@ -1145,33 +1169,27 @@ export default function AIClipper({
   ];
   const canContinue = wizardStep === 0 ? sourceReady && !uploading : wizardStep === 1 ? hasChosenObjective && Boolean(objective) : true;
   const createView = (
-    <div className="relative h-full overflow-y-auto bg-[#f8fafc] px-5 py-8 sm:px-8 lg:px-12">
-      <div className="mx-auto flex min-h-full w-full max-w-[1120px] flex-col justify-center">
-        <div className="mb-7 flex items-end justify-between gap-6 border-b border-slate-200 pb-6">
+    <div className="relative h-full overflow-hidden bg-[#f7f8fa] px-4 py-5 sm:px-6">
+      <div className="mx-auto flex h-full w-full max-w-[720px] flex-col">
+        <div className="mb-4 flex shrink-0 items-center justify-between gap-4">
           <div>
-            <div className="mb-4 flex items-center gap-2">
-              <span className="h-1.5 w-1.5 rounded-full bg-slate-900" />
-              <span className="text-[10px] font-bold uppercase tracking-[.17em] text-slate-400">AI Clipper</span>
-            </div>
-            <h1 className="text-[clamp(30px,4vw,48px)] font-semibold tracking-[-.035em] text-slate-950">Create vertical clips</h1>
-            <p className="mt-2 max-w-xl text-[13px] leading-6 text-slate-500">
-              Turn a YouTube link or local file into share-ready moments with timed captions and optional face tracking.
-            </p>
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">AI Clipper</p>
+            <h1 className="mt-1 text-[22px] font-semibold tracking-[-0.03em] text-slate-950 sm:text-[26px]">Create clips</h1>
           </div>
           {results.length ? (
             <button
               type="button"
               onClick={() => setView("results")}
-              className="hidden h-10 shrink-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-4 text-[10px] font-semibold text-slate-700 shadow-sm transition-colors hover:border-slate-400 sm:flex"
+              className="flex h-9 shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-semibold text-slate-600 shadow-sm transition-colors hover:border-slate-300"
             >
               <Clock3 className="h-3.5 w-3.5" />
-              Recent clips
+              Recent
             </button>
           ) : null}
         </div>
 
-        <div className="creator-setup-layout grid gap-5">
-          <ol className="space-y-2" aria-label="Clip setup">
+        <div className="creator-setup-layout grid min-h-0 flex-1 gap-4 overflow-hidden">
+          <ol className="clyra-visible-scrollbar space-y-1.5 overflow-y-auto pr-1" aria-label="Clip setup">
             {wizardMeta.map((item, index) => {
               const current = index === wizardStep;
               const complete = index < wizardStep;
@@ -1182,8 +1200,8 @@ export default function AIClipper({
                     type="button"
                     onClick={() => (clickable ? setWizardStep(index) : undefined)}
                     className={cn(
-                      "flex w-full items-start gap-3 rounded-md px-3 py-3 text-left transition-colors",
-                      current ? "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200" : "text-slate-400 hover:bg-white/70",
+                      "flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left transition-colors",
+                      current ? "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200" : "text-slate-400 hover:bg-white/80",
                     )}
                   >
                     <span className={cn(
@@ -1192,9 +1210,9 @@ export default function AIClipper({
                     )}>
                       {complete ? <Check className="h-3 w-3" /> : index + 1}
                     </span>
-                    <span>
-                      <span className="block text-[11px] font-semibold">{item.title}</span>
-                      <span className="mt-0.5 block text-[8px] leading-4 text-slate-400">{item.detail}</span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-[11px] font-semibold">{item.title}</span>
+                      <span className="mt-0.5 block truncate text-[9px] leading-4 text-slate-400">{item.detail}</span>
                     </span>
                   </button>
                 </li>
@@ -1204,20 +1222,20 @@ export default function AIClipper({
 
           <motion.section
             key={wizardStep}
-            initial={{ opacity: 0, y: 10 }}
+            initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.24, ease: [0.2, 0.8, 0.2, 1] }}
-            className="border-t border-slate-200 pt-6 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0"
+            transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
+            className="clyra-visible-scrollbar min-h-0 overflow-y-auto rounded-[16px] border border-slate-200/90 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,.04)] sm:p-5"
           >
-            <p className="text-[10px] font-bold uppercase tracking-[.14em] text-slate-400">Step {wizardStep + 1} of 4</p>
-            <h2 className="mt-2 text-[22px] font-semibold text-slate-950">{wizardMeta[wizardStep].title}</h2>
-            <p className="mt-1.5 max-w-lg text-[12px] leading-5 text-slate-500">{wizardMeta[wizardStep].detail}</p>
+            <p className="text-[9px] font-bold uppercase tracking-[.14em] text-slate-400">Step {wizardStep + 1} of 4</p>
+            <h2 className="mt-1.5 text-[18px] font-semibold tracking-[-0.02em] text-slate-950">{wizardMeta[wizardStep].title}</h2>
+            <p className="mt-1 max-w-md text-[11px] leading-5 text-slate-500">{wizardMeta[wizardStep].detail}</p>
 
-            <div className="mt-6">
+            <div className="mt-4">
               {wizardStep === 0 ? <SourcePicker source={draft.source} onSource={(source) => updateDraft("source", source)} onFile={(file) => void handleFile(file)} uploading={uploading} uploadProgress={uploadProgress} /> : null}
               {wizardStep === 1 ? (
                 <div>
-                  <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-2.5 sm:grid-cols-2">
                     {OBJECTIVES.map(([id, label]) => {
                       const meta = OBJECTIVE_DETAILS[id];
                       const Icon = meta.icon;
@@ -1231,29 +1249,29 @@ export default function AIClipper({
                             updateDraft("objective", id);
                           }}
                           className={cn(
-                            "min-h-[120px] rounded-md border p-4 text-left transition-[border-color,background-color,transform] duration-150 active:scale-[.99]",
-                            selected ? "border-slate-900 bg-white shadow-sm" : "border-slate-200 bg-white/60 hover:border-slate-400",
+                            "min-h-[96px] rounded-xl border p-3.5 text-left transition-[border-color,background-color,transform] duration-150 active:scale-[.99]",
+                            selected ? "border-slate-900 bg-white shadow-sm" : "border-slate-200 bg-slate-50/50 hover:border-slate-400",
                           )}
                         >
                           <div className="flex items-center justify-between">
-                            <span className="grid h-9 w-9 place-items-center rounded-md bg-slate-100 text-slate-700"><Icon className="h-4 w-4" /></span>
-                            {selected ? <Check className="h-4 w-4 text-slate-950" /> : null}
+                            <span className="grid h-8 w-8 place-items-center rounded-lg bg-slate-100 text-slate-700"><Icon className="h-3.5 w-3.5" /></span>
+                            {selected ? <Check className="h-3.5 w-3.5 text-slate-950" /> : null}
                           </div>
-                          <p className="mt-4 text-[13px] font-semibold text-slate-950">{id === "custom" ? "Describe it yourself" : label}</p>
-                          <p className="mt-1.5 text-[10px] leading-5 text-slate-500">{meta.detail}</p>
+                          <p className="mt-3 text-[12px] font-semibold text-slate-950">{id === "custom" ? "Describe it yourself" : label}</p>
+                          <p className="mt-1 text-[9px] leading-4 text-slate-500">{meta.detail}</p>
                         </button>
                       );
                     })}
                   </div>
                   {draft.objective === "custom" ? (
-                    <label className="mt-4 block">
-                      <span className="mb-2 block text-[10px] font-semibold text-slate-500">Custom direction</span>
+                    <label className="mt-3 block">
+                      <span className="mb-1.5 block text-[10px] font-semibold text-slate-500">Custom direction</span>
                       <textarea
                         value={draft.customObjective}
                         onChange={(event) => updateDraft("customObjective", event.target.value.slice(0, 500))}
-                        rows={3}
+                        rows={2}
                         placeholder="Find clear moments where the speaker explains a surprising idea…"
-                        className="w-full resize-none rounded-md border border-slate-200 bg-white px-3 py-3 text-[12px] leading-5 text-slate-700 outline-none focus:border-slate-400"
+                        className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-[12px] leading-5 text-slate-700 outline-none focus:border-slate-400"
                       />
                     </label>
                   ) : null}

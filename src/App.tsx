@@ -99,6 +99,7 @@ import { AiOrb, type OrbColorTheme } from "./components/AiOrb";
 import { getElectronDesktop } from "./lib/electron-runtime";
 import { VibeAgentMessageBody } from "./components/vibe/VibeAgentMessageBody";
 import { VibeLivePreviewPanel } from "./components/vibe/VibeLivePreviewPanel";
+import { WorkspaceTaskView, type TaskViewTab } from "./components/WorkspaceTaskView";
 import { buildLocalVibeFallbackResponse } from "./lib/buildLocalVibeFallback";
 import { VIBE_CURSOR_AGENT_SYSTEM_PROMPT } from "./lib/vibeAgentConstants";
 import { extractVibeFilesFromContent } from "./lib/parseVibeAgentContent";
@@ -222,17 +223,28 @@ function prepareVibeForBoot(
 ) {
   if (vibeBootPreparation) return vibeBootPreparation;
   vibeBootPreparation = (async () => {
+    let latest = 0;
     const report = (stage: number, progress: number) => {
+      latest = Math.max(latest, Math.min(0.99, progress));
       onProgress?.({
         stage,
-        progress,
+        progress: latest,
         label: VIBE_BOOT_STAGE_LABELS[Math.min(stage, VIBE_BOOT_STAGE_LABELS.length - 1)],
       });
     };
+    // Soft ticks while a long await is in flight so the bar never freezes
+    // on one label for tens of seconds.
+    const pulse = (stage: number, from: number, to: number, everyMs = 420) => {
+      let value = from;
+      const timer = window.setInterval(() => {
+        value = Math.min(to, value + (to - from) * 0.12);
+        report(stage, value);
+        if (value >= to - 0.001) window.clearInterval(timer);
+      }, everyMs);
+      return () => window.clearInterval(timer);
+    };
 
     report(0, 0.08);
-    // Focus boot on Vibe: warm its chunk + routes first. Other workspaces can
-    // stay lazy so this window is spent on the coding engine.
     const vibeChunk = loadVibeCoderWorkspace();
     report(1, 0.22);
     const routesWarm = fetch("/api/vibe/projects").catch(() => null);
@@ -250,10 +262,14 @@ function prepareVibeForBoot(
       .catch(() => ({ ready: false as const }));
 
     report(2, 0.42);
+    const stopChunkPulse = pulse(2, 0.42, 0.58, 380);
     await Promise.allSettled([vibeChunk, routesWarm]);
+    stopChunkPulse();
     report(3, 0.62);
 
+    const stopWarmPulse = pulse(3, 0.62, 0.84, 520);
     const warmupResult = await warmup;
+    stopWarmPulse();
     report(4, warmupResult.ready ? 0.88 : 0.78);
     const ready =
       warmupResult.ready ||
@@ -432,9 +448,9 @@ function BootIntroOverlay({
                   className="clyra-boot-progress__fill"
                   initial={false}
                   animate={{ scaleX: progress }}
-                  transition={{ duration: isComplete ? 1.82 : 1.7, ease: [0.22, 1, 0.36, 1] }}
+                  transition={{ duration: isComplete ? 0.9 : 0.55, ease: [0.22, 1, 0.36, 1] }}
                 >
-                  {!isComplete ? <span key={shinePass} className="clyra-boot-progress__shine" /> : null}
+                  {!isComplete ? <span className="clyra-boot-progress__shine" /> : null}
                 </motion.div>
               </div>
               {showStatus ? (
@@ -1755,16 +1771,19 @@ export default function App() {
     };
   }, [activeWorkspaceTab, isEmbeddedToolPreview]);
   const [isAppLauncherOpen, setIsAppLauncherOpen] = useState(false);
+  const [isTaskViewOpen, setIsTaskViewOpen] = useState(false);
+  const [visitedWorkspaceTabs, setVisitedWorkspaceTabs] = useState<WorkspaceTabId[]>(["chat"]);
+  const appLauncherChordRef = useRef(false);
   useLayoutEffect(() => {
-    if (isAppLauncherOpen) {
+    if (isAppLauncherOpen || isTaskViewOpen) {
       void getElectronDesktop()?.browser.setSurface({ visible: false });
     }
     window.dispatchEvent(
       new CustomEvent("clyra:native-surface-occlusion", {
-        detail: { occluded: isAppLauncherOpen },
+        detail: { occluded: isAppLauncherOpen || isTaskViewOpen },
       }),
     );
-  }, [isAppLauncherOpen]);
+  }, [isAppLauncherOpen, isTaskViewOpen]);
   const [workspaceChromeEngaged, setWorkspaceChromeEngaged] = useState(isEmbeddedToolPreview);
   const m1WorkspaceFrameRef = useRef<HTMLIFrameElement>(null);
   const [m1WorkspacePath, setM1WorkspacePath] = useState("/");
@@ -1962,7 +1981,7 @@ export default function App() {
       latestStage = Math.max(latestStage, stage);
       setIntroProgress(latestProgress);
       if (latestStage >= 0) setIntroStage(latestStage);
-      setIntroShinePass((pass) => pass + 1);
+      // Keep one continuous shine loop — remounting on every tick freezes the shimmer.
     };
 
     const finishBoot = () => {
@@ -2643,13 +2662,35 @@ export default function App() {
 
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      const key = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && key === "k") {
         e.preventDefault();
-        setIsAppLauncherOpen((current) => !current);
+        // Cmd/Ctrl+K opens the launcher. Pressing K again (with or without
+        // the modifier) while the launcher is open enters Task View.
+        if (isAppLauncherOpen || appLauncherChordRef.current || isTaskViewOpen) {
+          setIsAppLauncherOpen(false);
+          setIsTaskViewOpen((open) => !open);
+          appLauncherChordRef.current = false;
+        } else {
+          setIsAppLauncherOpen(true);
+          setIsTaskViewOpen(false);
+          appLauncherChordRef.current = true;
+          window.setTimeout(() => {
+            appLauncherChordRef.current = false;
+          }, 1200);
+        }
         setShowCommandPalette(false);
         requestAnimationFrame(() => textareaRef.current?.blur());
+      } else if (key === "k" && !e.ctrlKey && !e.metaKey && !e.altKey && isAppLauncherOpen) {
+        e.preventDefault();
+        setIsAppLauncherOpen(false);
+        setIsTaskViewOpen(true);
+        appLauncherChordRef.current = false;
+        setShowCommandPalette(false);
       } else if (e.key === "Escape") {
         setIsAppLauncherOpen(false);
+        setIsTaskViewOpen(false);
+        appLauncherChordRef.current = false;
       }
     };
     const handleWorkspaceMessage = (event: MessageEvent) => {
@@ -2669,7 +2710,7 @@ export default function App() {
       window.removeEventListener("keydown", handleGlobalKeyDown);
       window.removeEventListener("message", handleWorkspaceMessage);
     };
-  }, []);
+  }, [isAppLauncherOpen, isTaskViewOpen]);
 
   const isVibeComposerMode =
     activeWorkspaceTab === "vibe" &&
@@ -5213,7 +5254,11 @@ Please analyze the code you just wrote and fix this error.`;
   };
 
   const handleWorkspaceTabChange = (tabId: WorkspaceTabId) => {
-    if (tabId === activeWorkspaceTab) return;
+    setVisitedWorkspaceTabs((current) => (current.includes(tabId) ? current : [...current, tabId]));
+    if (tabId === activeWorkspaceTab) {
+      setIsTaskViewOpen(false);
+      return;
+    }
     const currentIsVibeChat = messages.some(
       (message) => message.assistantKind === "vibe",
     );
@@ -5231,6 +5276,7 @@ Please analyze the code you just wrote and fix this error.`;
       workspaceSwitchTimeoutRef.current = null;
     }, 860);
     setActiveWorkspaceTab(tabId);
+    setIsTaskViewOpen(false);
     setWorkspaceChromeEngaged(false);
     setSelectedCommand(null);
     setShowCommandPalette(false);
@@ -5316,6 +5362,78 @@ Please analyze the code you just wrote and fix this error.`;
           />
         ) : null}
       </AnimatePresence>
+      <WorkspaceTaskView
+        open={isTaskViewOpen}
+        activeId={activeWorkspaceTab}
+        onClose={() => setIsTaskViewOpen(false)}
+        onSelect={(id) => handleWorkspaceTabChange(id as WorkspaceTabId)}
+        onCloseTab={(id) => {
+          setVisitedWorkspaceTabs((current) => {
+            if (current.length <= 1) return current;
+            const next = current.filter((tab) => tab !== id);
+            if (id === activeWorkspaceTab && next[0]) {
+              handleWorkspaceTabChange(next[0]);
+            }
+            return next;
+          });
+        }}
+        tabs={visitedWorkspaceTabs.map((tabId): TaskViewTab => {
+          const meta: Record<WorkspaceTabId, { label: string; icon: React.ReactNode }> = {
+            chat: { label: "Chat", icon: <MessageCircleDashed className="h-3.5 w-3.5" /> },
+            vibe: { label: "Vibe Coder", icon: <Code2 className="h-3.5 w-3.5" /> },
+            clip: { label: "AI Clipper", icon: <Scissors className="h-3.5 w-3.5" /> },
+            browser: { label: "Browser", icon: <Globe className="h-3.5 w-3.5" /> },
+            study: { label: "Study Pal", icon: <GraduationCap className="h-3.5 w-3.5" /> },
+            "fake-text": { label: "Text Story", icon: <MessagesSquare className="h-3.5 w-3.5" /> },
+            "would-rather": { label: "Would You Rather", icon: <Heart className="h-3.5 w-3.5" /> },
+            "reddit-story": { label: "Reddit Story", icon: <MessagesSquare className="h-3.5 w-3.5" /> },
+          };
+          const info = meta[tabId] || { label: tabId, icon: <AppWindow className="h-3.5 w-3.5" /> };
+          return {
+            id: tabId,
+            label: info.label,
+            icon: info.icon,
+            preview: (
+              <div className="h-full w-full bg-white">
+                <Suspense fallback={<div className="h-full w-full bg-white" />}>
+                  {tabId === "vibe" ? (
+                    <VibeCoderWorkspace orbColorTheme={orbColorTheme} onEngaged={() => undefined} />
+                  ) : tabId === "clip" ? (
+                    <AIClipper embedded onEngaged={() => undefined} onClose={() => undefined} />
+                  ) : tabId === "browser" ? (
+                    <WebBrowserWorkspace />
+                  ) : tabId === "study" ? (
+                    <StudyPalWorkspace globalTabsVisible={false} />
+                  ) : tabId === "fake-text" || tabId === "would-rather" || tabId === "reddit-story" ? (
+                    <CreatorStudioWorkspace mode={tabId} onBack={() => undefined} />
+                  ) : (
+                    <div className="flex h-full flex-col bg-white px-8 pt-16">
+                      <div className="mx-auto mb-6 h-16 w-16 rounded-full bg-gradient-to-br from-emerald-200 to-teal-400 opacity-80" />
+                      <p className="text-center text-[28px] font-semibold tracking-tight text-slate-800">Hi there, I&apos;m Clyra</p>
+                      <p className="mt-2 text-center text-[14px] text-slate-500">What can I help you with today?</p>
+                      <div className="mx-auto mt-8 w-full max-w-xl space-y-3">
+                        {messages.slice(-4).map((message) => (
+                          <div
+                            key={message.id}
+                            className={cn(
+                              "rounded-2xl px-4 py-3 text-[13px] font-medium",
+                              message.role === "user"
+                                ? "ml-auto max-w-[80%] bg-[#f4f4f4] text-slate-800"
+                                : "mr-auto max-w-[90%] text-slate-600",
+                            )}
+                          >
+                            {String(message.content || "").slice(0, 180)}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </Suspense>
+              </div>
+            ),
+          };
+        })}
+      />
       {typeof document !== "undefined" &&
         createPortal(
           <AnimatePresence>
@@ -5908,7 +6026,7 @@ Please analyze the code you just wrote and fix this error.`;
                 "grid min-h-0 w-full flex-1 overflow-hidden",
                 "transition-[grid-template-columns] duration-[720ms] ease-[cubic-bezier(0.32,0.72,0,1)]",
                 keepWorkspacePreviewLayout
-                  ? "grid-cols-[minmax(260px,min(420px,34vw))_minmax(0,1fr)]"
+                  ? "grid-cols-[minmax(360px,min(32vw,420px))_minmax(620px,1fr)]"
                   : "grid-cols-[minmax(0,1fr)_0fr]",
               )}
             >
@@ -7281,7 +7399,7 @@ Please analyze the code you just wrote and fix this error.`;
               </div>
               <div
                 className={cn(
-                  "flex min-h-0 min-w-0 flex-col overflow-hidden bg-white transition-opacity duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
+                  "flex min-h-0 min-w-0 flex-col overflow-hidden bg-[#f8fafc] p-3 transition-opacity duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none sm:p-4",
                   showWorkspaceLivePreview
                     ? "pointer-events-auto opacity-100"
                     : "pointer-events-none opacity-0",
@@ -7289,12 +7407,14 @@ Please analyze the code you just wrote and fix this error.`;
                 aria-hidden={!showWorkspaceLivePreview}
               >
                 {showWorkspaceLivePreview ? (
-                  <VibeLivePreviewPanel
-                    filesByPath={vibePreviewFiles!}
-                    onAutoFix={handleAutoFix}
-                    setToastMessage={setToastMessage}
-                    onReferenceElement={handlePreviewElementReference}
-                  />
+                  <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[16px] border border-slate-200/80 bg-white shadow-[0_12px_40px_rgba(15,23,42,0.06)]">
+                    <VibeLivePreviewPanel
+                      filesByPath={vibePreviewFiles!}
+                      onAutoFix={handleAutoFix}
+                      setToastMessage={setToastMessage}
+                      onReferenceElement={handlePreviewElementReference}
+                    />
+                  </div>
                 ) : null}
               </div>
             </div>

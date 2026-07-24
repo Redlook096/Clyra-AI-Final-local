@@ -12,7 +12,6 @@ import { PreviewErrorOverlay } from "./PreviewErrorOverlay";
 import { PreviewIframe } from "./PreviewIframe";
 import { PreviewStatusOverlay } from "./PreviewStatusOverlay";
 import { PreviewHealthStatus } from "./PreviewHealthStatus";
-import { PreviewSkeletonLayout } from "./PreviewSkeletonLayout";
 
 interface VibeProjectPreviewTarget {
   id: string;
@@ -224,10 +223,10 @@ export function LivePreviewPanel({
       exit={{ opacity: 0, x: 48, scale: 0.975 }}
       transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
       className={cn(
-        "group flex min-w-0 flex-col overflow-hidden rounded-[34px] border border-slate-200/80 bg-white/88 shadow-[0_28px_100px_rgba(15,23,42,0.08)] backdrop-blur-xl",
+        "group flex min-w-0 flex-col overflow-hidden rounded-[16px] border border-slate-200/80 bg-white shadow-[0_12px_40px_rgba(15,23,42,0.06)]",
         !isFullscreen && "sticky top-0 h-[calc(100vh-6rem)] min-h-[580px]",
         isFullscreen &&
-          "fixed inset-4 top-4 z-[240] h-auto min-h-0 rounded-[32px] shadow-[0_38px_130px_rgba(15,23,42,0.16)]",
+          "fixed inset-3 top-3 z-[240] h-auto min-h-0 rounded-[16px] shadow-[0_24px_70px_rgba(15,23,42,0.12)]",
         className,
       )}
     >
@@ -257,6 +256,11 @@ export function LivePreviewPanel({
         onCopyUrl={copyUrl}
         isFullscreen={isFullscreen}
         onToggleFullscreen={() => setIsFullscreen((value) => !value)}
+        statusLabel={
+          session?.status && session.status !== "ready" && session.status !== "idle"
+            ? session.status.replaceAll("_", " ")
+            : undefined
+        }
       />
 
       {/* Preview viewport — overflow-hidden so iframe never causes outer scroll */}
@@ -275,7 +279,7 @@ export function LivePreviewPanel({
               title={`${project?.name ?? "Vibe"} preview`}
             />
           ) : error ? (
-            <PreviewSkeletonLayout message="Diagnosing preview issue…" />
+            <PreviewStatusOverlay status="build_failed" />
           ) : (
             <PreviewEmptyState />
           )}

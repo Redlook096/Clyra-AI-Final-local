@@ -168,18 +168,47 @@ function configureUiSession() {
   // only our local service can request media, while all remote embedded pages
   // remain in the isolated persistent browser session and follow its policy.
   const isClyraOrigin = (requestingUrl = "") => {
+    if (!requestingUrl) return false;
     try {
       const url = new URL(requestingUrl);
-      return (url.hostname === "127.0.0.1" || url.hostname === "localhost") && Number(url.port) === appPort;
+      const hostOk = url.hostname === "127.0.0.1" || url.hostname === "localhost";
+      if (!hostOk) return false;
+      const port = url.port ? Number(url.port) : (url.protocol === "https:" ? 443 : 80);
+      return port === appPort;
     } catch {
       return false;
     }
   };
-  session.defaultSession.setPermissionCheckHandler((_contents, permission, requestingOrigin) => (
-    permission === "media" && isClyraOrigin(requestingOrigin)
-  ));
-  session.defaultSession.setPermissionRequestHandler((_contents, permission, callback, details) => {
-    callback(permission === "media" && isClyraOrigin(details.requestingUrl));
+  const allowMediaFrom = (webContents, requestingOrigin, details = {}) => {
+    const candidates = [
+      requestingOrigin,
+      details.securityOrigin,
+      details.requestingUrl,
+    ];
+    try {
+      candidates.push(webContents?.getURL?.() || "");
+    } catch {
+      // Contents may already be destroyed during shutdown.
+    }
+    return candidates.some((candidate) => isClyraOrigin(String(candidate || "")));
+  };
+  session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
+    if (permission !== "media") return false;
+    // Chromium may pass mediaType=audio|video|unknown on the check path.
+    if (details?.mediaType === "video") return false;
+    return allowMediaFrom(webContents, requestingOrigin, details || {});
+  });
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    if (permission !== "media") {
+      callback(false);
+      return;
+    }
+    const mediaTypes = Array.isArray(details?.mediaTypes) ? details.mediaTypes : [];
+    if (mediaTypes.length > 0 && !mediaTypes.includes("audio")) {
+      callback(false);
+      return;
+    }
+    callback(allowMediaFrom(webContents, details?.requestingUrl || details?.securityOrigin, details || {}));
   });
 }
 

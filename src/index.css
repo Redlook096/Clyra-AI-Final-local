@@ -176,6 +176,37 @@
   transform: translateY(0) scaleX(1);
 }
 
+/* Vertical icon rail (Study Pal) — same hover paint, stacked. */
+.clyra-workflow-tabs--vertical {
+  display: flex;
+  max-width: none;
+  flex-direction: column;
+  overflow: visible;
+  border-radius: 18px;
+  padding: 4px;
+}
+
+.clyra-workflow-tabs--vertical::after {
+  display: none;
+}
+
+.clyra-workflow-tabs--vertical .clyra-workflow-tab {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  padding: 0;
+  border-radius: 999px;
+}
+
+.clyra-workflow-tabs--vertical .clyra-workflow-tab__hover {
+  left: 2px;
+  right: 2px;
+  top: auto;
+  height: 40px;
+  translate: 0 0;
+  border-radius: 999px;
+}
+
 .clyra-workflow-tabs::-webkit-scrollbar {
   display: none;
 }
@@ -977,6 +1008,28 @@
   margin-inline: auto;
   overflow: visible;
   contain: layout;
+}
+
+/* Settings orb carousel: tight 3-up stage, no welcome-screen shell sizing */
+.clyra-orb-carousel .clyra-ai-orb-shell {
+  --orb-size: 88px;
+  width: var(--orb-size);
+  height: var(--orb-size);
+  margin: 0;
+  contain: none;
+}
+
+.clyra-orb-carousel .clyra-ai-orb {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clyra-orb-carousel .clyra-ai-orb,
+  .clyra-orb-carousel .clyra-ai-orb::before,
+  .clyra-orb-carousel .clyra-ai-orb::after,
+  .clyra-orb-carousel .clyra-ai-orb-ball {
+    animation: none !important;
+  }
 }
 
 .clyra-ai-orb-shell--intro {
@@ -5149,7 +5202,7 @@ body,
   border-radius: inherit;
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .78), transparent);
   filter: blur(.25px);
-  animation: clyra-boot-progress-shimmer 1.7s cubic-bezier(.22, 1, .36, 1) both;
+  animation: clyra-boot-progress-shimmer 1.35s cubic-bezier(.22, 1, .36, 1) infinite;
   will-change: transform;
 }
 
@@ -5451,7 +5504,8 @@ body,
    the same side-by-side composition at reduced window sizes instead of
    reflowing the preview underneath and losing the timeline. */
 .creator-setup-layout {
-  grid-template-columns: minmax(148px, .62fr) minmax(260px, 1.5fr);
+  grid-template-columns: minmax(128px, .48fr) minmax(240px, 1.4fr);
+  align-items: stretch;
 }
 
 .creator-template-layout {
@@ -5543,9 +5597,13 @@ body,
   top: -42px;
 }
 
+.clyra-clip-source-preview {
+  max-height: min(28dvh, 220px);
+}
+
 .clyra-clip-source-preview__frame {
-  width: auto;
-  height: min(31dvh, 300px);
+  width: 100%;
+  height: min(28dvh, 220px);
   max-width: 100%;
   aspect-ratio: 16 / 9;
   margin-inline: auto;
@@ -5553,14 +5611,19 @@ body,
 
 @media (max-height: 820px) {
   .clyra-clipper-workspace { padding-top: 14px; padding-bottom: 14px; }
-  .clyra-clip-source-preview__frame { height: min(29dvh, 250px); }
+  .clyra-clip-source-preview__frame { height: min(24dvh, 180px); }
 }
 
 @media (max-height: 680px) {
   .clyra-clipper-workspace > header { padding-bottom: 10px; }
   .clyra-clipper-workspace > nav { padding-bottom: 10px; }
-  .clyra-clip-source-preview { margin-top: 12px; }
-  .clyra-clip-source-preview__frame { height: min(26dvh, 180px); }
+  .clyra-clip-source-preview { margin-top: 10px; }
+  .clyra-clip-source-preview__frame { height: min(22dvh, 150px); }
+}
+
+.creator-setup-layout {
+  grid-template-columns: minmax(128px, .48fr) minmax(240px, 1.4fr);
+  align-items: stretch;
 }
 
 /* The active composer is flush with the bottom edge; the latest-message

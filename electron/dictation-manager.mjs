@@ -134,21 +134,45 @@ export class DictationManager {
     return { microphone, accessibility, trusted: accessibility };
   }
 
+  micAppLabel() {
+    // In desktop:dev the binary is still Electron.app, so macOS lists
+    // "Electron" under Microphone — not the product name from app.setName.
+    return process.env.CLYRA_ELECTRON_DEV === "1" ? "Electron" : "Clyra";
+  }
+
+  micBlockedMessage(status = "denied") {
+    const appLabel = this.micAppLabel();
+    if (process.platform === "win32") {
+      return `Microphone access is blocked. Opening Windows Settings → Privacy → Microphone so you can enable ${appLabel}.`;
+    }
+    if (status === "restricted") {
+      return `Microphone access is restricted by the system. Opening System Settings → Privacy & Security → Microphone so you can enable ${appLabel}.`;
+    }
+    return `Microphone access is blocked. Opening System Settings → Privacy & Security → Microphone so you can turn on ${appLabel}.`;
+  }
+
   async ensureMicrophoneAccess() {
-    if (process.platform !== "darwin") return { ok: true, status: "unknown" };
+    if (process.platform === "linux") return { ok: true, status: "unknown" };
+    if (process.platform === "win32") {
+      // Windows has no askForMediaAccess equivalent; Chromium still prompts /
+      // respects Privacy → Microphone. If getUserMedia later fails we open
+      // Settings from the renderer path.
+      return { ok: true, status: "unknown" };
+    }
     let status = "unknown";
     try {
       status = systemPreferences.getMediaAccessStatus("microphone");
     } catch {
+      // Prefer attempting capture over hard-failing when the TCC query fails.
       return { ok: true, status: "unknown" };
     }
     if (status === "granted") return { ok: true, status };
     if (status === "denied" || status === "restricted") {
-      void this.openMicrophoneSettings();
+      await this.openMicrophoneSettings();
       return {
         ok: false,
         status,
-        error: "Microphone access is blocked. Opening System Settings → Privacy & Security → Microphone so you can enable Clyra.",
+        error: this.micBlockedMessage(status),
       };
     }
     // not-determined / unknown — prompt once from the main process so a
@@ -156,14 +180,20 @@ export class DictationManager {
     try {
       const granted = await systemPreferences.askForMediaAccess("microphone");
       if (granted) return { ok: true, status: "granted" };
-      void this.openMicrophoneSettings();
+      await this.openMicrophoneSettings();
       return {
         ok: false,
         status: "denied",
-        error: "Microphone permission was denied. Opening System Settings → Privacy & Security → Microphone.",
+        error: this.micBlockedMessage("denied"),
       };
-    } catch {
-      return { ok: true, status };
+    } catch (error) {
+      await this.openMicrophoneSettings();
+      return {
+        ok: false,
+        status: "denied",
+        error: this.micBlockedMessage("denied"),
+        cause: error instanceof Error ? error.message : String(error || ""),
+      };
     }
   }
 
@@ -182,20 +212,41 @@ export class DictationManager {
   }
 
   async openMicrophoneSettings() {
-    if (process.platform !== "darwin") return;
-    const candidates = [
-      "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
-      "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone",
-      "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension",
-    ];
-    for (const url of candidates) {
+    // Prefer the OS `open` / `start` CLIs — shell.openExternal often no-ops on
+    // preference-pane URLs (especially on newer macOS System Settings).
+    if (process.platform === "darwin") {
+      const candidates = [
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+        "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone",
+        "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension",
+      ];
+      for (const url of candidates) {
+        try {
+          await execFileAsync("open", [url], { timeout: 4_000 });
+          return { ok: true };
+        } catch {
+          // Try the next deep-link style used across macOS versions.
+        }
+      }
       try {
-        await shell.openExternal(url);
-        return;
+        await execFileAsync("open", ["/System/Library/PreferencePanes/Security.prefPane"], { timeout: 4_000 });
+        return { ok: true };
       } catch {
-        // Try the next deep-link style used across macOS versions.
+        await shell.openExternal(candidates[0]).catch(() => undefined);
+        return { ok: true };
       }
     }
+    if (process.platform === "win32") {
+      try {
+        // Empty title arg keeps `start` from treating the URI as a window title.
+        await execFileAsync("cmd", ["/c", "start", "", "ms-settings:privacy-microphone"], { timeout: 4_000, windowsHide: true });
+        return { ok: true };
+      } catch {
+        await shell.openExternal("ms-settings:privacy-microphone").catch(() => undefined);
+        return { ok: true };
+      }
+    }
+    return { ok: false };
   }
 
   ensurePill() {

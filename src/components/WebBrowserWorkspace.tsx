@@ -260,6 +260,13 @@ function initialAgentMessages(): AgentMessage[] {
   return [];
 }
 
+function looksLikeStaleFailureTranscript(messages: AgentMessage[]) {
+  if (!messages.length) return false;
+  const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+  if (!lastAssistant) return false;
+  return /could not complete|task not completed|was not verified|i stopped instead of looping|failed/i.test(lastAssistant.content);
+}
+
 type SideView = "agent" | "history" | "bookmarks" | "downloads" | "settings";
 
 const defaultSettings: BrowserSettings = {
@@ -671,7 +678,11 @@ export default function WebBrowserWorkspace() {
   const [cursor, setCursor] = useState<AgentCursor | null>(null);
   const [frameTick, setFrameTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [messages, setMessagesState] = useState<AgentMessage[]>(initialAgentMessages);
+  const [messages, setMessagesState] = useState<AgentMessage[]>(() => {
+    const saved = initialAgentMessages();
+    // Opening Browser on a finished failure should show welcome, not the last error.
+    return looksLikeStaleFailureTranscript(saved) ? [] : saved;
+  });
   const [runItems, setRunItems] = useState<RunItem[]>([]);
   const [runTask, setRunTask] = useState("");
   const [completedStepsOpen, setCompletedStepsOpen] = useState(false);
@@ -757,7 +768,16 @@ export default function WebBrowserWorkspace() {
   }, [requestBrowser]);
 
   const applyAgentSession = useCallback((session: AgentSession | null) => {
-    if (!session) return;
+    if (!session) {
+      setIsAgentBusy(false);
+      setAgentPhase("idle");
+      setAgentStatus("Ready");
+      if (!streamingRunRef.current) {
+        setRunItems([]);
+        setRunTask("");
+      }
+      return;
+    }
     const active = ACTIVE_AGENT_PHASES.has(session.status);
     setIsAgentBusy(active);
     setAgentPhase(session.status);
@@ -765,7 +785,7 @@ export default function WebBrowserWorkspace() {
     if (session.plan) setPlan(session.plan);
     setCriteriaProgress({ complete: session.completedCriteria || 0, total: session.totalCriteria || 0 });
     setFactCount(session.factCount || 0);
-    if (session.recentEvents?.length) {
+    if (active && session.recentEvents?.length) {
       setLiveSteps(session.recentEvents.slice(-20).map((event) => `${event.phase}: ${event.message}`));
       // While an SSE stream is live it owns the run feed; the polled session
       // is only used to rebuild it after a reload/reconnect.
@@ -773,27 +793,19 @@ export default function WebBrowserWorkspace() {
         setRunTask(session.task || "");
         setRunItems(session.recentEvents.reduce((acc, event) => reduceRunItems(acc, event), [] as RunItem[]));
       }
+    } else if (!streamingRunRef.current) {
+      // Idle reopen must not resurrect a finished Failed run card.
+      setRunItems([]);
+      setRunTask("");
+      setLiveSteps([]);
     }
-    if (!active && session.result?.message && !handledAgentSessionsRef.current.has(session.id)) {
-      handledAgentSessionsRef.current.add(session.id);
-      setMessages((current) => {
-        const alreadyPresent = current.some((message) => message.role === "assistant" && message.content === session.result?.message);
-        if (alreadyPresent) return current;
-        return [
-          ...current,
-          {
-            id: `session-${session.id}`,
-            role: "assistant" as const,
-            content: session.result.message,
-            steps: session.result.steps,
-            facts: session.result.facts,
-          },
-        ].slice(-60);
-      });
+    if (!active) {
+      // Mark finished sessions handled without injecting them into chat on open.
+      if (session.id) handledAgentSessionsRef.current.add(session.id);
       agentOriginTabRef.current = null;
       setAgentControlledTabId(null);
     }
-  }, [setMessages]);
+  }, []);
 
   const syncAgentSession = useCallback(async () => {
     try {
@@ -1062,6 +1074,8 @@ export default function WebBrowserWorkspace() {
         setAgentStatus("Ready");
         setAgentControlledTabId(null);
         agentOriginTabRef.current = null;
+        setRunItems([]);
+        setRunTask("");
         // A completed task hands the page straight back to the user.  Leaving
         // the last cursor coordinate on screen made an idle browser look as if
         // the agent still had the controls.
@@ -1660,7 +1674,7 @@ export default function WebBrowserWorkspace() {
                         );
                       })}
 
-                      {isAgentBusy || (runItems.length > 0 && messages.length > 0) ? (
+                      {isAgentBusy ? (
                         <AgentRunSection
                           task={runTask || browserState?.agent.task || ""}
                           active={isAgentBusy}

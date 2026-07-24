@@ -142,7 +142,13 @@
         "dmg",
         "zip"
       ],
-      "hardenedRuntime": true
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Clyra needs microphone access for Cmd+Shift+K dictation and Voice Call.",
+        "NSAppleEventsUsageDescription": "Clyra needs Accessibility / Apple Events access to paste dictation into other apps."
+      }
     },
     "win": {
       "target": [
