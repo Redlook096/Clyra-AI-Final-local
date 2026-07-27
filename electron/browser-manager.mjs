@@ -296,7 +296,8 @@ export class ChromiumBrowserManager {
     const modifier = process.platform === "darwin" ? input.meta : input.control;
     const key = String(input.key || "").toLowerCase();
     if (!modifier && key !== "f12") return;
-    if (modifier && key === "l") this.uiView.webContents.send("browser:focus-address");
+    if (modifier && key === "j") this.uiView.webContents.send("taskview:toggle");
+    else if (modifier && key === "l") this.uiView.webContents.send("browser:focus-address");
     else if (modifier && key === "t") void this.createTab();
     else if (modifier && input.shift && key === "t") void this.restoreClosedTab();
     else if (modifier && key === "w") void this.closeTab(this.activeTabId);

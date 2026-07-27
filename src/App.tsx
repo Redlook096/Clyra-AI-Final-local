@@ -99,7 +99,8 @@ import { AiOrb, type OrbColorTheme } from "./components/AiOrb";
 import { getElectronDesktop } from "./lib/electron-runtime";
 import { VibeAgentMessageBody } from "./components/vibe/VibeAgentMessageBody";
 import { VibeLivePreviewPanel } from "./components/vibe/VibeLivePreviewPanel";
-import { WorkspaceTaskView, type TaskViewTab } from "./components/WorkspaceTaskView";
+import { WorkspaceTaskView, type TaskViewPreview, type TaskViewTab } from "./components/WorkspaceTaskView";
+import { buildWelcomeRows } from "./features/chat/welcomeSuggestions";
 import { buildLocalVibeFallbackResponse } from "./lib/buildLocalVibeFallback";
 import { VIBE_CURSOR_AGENT_SYSTEM_PROMPT } from "./lib/vibeAgentConstants";
 import { extractVibeFilesFromContent } from "./lib/parseVibeAgentContent";
@@ -267,7 +268,7 @@ function prepareVibeForBoot(
     stopChunkPulse();
     report(3, 0.62);
 
-    const stopWarmPulse = pulse(3, 0.62, 0.84, 520);
+    const stopWarmPulse = pulse(3, 0.62, 0.9, 460);
     const warmupResult = await warmup;
     stopWarmPulse();
     report(4, warmupResult.ready ? 0.88 : 0.78);
@@ -1773,7 +1774,47 @@ export default function App() {
   const [isAppLauncherOpen, setIsAppLauncherOpen] = useState(false);
   const [isTaskViewOpen, setIsTaskViewOpen] = useState(false);
   const [visitedWorkspaceTabs, setVisitedWorkspaceTabs] = useState<WorkspaceTabId[]>(["chat"]);
+  const [taskViewPreviews, setTaskViewPreviews] = useState<Record<string, TaskViewPreview>>({});
+  const taskViewSelectionRef = useRef(false);
   const appLauncherChordRef = useRef(false);
+  const workspaceSceneRef = useRef<HTMLDivElement>(null);
+  const captureWorkspacePreview = useCallback(async (tabId: WorkspaceTabId) => {
+    const desktop = getElectronDesktop();
+    const scene = workspaceSceneRef.current?.getBoundingClientRect();
+    if (!desktop?.taskView || !scene || scene.width < 2 || scene.height < 2) return false;
+    try {
+      // This is a capture of the existing rendered tool, before occluding its
+      // native view. It preserves scroll, editor contents, and loaded state.
+      const preview = await desktop.taskView.capture({
+        bounds: { x: scene.left, y: scene.top, width: scene.width, height: scene.height },
+        nativeBrowser: tabId === "browser",
+      });
+      if (!preview?.src) return false;
+      setTaskViewPreviews((current) => ({
+        ...current,
+        [tabId]: { src: preview.src, width: preview.width, height: preview.height, nativeLayer: preview.nativeLayer },
+      }));
+      return true;
+    } catch {
+      // A previous valid capture remains in the cache. Task View never swaps
+      // a valid preview for an empty frame when a fresh capture is delayed.
+      return false;
+    }
+  }, []);
+  const openTaskView = useCallback(async () => {
+    if (isTaskViewOpen) {
+      setIsTaskViewOpen(false);
+      return;
+    }
+    setIsAppLauncherOpen(false);
+    setShowCommandPalette(false);
+    await captureWorkspacePreview(activeWorkspaceTab);
+    setIsTaskViewOpen(true);
+  }, [activeWorkspaceTab, captureWorkspacePreview, isTaskViewOpen]);
+  useEffect(() => {
+    const desktop = getElectronDesktop();
+    return desktop?.taskView.onToggle(() => void openTaskView());
+  }, [openTaskView]);
   useLayoutEffect(() => {
     if (isAppLauncherOpen || isTaskViewOpen) {
       void getElectronDesktop()?.browser.setSurface({ visible: false });
@@ -1968,7 +2009,7 @@ export default function App() {
       timers.push(window.setTimeout(callback, delay));
     };
     const bootStartedAt = performance.now();
-    const minimumBootMs = 2_800;
+    const minimumBootMs = 1_650;
     let latestProgress = 0;
     let latestStage = -1;
     let preparationDone = false;
@@ -1989,7 +2030,7 @@ export default function App() {
       setIntroProgress(1);
       setIntroStage(VIBE_BOOT_STAGE_LABELS.length - 1);
       setIntroState("progress_complete");
-      schedule(820, () => {
+      schedule(360, () => {
         if (cancelled) return;
         setIntroState("complete");
         setIsSidebarOpen(true);
@@ -2006,11 +2047,11 @@ export default function App() {
       });
     };
 
-    schedule(700, () => {
+    schedule(120, () => {
       if (cancelled) return;
       setIntroState("orb_up");
     });
-    schedule(1_160, () => {
+    schedule(280, () => {
       if (cancelled) return;
       setIntroState("progress");
       setIntroStage(0);
@@ -2178,6 +2219,7 @@ export default function App() {
     scrollRafRef.current = requestAnimationFrame(follow);
   }, []);
   const isExpanded =
+    (messages.length === 0 && activeWorkspaceTab === "chat") ||
     messages.length > 0 ||
     isComposerFocused ||
     isInputExpanded ||
@@ -2663,28 +2705,24 @@ export default function App() {
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
-      if ((e.ctrlKey || e.metaKey) && key === "k") {
+      if ((e.ctrlKey || e.metaKey) && key === "j") {
         e.preventDefault();
-        // Cmd/Ctrl+K opens the launcher. Pressing K again (with or without
-        // the modifier) while the launcher is open enters Task View.
-        if (isAppLauncherOpen || appLauncherChordRef.current || isTaskViewOpen) {
-          setIsAppLauncherOpen(false);
-          setIsTaskViewOpen((open) => !open);
-          appLauncherChordRef.current = false;
-        } else {
-          setIsAppLauncherOpen(true);
-          setIsTaskViewOpen(false);
-          appLauncherChordRef.current = true;
-          window.setTimeout(() => {
-            appLauncherChordRef.current = false;
-          }, 1200);
-        }
+        // Task View is a direct spatial overview, not a two-key launcher
+        // chord. The live workspace itself moves into the overview, so Ctrl/J
+        // is responsive even while a tool owns focus.
+        void openTaskView();
+        appLauncherChordRef.current = false;
+        setShowCommandPalette(false);
+      } else if ((e.ctrlKey || e.metaKey) && key === "k") {
+        e.preventDefault();
+        setIsTaskViewOpen(false);
+        setIsAppLauncherOpen((open) => !open);
+        appLauncherChordRef.current = false;
         setShowCommandPalette(false);
         requestAnimationFrame(() => textareaRef.current?.blur());
       } else if (key === "k" && !e.ctrlKey && !e.metaKey && !e.altKey && isAppLauncherOpen) {
         e.preventDefault();
-        setIsAppLauncherOpen(false);
-        setIsTaskViewOpen(true);
+        void openTaskView();
         appLauncherChordRef.current = false;
         setShowCommandPalette(false);
       } else if (e.key === "Escape") {
@@ -2710,7 +2748,7 @@ export default function App() {
       window.removeEventListener("keydown", handleGlobalKeyDown);
       window.removeEventListener("message", handleWorkspaceMessage);
     };
-  }, [isAppLauncherOpen, isTaskViewOpen]);
+  }, [isAppLauncherOpen, isTaskViewOpen, openTaskView]);
 
   const isVibeComposerMode =
     activeWorkspaceTab === "vibe" &&
@@ -5044,7 +5082,7 @@ Please analyze the code you just wrote and fix this error.`;
     !isStudyWorkspace;
   const showWorkflowTabs =
     !isEmbeddedToolPreview &&
-    (activeWorkspaceTab === "chat" || workflowTabsRestingVisible);
+    activeWorkspaceTab !== "chat" && workflowTabsRestingVisible;
   const sidebarWidthPx = 272;
   const sidebarClearancePx = sidebarWidthPx + 24;
   const effectiveWorkspaceViewport =
@@ -5085,7 +5123,7 @@ Please analyze the code you just wrote and fix this error.`;
   };
   const workspacePanelVariants = {
     enter: (direction: number) => ({
-      x: direction > 0 ? workspaceSwipeTravelPx : -workspaceSwipeTravelPx,
+      x: direction === 0 ? 0 : direction > 0 ? workspaceSwipeTravelPx : -workspaceSwipeTravelPx,
       opacity: 1,
       zIndex: 2,
       pointerEvents: "none" as const,
@@ -5100,7 +5138,7 @@ Please analyze the code you just wrote and fix this error.`;
       pointerEvents: "auto" as const,
     },
     exit: (direction: number) => ({
-      x: direction > 0 ? -workspaceSwipeTravelPx : workspaceSwipeTravelPx,
+      x: direction === 0 ? 0 : direction > 0 ? -workspaceSwipeTravelPx : workspaceSwipeTravelPx,
       opacity: 1,
       zIndex: 1,
       pointerEvents: "none" as const,
@@ -5108,6 +5146,7 @@ Please analyze the code you just wrote and fix this error.`;
   };
 
   const recentUserRequest = recentChat?.messages.find((message) => message.role === "user")?.content.trim();
+  const welcomeRows = useMemo(() => buildWelcomeRows(chats), [chats]);
   const chatQuickActions: Array<{
     baseLabel: string;
     skeletonLabel: string;
@@ -5254,6 +5293,11 @@ Please analyze the code you just wrote and fix this error.`;
   };
 
   const handleWorkspaceTabChange = (tabId: WorkspaceTabId) => {
+    const fromTaskView = taskViewSelectionRef.current;
+    taskViewSelectionRef.current = false;
+    if (tabId !== activeWorkspaceTab) {
+      void captureWorkspacePreview(activeWorkspaceTab);
+    }
     setVisitedWorkspaceTabs((current) => (current.includes(tabId) ? current : [...current, tabId]));
     if (tabId === activeWorkspaceTab) {
       setIsTaskViewOpen(false);
@@ -5266,15 +5310,17 @@ Please analyze the code you just wrote and fix this error.`;
     const toIndex = workspaceTabIndex(tabId);
     // Always derive direction from a stable order so Chat ↔ tool swipes are
     // perfect mirrors (returning to Chat must not reverse or spawn).
-    setWorkspaceTransitionDirection(toIndex >= fromIndex ? 1 : -1);
-    setIsWorkspaceSwitching(true);
+    setWorkspaceTransitionDirection(fromTaskView ? 0 : toIndex >= fromIndex ? 1 : -1);
+    setIsWorkspaceSwitching(!fromTaskView);
     if (workspaceSwitchTimeoutRef.current != null) {
       window.clearTimeout(workspaceSwitchTimeoutRef.current);
     }
-    workspaceSwitchTimeoutRef.current = window.setTimeout(() => {
-      setIsWorkspaceSwitching(false);
-      workspaceSwitchTimeoutRef.current = null;
-    }, 860);
+    if (!fromTaskView) {
+      workspaceSwitchTimeoutRef.current = window.setTimeout(() => {
+        setIsWorkspaceSwitching(false);
+        workspaceSwitchTimeoutRef.current = null;
+      }, 860);
+    }
     setActiveWorkspaceTab(tabId);
     setIsTaskViewOpen(false);
     setWorkspaceChromeEngaged(false);
@@ -5365,17 +5411,22 @@ Please analyze the code you just wrote and fix this error.`;
       <WorkspaceTaskView
         open={isTaskViewOpen}
         activeId={activeWorkspaceTab}
+        sceneRef={workspaceSceneRef}
         onClose={() => setIsTaskViewOpen(false)}
-        onSelect={(id) => handleWorkspaceTabChange(id as WorkspaceTabId)}
+        onSelect={(id) => {
+          taskViewSelectionRef.current = true;
+          handleWorkspaceTabChange(id as WorkspaceTabId);
+        }}
         onCloseTab={(id) => {
-          setVisitedWorkspaceTabs((current) => {
-            if (current.length <= 1) return current;
-            const next = current.filter((tab) => tab !== id);
-            if (id === activeWorkspaceTab && next[0]) {
-              handleWorkspaceTabChange(next[0]);
-            }
-            return next;
-          });
+          const next = visitedWorkspaceTabs.filter((tab) => tab !== id);
+          if (!next.length) return;
+          // Keep the overview mounted while its FLIP reflow settles. Selecting
+          // the next active tab happens through the same persistent workspace
+          // state, without remounting any of the remaining preview cards.
+          setVisitedWorkspaceTabs(next);
+          if (id === activeWorkspaceTab && next[0]) {
+            setActiveWorkspaceTab(next[0]);
+          }
         }}
         tabs={visitedWorkspaceTabs.map((tabId): TaskViewTab => {
           const meta: Record<WorkspaceTabId, { label: string; icon: React.ReactNode }> = {
@@ -5393,44 +5444,7 @@ Please analyze the code you just wrote and fix this error.`;
             id: tabId,
             label: info.label,
             icon: info.icon,
-            preview: (
-              <div className="h-full w-full bg-white">
-                <Suspense fallback={<div className="h-full w-full bg-white" />}>
-                  {tabId === "vibe" ? (
-                    <VibeCoderWorkspace orbColorTheme={orbColorTheme} onEngaged={() => undefined} />
-                  ) : tabId === "clip" ? (
-                    <AIClipper embedded onEngaged={() => undefined} onClose={() => undefined} />
-                  ) : tabId === "browser" ? (
-                    <WebBrowserWorkspace />
-                  ) : tabId === "study" ? (
-                    <StudyPalWorkspace globalTabsVisible={false} />
-                  ) : tabId === "fake-text" || tabId === "would-rather" || tabId === "reddit-story" ? (
-                    <CreatorStudioWorkspace mode={tabId} onBack={() => undefined} />
-                  ) : (
-                    <div className="flex h-full flex-col bg-white px-8 pt-16">
-                      <div className="mx-auto mb-6 h-16 w-16 rounded-full bg-gradient-to-br from-emerald-200 to-teal-400 opacity-80" />
-                      <p className="text-center text-[28px] font-semibold tracking-tight text-slate-800">Hi there, I&apos;m Clyra</p>
-                      <p className="mt-2 text-center text-[14px] text-slate-500">What can I help you with today?</p>
-                      <div className="mx-auto mt-8 w-full max-w-xl space-y-3">
-                        {messages.slice(-4).map((message) => (
-                          <div
-                            key={message.id}
-                            className={cn(
-                              "rounded-2xl px-4 py-3 text-[13px] font-medium",
-                              message.role === "user"
-                                ? "ml-auto max-w-[80%] bg-[#f4f4f4] text-slate-800"
-                                : "mr-auto max-w-[90%] text-slate-600",
-                            )}
-                          >
-                            {String(message.content || "").slice(0, 180)}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </Suspense>
-              </div>
-            ),
+            preview: taskViewPreviews[tabId],
           };
         })}
       />
@@ -6031,6 +6045,7 @@ Please analyze the code you just wrote and fix this error.`;
               )}
             >
               <div
+                ref={workspaceSceneRef}
                 className={cn(
                   "clyra-workspace-scene relative z-10 flex min-h-0 min-w-0 flex-col overflow-hidden",
                   isSidebarOpen && showSidebarControls && "clyra-workspace-scene--sidebar-open",
@@ -6128,6 +6143,10 @@ Please analyze the code you just wrote and fix this error.`;
                       willChange: "transform",
                     }}
                   >
+                    <div
+                      data-workspace-surface={workspaceViewKey}
+                      className="absolute inset-0 flex min-h-0 min-w-0 flex-col"
+                    >
                       {isVibeWorkspace ? (
                         <Suspense fallback={
                           <div className="h-full w-full bg-white" aria-hidden="true" />
@@ -6172,78 +6191,33 @@ Please analyze the code you just wrote and fix this error.`;
                         <motion.div
                           initial={false}
                           className={cn(
-                            "text-center space-y-3 mb-7 flex flex-col items-center max-w-[980px] mx-auto w-full",
+                            "clyra-chat-welcome text-center flex flex-col items-center max-w-[680px] mx-auto w-full",
                             showWorkspaceLivePreview
                               ? "px-3 sm:px-4"
                               : "px-5 sm:px-8",
                           )}
                         >
-                          <motion.div
-                            className="mb-2 flex w-full flex-col items-center justify-center relative transform-gpu"
-                            initial={false}
+                          <span className="clyra-chat-welcome__identity">
+                            <MessageCircleDashed className="h-7 w-7 text-slate-800" />
+                            <span>Clyra</span>
+                          </span>
+                          <button
+                            type="button"
+                            className="clyra-chat-welcome__temporary"
+                            onClick={() => setIsTemporaryChat((enabled) => !enabled)}
+                            aria-pressed={isTemporaryChat}
                           >
-                            <AiOrb colorTheme={orbColorTheme} />
-                          </motion.div>
+                            {isTemporaryChat ? "Temporary chat on" : "Temporary chat"}
+                          </button>
                           <motion.h1
-                            className="text-3xl sm:text-4xl font-semibold tracking-tight text-slate-800"
+                            className="clyra-chat-welcome__title text-3xl sm:text-4xl font-semibold tracking-tight text-slate-800"
                             initial={false}
                           >
-                            {emptyStateTitle}
+                            What can I help you with?
                           </motion.h1>
-                          <motion.div className="flex w-full flex-col items-center">
-                            <motion.p
-                              className="text-slate-500 text-sm sm:text-base font-medium font-sans z-10 relative"
-                              initial={false}
-                            >
-                              {emptyStateSubtitle}
-                            </motion.p>
-
-                            {!isVibeWorkspace && (
-                              <motion.div
-                                className="clyra-chat-quick-actions mt-4"
-                                initial={false}
-                                animate={{
-                                  opacity: 1,
-                                  y: 0,
-                                  scale: 1,
-                                }}
-                                transition={{
-                                  duration: 0.22,
-                                  ease: [0.16, 1, 0.3, 1],
-                                }}
-                                style={{
-                                  pointerEvents: "auto",
-                                }}
-                              >
-                                {chatQuickActions.map((action) => {
-                                  const QuickIcon = action.icon;
-
-                                  return (
-                                    <motion.button
-                                      initial={false}
-                                      key={action.baseLabel}
-                                      type="button"
-                                      className="clyra-chat-chip group"
-                                      onClick={() => {
-                                        if (action.destination === "vibe") {
-                                          applyVibePrompt(action.prompt);
-                                          return;
-                                        }
-                                        if (action.destination === "browser" || action.destination === "study") {
-                                          handleWorkspaceTabChange(action.destination);
-                                          return;
-                                        }
-                                        applyQuickPrompt(action.prompt, action.skeletonLabel);
-                                      }}
-                                    >
-                                      <QuickIcon className="h-3.5 w-3.5" />
-                                      <span>{action.baseLabel}</span>
-                                    </motion.button>
-                                  );
-                                })}
-                              </motion.div>
-                            )}
-                          </motion.div>
+                          <motion.p className="clyra-chat-welcome__support" initial={false}>
+                            Ask a question, start a task, or continue work across Browser, Vibe, Study and Create.
+                          </motion.p>
                         </motion.div>
                       ) : (
                         <div
@@ -6459,7 +6433,7 @@ Please analyze the code you just wrote and fix this error.`;
                           !isVibeWorkspace && (
                           <motion.div
                             key="composer"
-                            layout={false}
+                            layout="position"
                             ref={inputContainerRef}
                             onClick={(event) => {
                               const target = event.target as HTMLElement | null;
@@ -6504,7 +6478,7 @@ Please analyze the code you just wrote and fix this error.`;
                               // Constant lift in welcome mode: the anchor box
                               // around the surface keeps the rail's height
                               // fixed, so no reactive offset is needed.
-                              y: messages.length > 0 ? 0 : -142,
+                              y: 0,
                               scale: 1,
                             }}
                             exit={{
@@ -6514,7 +6488,8 @@ Please analyze the code you just wrote and fix this error.`;
                               pointerEvents: "none",
                             }}
                             transition={{
-                              y: { duration: 0.72, ease: [0.22, 1, 0.36, 1] },
+                              layout: { duration: 0.96, ease: [0.22, 1, 0.36, 1] },
+                              y: { duration: 0.96, ease: [0.22, 1, 0.36, 1] },
                               opacity: { duration: 0.28, ease: "easeOut" },
                             }}
                             style={{
@@ -6558,7 +6533,7 @@ Please analyze the code you just wrote and fix this error.`;
                                     damping: 20,
                                     mass: 1,
                                   }}
-                                  className="absolute bottom-[calc(100%+16px)] left-1/2 -translate-x-1/2 z-10 pointer-events-none"
+                                  className="clyra-temporary-status absolute bottom-[calc(100%+16px)] left-1/2 -translate-x-1/2 z-10 pointer-events-none"
                                 >
                                   <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-slate-100/90 text-slate-600 font-medium text-xs backdrop-blur-md border border-slate-200/60 shadow-sm">
                                     <MessageCircleDashed className="w-3.5 h-3.5 stroke-[2.2]" />
@@ -6568,7 +6543,7 @@ Please analyze the code you just wrote and fix this error.`;
                               )}
                             </AnimatePresence>
                             <AnimatePresence initial={false}>
-                              {(messages.length > 0 || isExpanded) && !showCommandPalette ? (
+                              {!showCommandPalette ? (
                                 <motion.div
                                   key="composer-tools"
                                   className="clyra-composer-tools"
@@ -7167,7 +7142,7 @@ Please analyze the code you just wrote and fix this error.`;
                                         className={cn("flex h-9 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-semibold transition-colors", showCommandPalette || selectedAppAgents.length ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-100 hover:text-slate-800")}
                                         aria-label="Select app agents"
                                       >
-                                        <AppWindow className="h-4 w-4" /><span className="hidden sm:inline">Apps</span>{selectedAppAgents.length ? <span className="grid h-4 min-w-4 place-items-center rounded-full bg-white px-1 text-[8px] text-slate-900">{selectedAppAgents.length}</span> : null}
+                                        <AppWindow className="h-4 w-4" /><span className="hidden sm:inline">Tools</span>{selectedAppAgents.length ? <span className="grid h-4 min-w-4 place-items-center rounded-full bg-white px-1 text-[8px] text-slate-900">{selectedAppAgents.length}</span> : null}
                                       </motion.button>
 
                                       <AnimatePresence initial={false}>
@@ -7307,6 +7282,35 @@ Please analyze the code you just wrote and fix this error.`;
                               </motion.div>
                             </motion.div>
                             </div>
+                            {messages.length === 0 && welcomeRows.length ? (
+                              <section className="clyra-chat-welcome__recent" aria-label="Recent conversations">
+                                <div className="clyra-chat-welcome__recent-header">
+                                  <h2>Recent conversations</h2>
+                                  <button type="button" onClick={() => setIsSidebarOpen(true)}>View all <ChevronRight className="h-3.5 w-3.5" /></button>
+                                </div>
+                                <div className="clyra-chat-welcome__recent-list">
+                                  {welcomeRows.map((row) => {
+                                    return (
+                                      <button key={row.id} type="button" onClick={() => {
+                                        if (row.kind === "recent") {
+                                          const chat = chats.find((item) => `recent-${item.id}` === row.id);
+                                          if (chat) openChatSession(chat);
+                                          return;
+                                        }
+                                        applyQuickPrompt(row.prompt || "");
+                                      }}>
+                                        <MessageCircleDashed className="clyra-chat-welcome__recent-icon h-4 w-4" />
+                                        <span className="clyra-chat-welcome__recent-copy">
+                                          <strong>{row.title}</strong>
+                                          <small>{row.preview}</small>
+                                        </span>
+                                        <time>{row.timestamp}</time>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </section>
+                            ) : null}
                           </motion.div>
                         )}
                       </AnimatePresence>
@@ -7393,6 +7397,7 @@ Please analyze the code you just wrote and fix this error.`;
                           </motion.div>
                         )}
                       </AnimatePresence>
+                    </div>
                   </motion.div>
                   </AnimatePresence>
                 </div>

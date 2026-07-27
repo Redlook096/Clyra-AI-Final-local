@@ -368,6 +368,43 @@ function registerIpc() {
   ipcMain.handle("browser:inspect", async (event) => { authorize(event); return { ok: true, snapshot: await browserManager.inspect() }; });
   ipcMain.handle("browser:set-cursor", async (event, cursor) => { authorize(event); await browserManager.setCursor(cursor); return { ok: true }; });
   ipcMain.handle("browser:devtools", (event) => { authorize(event); browserManager.activeContents()?.openDevTools({ mode: "detach" }); return { ok: true }; });
+  // Task View previews are real pixels from the already-rendered workspace.
+  // The renderer sends the exact workspace bounds before it reveals the
+  // overview, so no tool is remounted, resized, or asked to recreate itself.
+  ipcMain.handle("taskview:capture", async (event, payload = {}) => {
+    authorize(event);
+    const bounds = payload.bounds || {};
+    const x = Math.max(0, Math.round(Number(bounds.x) || 0));
+    const y = Math.max(0, Math.round(Number(bounds.y) || 0));
+    const width = Math.max(2, Math.round(Number(bounds.width) || 2));
+    const height = Math.max(2, Math.round(Number(bounds.height) || 2));
+    const contents = uiView?.webContents;
+    if (!contents || contents.isDestroyed()) throw new Error("The active workspace is unavailable for capture.");
+    const image = await contents.capturePage({ x, y, width, height });
+    const size = image.getSize();
+    let nativeLayer;
+    if (payload.nativeBrowser) {
+      const nativeContents = browserManager?.activeContents();
+      const nativeBounds = browserManager?.surface?.bounds;
+      if (nativeContents && !nativeContents.isDestroyed() && nativeBounds) {
+        const nativeImage = await nativeContents.capturePage();
+        const nativeSize = nativeImage.getSize();
+        nativeLayer = {
+          src: nativeImage.toDataURL(),
+          // BrowserViews are positioned in the same BrowserWindow coordinate
+          // system as the UI capture. These offsets restore the real page
+          // exactly inside its captured toolbar/sidebar shell.
+          left: nativeBounds.x - x,
+          top: nativeBounds.y - y,
+          width: nativeBounds.width,
+          height: nativeBounds.height,
+          imageWidth: nativeSize.width,
+          imageHeight: nativeSize.height,
+        };
+      }
+    }
+    return { ok: true, src: image.toDataURL(), width: size.width, height: size.height, nativeLayer };
+  });
   ipcMain.handle("surface:update", (event, payload) => { authorize(event); return { ok: true, surface: surfaceManager.update(payload) }; });
   ipcMain.handle("surface:hide", (event, { id }) => { authorize(event); surfaceManager.hide(id); return { ok: true }; });
   ipcMain.handle("dictation:set-state", (event, payload) => { authorize(event); dictationManager?.setState(payload || { phase: "idle" }); return { ok: true }; });

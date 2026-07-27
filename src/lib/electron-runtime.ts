@@ -30,6 +30,24 @@ export type ClyraDesktopBridge = {
     }) => Promise<any>;
     hide: (id: string) => Promise<any>;
   };
+  taskView: {
+    capture: (payload: { bounds: ElectronSurfaceBounds; nativeBrowser?: boolean }) => Promise<{
+      ok: boolean;
+      src: string;
+      width: number;
+      height: number;
+      nativeLayer?: {
+        src: string;
+        left: number;
+        top: number;
+        width: number;
+        height: number;
+        imageWidth: number;
+        imageHeight: number;
+      };
+    }>;
+    onToggle: (callback: () => void) => () => void;
+  };
   dictation: {
     setState: (payload: unknown) => Promise<any>;
     serviceUrl: () => Promise<string>;
