@@ -268,10 +268,14 @@ export const WorkspaceTaskView = forwardRef<TaskViewHandle, {
         { transform: "translate3d(0, 0, 0) scale(1)", opacity: 1 },
         { transform: `translate3d(${delta.x}px, ${delta.y}px, 0) scale(${delta.scaleX}, ${delta.scaleY})`, opacity: 1 },
       ],
-      { duration: SELECT_MS, easing: EASE, fill: "forwards" },
+      { duration: SELECT_MS, easing: EASE, fill: "both" },
     ).finished.finally(() => {
-      onClose();
-      locked.current = false;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          onClose();
+          locked.current = false;
+        });
+      });
     });
   }, [activeId, cards, onClose, sceneRef, tabs]);
 
@@ -302,11 +306,15 @@ export const WorkspaceTaskView = forwardRef<TaskViewHandle, {
         { transform: "translate3d(0, 0, 0) scale(1)", opacity: 1 },
         { transform: `translate3d(${delta.x}px, ${delta.y}px, 0) scale(${delta.scaleX}, ${delta.scaleY})`, opacity: 1 },
       ],
-      { duration: SELECT_MS, easing: EASE, fill: "forwards" },
+      { duration: SELECT_MS, easing: EASE, fill: "both" },
     ).finished.finally(() => {
-      onSelect(id);
-      locked.current = false;
-      setSelectingId(null);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          onSelect(id);
+          locked.current = false;
+          setSelectingId(null);
+        });
+      });
     });
   }, [cards, onSelect, sceneRef, selectingId, tabs]);
 

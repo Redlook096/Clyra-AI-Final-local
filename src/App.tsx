@@ -235,10 +235,10 @@ function prepareVibeForBoot(
     };
     // Soft ticks while a long await is in flight so the bar never freezes
     // on one label for tens of seconds.
-    const pulse = (stage: number, from: number, to: number, everyMs = 420) => {
+    const pulse = (stage: number, from: number, to: number, everyMs = 280) => {
       let value = from;
       const timer = window.setInterval(() => {
-        value = Math.min(to, value + (to - from) * 0.12);
+        value = Math.min(to, value + (to - from) * 0.18);
         report(stage, value);
         if (value >= to - 0.001) window.clearInterval(timer);
       }, everyMs);
@@ -246,8 +246,11 @@ function prepareVibeForBoot(
     };
 
     report(0, 0.08);
+    const stopPulse0 = pulse(0, 0.08, 0.19, 300);
     const vibeChunk = loadVibeCoderWorkspace();
+    stopPulse0();
     report(1, 0.22);
+    const stopPulse1 = pulse(1, 0.22, 0.40, 260);
     const routesWarm = fetch("/api/vibe/projects").catch(() => null);
     const warmup = fetch("/api/vibe/m1-warmup?await=1", {
       method: "POST",
@@ -262,13 +265,14 @@ function prepareVibeForBoot(
       })
       .catch(() => ({ ready: false as const }));
 
+    stopPulse1();
     report(2, 0.42);
-    const stopChunkPulse = pulse(2, 0.42, 0.58, 380);
+    const stopChunkPulse = pulse(2, 0.42, 0.58, 300);
     await Promise.allSettled([vibeChunk, routesWarm]);
     stopChunkPulse();
     report(3, 0.62);
 
-    const stopWarmPulse = pulse(3, 0.62, 0.9, 460);
+    const stopWarmPulse = pulse(3, 0.62, 0.88, 320);
     const warmupResult = await warmup;
     stopWarmPulse();
     report(4, warmupResult.ready ? 0.88 : 0.78);
@@ -2010,7 +2014,7 @@ export default function App() {
       timers.push(window.setTimeout(callback, delay));
     };
     const bootStartedAt = performance.now();
-    const minimumBootMs = 1_650;
+    const minimumBootMs = 900;
     let latestProgress = 0;
     let latestStage = -1;
     let preparationDone = false;
@@ -2031,7 +2035,7 @@ export default function App() {
       setIntroProgress(1);
       setIntroStage(VIBE_BOOT_STAGE_LABELS.length - 1);
       setIntroState("progress_complete");
-      schedule(360, () => {
+      schedule(260, () => {
         if (cancelled) return;
         setIntroState("complete");
         setIsSidebarOpen(true);
@@ -2048,11 +2052,11 @@ export default function App() {
       });
     };
 
-    schedule(120, () => {
+    schedule(80, () => {
       if (cancelled) return;
       setIntroState("orb_up");
     });
-    schedule(280, () => {
+    schedule(180, () => {
       if (cancelled) return;
       setIntroState("progress");
       setIntroStage(0);
@@ -5083,7 +5087,7 @@ Please analyze the code you just wrote and fix this error.`;
     !isStudyWorkspace;
   const showWorkflowTabs =
     !isEmbeddedToolPreview &&
-    activeWorkspaceTab !== "chat" && workflowTabsRestingVisible;
+    (activeWorkspaceTab === "chat" || workflowTabsRestingVisible);
   const sidebarWidthPx = 272;
   const sidebarClearancePx = sidebarWidthPx + 24;
   const effectiveWorkspaceViewport =
@@ -5464,6 +5468,69 @@ Please analyze the code you just wrote and fix this error.`;
           </AnimatePresence>,
           document.body,
         )}
+      {typeof document !== "undefined" && showSidebarControls && createPortal(
+        <AnimatePresence>
+          {!isSidebarOpen && (
+            <motion.button
+              type="button"
+              onClick={toggleSidebar}
+              aria-label="Open sidebar"
+              aria-expanded={isSidebarOpen}
+              title="Open sidebar"
+              initial={false}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: -8 }}
+              transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+              className="clyra-sidebar-toggle group fixed left-4 top-7 z-[200] flex h-11 w-11 items-center justify-center rounded-full border border-transparent bg-transparent text-slate-600 shadow-none transition-[color,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] hover:scale-[1.05] hover:text-slate-900 active:scale-[0.94] sm:left-6 sm:top-8"
+            >
+              <span className="pointer-events-none relative block h-[12px] w-[18px] opacity-95">
+                <span className="pointer-events-none absolute left-0 top-0 h-[2px] w-full rounded-full bg-current" />
+                <span className="pointer-events-none absolute left-0 top-[5px] h-[2px] w-full rounded-full bg-current" />
+                <span className="pointer-events-none absolute left-0 top-[10px] h-[2px] w-full rounded-full bg-current" />
+              </span>
+            </motion.button>
+          )}
+        </AnimatePresence>,
+        document.body,
+      )}
+      {typeof document !== "undefined" && messages.length === 0 && activeWorkspaceTab === "chat" && createPortal(
+        <motion.button
+          type="button"
+          onClick={() => setIsTemporaryChat((enabled) => !enabled)}
+          className={cn(
+            "clyra-temp-chat-toggle fixed right-4 top-7 z-[200] grid h-11 w-11 place-items-center rounded-full text-slate-400 transition-[color,transform] duration-300 hover:scale-[1.04] hover:text-slate-600 active:scale-[0.94] sm:right-6 sm:top-8",
+            isTemporaryChat && "text-slate-600",
+          )}
+          title={isTemporaryChat ? "Turn off Temporary Chat" : "Temporary Chat"}
+          aria-label={isTemporaryChat ? "Turn off Temporary Chat" : "Temporary Chat"}
+        >
+          <MessageCircleDashed
+            className={cn(
+              "relative h-5 w-5 stroke-[1.6] transition-all duration-300",
+              isTemporaryChat ? "opacity-100 scale-105" : "opacity-75",
+            )}
+          />
+          <AnimatePresence>
+            {isTemporaryChat && (
+              <motion.div
+                initial={{ scale: 0.6, opacity: 0, y: 6 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.6, opacity: 0, y: 6 }}
+                transition={{
+                  type: "spring",
+                  stiffness: 320,
+                  damping: 24,
+                  mass: 0.7,
+                }}
+                className="pointer-events-none absolute inset-0 flex items-center justify-center"
+              >
+                <Check className="h-3.5 w-3.5 stroke-[2.4] text-slate-400" />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.button>,
+        document.body,
+      )}
       <motion.div
         className="clyra-app-shell h-dvh flex min-w-0 bg-white text-slate-900 font-sans selection:bg-slate-200 overflow-hidden scalable-container relative"
         initial={false}
@@ -5894,28 +5961,6 @@ Please analyze the code you just wrote and fix this error.`;
         )}
 
         <div className={cn("clyra-main-surface relative z-10 flex min-h-0 min-w-0 flex-1 flex-col bg-white sm:border-transparent", activeWorkspaceTab === "chat" && "clyra-chat-page")}>
-          <AnimatePresence>
-            {showSidebarControls && !isSidebarOpen && (
-              <motion.button
-                type="button"
-                onClick={toggleSidebar}
-                aria-label="Open sidebar"
-                aria-expanded={isSidebarOpen}
-                title="Open sidebar"
-                initial={false}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.9, y: -8 }}
-                transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-                className="clyra-sidebar-toggle group fixed left-4 top-7 z-[200] flex h-11 w-11 items-center justify-center rounded-full border border-transparent bg-transparent text-slate-600 shadow-none transition-[color,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] hover:scale-[1.05] hover:text-slate-900 active:scale-[0.94] sm:top-8 sm:left-6"
-              >
-                <span className="pointer-events-none relative block h-[12px] w-[18px] opacity-95">
-                  <span className="pointer-events-none absolute left-0 top-0 h-[2px] w-full rounded-full bg-current" />
-                  <span className="pointer-events-none absolute left-0 top-[5px] h-[2px] w-full rounded-full bg-current" />
-                  <span className="pointer-events-none absolute left-0 top-[10px] h-[2px] w-full rounded-full bg-current" />
-                </span>
-              </motion.button>
-            )}
-          </AnimatePresence>
           <AnimatePresence initial={false}>
           {showWorkflowTabs ? (
           <motion.div
@@ -6203,66 +6248,24 @@ Please analyze the code you just wrote and fix this error.`;
                             <MessageCircleDashed className="h-7 w-7 text-slate-800" />
                             <span>Clyra</span>
                           </span>
-                          <motion.button
-                            type="button"
-                            onClick={() => setIsTemporaryChat((enabled) => !enabled)}
-                            className={cn(
-                              "clyra-temp-chat-toggle fixed right-5 top-5 z-[170] grid h-10 w-10 place-items-center rounded-full text-slate-400 transition-[color,transform] duration-300 hover:scale-[1.04] hover:text-slate-600 active:scale-[0.94] sm:right-7 sm:top-7",
-                              isTemporaryChat && "text-slate-600",
-                            )}
-                            title={isTemporaryChat ? "Turn off Temporary Chat" : "Temporary Chat"}
-                            aria-label={isTemporaryChat ? "Turn off Temporary Chat" : "Temporary Chat"}
+                          <motion.div
+                            initial={false}
+                            animate={isTemporaryChat
+                              ? { height: "auto", opacity: 1, marginTop: 12, marginBottom: 0 }
+                              : { height: 0, opacity: 0, marginTop: 0, marginBottom: 0 }
+                            }
+                            transition={{
+                              height: { duration: 0.45, ease: [0.22, 1, 0.36, 1] },
+                              opacity: { duration: 0.35, ease: "easeOut" },
+                              marginTop: { duration: 0.45, ease: [0.22, 1, 0.36, 1] },
+                            }}
+                            className="overflow-hidden pointer-events-none"
                           >
-                            <MessageCircleDashed
-                              className={cn(
-                                "relative h-5 w-5 stroke-[1.6] transition-all duration-300",
-                                isTemporaryChat ? "opacity-100 scale-105" : "opacity-75",
-                              )}
-                            />
-                            <AnimatePresence>
-                              {isTemporaryChat && (
-                                <motion.div
-                                  initial={{ scale: 0.6, opacity: 0, y: 6 }}
-                                  animate={{ scale: 1, opacity: 1, y: 0 }}
-                                  exit={{ scale: 0.6, opacity: 0, y: 6 }}
-                                  transition={{
-                                    type: "spring",
-                                    stiffness: 280,
-                                    damping: 26,
-                                    mass: 0.72,
-                                  }}
-                                  className="pointer-events-none absolute inset-0 flex items-center justify-center"
-                                >
-                                  <Check className="h-3.5 w-3.5 stroke-[2.4] text-slate-400" />
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </motion.button>
-                          <AnimatePresence>
-                            {isTemporaryChat && (
-                              <motion.div
-                                layout
-                                initial={{ opacity: 0, y: 10, filter: "blur(4px)" }}
-                                animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-                                exit={{ opacity: 0, y: 10, filter: "blur(4px)" }}
-                                transition={{
-                                  layout: { duration: 0.5, ease: [0.22, 1, 0.36, 1] },
-                                  default: {
-                                    type: "spring",
-                                    stiffness: 220,
-                                    damping: 28,
-                                    mass: 0.85,
-                                  },
-                                }}
-                                className="mt-3 pointer-events-none"
-                              >
-                                <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-neutral-100/90 text-neutral-500 font-medium text-[11px] backdrop-blur-xl border border-neutral-200/60 shadow-[0_2px_10px_rgba(0,0,0,0.04)]">
-                                  <MessageCircleDashed className="w-3 h-3 stroke-[2] text-neutral-400" />
-                                  Temporary Chat
-                                </span>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
+                            <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-neutral-100/90 text-neutral-500 font-medium text-[11px] backdrop-blur-xl border border-neutral-200/60 shadow-[0_2px_10px_rgba(0,0,0,0.04)]">
+                              <MessageCircleDashed className="w-3 h-3 stroke-[2] text-neutral-400" />
+                              Temporary Chat
+                            </span>
+                          </motion.div>
                           <motion.h1
                             layout="position"
                             className="clyra-chat-welcome__title text-3xl sm:text-4xl font-semibold tracking-tight text-slate-800"
