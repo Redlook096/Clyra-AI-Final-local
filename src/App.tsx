@@ -6238,23 +6238,23 @@ Please analyze the code you just wrote and fix this error.`;
                               )}
                             </AnimatePresence>
                           </motion.button>
-                          <AnimatePresence mode="popLayout">
+                          <AnimatePresence>
                             {isTemporaryChat && (
                               <motion.div
                                 layout
-                                initial={{ opacity: 0, y: 14, filter: "blur(5px)" }}
+                                initial={{ opacity: 0, y: 10, filter: "blur(4px)" }}
                                 animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-                                exit={{ opacity: 0, y: 14, filter: "blur(5px)" }}
+                                exit={{ opacity: 0, y: 10, filter: "blur(4px)" }}
                                 transition={{
                                   layout: { duration: 0.5, ease: [0.22, 1, 0.36, 1] },
                                   default: {
                                     type: "spring",
-                                    stiffness: 200,
+                                    stiffness: 220,
                                     damping: 28,
                                     mass: 0.85,
                                   },
                                 }}
-                                className="mt-2 pointer-events-none"
+                                className="mt-3 pointer-events-none"
                               >
                                 <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-neutral-100/90 text-neutral-500 font-medium text-[11px] backdrop-blur-xl border border-neutral-200/60 shadow-[0_2px_10px_rgba(0,0,0,0.04)]">
                                   <MessageCircleDashed className="w-3 h-3 stroke-[2] text-neutral-400" />

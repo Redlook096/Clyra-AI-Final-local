@@ -261,7 +261,7 @@ export const WorkspaceTaskView = forwardRef<TaskViewHandle, {
       locked.current = false;
       return;
     }
-    const delta = transformBetween(activeCard, scene);
+    const delta = transformBetween(scene, activeCard);
     node.style.zIndex = "4";
     node.animate(
       [
@@ -295,7 +295,7 @@ export const WorkspaceTaskView = forwardRef<TaskViewHandle, {
       );
     });
     const scene = rectOf(sceneRef);
-    const delta = transformBetween(card, scene);
+    const delta = transformBetween(scene, card);
     node.style.zIndex = "4";
     node.animate(
       [
