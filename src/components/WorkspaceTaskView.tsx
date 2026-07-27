@@ -1,6 +1,8 @@
 import {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -128,15 +130,11 @@ function cardStyle(card: Rect, extra?: CSSProperties): CSSProperties {
   return { left: card.left, top: card.top, width: card.width, height: card.height + FOOTER_H, ...extra };
 }
 
-export function WorkspaceTaskView({
-  open,
-  tabs,
-  activeId,
-  sceneRef,
-  onSelect,
-  onClose,
-  onCloseTab,
-}: {
+export type TaskViewHandle = {
+  closeToActive: () => void;
+};
+
+export const WorkspaceTaskView = forwardRef<TaskViewHandle, {
   open: boolean;
   tabs: TaskViewTab[];
   activeId: string;
@@ -144,7 +142,15 @@ export function WorkspaceTaskView({
   onSelect: (id: string) => void;
   onClose: () => void;
   onCloseTab?: (id: string) => void;
-}) {
+}>(function WorkspaceTaskView({
+  open,
+  tabs,
+  activeId,
+  sceneRef,
+  onSelect,
+  onClose,
+  onCloseTab,
+}, ref) {
   const [cards, setCards] = useState<Rect[]>([]);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
@@ -355,6 +361,8 @@ export function WorkspaceTaskView({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [activeId, closeToActive, focusedId, open, selectTab, tabs]);
 
+  useImperativeHandle(ref, () => ({ closeToActive }), [closeToActive]);
+
   if (!open || typeof document === "undefined") return null;
 
   return createPortal(
@@ -429,4 +437,4 @@ export function WorkspaceTaskView({
     </div>,
     document.body,
   );
-}
+});

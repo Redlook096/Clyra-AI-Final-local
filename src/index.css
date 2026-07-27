@@ -5701,7 +5701,7 @@ body,
   width: min(680px, calc(100% - 48px)) !important;
   max-width: none !important;
   flex: 0 0 auto;
-  margin: 32px auto 0 !important;
+  margin: 48px auto 0 !important;
   padding: 0 !important;
   transition: none !important;
 }
@@ -5712,7 +5712,7 @@ body,
 }
 .clyra-chat-welcome__recent {
   width: 100%;
-  margin: 38px 0 48px;
+  margin: 42px 0 64px;
   color: #17223a;
   text-align: left;
 }

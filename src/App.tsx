@@ -99,7 +99,7 @@ import { AiOrb, type OrbColorTheme } from "./components/AiOrb";
 import { getElectronDesktop } from "./lib/electron-runtime";
 import { VibeAgentMessageBody } from "./components/vibe/VibeAgentMessageBody";
 import { VibeLivePreviewPanel } from "./components/vibe/VibeLivePreviewPanel";
-import { WorkspaceTaskView, type TaskViewPreview, type TaskViewTab } from "./components/WorkspaceTaskView";
+import { WorkspaceTaskView, type TaskViewHandle, type TaskViewPreview, type TaskViewTab } from "./components/WorkspaceTaskView";
 import { buildWelcomeRows } from "./features/chat/welcomeSuggestions";
 import { buildLocalVibeFallbackResponse } from "./lib/buildLocalVibeFallback";
 import { VIBE_CURSOR_AGENT_SYSTEM_PROMPT } from "./lib/vibeAgentConstants";
@@ -1777,6 +1777,7 @@ export default function App() {
   const [taskViewPreviews, setTaskViewPreviews] = useState<Record<string, TaskViewPreview>>({});
   const taskViewSelectionRef = useRef(false);
   const appLauncherChordRef = useRef(false);
+  const taskViewRef = useRef<TaskViewHandle>(null);
   const workspaceSceneRef = useRef<HTMLDivElement>(null);
   const captureWorkspacePreview = useCallback(async (tabId: WorkspaceTabId) => {
     const desktop = getElectronDesktop();
@@ -1803,7 +1804,7 @@ export default function App() {
   }, []);
   const openTaskView = useCallback(async () => {
     if (isTaskViewOpen) {
-      setIsTaskViewOpen(false);
+      taskViewRef.current?.closeToActive();
       return;
     }
     setIsAppLauncherOpen(false);
@@ -5409,6 +5410,7 @@ Please analyze the code you just wrote and fix this error.`;
         ) : null}
       </AnimatePresence>
       <WorkspaceTaskView
+        ref={taskViewRef}
         open={isTaskViewOpen}
         activeId={activeWorkspaceTab}
         sceneRef={workspaceSceneRef}
@@ -6205,8 +6207,8 @@ Please analyze the code you just wrote and fix this error.`;
                             type="button"
                             onClick={() => setIsTemporaryChat((enabled) => !enabled)}
                             className={cn(
-                              "clyra-temp-chat-toggle absolute right-0 top-[clamp(24px,4vh,40px)] z-[170] grid h-10 w-10 place-items-center rounded-full text-slate-500 transition-[color,transform] duration-300 hover:scale-[1.04] hover:text-slate-900 active:scale-[0.94]",
-                              isTemporaryChat && "text-slate-900",
+                              "clyra-temp-chat-toggle fixed right-5 top-5 z-[170] grid h-10 w-10 place-items-center rounded-full text-slate-400 transition-[color,transform] duration-300 hover:scale-[1.04] hover:text-slate-600 active:scale-[0.94] sm:right-7 sm:top-7",
+                              isTemporaryChat && "text-slate-600",
                             )}
                             title={isTemporaryChat ? "Turn off Temporary Chat" : "Temporary Chat"}
                             aria-label={isTemporaryChat ? "Turn off Temporary Chat" : "Temporary Chat"}
@@ -6220,29 +6222,60 @@ Please analyze the code you just wrote and fix this error.`;
                             <AnimatePresence>
                               {isTemporaryChat && (
                                 <motion.div
-                                  initial={{ scale: 0.5, opacity: 0 }}
-                                  animate={{ scale: 1, opacity: 1 }}
-                                  exit={{ scale: 0.5, opacity: 0 }}
+                                  initial={{ scale: 0.6, opacity: 0, y: 6 }}
+                                  animate={{ scale: 1, opacity: 1, y: 0 }}
+                                  exit={{ scale: 0.6, opacity: 0, y: 6 }}
                                   transition={{
                                     type: "spring",
-                                    stiffness: 360,
-                                    damping: 24,
-                                    mass: 0.7,
+                                    stiffness: 280,
+                                    damping: 26,
+                                    mass: 0.72,
                                   }}
                                   className="pointer-events-none absolute inset-0 flex items-center justify-center"
                                 >
-                                  <Check className="h-3.5 w-3.5 stroke-[2.4] text-slate-900" />
+                                  <Check className="h-3.5 w-3.5 stroke-[2.4] text-slate-400" />
                                 </motion.div>
                               )}
                             </AnimatePresence>
                           </motion.button>
+                          <AnimatePresence mode="popLayout">
+                            {isTemporaryChat && (
+                              <motion.div
+                                layout
+                                initial={{ opacity: 0, y: 14, filter: "blur(5px)" }}
+                                animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+                                exit={{ opacity: 0, y: 14, filter: "blur(5px)" }}
+                                transition={{
+                                  layout: { duration: 0.5, ease: [0.22, 1, 0.36, 1] },
+                                  default: {
+                                    type: "spring",
+                                    stiffness: 200,
+                                    damping: 28,
+                                    mass: 0.85,
+                                  },
+                                }}
+                                className="mt-2 pointer-events-none"
+                              >
+                                <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-neutral-100/90 text-neutral-500 font-medium text-[11px] backdrop-blur-xl border border-neutral-200/60 shadow-[0_2px_10px_rgba(0,0,0,0.04)]">
+                                  <MessageCircleDashed className="w-3 h-3 stroke-[2] text-neutral-400" />
+                                  Temporary Chat
+                                </span>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
                           <motion.h1
+                            layout="position"
                             className="clyra-chat-welcome__title text-3xl sm:text-4xl font-semibold tracking-tight text-slate-800"
                             initial={false}
+                            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
                           >
                             What can I help you with?
                           </motion.h1>
-                          <motion.p className="clyra-chat-welcome__support" initial={false}>
+                          <motion.p
+                            layout="position"
+                            className="clyra-chat-welcome__support" initial={false}
+                            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+                          >
                             Ask a question, start a task, or continue work across Browser, Vibe, Study and Create.
                           </motion.p>
                         </motion.div>
@@ -6533,42 +6566,6 @@ Please analyze the code you just wrote and fix this error.`;
                                 : "pb-0",
                             )}
                           >
-                            <AnimatePresence>
-                              {isTemporaryChat && (
-                                <motion.div
-                                  initial={{
-                                    opacity: 0,
-                                    scale: 0.9,
-                                    y: 15,
-                                    filter: "blur(4px)",
-                                  }}
-                                  animate={{
-                                    opacity: 1,
-                                    scale: 1,
-                                    y: 0,
-                                    filter: "blur(0px)",
-                                  }}
-                                  exit={{
-                                    opacity: 0,
-                                    scale: 0.9,
-                                    y: 15,
-                                    filter: "blur(4px)",
-                                  }}
-                                  transition={{
-                                    type: "spring",
-                                    stiffness: 220,
-                                    damping: 20,
-                                    mass: 1,
-                                  }}
-                                  className="absolute bottom-[calc(100%+16px)] left-1/2 -translate-x-1/2 z-10 pointer-events-none"
-                                >
-                                  <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-slate-100/90 text-slate-600 font-medium text-xs backdrop-blur-md border border-slate-200/60 shadow-sm">
-                                    <MessageCircleDashed className="w-3.5 h-3.5 stroke-[2.2]" />
-                                    Temporary Chat Enabled
-                                  </span>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
                             <AnimatePresence initial={false}>
                               {!showCommandPalette ? (
                                 <motion.div
