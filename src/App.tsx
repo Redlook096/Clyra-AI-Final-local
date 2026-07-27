@@ -6201,14 +6201,41 @@ Please analyze the code you just wrote and fix this error.`;
                             <MessageCircleDashed className="h-7 w-7 text-slate-800" />
                             <span>Clyra</span>
                           </span>
-                          <button
+                          <motion.button
                             type="button"
-                            className="clyra-chat-welcome__temporary"
                             onClick={() => setIsTemporaryChat((enabled) => !enabled)}
-                            aria-pressed={isTemporaryChat}
+                            className={cn(
+                              "clyra-temp-chat-toggle absolute right-0 top-[clamp(24px,4vh,40px)] z-[170] grid h-10 w-10 place-items-center rounded-full text-slate-500 transition-[color,transform] duration-300 hover:scale-[1.04] hover:text-slate-900 active:scale-[0.94]",
+                              isTemporaryChat && "text-slate-900",
+                            )}
+                            title={isTemporaryChat ? "Turn off Temporary Chat" : "Temporary Chat"}
+                            aria-label={isTemporaryChat ? "Turn off Temporary Chat" : "Temporary Chat"}
                           >
-                            {isTemporaryChat ? "Temporary chat on" : "Temporary chat"}
-                          </button>
+                            <MessageCircleDashed
+                              className={cn(
+                                "relative h-5 w-5 stroke-[1.6] transition-all duration-300",
+                                isTemporaryChat ? "opacity-100 scale-105" : "opacity-75",
+                              )}
+                            />
+                            <AnimatePresence>
+                              {isTemporaryChat && (
+                                <motion.div
+                                  initial={{ scale: 0.5, opacity: 0 }}
+                                  animate={{ scale: 1, opacity: 1 }}
+                                  exit={{ scale: 0.5, opacity: 0 }}
+                                  transition={{
+                                    type: "spring",
+                                    stiffness: 360,
+                                    damping: 24,
+                                    mass: 0.7,
+                                  }}
+                                  className="pointer-events-none absolute inset-0 flex items-center justify-center"
+                                >
+                                  <Check className="h-3.5 w-3.5 stroke-[2.4] text-slate-900" />
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
+                          </motion.button>
                           <motion.h1
                             className="clyra-chat-welcome__title text-3xl sm:text-4xl font-semibold tracking-tight text-slate-800"
                             initial={false}
@@ -6533,7 +6560,7 @@ Please analyze the code you just wrote and fix this error.`;
                                     damping: 20,
                                     mass: 1,
                                   }}
-                                  className="clyra-temporary-status absolute bottom-[calc(100%+16px)] left-1/2 -translate-x-1/2 z-10 pointer-events-none"
+                                  className="absolute bottom-[calc(100%+16px)] left-1/2 -translate-x-1/2 z-10 pointer-events-none"
                                 >
                                   <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-slate-100/90 text-slate-600 font-medium text-xs backdrop-blur-md border border-slate-200/60 shadow-sm">
                                     <MessageCircleDashed className="w-3.5 h-3.5 stroke-[2.2]" />

@@ -5668,7 +5668,7 @@ body,
   flex: 0 0 auto;
   gap: 0;
   margin: 0 auto;
-  padding: clamp(132px, 16vh, 184px) 0 0;
+  padding: clamp(156px, 18vh, 200px) 0 0;
   position: relative;
 }
 .clyra-chat-welcome__identity {
@@ -5682,20 +5682,7 @@ body,
   letter-spacing: normal;
   text-transform: none;
 }
-.clyra-chat-welcome__temporary {
-  position: absolute;
-  top: clamp(24px, 4vh, 40px);
-  right: 0;
-  border: 1px solid #dce3eb;
-  border-radius: 999px;
-  background: #fff;
-  color: #52647c;
-  padding: 7px 11px;
-  font-size: 11px;
-  font-weight: 650;
-  box-shadow: 0 4px 14px rgba(15,23,42,.05);
-}
-.clyra-chat-welcome__temporary:hover, .clyra-chat-welcome__temporary[aria-pressed="true"] { border-color: #aebdce; background: #f8fafc; color: #1e293b; }
+
 .clyra-chat-welcome__title { margin: 22px 0 0; font-size: clamp(32px, 3vw, 34px); line-height: 1.15; }
 .clyra-chat-welcome__support {
   max-width: 560px;
@@ -5717,12 +5704,6 @@ body,
   margin: 32px auto 0 !important;
   padding: 0 !important;
   transition: none !important;
-}
-.clyra-chat-page .clyra-composer-welcome .clyra-temporary-status {
-  left: auto !important;
-  right: 0;
-  bottom: calc(100% + 12px);
-  transform: none !important;
 }
 .clyra-chat-page .clyra-composer-welcome .input-wrapper {
   min-height: 122px;
