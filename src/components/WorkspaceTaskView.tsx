@@ -41,9 +41,8 @@ export type TaskViewTab = {
 type Rect = { left: number; top: number; width: number; height: number };
 
 const EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
-const CLOSE_EASE = "cubic-bezier(0.32, 0, 0.22, 1)";
 const OPEN_MS = 440;
-const SELECT_MS = 480;
+const SELECT_MS = 440;
 const EXIT_MS = 210;
 const REFLOW_MS = 320;
 const GAP = 24;
@@ -264,18 +263,20 @@ export const WorkspaceTaskView = forwardRef<TaskViewHandle, {
     }
     const delta = transformBetween(scene, activeCard);
     node.style.zIndex = "4";
-    node.style.transform = "translate3d(0, 0, 0) scale(1)";
-    void node.offsetHeight;
-    node.style.willChange = "transform";
-    node.style.transition = `transform ${SELECT_MS}ms ${CLOSE_EASE}`;
-    node.style.transform = `translate3d(${delta.x}px, ${delta.y}px, 0) scale(${delta.scaleX}, ${delta.scaleY})`;
-    const onEnd = () => {
-      node.removeEventListener("transitionend", onEnd);
-      node.style.willChange = "auto";
-      onClose();
-      locked.current = false;
-    };
-    node.addEventListener("transitionend", onEnd, { once: true });
+    node.animate(
+      [
+        { transform: "translate3d(0, 0, 0) scale(1)", opacity: 1 },
+        { transform: `translate3d(${delta.x}px, ${delta.y}px, 0) scale(${delta.scaleX}, ${delta.scaleY})`, opacity: 1 },
+      ],
+      { duration: SELECT_MS, easing: EASE, fill: "both" },
+    ).finished.finally(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          onClose();
+          locked.current = false;
+        });
+      });
+    });
   }, [activeId, cards, onClose, sceneRef, tabs]);
 
   const selectTab = useCallback((id: string) => {
@@ -300,19 +301,21 @@ export const WorkspaceTaskView = forwardRef<TaskViewHandle, {
     const scene = rectOf(sceneRef);
     const delta = transformBetween(scene, card);
     node.style.zIndex = "4";
-    node.style.transform = "translate3d(0, 0, 0) scale(1)";
-    void node.offsetHeight;
-    node.style.willChange = "transform";
-    node.style.transition = `transform ${SELECT_MS}ms ${CLOSE_EASE}`;
-    node.style.transform = `translate3d(${delta.x}px, ${delta.y}px, 0) scale(${delta.scaleX}, ${delta.scaleY})`;
-    const onSelectEnd = () => {
-      node.removeEventListener("transitionend", onSelectEnd);
-      node.style.willChange = "auto";
-      onSelect(id);
-      locked.current = false;
-      setSelectingId(null);
-    };
-    node.addEventListener("transitionend", onSelectEnd, { once: true });
+    node.animate(
+      [
+        { transform: "translate3d(0, 0, 0) scale(1)", opacity: 1 },
+        { transform: `translate3d(${delta.x}px, ${delta.y}px, 0) scale(${delta.scaleX}, ${delta.scaleY})`, opacity: 1 },
+      ],
+      { duration: SELECT_MS, easing: EASE, fill: "both" },
+    ).finished.finally(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          onSelect(id);
+          locked.current = false;
+          setSelectingId(null);
+        });
+      });
+    });
   }, [cards, onSelect, sceneRef, selectingId, tabs]);
 
   const closeTab = useCallback((event: React.MouseEvent, id: string) => {
