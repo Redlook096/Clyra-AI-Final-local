@@ -5113,7 +5113,7 @@ Please analyze the code you just wrote and fix this error.`;
   // rail. Moving a full scene width keeps Chat -> Vibe and Vibe -> Chat
   // perfectly mirrored and prevents either view from lingering at an edge.
   const workspaceSwipeTravelPx = Math.max(360, effectiveWorkspaceViewport + 24);
-  const workspaceSwipeEase = [0.38, 0, 0.16, 1] as [
+  const workspaceSwipeEase = [0.25, 0.1, 0.25, 1] as [
     number,
     number,
     number,
@@ -5121,9 +5121,7 @@ Please analyze the code you just wrote and fix this error.`;
   ];
   const workspaceSwipeTransition = {
     type: "tween" as const,
-    // A paired panel needs a little room to decelerate into place. The final
-    // third deliberately eases out so either direction feels identical.
-    duration: 0.72,
+    duration: 0.82,
     ease: workspaceSwipeEase,
   };
   const workspacePanelVariants = {
