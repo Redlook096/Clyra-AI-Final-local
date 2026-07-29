@@ -4,13 +4,21 @@ import { existsSync, promises as fs, statSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import dotenv from "dotenv";
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell, WebContentsView } from "electron";
 import { ChromiumBrowserManager } from "./browser-manager.mjs";
 import { ChromiumSurfaceManager } from "./surface-manager.mjs";
 import { DictationManager } from "./dictation-manager.mjs";
+import { SmartToolbarManager } from "./smart-toolbar-manager.mjs";
+import { GoogleWorkspaceManager } from "./google-workspace-manager.mjs";
+import { DeepResearchManager } from "./deep-research-manager.mjs";
+import { LocalMemoryManager } from "./local-memory-manager.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(here, "..");
+// OAuth credentials stay in the local ignored .env file and are only read by
+// this Electron main process. They are deliberately never sent over IPC.
+dotenv.config({ path: path.join(projectRoot, ".env"), quiet: true });
 const isDevelopment = process.env.CLYRA_ELECTRON_DEV === "1";
 const appPort = Number(process.env.CLYRA_DESKTOP_PORT || 31_415);
 const cdpPort = Number(process.env.CLYRA_CDP_PORT || 9_223);
@@ -36,6 +44,10 @@ let uiView = null;
 let browserManager = null;
 let surfaceManager = null;
 let dictationManager = null;
+let smartToolbarManager = null;
+let googleWorkspaceManager = null;
+let deepResearchManager = null;
+let localMemoryManager = null;
 let serviceProcess = null;
 let serviceLaunchError = null;
 let serviceFallbackStarted = false;
@@ -52,7 +64,12 @@ function destroyNativeManagers() {
   try { browserManager?.destroy(); } catch (error) { console.warn("[browser] teardown failed:", error); }
   try { surfaceManager?.destroy(); } catch (error) { console.warn("[surface] teardown failed:", error); }
   try { dictationManager?.destroy(); } catch (error) { console.warn("[dictation] teardown failed:", error); }
+  try { smartToolbarManager?.destroy(); } catch (error) { console.warn("[smart-toolbar] teardown failed:", error); }
   dictationManager = null;
+  smartToolbarManager = null;
+  googleWorkspaceManager?.finishAuth?.();
+  googleWorkspaceManager = null;
+  deepResearchManager = null;
 }
 
 function sendJson(response, status, payload) {
@@ -408,6 +425,8 @@ function registerIpc() {
   ipcMain.handle("surface:update", (event, payload) => { authorize(event); return { ok: true, surface: surfaceManager.update(payload) }; });
   ipcMain.handle("surface:hide", (event, { id }) => { authorize(event); surfaceManager.hide(id); return { ok: true }; });
   ipcMain.handle("dictation:set-state", (event, payload) => { authorize(event); dictationManager?.setState(payload || { phase: "idle" }); return { ok: true }; });
+  ipcMain.handle("dictation:toggle", (event) => { authorize(event); void dictationManager?.toggle(); return { ok: true }; });
+  ipcMain.handle("dictation:shortcut-status", (event) => { authorize(event); return { registered: Boolean(dictationManager?.shortcutRegistered) }; });
   ipcMain.handle("dictation:service-url", (event) => {
     authorize(event);
     return `http://127.0.0.1:${appPort}`;
@@ -426,6 +445,36 @@ function registerIpc() {
     return { ok: true };
   });
   ipcMain.on("dictation:pill-action", (event, action) => { authorizeDictation(event); void dictationManager?.action(String(action || "cancel")); });
+  ipcMain.on("smart-toolbar:action", (event, payload) => {
+    if (!smartToolbarManager?.isSender(event.sender)) throw new Error("Untrusted smart toolbar IPC sender.");
+    void smartToolbarManager.action(payload || {});
+  });
+  ipcMain.handle("google:status", (event) => { authorize(event); return googleWorkspaceManager?.status() || { connected:false }; });
+  ipcMain.handle("google:sign-in", (event) => { authorize(event); return googleWorkspaceManager?.signIn() || { ok:false, error:"Google integration is unavailable." }; });
+  ipcMain.handle("google:disconnect", (event) => { authorize(event); return googleWorkspaceManager?.disconnect() || { ok:true }; });
+  ipcMain.handle("google:execute", (event, payload) => {
+    authorize(event);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("Invalid Google Workspace IPC payload.");
+    // Renderer input is only a request envelope. Tokens, credentials, raw API
+    // responses, and filesystem paths never cross this boundary.
+    const keys = Object.keys(payload);
+    if (keys.some((key) => !["tool", "prompt", "runId", "service", "action", "args", "confirmed"].includes(key))) throw new Error("Unsupported Google Workspace IPC field.");
+    return googleWorkspaceManager?.execute(payload) || { ok:false, text:"Google integration is unavailable." };
+  });
+  ipcMain.handle("research:execute", (event, payload) => {
+    authorize(event);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("Invalid Deep Research IPC payload.");
+    const keys = Object.keys(payload);
+    if (keys.some((key) => !["prompt", "runId", "checkpointId", "answers", "action"].includes(key))) throw new Error("Unsupported Deep Research IPC field.");
+    return deepResearchManager?.execute(payload) || { ok:false, text:"Deep Research is unavailable." };
+  });
+  ipcMain.handle("memory:list", (event, payload) => { authorize(event); return localMemoryManager?.list(String(payload?.userId || "local")) || []; });
+  ipcMain.handle("memory:search", (event, payload) => { authorize(event); return localMemoryManager?.search({ userId:String(payload?.userId || "local"), query:String(payload?.query || ""), limit:Number(payload?.limit || 5) }) || []; });
+  ipcMain.handle("memory:add", (event, payload) => { authorize(event); return localMemoryManager?.add({ userId:String(payload?.userId || "local"), text:String(payload?.text || ""), force:Boolean(payload?.force) }) || {saved:false}; });
+  ipcMain.handle("memory:update", (event, payload) => { authorize(event); return localMemoryManager?.update({ userId:String(payload?.userId || "local"), id:String(payload?.id || ""), text:String(payload?.text || "") }) || {ok:false}; });
+  ipcMain.handle("memory:remove", (event, payload) => { authorize(event); return localMemoryManager?.remove({ userId:String(payload?.userId || "local"), id:String(payload?.id || "") }) || {ok:false}; });
+  ipcMain.handle("memory:clear", (event, payload) => { authorize(event); return localMemoryManager?.clear(String(payload?.userId || "local")) || {ok:false}; });
+  if (isDevelopment) ipcMain.handle("google:diagnostic", (event, payload) => { authorize(event); return googleWorkspaceManager?.diagnostic(payload || {}) || { ok:false, stage:"desktop", errorCode:"GOOGLE_UNAVAILABLE" }; });
 }
 
 function resizeUi() {
@@ -477,8 +526,30 @@ async function createWindow() {
     preloadPath: path.join(here, "dictation-preload.cjs"),
     pillPath: path.join(here, "dictation-pill.html"),
   });
+  smartToolbarManager = new SmartToolbarManager({
+    uiContents: () => uiView?.webContents ?? null,
+    preloadPath: path.join(here, "smart-toolbar-preload.cjs"),
+    toolbarPath: path.join(here, "smart-toolbar.html"),
+    serviceUrl: () => `http://127.0.0.1:${appPort}`,
+    isSuppressed: () => Boolean(dictationManager && dictationManager.phase !== "idle"),
+  });
+  googleWorkspaceManager = new GoogleWorkspaceManager({
+    tokenPath: path.join(app.getPath("userData"), "google-workspace.dat"),
+    uiContents: () => uiView?.webContents ?? null,
+    development: isDevelopment,
+    clientId: process.env.CLYRA_GOOGLE_CLIENT_ID,
+    clientSecret: process.env.CLYRA_GOOGLE_CLIENT_SECRET,
+    serviceUrl: () => `http://127.0.0.1:${appPort}`,
+  });
+  deepResearchManager = new DeepResearchManager({
+    uiContents: () => uiView?.webContents ?? null,
+    development: isDevelopment,
+    serviceUrl: () => `http://127.0.0.1:${appPort}`,
+  });
+  localMemoryManager = new LocalMemoryManager({ filePath:path.join(app.getPath("userData"), "clyra-memory.dat"), development:isDevelopment });
   await browserManager.initialize();
   await dictationManager.initialize();
+  await smartToolbarManager.initialize();
   registerIpc();
 
   mainWindow.on("resize", resizeUi);

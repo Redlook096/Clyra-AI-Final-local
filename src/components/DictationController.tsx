@@ -338,5 +338,23 @@ export function DictationController() {
     return () => { removeTrigger(); removeAction(); release(); };
   }, [cancel, insert, release, start, stop, updateNative]);
 
+  // Electron's global shortcut remains the system-wide path. This focused-app
+  // fallback covers the rare macOS case where another accessibility utility
+  // temporarily owns Cmd+Shift+K, so Clyra's own composer never feels dead.
+  useEffect(() => {
+    const desktop = getElectronDesktop();
+    if (!desktop?.dictation.toggle) return;
+    let useFocusedFallback = false;
+    void desktop.dictation.shortcutStatus?.().then((status) => { useFocusedFallback = !status.registered; }).catch(() => { useFocusedFallback = true; });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!useFocusedFallback) return;
+      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.key.toLowerCase() !== "k") return;
+      event.preventDefault();
+      void desktop.dictation.toggle?.();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, []);
+
   return null;
 }

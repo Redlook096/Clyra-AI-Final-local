@@ -54,13 +54,21 @@ export function MarkdownMessageContent({
           </span>
         );
       }
+      const isGoogleDocumentOpen =
+        typeof href === "string" &&
+        /^https:\/\/docs\.google\.com\/document\/d\//.test(href) &&
+        String(children).toLowerCase().includes("open google docs");
       return (
         <a
           {...props}
           href={href}
           target={href?.startsWith("http") ? "_blank" : undefined}
           rel={href?.startsWith("http") ? "noopener noreferrer" : undefined}
-          className="font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 transition-colors hover:text-slate-600"
+          className={cn(
+            isGoogleDocumentOpen
+              ? "clyra-document-open-link"
+              : "font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 transition-colors hover:text-slate-600",
+          )}
         >
           {children}
         </a>

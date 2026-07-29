@@ -92,6 +92,7 @@ export class DictationManager {
     this.payload = { phase: "idle" };
     this.target = null;
     this.escapeRegistered = false;
+    this.shortcutRegistered = false;
     this.activationId = 0;
     this.shortcut = process.platform === "darwin" ? "Command+Shift+K" : "Control+Shift+K";
   }
@@ -102,13 +103,13 @@ export class DictationManager {
 
   async initialize() {
     globalShortcut.unregister(this.shortcut);
-    if (!globalShortcut.register(this.shortcut, () => void this.toggle())) {
-      throw new Error("Clyra could not register the global dictation shortcut.");
-    }
+    this.shortcutRegistered = globalShortcut.register(this.shortcut, () => void this.toggle());
+    if (!this.shortcutRegistered) console.warn("[dictation] global Cmd/Ctrl+Shift+K is already owned by another app.");
   }
 
   destroy() {
     globalShortcut.unregister(this.shortcut);
+    this.shortcutRegistered = false;
     this.unregisterEscape();
     this.window?.destroy();
     this.window = null;

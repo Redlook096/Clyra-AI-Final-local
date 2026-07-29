@@ -1006,6 +1006,19 @@ export function useVoiceCall(options: {
     statusRef.current = "connecting";
     pendingAssistantTextRef.current = "";
     ttsPlaybackStartedRef.current = false;
+    // Ask through the desktop main process before Chromium opens getUserMedia.
+    // This makes the first-click path deterministic on macOS, where a hidden
+    // WebContentsView otherwise occasionally drops the TCC prompt.
+    const desktopPermission = await getElectronDesktop()?.dictation.ensurePermissions?.().catch(() => null);
+    if (desktopPermission && desktopPermission.ok === false) {
+      const message = String(desktopPermission.error || "Microphone permission is blocked.");
+      setError(message);
+      setStatus("error");
+      statusRef.current = "error";
+      activeRef.current = false;
+      setActive(false);
+      return;
+    }
     // This runs synchronously from the user's Start Call gesture. Keeping the
     // context active here avoids browser autoplay policies suspending valid
     // Async/Max PCM that arrives later over WebSocket.

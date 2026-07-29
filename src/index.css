@@ -2120,6 +2120,39 @@ body,
   text-decoration: underline;
 }
 
+/* The verified Docs result remains a normal external link semantically, but
+   reads as one calm, compact action in chat rather than a loose URL. */
+.markdown-body .clyra-document-open-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 31px;
+  padding: 0 12px;
+  border: 1px solid #dce5f0;
+  border-radius: 999px;
+  background: #fff;
+  color: #314a69;
+  box-shadow: 0 3px 10px rgba(42, 63, 92, .07);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: -.01em;
+  line-height: 1;
+  text-decoration: none;
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
+}
+
+.markdown-body .clyra-document-open-link:hover {
+  transform: translateY(-1px);
+  border-color: #bed0e5;
+  background: #f9fbff;
+  box-shadow: 0 6px 16px rgba(42, 63, 92, .11);
+  color: #1f416d;
+}
+
+.markdown-body .clyra-document-open-link:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, .20);
+  outline-offset: 2px;
+}
+
 /* Performance optimizations */
 .clyra-workspace-card {
   will-change: transform, opacity;
@@ -5048,6 +5081,24 @@ body,
   letter-spacing: -.01em;
 }
 
+/* The active tool label remains readable, while the small moving highlight
+   connects the normal thinking state to web and Google Workspace stages. */
+.clyra-thinking-wave--shimmer {
+  color: #53677d;
+  background-image: linear-gradient(105deg, #53677d 0%, #53677d 38%, #8da5bf 45%, #eef6fc 50%, #6c8eaf 55%, #53677d 62%, #53677d 100%);
+  background-size: 280% 100%;
+  background-position: 115% 50%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: clyra-status-text-shimmer 2.4s cubic-bezier(.45, 0, .55, 1) infinite;
+  will-change: background-position;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clyra-thinking-wave--shimmer { animation: none; }
+}
+
 @keyframes clyra-gradient-wave {
   from { background-position: 115% 50%; }
   to { background-position: -115% 50%; }
@@ -5126,15 +5177,22 @@ body,
   animation-fill-mode: both;
 }
 
-/* The palette follows the visible input, not its padded outer wrapper. */
+/* The palette belongs to the composer: it deliberately shares its inner
+   reading width instead of becoming a second, wider floating surface. */
 .clyra-command-palette {
-  width: min(640px, calc(100vw - 48px)) !important;
-  max-height: 220px !important;
-  border: 1px solid rgba(221, 228, 237, .96) !important;
-  border-radius: 16px !important;
-  background: rgba(255, 255, 255, .985) !important;
-  box-shadow: 0 14px 34px rgba(24, 39, 60, .105), 0 2px 7px rgba(24, 39, 60, .045) !important;
-  backdrop-filter: blur(14px) saturate(1.06);
+  width: 100% !important;
+  max-width: none !important;
+  max-height: min(278px, 42vh) !important;
+  left: 0 !important;
+  right: 0 !important;
+  translate: 0 0 !important;
+  overflow-y: auto !important;
+  border: 1px solid rgba(218, 226, 236, .92) !important;
+  border-radius: 18px !important;
+  background: linear-gradient(160deg, rgba(255,255,255,.985), rgba(249,251,254,.96)) !important;
+  box-shadow: 0 20px 48px rgba(24, 39, 60, .13), 0 3px 10px rgba(24, 39, 60, .045) !important;
+  backdrop-filter: blur(22px) saturate(1.12);
+  -webkit-backdrop-filter: blur(22px) saturate(1.12);
   will-change: transform, opacity;
 }
 
@@ -5145,11 +5203,15 @@ body,
 }
 
 .clyra-command-palette .clyra-command-option {
-  min-height: 40px;
-  padding: 8px 13px !important;
-  border-radius: 10px;
-  margin-inline: 5px;
+  min-height: 48px;
+  padding: 9px 12px !important;
+  border-radius: 13px;
+  margin-inline: 7px;
+  transition: transform 220ms cubic-bezier(.16,1,.3,1), background-color 180ms ease, box-shadow 180ms ease, color 180ms ease !important;
 }
+.clyra-command-palette .clyra-command-option:hover { transform: translate3d(2px, 0, 0); }
+.clyra-command-palette .clyra-command-option:active { transform: translate3d(1px, 0, 0) scale(.992); }
+.clyra-command-palette .clyra-command-option > div:first-child { border-radius: 9px !important; }
 
 /* Premium but restrained boot surface. The content stays pinned to the true
    viewport centre while a soft halo and fine progress beam provide movement. */
@@ -5360,7 +5422,7 @@ body,
 }
 
 @media (max-width: 760px) {
-  .clyra-command-palette { width: min(640px, calc(100vw - 24px)) !important; }
+  .clyra-command-palette { width: 100% !important; max-height: min(258px, 46vh) !important; }
 }
 
 /* A row-level entry is independent of message streaming and scroll renders.

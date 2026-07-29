@@ -49,6 +49,8 @@ export type ClyraDesktopBridge = {
     onToggle: (callback: () => void) => () => void;
   };
   dictation: {
+    toggle?: () => Promise<{ ok: boolean }>;
+    shortcutStatus?: () => Promise<{ registered: boolean }>;
     setState: (payload: unknown) => Promise<any>;
     serviceUrl: () => Promise<string>;
     insert: (payload: { text: string; target?: unknown }) => Promise<any>;
@@ -56,6 +58,19 @@ export type ClyraDesktopBridge = {
     openMicrophoneSettings?: () => Promise<{ ok: boolean }>;
     onTrigger: (callback: (payload: any) => void) => () => void;
     onAction: (callback: (payload: any) => void) => () => void;
+  };
+  google: {
+    status: () => Promise<{ connected: boolean; email?: string }>;
+    signIn: () => Promise<{ ok: boolean; pending?: boolean; error?: string }>;
+    disconnect: () => Promise<{ ok: boolean }>;
+    execute: (payload: { tool?: "gmail" | "calendar" | "docs" | "sheets" | "slides" | "drive"; prompt?: string; runId?: string; service?: "docs" | "drive" | "sheets" | "gmail" | "calendar" | "contacts" | "youtube"; action?: string; args?: Record<string, unknown>; confirmed?: boolean }) => Promise<{ ok: boolean; text: string; action?: string; detail?: string; needsAuth?: boolean; needsInput?: boolean; requiresConfirmation?: boolean; confirmationKind?: string }>;
+    diagnostic: (payload?: { forceRefresh?: boolean }) => Promise<{ ok: boolean; stage?: string; httpStatus?: number; errorCode?: string; driveListed?: boolean; documentCreated?: boolean; documentRead?: boolean; documentDeleted?: boolean; refreshVerified?: boolean; accessibleFileCount?: number }>;
+    onAuthState: (callback: (payload: { connected: boolean; email?: string; pending?: boolean; error?: string }) => void) => () => void;
+    onAgentProgress: (callback: (payload: { runId: string; service: "clyra" | "research" | "gmail" | "calendar" | "docs" | "sheets" | "slides" | "drive"; state: "running" | "completed" | "failed"; label: string; detail: string }) => void) => () => void;
+  };
+  research: {
+    execute: (payload: { prompt: string; runId?: string; checkpointId?: string; answers?: string; action?: "start" | "continue" | "cancel" }) => Promise<{ ok: boolean; text: string; needsClarification?: boolean; checkpointId?: string; questions?: string[]; analysisPrompt?: string; sources?: Array<{ url: string; publisher: string; branch: string }>; assumptions?: string[]; paused?: boolean; cancelled?: boolean }>;
+    onAgentProgress: (callback: (payload: { runId: string; service: "clyra" | "research"; state: "running" | "completed" | "failed"; label: string; detail: string }) => void) => () => void;
   };
 };
 

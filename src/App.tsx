@@ -24,7 +24,7 @@ import {
 } from "motion/react";
 import {
   AppWindow,
-  BrainCircuit,
+  Brain,
   CircleAlert,
   Code2,
   Scissors,
@@ -39,6 +39,7 @@ import {
   Heart,
   Loader2,
   MessageCircleDashed,
+  Mail,
   MessagesSquare,
   Mic,
   MousePointer2,
@@ -285,6 +286,7 @@ function prepareVibeForBoot(
 
 type WorkspaceTabId = "chat" | "vibe" | "clip" | "browser" | "study" | CreatorMode;
 type AppAgentId = "vibe" | "browse" | "clip" | "study" | "fake-text" | "would-rather";
+type GoogleToolId = "gmail" | "calendar" | "docs" | "sheets" | "slides" | "drive";
 type AppAgentStatus = "queued" | "running" | "ready" | "needs_input" | "failed";
 
 type AttachedAppAgent = {
@@ -539,6 +541,10 @@ function useComposerVoiceCapture(onComplete: (text: string) => void) {
   const silenceTimerRef = useRef<number | null>(null);
   const heardSpeechRef = useRef(false);
   const lastSpeechAtRef = useRef(0);
+  const phaseRef = useRef<ComposerVoicePhase>("idle");
+  const recognitionRef = useRef<any>(null);
+
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
 
   const release = useCallback(() => {
     if (silenceTimerRef.current != null) window.clearTimeout(silenceTimerRef.current);
@@ -548,6 +554,8 @@ function useComposerVoiceCapture(onComplete: (text: string) => void) {
     try { socketRef.current?.close(); } catch { /* already closed */ }
     socketRef.current = null;
     sessionIdRef.current = "";
+    try { recognitionRef.current?.abort?.(); } catch { /* already stopped */ }
+    recognitionRef.current = null;
     setLevel(0);
   }, []);
 
@@ -568,13 +576,17 @@ function useComposerVoiceCapture(onComplete: (text: string) => void) {
   }, []);
 
   const start = useCallback(async () => {
-    if (phase !== "idle") return;
+    if (phaseRef.current !== "idle") return;
     heardSpeechRef.current = false;
     lastSpeechAtRef.current = 0;
     setPhase("listening");
     setDetail("Listening");
     try {
-      const response = await fetch("/voice/session", {
+      const desktop = getElectronDesktop();
+      const permissions = await desktop?.dictation.ensurePermissions?.().catch(() => null);
+      if (permissions && permissions.ok === false) throw new Error(String(permissions.error || "Microphone permission is blocked."));
+      const origin = await desktop?.dictation.serviceUrl().catch(() => "") || window.location.origin;
+      const response = await fetch(new URL("/voice/session", origin), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode: "dictation", history: [] }),
@@ -612,6 +624,28 @@ function useComposerVoiceCapture(onComplete: (text: string) => void) {
             setPhase("error");
             setDetail(error instanceof Error ? error.message : "Microphone access was denied.");
           });
+        } else if (message.type === "pipeline_mode" && message.mode === "browser" && !recognitionRef.current) {
+          const Recognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+          if (!Recognition) {
+            release();
+            setPhase("error");
+            setDetail("Clyra's local speech engine is warming up. Try again in a moment.");
+            return;
+          }
+          const recognition = new Recognition();
+          recognition.continuous = false;
+          recognition.interimResults = true;
+          recognition.lang = navigator.language || "en-AU";
+          recognitionRef.current = recognition;
+          recognition.onresult = (recognitionEvent: any) => {
+            let finalText = "";
+            for (let i = recognitionEvent.resultIndex; i < recognitionEvent.results.length; i += 1) {
+              if (recognitionEvent.results[i].isFinal) finalText += recognitionEvent.results[i][0].transcript;
+            }
+            if (finalText.trim() && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "utterance", sessionId: session.sessionId, text: finalText.trim() }));
+          };
+          recognition.onerror = () => { if (phaseRef.current === "listening") { release(); setPhase("error"); setDetail("Speech recognition could not hear the microphone."); } };
+          try { recognition.start(); } catch { /* Chromium can reject a duplicate start; current session remains live. */ }
         } else if (message.type === "dictation_final") {
           const transcript = String(message.text || "").trim();
           release();
@@ -656,7 +690,7 @@ function useComposerVoiceCapture(onComplete: (text: string) => void) {
       setPhase("error");
       setDetail(error instanceof Error ? error.message : "Voice service is unavailable.");
     }
-  }, [cancel, flush, onComplete, phase, release]);
+  }, [cancel, flush, onComplete, release]);
 
   useEffect(() => () => release(), [release]);
   return { phase, level, detail, start, cancel };
@@ -748,15 +782,62 @@ function SoftStreamText({
   );
 }
 
+type GoogleAgentStep = {
+  service: "clyra" | "research" | "gmail" | "calendar" | "docs" | "sheets" | "slides" | "drive";
+  state: "running" | "completed" | "failed";
+  label: string;
+  detail: string;
+};
+
+function GoogleAgentServiceIcon({ service }: { service: GoogleAgentStep["service"] }) {
+  if (service === "research") return <Globe className="h-3.5 w-3.5 text-slate-500" strokeWidth={1.8} />;
+  if (service === "clyra") return <ShiningBrainIcon />;
+  return <GoogleGlyph product={service} className="h-4 w-4" />;
+}
+
+function GoogleAgentActionStack({ steps, completed = false }: { steps?: GoogleAgentStep[]; completed?: boolean }) {
+  const finished = (steps || []).filter((step) => step.state !== "running");
+  if (!finished.length) return null;
+  return (
+    <div className={cn("mt-2.5 max-w-[520px] space-y-1.5", completed && "mb-3")}>
+      <AnimatePresence initial={false}>
+        {finished.map((step, index) => (
+          <motion.div
+            key={`${step.service}-${step.label}`}
+            initial={{ opacity: 0, y: 5, filter: "blur(2px)" }}
+            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+            transition={{ duration: 0.42, delay: Math.min(index * 0.085, 0.34), ease: CHAT_EASE_OUT }}
+            className="flex items-center gap-2 text-[11px] leading-4 text-slate-400"
+          >
+            <span className="grid h-4 w-4 shrink-0 place-items-center opacity-80"><GoogleAgentServiceIcon service={step.service} /></span>
+            <span className="truncate"><span className="font-medium text-slate-500">{step.label}</span>{step.detail ? <span className="text-slate-400"> — {step.detail}</span> : null}</span>
+          </motion.div>
+        ))}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 /** Standard chat: shimmer until the model emits answer text (`content`), then hide so stagger can print it. */
 function ChatThinkingLabel({
   thinkingMode = "thinking",
   searchSources = [],
+  googleAction,
+  googleDetail,
+  googleSteps,
 }: {
-  thinkingMode?: "thinking" | "youtube" | "search" | "weather";
+  thinkingMode?: "thinking" | "youtube" | "search" | "weather" | "google" | "research";
   searchSources?: string[];
+  googleAction?: string;
+  googleDetail?: string;
+  googleSteps?: GoogleAgentStep[];
 }) {
   const [wavePhase, setWavePhase] = useState<"reveal" | "settle" | "shimmer">("reveal");
+  const activeGoogleService = [...(googleSteps || [])].reverse().find((step) => step.state === "running")?.service;
+  const googleIsResearching = (thinkingMode === "google" && activeGoogleService === "research") || thinkingMode === "research";
+  const googleProduct = activeGoogleService && ["gmail", "calendar", "docs", "sheets", "slides", "drive"].includes(activeGoogleService)
+    ? activeGoogleService as keyof typeof GOOGLE_PRODUCT_LOGOS
+    : "google";
   const label =
     thinkingMode === "youtube"
       ? "Analyzing YouTube"
@@ -764,6 +845,10 @@ function ChatThinkingLabel({
         ? "Searching the web"
         : thinkingMode === "weather"
           ? "Checking weather"
+          : googleIsResearching
+            ? googleAction || "Preparing the research scope"
+          : thinkingMode === "google"
+            ? googleAction || "Working in Google Workspace"
           : "Thinking";
 
   const sourceHosts = searchSources
@@ -782,22 +867,35 @@ function ChatThinkingLabel({
         <span className={waveIconClass} aria-hidden>
           <Youtube className="h-[16px] w-[16px] text-[#ff0033]" strokeWidth={2} />
         </span>
+      ) : thinkingMode === "research" ? (
+        <span className={waveIconClass} aria-hidden>
+          <Brain className="h-[15px] w-[15px] text-slate-500" strokeWidth={1.75} />
+        </span>
       ) : thinkingMode === "search" ? (
         <span className={waveIconClass} aria-hidden>
           <Globe className="h-[15px] w-[15px] text-slate-500" strokeWidth={1.75} />
+        </span>
+      ) : googleIsResearching ? (
+        <span className={waveIconClass} aria-hidden>
+          <Brain className="h-[15px] w-[15px] text-slate-500" strokeWidth={1.75} />
+        </span>
+      ) : thinkingMode === "google" ? (
+        <span className={waveIconClass} aria-hidden>
+          <GoogleGlyph product={googleProduct} className="h-4 w-4" />
         </span>
       ) : (
         <span className={waveIconClass} aria-hidden>
           <ShiningBrainIcon />
         </span>
       )}
-      <StatusTextReveal
-        className="clyra-thinking-wave"
-        text={label}
-        ariaLabel={label}
-        onPhaseChange={setWavePhase}
-      />
-      {thinkingMode === "thinking" ? <ThinkingDots /> : null}
+      <motion.span
+        key={label}
+        initial={{ opacity: 0, y: 3, filter: "blur(2px)" }}
+        animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+        transition={{ duration: 0.36, ease: CHAT_EASE_OUT }}
+        className="clyra-thinking-wave clyra-thinking-wave--shimmer min-w-0 truncate"
+      >{label}</motion.span>
+      {thinkingMode === "thinking" || thinkingMode === "google" || thinkingMode === "research" ? <ThinkingDots /> : null}
       {thinkingMode === "search" ? (
         <span className="ml-0.5 flex items-center gap-1.5">
           <AnimatePresence initial={false}>
@@ -878,6 +976,53 @@ function AppAgentGlyph({ id, className = "h-4 w-4" }: { id: AppAgentId; classNam
   if (id === "study") return <GraduationCap className={className} />;
   if (id === "fake-text") return <MessagesSquare className={className} />;
   return <Heart className={className} />;
+}
+
+const GOOGLE_PRODUCT_LOGOS = {
+  google: "https://www.gstatic.com/images/branding/product/2x/googleg_48dp.png",
+  gmail: "https://www.gstatic.com/images/branding/product/2x/gmail_48dp.png",
+  calendar: "https://www.gstatic.com/images/branding/product/2x/calendar_48dp.png",
+  docs: "https://www.gstatic.com/images/branding/product/2x/docs_48dp.png",
+  sheets: "https://www.gstatic.com/images/branding/product/2x/sheets_48dp.png",
+  slides: "https://www.gstatic.com/images/branding/product/2x/slides_48dp.png",
+  drive: "https://www.gstatic.com/images/branding/product/2x/drive_48dp.png",
+} as const;
+
+function GoogleGlyph({ product = "google", className = "h-4 w-4" }: { product?: keyof typeof GOOGLE_PRODUCT_LOGOS; className?: string }) {
+  return <img src={GOOGLE_PRODUCT_LOGOS[product]} alt="" className={cn("object-contain", className)} />;
+}
+
+function GoogleConnectSheet({
+  open,
+  busy,
+  tool,
+  onConnect,
+  onCancel,
+}: {
+  open: boolean;
+  busy: boolean;
+  tool: GoogleToolId | null;
+  onConnect: () => void;
+  onCancel: () => void;
+}) {
+  const destination = tool === "gmail" ? "Gmail" : tool === "calendar" ? "Google Calendar" : tool === "docs" ? "Google Docs" : tool === "sheets" ? "Google Sheets" : tool === "slides" ? "Google Slides" : "Google Drive";
+  return createPortal(
+    <AnimatePresence>
+      {open ? <motion.div className="fixed inset-0 z-[500] flex items-center justify-center bg-slate-950/20 p-5 backdrop-blur-[3px]" initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}>
+        <motion.section role="dialog" aria-modal="true" aria-label="Connect Google Workspace" initial={{ opacity:0, y:16, scale:.975 }} animate={{ opacity:1, y:0, scale:1 }} exit={{ opacity:0, y:10, scale:.985 }} transition={{ duration:.28, ease:[.16,1,.3,1] }} className="w-full max-w-[430px] overflow-hidden rounded-[28px] border border-white/80 bg-white/95 shadow-[0_28px_80px_rgba(15,23,42,.24)] backdrop-blur-2xl">
+          <div className="relative px-7 pb-6 pt-7">
+            <button type="button" onClick={onCancel} disabled={busy} className="absolute right-4 top-4 grid h-8 w-8 place-items-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-700" aria-label="Close Google sign-in"><X className="h-4 w-4" /></button>
+            <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-[17px] bg-white shadow-[0_7px_20px_rgba(15,23,42,.12)]"><GoogleGlyph className="h-7 w-7" /></div>
+            <p className="text-[11px] font-bold uppercase tracking-[.16em] text-[#4285f4]">Clyra × Google</p>
+            <h2 className="mt-1 text-[23px] font-semibold tracking-[-.035em] text-slate-900">Connect Google Workspace</h2>
+            <p className="mt-2 max-w-sm text-[13px] leading-6 text-slate-500">Connect once to let Clyra use {destination} for the request you’re about to send. Your Google sign-in stays protected by Google.</p>
+            <div className="mt-5 flex items-center gap-3 rounded-2xl border border-blue-100 bg-blue-50/70 px-3.5 py-3 text-[11px] leading-5 text-slate-600"><GoogleGlyph className="h-5 w-5 shrink-0" /><span>Google sign-in opens in your normal browser, so your saved accounts, passkeys, and password manager stay available.</span></div>
+            <div className="mt-6 flex gap-2"><button type="button" onClick={onCancel} disabled={busy} className="h-11 flex-1 rounded-xl text-[12px] font-semibold text-slate-500 transition hover:bg-slate-100 disabled:opacity-50">Not now</button><button type="button" onClick={onConnect} disabled={busy} className="flex h-11 flex-[1.5] items-center justify-center gap-2 rounded-xl bg-[#0052fb] px-4 text-[12px] font-semibold text-white shadow-[0_7px_18px_rgba(0,82,251,.23)] transition hover:bg-[#0048e0] disabled:opacity-70">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <GoogleGlyph className="h-4 w-4" />}{busy ? "Waiting for Google…" : "Continue with Google"}</button></div>
+          </div>
+        </motion.section>
+      </motion.div> : null}
+    </AnimatePresence>, document.body,
+  );
 }
 
 function AppAgentCard({
@@ -1162,6 +1307,9 @@ export const AnimatedMessage = ({
   youtubeVideoId,
   searchSources,
   weather,
+  googleAction,
+  googleDetail,
+  googleSteps,
   isLastAssistant,
   onVibePreviewReady,
   onDocumentRewriteRequest,
@@ -1178,10 +1326,13 @@ export const AnimatedMessage = ({
   markdownSupport?: boolean;
   codeHighlighting?: boolean;
   assistantKind?: "chat" | "vibe";
-  thinkingMode?: "thinking" | "youtube" | "search" | "weather";
+  thinkingMode?: "thinking" | "youtube" | "search" | "weather" | "google" | "research";
   youtubeVideoId?: string;
   searchSources?: string[];
   weather?: WeatherPayload;
+  googleAction?: string;
+  googleDetail?: string;
+  googleSteps?: GoogleAgentStep[];
   isLastAssistant?: boolean;
   onVibePreviewReady?: (
     messageId: string,
@@ -1202,6 +1353,8 @@ export const AnimatedMessage = ({
       ? 4600
       : thinkingMode === "weather"
         ? 3600
+        : thinkingMode === "google" || thinkingMode === "research"
+          ? 2400
         : 3200;
   const persistedThinkingStart = chatThinkingStartedAt.get(thinkingKey);
   const shouldKeepThinkingForDwell =
@@ -1396,7 +1549,13 @@ export const AnimatedMessage = ({
             <ChatThinkingLabel
               thinkingMode={thinkingMode}
               searchSources={searchSources}
+              googleAction={googleAction}
+              googleDetail={googleDetail}
+              googleSteps={googleSteps}
             />
+            {thinkingMode === "google" || thinkingMode === "research" ? (
+              <GoogleAgentActionStack steps={googleSteps} />
+            ) : null}
           </motion.div>
         ) : showAnswer && !hasInlineStatusCard ? (
           <motion.div
@@ -1501,7 +1660,7 @@ interface CommandSuggestionBase {
 }
 
 interface BuiltInCommandSuggestion extends CommandSuggestionBase {
-  id: "youtube" | "search";
+  id: "youtube" | "search" | "deep-research" | `google-${GoogleToolId}`;
   kind: "command";
 }
 
@@ -1511,6 +1670,40 @@ interface AppSuggestion extends CommandSuggestionBase {
 }
 
 type CommandSuggestion = BuiltInCommandSuggestion | AppSuggestion;
+
+function detectGoogleTool(prompt: string, selected?: BuiltInCommandSuggestion | AppSuggestion | null): GoogleToolId | null {
+  if (selected?.kind === "command" && selected.id.startsWith("google-")) return selected.id.slice("google-".length) as GoogleToolId;
+  const value = prompt.toLowerCase();
+  if (/\b(?:summari[sz]e|digest|brief|review)\b[\s\S]{0,120}\b(?:emails?|gmail|inbox)\b[\s\S]{0,120}\b(?:doc|document|report)\b/.test(value)) return "docs";
+  if (/\b(?:gmail|inbox|unread (?:email|mail)|check (?:my )?(?:email|mail))\b/.test(value)) return "gmail";
+  if (/\b(?:google calendar|calendar|schedule|upcoming events)\b/.test(value)) return "calendar";
+  if (/\b(?:google docs?|create (?:a )?(?:doc|document))\b/.test(value)) return "docs";
+  // A request to make a comparison, plan, report, letter, or guide is a
+  // document request even when the user omits the words “Google Doc”.
+  if (/\b(?:create|make|write|draft)\b[\s\S]{0,90}\b(?:comparison|versus|vs\.?|report|project plan|study guide|meeting notes|letter|proposal|business plan)\b/.test(value)) return "docs";
+  if (/\b(?:google sheets?|create (?:a )?(?:sheet|spreadsheet))\b/.test(value)) return "sheets";
+  if (/\b(?:google slides?|create (?:a )?(?:slide|presentation))\b/.test(value)) return "slides";
+  if (/\b(?:google drive|drive file)\b/.test(value)) return "drive";
+  return null;
+}
+
+function googleActionLabel(tool: GoogleToolId, prompt: string) {
+  if (tool === "gmail") return /\b(?:send|draft|reply|compose)\b/i.test(prompt) ? "Preparing Gmail message" : "Checking Gmail";
+  if (tool === "calendar") return /\b(?:create|schedule|add)\b/i.test(prompt) ? "Preparing Google Calendar" : "Checking Google Calendar";
+  if (tool === "docs") return "Creating Google Doc";
+  if (tool === "sheets") return "Creating Google Sheet";
+  if (tool === "slides") return "Creating Google Slides";
+  return "Creating Google Drive file";
+}
+
+function googleActionDetail(tool: GoogleToolId, prompt: string) {
+  if (tool === "gmail") return /\b(?:send|draft|reply|compose)\b/i.test(prompt) ? "Preparing the email in Clyra; nothing is sent until you confirm." : "Reading unread messages, sender names, subjects, and dates from your inbox.";
+  if (tool === "calendar") return /\b(?:create|schedule|add)\b/i.test(prompt) ? "Checking the event details before making any change to your calendar." : "Loading upcoming events from your primary Google Calendar.";
+  if (tool === "docs") return "Creating a new document in your Google Drive and preparing its shareable link.";
+  if (tool === "sheets") return "Creating a new spreadsheet in your Google Drive and preparing its shareable link.";
+  if (tool === "slides") return "Creating a new presentation in your Google Drive and preparing its shareable link.";
+  return "Creating a new Google Drive file and preparing its shareable link.";
+}
 
 interface TextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
   containerClassName?: string;
@@ -1621,7 +1814,13 @@ export default function App() {
     assistantKind?: "chat" | "vibe";
     /** User prompt for this Vibe reply—drives the fixed Thought summary. */
     vibeUserPrompt?: string;
-    thinkingMode?: "thinking" | "youtube" | "search" | "weather";
+    thinkingMode?: "thinking" | "youtube" | "search" | "weather" | "google" | "research";
+    googleAction?: string;
+    googleDetail?: string;
+    googleRunId?: string;
+    googleSteps?: GoogleAgentStep[];
+    researchRunId?: string;
+    researchCheckpointId?: string;
     documentMode?: "notes";
     youtubeVideoId?: string;
     youtubeContext?: {
@@ -1645,6 +1844,7 @@ export default function App() {
 
   const [selectedCommand, setSelectedCommand] =
     useState<BuiltInCommandSuggestion | AppSuggestion | null>(null);
+  const [pendingDeepResearch, setPendingDeepResearch] = useState<{ checkpointId: string; prompt: string } | null>(null);
   const [selectedAppAgents, setSelectedAppAgents] = useState<AppSuggestion[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<{ messageId: string; agentId: AppAgentId } | null>(null);
   const [activeWorkspaceTab, setActiveWorkspaceTab] =
@@ -2309,6 +2509,61 @@ export default function App() {
   const [isTemporaryChat, setIsTemporaryChat] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [googleConnectRequest, setGoogleConnectRequest] = useState<{ tool: GoogleToolId; prompt: string } | null>(null);
+  const [googleConnectBusy, setGoogleConnectBusy] = useState(false);
+  useEffect(() => {
+    const desktop = getElectronDesktop();
+    if (!desktop?.google) return;
+    return desktop.google.onAuthState((state) => {
+      if (state.connected) {
+        setGoogleConnectBusy(false);
+        setGoogleConnectRequest(null);
+        setToastMessage(state.email ? `Google connected as ${state.email}` : "Google Workspace connected");
+        window.setTimeout(() => void sendMessageRef.current?.(), 140);
+      }
+      else if (state.error) { setGoogleConnectBusy(false); setToastMessage(state.error); }
+    });
+  }, []);
+  useEffect(() => {
+    const desktop = getElectronDesktop();
+    if (!desktop?.google?.onAgentProgress) return;
+    return desktop.google.onAgentProgress((progress) => {
+      setMessages((current) => current.map((message) => {
+        if (message.googleRunId !== progress.runId) return message;
+        const steps = [...(message.googleSteps || [])];
+        const nextStep: GoogleAgentStep = {
+          service: progress.service,
+          state: progress.state,
+          label: progress.label,
+          detail: progress.detail,
+        };
+        const existing = steps.findIndex((step) => step.service === nextStep.service && step.label === nextStep.label);
+        if (existing >= 0) steps[existing] = nextStep;
+        else steps.push(nextStep);
+        return {
+          ...message,
+          googleSteps: steps,
+          googleAction: progress.label,
+          googleDetail: progress.detail,
+        };
+      }));
+    });
+  }, []);
+  useEffect(() => {
+    const desktop = getElectronDesktop();
+    if (!desktop?.research?.onAgentProgress) return;
+    return desktop.research.onAgentProgress((progress) => {
+      setMessages((current) => current.map((message) => {
+        if (message.researchRunId !== progress.runId) return message;
+        const steps = [...(message.googleSteps || [])];
+        const nextStep: GoogleAgentStep = { service:progress.service, state:progress.state, label:progress.label, detail:progress.detail };
+        const existing = steps.findIndex((step) => step.service === nextStep.service && step.label === nextStep.label);
+        if (existing >= 0) steps[existing] = nextStep;
+        else steps.push(nextStep);
+        return { ...message, googleSteps:steps, googleAction:nextStep.label, googleDetail:nextStep.detail };
+      }));
+    });
+  }, []);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showClipsLibrary, setShowClipsLibrary] = useState(false);
   const [theme, setTheme] = useState("Light");
@@ -2832,6 +3087,21 @@ export default function App() {
       workspace: "chat",
     },
     {
+      id: "deep-research",
+      kind: "command",
+      icon: () => <Brain className="h-4 w-4" />,
+      label: "Deep Research",
+      description: "Investigate a topic across trusted sources and produce a verified report",
+      prefix: "/deep-research",
+      workspace: "vibe",
+    },
+    { id:"google-gmail", kind:"command", icon:()=> <GoogleGlyph product="gmail" />, label:"Google Gmail", description:"Read email or prepare a message without leaving Clyra", prefix:"/gmail", workspace:"chat" },
+    { id:"google-calendar", kind:"command", icon:()=> <GoogleGlyph product="calendar" />, label:"Google Calendar", description:"Check upcoming events or prepare a calendar action", prefix:"/calendar", workspace:"chat" },
+    { id:"google-docs", kind:"command", icon:()=> <GoogleGlyph product="docs" />, label:"Google Docs", description:"Create a polished Google document", prefix:"/docs", workspace:"chat" },
+    { id:"google-sheets", kind:"command", icon:()=> <GoogleGlyph product="sheets" />, label:"Google Sheets", description:"Create a Google spreadsheet", prefix:"/sheets", workspace:"chat" },
+    { id:"google-slides", kind:"command", icon:()=> <GoogleGlyph product="slides" />, label:"Google Slides", description:"Create a Google presentation", prefix:"/slides", workspace:"chat" },
+    { id:"google-drive", kind:"command", icon:()=> <GoogleGlyph product="drive" />, label:"Google Drive", description:"Create a file in Google Drive", prefix:"/drive", workspace:"chat" },
+    {
       id: "vibe",
       kind: "app",
       icon: (isActive) => (
@@ -3001,10 +3271,14 @@ export default function App() {
     [filteredChats, isVibeChat],
   );
 
+  // The composer is deliberately focused on first-party actions. App previews
+  // and game/workbench shortcuts belong to their own workspaces, not this
+  // compact command surface.
+  const composerCommands = commandSuggestions.filter((cmd) => cmd.kind === "command");
   const filteredSuggestions = isCommandMode
-    ? commandSuggestions.filter((cmd) => cmd.label.toLowerCase().includes(commandQuery))
+    ? composerCommands.filter((cmd) => cmd.label.toLowerCase().includes(commandQuery))
     : isCommandPalettePinned
-      ? commandSuggestions
+      ? composerCommands
       : [];
 
   useEffect(() => {
@@ -3924,6 +4198,27 @@ Please analyze the code you just wrote and fix this error.`;
         selectedCommand?.id ??
         (activeWorkspaceTab === "vibe" ? "vibe" : undefined);
       const rawUserText = value.trim();
+      const isDeepResearchMode = userCommandId === "deep-research" || /^\/deep-research\b/i.test(rawUserText) || Boolean(pendingDeepResearch);
+      const googleTool = isDeepResearchMode ? null : detectGoogleTool(rawUserText, selectedCommand);
+      const googleAction = googleTool ? googleActionLabel(googleTool, rawUserText) : undefined;
+      const googleDetail = googleTool ? googleActionDetail(googleTool, rawUserText) : undefined;
+      // Do this before creating a chat message. The request remains intact
+      // behind the Clyra-styled connection sheet and resumes automatically
+      // after Google confirms the PKCE flow.
+      if (googleTool) {
+        const desktop = getElectronDesktop();
+        if (!desktop?.google) {
+          setToastMessage("Google Workspace actions run securely in the Clyra desktop app.");
+          return;
+        }
+        const status = await desktop?.google.status().catch(() => ({ connected: false }));
+        if (!status?.connected) {
+          setGoogleConnectRequest({ tool: googleTool, prompt: rawUserText });
+          setGoogleConnectBusy(false);
+          setIsInputExpanded(true);
+          return;
+        }
+      }
       if (rawUserText) setWorkspaceChromeEngaged(true);
       const vibeCommand = rawUserText.match(/^\/vibe(?:\s+(.+))?$/i);
       const clipCommand = rawUserText.match(/^\/clip(?:\s+(.+))?$/i);
@@ -4014,6 +4309,7 @@ Please analyze the code you just wrote and fix this error.`;
         extractWeatherLocation(rawUserText) ||
         "";
       const autoSearch =
+        !isDeepResearchMode &&
         !youtubeCommand &&
         !searchCommand &&
         !weatherCommand &&
@@ -4031,6 +4327,7 @@ Please analyze the code you just wrote and fix this error.`;
         (!attachedAgentOwnsRequest && Boolean(detectedYoutubeUrl)) ||
         youtubeFollowUp;
       const isSearchMode =
+        !isDeepResearchMode &&
         !isWeatherMode &&
         (userCommandId === "search" ||
           Boolean(searchCommand) ||
@@ -4090,15 +4387,21 @@ Please analyze the code you just wrote and fix this error.`;
       regenerationRef.current = null;
       const userMsgId = regeneration?.userMessageId ?? Date.now().toString();
       const aiMsgId = (Date.now() + 1).toString();
+      const googleRunId = googleTool ? `${aiMsgId}-google` : undefined;
+      const researchRunId = isDeepResearchMode ? `${aiMsgId}-research` : undefined;
 
       const isVibeMode = userCommandId === "vibe" || Boolean(vibeCommand);
       const thinkingMode: Message["thinkingMode"] = isYoutubeMode
         ? "youtube"
-        : isSearchMode
-          ? "search"
-          : isWeatherMode
-            ? "weather"
-            : "thinking";
+        : isDeepResearchMode
+          ? "research"
+          : isSearchMode
+            ? "search"
+            : isWeatherMode
+              ? "weather"
+              : googleTool
+                ? "google"
+                : "thinking";
       const youtubeVideoId = isYoutubeMode
         ? extractYoutubeVideoId(userText) ||
           extractYoutubeVideoId(youtubePayload) ||
@@ -4120,6 +4423,10 @@ Please analyze the code you just wrote and fix this error.`;
         isStreaming: true,
         assistantKind: isVibeMode ? "vibe" : "chat",
         thinkingMode,
+        ...(googleRunId ? { googleRunId, googleSteps: [] } : {}),
+        ...(researchRunId ? { researchRunId, googleSteps: [] } : {}),
+        ...(googleAction ? { googleAction } : {}),
+        ...(googleDetail ? { googleDetail } : {}),
         ...(wantsNotesMode(userText) ? { documentMode: "notes" as const } : {}),
         ...(youtubeVideoId ? { youtubeVideoId } : {}),
         ...(isVibeMode ? { vibeUserPrompt: userText } : {}),
@@ -4221,6 +4528,96 @@ Please analyze the code you just wrote and fix this error.`;
 
         if (isVibeMode && chatId) {
           simulateVibeCoder(aiMsgId, userText, chatId);
+          return;
+        }
+
+        if (googleTool) {
+          const desktop = getElectronDesktop();
+          if (!desktop?.google) return;
+          const result = await desktop.google.execute({ tool: googleTool, prompt: userText, runId: googleRunId });
+          if (result.needsAuth) {
+            void desktop.google.signIn();
+            setMessages((current) => current.map((message) => message.id === aiMsgId ? { ...message, content: "**Connect Google to continue**\n\nI opened a secure Google sign-in window. Once you’ve approved access, return to Clyra and send this request again.", isThinking:false, isStreaming:false, thinkingMode:"google" } : message));
+            return;
+          }
+          setMessages((current) => current.map((message) => message.id === aiMsgId ? { ...message, content: result.text, isThinking:false, isStreaming:false, thinkingMode:"google", googleAction:result.action || googleAction, googleDetail:result.detail || googleDetail } : message));
+          return;
+        }
+
+        if (isDeepResearchMode) {
+          const desktop = getElectronDesktop();
+          const continuation = pendingDeepResearch;
+          const payload = {
+            prompt: continuation?.prompt || userText,
+            runId: researchRunId,
+            ...(continuation ? { checkpointId:continuation.checkpointId, answers:userText, action:"continue" as const } : { action:"start" as const }),
+          };
+          const result = desktop?.research
+            ? await desktop.research.execute(payload)
+            : await (async () => {
+              try {
+                const response = await fetch("/api/research/deep", {
+                  method:"POST",
+                  headers:{"Content-Type":"application/json", Accept:"text/event-stream"},
+                  body:JSON.stringify(payload),
+                });
+                if (!response.ok || !response.body) return { ok:false, text:"Deep Research could not reach the local service." };
+                const reader=response.body.getReader();
+                const decoder=new TextDecoder();
+                let buffer=""; let finalResult: any=null;
+                const applyProgress=(progress: { runId?:string; service?:string; state?:GoogleAgentStep["state"]; label?:string; detail?:string }) => {
+                  setMessages((current) => current.map((message) => {
+                    if (message.researchRunId !== progress.runId) return message;
+                    const nextStep: GoogleAgentStep={ service:(progress.service as GoogleAgentStep["service"]) || "research", state:progress.state || "running", label:progress.label || "Researching", detail:progress.detail || "" };
+                    const steps=[...(message.googleSteps || [])]; const index=steps.findIndex((step)=>step.service===nextStep.service && step.label===nextStep.label);
+                    if(index>=0) steps[index]=nextStep; else steps.push(nextStep);
+                    return { ...message, googleSteps:steps, googleAction:nextStep.label, googleDetail:nextStep.detail };
+                  }));
+                };
+                while (true) {
+                  const { done, value }=await reader.read();
+                  buffer+=decoder.decode(value || new Uint8Array(), { stream:!done });
+                  const events=buffer.split("\n\n"); buffer=events.pop() || "";
+                  for (const entry of events) {
+                    const event=entry.match(/^event: (.+)$/m)?.[1]; const data=entry.match(/^data: (.+)$/m)?.[1];
+                    if (!event || !data) continue;
+                    const parsed=JSON.parse(data);
+                    if (event==="progress") applyProgress(parsed); else if (event==="result") finalResult=parsed;
+                  }
+                  if (done) break;
+                }
+                return finalResult || { ok:false, text:"Deep Research ended without a result." };
+              } catch { return { ok:false, text:"Deep Research could not reach the local service." }; }
+            })();
+          if (result.needsClarification && result.checkpointId) {
+            setPendingDeepResearch({ checkpointId:result.checkpointId, prompt:userText });
+            const questions=(result.questions || []).map((question,index)=>`${index + 1}. ${question}`).join("\n");
+            setMessages((current) => current.map((message) => message.id === aiMsgId ? {
+              ...message,
+              content:`I’ll investigate this using current, primary, independent, and counterevidence sources. Before I begin:\n\n${questions}\n\nReply in one message, or say “use your judgement.”`,
+              isThinking:false, isStreaming:false, thinkingMode:"research", researchCheckpointId:result.checkpointId,
+            } : message));
+            return;
+          }
+          if (!result.ok || !result.analysisPrompt) {
+            setMessages((current) => current.map((message) => message.id === aiMsgId ? { ...message, content:result.text || "Deep Research could not be completed safely.", isThinking:false, isStreaming:false, thinkingMode:"research" } : message));
+            return;
+          }
+          setPendingDeepResearch(null);
+          let accumulatedText="";
+          await streamOpenAI(
+            "Produce a concise, rigorous research report. Use only the inspected evidence provided; put source markers beside factual claims, label inferences, and do not reveal private reasoning.",
+            [{ role:"user", content:result.analysisPrompt }],
+            (chunkText, isReasoning) => {
+              if (isReasoning) return;
+              accumulatedText += chunkText;
+              setMessages((current) => current.map((message) => message.id === aiMsgId ? { ...message, content:accumulatedText, isThinking:false, isStreaming:true, thinkingMode:"search", searchSources:(result.sources || []).map((source)=>source.url) } : message));
+            },
+            0.25,
+            4200,
+            "deepseek-chat",
+          );
+          setMessages((current) => current.map((message) => message.id === aiMsgId ? { ...message, content:accumulatedText || "Research completed, but the final synthesis was unavailable.", isThinking:false, isStreaming:false, thinkingMode:"search", searchSources:(result.sources || []).map((source)=>source.url) } : message));
           return;
         }
 
@@ -5393,6 +5790,23 @@ Please analyze the code you just wrote and fix this error.`;
         onUpdateUserMessage={voiceCall.updateUserMessage}
         onResendUserMessage={voiceCall.resendUserMessage}
       />
+      <GoogleConnectSheet
+        open={Boolean(googleConnectRequest)}
+        busy={googleConnectBusy}
+        tool={googleConnectRequest?.tool || null}
+        onCancel={() => { setGoogleConnectBusy(false); setGoogleConnectRequest(null); }}
+        onConnect={() => {
+          const desktop = getElectronDesktop();
+          if (!desktop?.google) { setGoogleConnectBusy(false); setGoogleConnectRequest(null); setToastMessage("Google Workspace actions run securely in the Clyra desktop app."); return; }
+          setGoogleConnectBusy(true);
+          void desktop.google.signIn().then((result) => {
+            if (!result.ok) {
+              setGoogleConnectBusy(false);
+              setToastMessage(result.error || "Google sign-in could not start.");
+            }
+          }).catch(() => { setGoogleConnectBusy(false); setToastMessage("Google sign-in could not start."); });
+        }}
+      />
       <DictationController />
       <AnimatePresence>
         {isAppLauncherOpen ? (
@@ -6286,18 +6700,6 @@ Please analyze the code you just wrote and fix this error.`;
                             <button
                               type="button"
                               onClick={() => {
-                                setIsCommandPalettePinned(true);
-                                setShowCommandPalette(true);
-                                setActiveSuggestion(0);
-                                setIsInputExpanded(true);
-                              }}
-                            >
-                              <AppWindow className="h-4 w-4" />
-                              Apps
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
                                 const searchCommand = commandSuggestions.find((command): command is BuiltInCommandSuggestion => command.id === "search");
                                 if (!searchCommand) return;
                                 setSelectedCommand(searchCommand);
@@ -6410,6 +6812,9 @@ Please analyze the code you just wrote and fix this error.`;
                                           youtubeVideoId={message.youtubeVideoId}
                                           searchSources={message.searchSources}
                                           weather={message.weather}
+                                          googleAction={message.googleAction}
+                                          googleDetail={message.googleDetail}
+                                          googleSteps={message.googleSteps}
                                           documentMode={message.documentMode}
                                           fontSizeClass={fontClass}
                                           markdownSupport={markdownSupport}
@@ -6631,17 +7036,6 @@ Please analyze the code you just wrote and fix this error.`;
                                     onPointerDown={(event) => event.stopPropagation()}
                                     onClick={(event) => {
                                       event.stopPropagation();
-                                      setIsCommandPalettePinned(true);
-                                      setShowCommandPalette(true);
-                                      setActiveSuggestion(0);
-                                      setIsInputExpanded(true);
-                                    }}
-                                  ><AppWindow className="h-4 w-4" /> Apps</button>
-                                  <button
-                                    type="button"
-                                    onPointerDown={(event) => event.stopPropagation()}
-                                    onClick={(event) => {
-                                      event.stopPropagation();
                                       const searchCommand = commandSuggestions.find((command): command is BuiltInCommandSuggestion => command.id === "search");
                                       if (!searchCommand) return;
                                       setSelectedCommand(searchCommand);
@@ -6816,13 +7210,10 @@ Please analyze the code you just wrote and fix this error.`;
                                                     c.prefix ===
                                                     suggestion.prefix,
                                                 );
-                                              const isSelected = suggestion.kind === "app" && selectedAppAgents.some((agent) => agent.id === suggestion.id);
+                                              const isSelected = false;
                                               return (
                                                 <React.Fragment key={suggestion.prefix}>
-                                                  {suggestion.kind === "app" && (index === 0 || filteredSuggestions[index - 1]?.kind !== "app") ? (
-                                                    <div className="px-4 pb-2 pt-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Apps</div>
-                                                  ) : null}
-                                                <motion.div
+                                                  <motion.div
                                                   className={cn(
                                                     "clyra-command-option flex cursor-pointer items-center gap-3 px-4 py-3 text-sm transition-colors",
                                                     isSelected
@@ -7185,31 +7576,6 @@ Please analyze the code you just wrote and fix this error.`;
                                       >
                                         <Paperclip className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
                                       </motion.button> : null}
-
-                                      <motion.button
-                                        data-command-button
-                                        type="button"
-                                        onClick={() => {
-                                          const next = !showCommandPalette;
-                                          setIsCommandPalettePinned(next);
-                                          setShowCommandPalette(next);
-                                          if (next) setActiveSuggestion(0);
-                                        }}
-                                        whileTap={{ scale: 0.95 }}
-                                        className={cn("flex h-9 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-semibold transition-colors", showCommandPalette || selectedAppAgents.length ? "bg-[#0052fb] text-white" : "text-slate-500 hover:bg-slate-100 hover:text-slate-800")}
-                                        aria-label="Select app agents"
-                                      >
-                                        <AppWindow className="h-4 w-4" /><span className="hidden sm:inline">Tools</span>{selectedAppAgents.length ? <span className="grid h-4 min-w-4 place-items-center rounded-full bg-white px-1 text-[8px] text-slate-900">{selectedAppAgents.length}</span> : null}
-                                      </motion.button>
-
-                                      <AnimatePresence initial={false}>
-                                        {selectedAppAgents.map((agent) => (
-                                          <motion.div key={agent.id} layout initial={{ opacity: 0, scale: 0.86, x: -4 }} animate={{ opacity: 1, scale: 1, x: 0 }} exit={{ opacity: 0, scale: 0.86, x: -4 }} className="flex h-8 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2 text-[10px] font-semibold text-slate-600 shadow-sm">
-                                            {agent.icon(false)}<span className="hidden max-w-24 truncate md:inline">{agent.label}</span>
-                                            <button type="button" onClick={() => setSelectedAppAgents((current) => current.filter((item) => item.id !== agent.id))} aria-label={`Remove ${agent.label}`} className="grid h-4 w-4 place-items-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X className="h-2.5 w-2.5" /></button>
-                                          </motion.div>
-                                        ))}
-                                      </AnimatePresence>
 
                                       <AnimatePresence>
                                         {activeInputCommand && (

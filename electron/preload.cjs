@@ -35,6 +35,8 @@ contextBridge.exposeInMainWorld("clyraDesktop", {
     onToggle: (callback) => subscribe("taskview:toggle", callback),
   },
   dictation: {
+    toggle: () => ipcRenderer.invoke("dictation:toggle"),
+    shortcutStatus: () => ipcRenderer.invoke("dictation:shortcut-status"),
     setState: (payload) => ipcRenderer.invoke("dictation:set-state", payload),
     serviceUrl: () => ipcRenderer.invoke("dictation:service-url"),
     insert: (payload) => ipcRenderer.invoke("dictation:insert", payload),
@@ -42,5 +44,18 @@ contextBridge.exposeInMainWorld("clyraDesktop", {
     openMicrophoneSettings: () => ipcRenderer.invoke("dictation:open-microphone-settings"),
     onTrigger: (callback) => subscribe("dictation:trigger", callback),
     onAction: (callback) => subscribe("dictation:action", callback),
+  },
+  google: {
+    status: () => ipcRenderer.invoke("google:status"),
+    signIn: () => ipcRenderer.invoke("google:sign-in"),
+    disconnect: () => ipcRenderer.invoke("google:disconnect"),
+    execute: (payload) => ipcRenderer.invoke("google:execute", payload),
+    diagnostic: (payload) => ipcRenderer.invoke("google:diagnostic", payload),
+    onAuthState: (callback) => subscribe("google:auth-state", callback),
+    onAgentProgress: (callback) => subscribe("google:agent-progress", callback),
+  },
+  research: {
+    execute: (payload) => ipcRenderer.invoke("research:execute", payload),
+    onAgentProgress: (callback) => subscribe("research:agent-progress", callback),
   },
 });

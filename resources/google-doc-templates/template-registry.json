@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "description": "Clyra Google Docs master-template registry. Master Google Doc IDs are written only by the validated provisioning job.",
+  "driveFolderName": "Clyra Templates",
+  "folders": ["Notes", "Meetings", "Academic", "Business", "Career", "Technical", "Product", "Communications", "Finance"],
+  "styles": ["minimal-professional", "modern-editorial", "structured-corporate", "warm-creative"],
+  "documentTypes": ["quick-note", "meeting-notes", "meeting-agenda", "essay", "research-paper", "study-guide", "business-report", "business-proposal", "project-plan", "business-plan", "resume", "cover-letter", "formal-letter", "comparison", "technical-documentation", "standard-operating-procedure", "product-brief", "case-study", "newsletter", "invoice"],
+  "masterIntegrityRule": "Never write to a masterGoogleDocId. Create a Drive files.copy before population, then validate the copy."
+}
