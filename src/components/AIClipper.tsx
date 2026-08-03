@@ -303,7 +303,9 @@ const DEFAULT_DRAFT: ClipDraft = {
   captionX: 50,
   captionY: 78,
   subtitleStyle: "phrase-highlight",
-  captionCollisionMode: "auto",
+  // Never stack Clyra captions over captions that are already part of the
+  // source unless the editor deliberately opts into a second layer.
+  captionCollisionMode: "keep-existing",
   renderQuality: "premium",
 };
 
@@ -1220,7 +1222,7 @@ export default function AIClipper({
               splitScreen: false,
             },
             captions_enabled: draft.captionsEnabled,
-            caption_collision_mode: draft.captionCollisionMode || "auto",
+            caption_collision_mode: draft.captionCollisionMode || "keep-existing",
             remove_fillers: draft.removeFillers,
             clip_name: draft.source.name || "clyra-clip",
           },
@@ -1431,7 +1433,7 @@ export default function AIClipper({
           cropFocus: draft.cropFocus,
           aspectRatio: draft.aspect,
           captionsEnabled: draft.captionsEnabled,
-          captionCollisionMode: draft.captionCollisionMode || "auto",
+          captionCollisionMode: draft.captionCollisionMode || "keep-existing",
           font: draft.font,
           fontSize: draft.fontSize,
           textColour: draft.colour,
@@ -1511,7 +1513,7 @@ export default function AIClipper({
           cropFocus: draft.cropFocus,
           aspectRatio: draft.aspect,
           captionsEnabled: draft.captionsEnabled,
-          captionCollisionMode: draft.captionCollisionMode || "auto",
+          captionCollisionMode: draft.captionCollisionMode || "keep-existing",
           font: draft.font,
           fontSize: draft.fontSize,
           textColour: draft.colour,
@@ -1701,22 +1703,22 @@ export default function AIClipper({
                   {draft.captionsEnabled ? (
                     <div className="border-b border-slate-100 pb-5">
                       <p className="text-[12px] font-medium text-slate-800">When source captions already exist</p>
-                      <p className="mt-0.5 text-[10px] leading-4 text-slate-400">Clyra detects lower-third captions and keeps your timed captions visible rather than silently removing them.</p>
+                      <p className="mt-0.5 text-[10px] leading-4 text-slate-400">Clyra uses one caption layer by default. If the source already has captions, it preserves them instead of stacking another set on top.</p>
                       <div className="mt-3 grid grid-cols-3 gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1" role="radiogroup" aria-label="Existing caption handling">
                         {([
-                          ["auto", "Move Clyra"],
                           ["keep-existing", "Keep source"],
+                          ["auto", "Move Clyra"],
                           ["allow-overlap", "Allow overlap"],
                         ] as Array<[CaptionCollisionMode, string]>).map(([mode, label]) => (
                           <button
                             key={mode}
                             type="button"
                             role="radio"
-                            aria-checked={(draft.captionCollisionMode || "auto") === mode}
+                            aria-checked={(draft.captionCollisionMode || "keep-existing") === mode}
                             onClick={() => updateDraft("captionCollisionMode", mode)}
                             className={cn(
                               "h-8 rounded-md px-2 text-[10px] font-medium transition-colors",
-                              (draft.captionCollisionMode || "auto") === mode ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700",
+                              (draft.captionCollisionMode || "keep-existing") === mode ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700",
                             )}
                           >
                             {label}

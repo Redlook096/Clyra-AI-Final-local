@@ -356,6 +356,10 @@ def build_smart_reframe_keyframes(crop_plan: Dict[str, Any]) -> Dict[str, Any]:
     the continuous virtual-camera motion the toggle intentionally disables.
     """
     plan = dict(crop_plan or {})
+    if bool((plan.get("faceTracking") or {}).get("preserveSource")):
+        # A no-face scene has no subject for the discrete smart-reframe path
+        # to follow. Preserve its original composition in either toggle mode.
+        return plan
     source = [dict(row) for row in (plan.get("cropKeyframes") or []) if isinstance(row, dict)]
     source.sort(key=lambda row: float(row.get("timeMs", 0) or 0))
     if not source:
@@ -2934,6 +2938,17 @@ def track_faces_and_build_crops(
         scenes = analysis["scenes"]
     frames = analysis["frames"]
     face_tracks = analysis["face_tracks"]
+    # Motion saliency is useful for search and scene scoring, but it is not a
+    # face. Never reinterpret a moving game object, window, or sign as a
+    # person and then force a vertical centre crop around it. A clip with no
+    # verified face keeps its original composition instead.
+    verified_face_samples = [
+        face
+        for row in face_tracks
+        for face in (row.get("faces") or [])
+        if "face" in str(face.get("detector") or "").lower()
+        or "profile" in str(face.get("detector") or "").lower()
+    ]
 
     # Manual selection is a hard identity lock.  Automatic mode deliberately
     # does not preselect `people[0]`: that old largest-face shortcut is what
@@ -3187,6 +3202,43 @@ def track_faces_and_build_crops(
             )
     finally:
         shutil.rmtree(analysis["work_dir"], ignore_errors=True)
+
+    if not verified_face_samples:
+        # Preserve the source rather than manufacturing a synthetic central
+        # crop. This applies equally to the visible follow toggle and to its
+        # smarter discrete-reframe fallback, so no-face gameplay remains
+        # gameplay instead of becoming a camera that chases arbitrary motion.
+        return {
+            "faceTracking": {
+                "enabled": False,
+                "mode": "off",
+                "selectedTrackId": None,
+                "selectedPersonId": None,
+                "reframeMode": reframe_mode,
+                "speakerMode": speaker_mode,
+                "trackingQuality": tracking_quality,
+                "sceneMode": scene_mode,
+                "personMode": scene_mode,
+                "allowZoom": False,
+                "backend": "no-face-preserve-source",
+                "fallbackReason": "no_verified_face",
+                "preserveSource": True,
+                "trajectoryMode": "source-composition",
+                "pathSampleCount": 0,
+            },
+            "cropKeyframes": [],
+            "availableFaces": [],
+            "people": [],
+            "selectedPerson": None,
+            "scenes": scenes,
+            "acceptedScenes": [],
+            "faceTracks": [],
+            "faceOverlay": [],
+            "activeSpeakerSwitches": [],
+            "trackingDiagnostics": [],
+            "capabilities": caps,
+            "proxy": analysis["proxy"],
+        }
 
     if not samples:
         samples = [_fixed_crop_keyframe(0, frame_w, frame_h, out_w, out_h, crop_focus)]

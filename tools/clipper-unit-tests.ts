@@ -170,6 +170,10 @@ smart_reframe = face.build_smart_reframe_keyframes({
         {"timeMs": 1100, "x": 620, "y": 0, "width": 720, "height": 1280, "scaledWidth": 1800, "scaledHeight": 1280, "zoom": 1.08, "activeSpeakerTrackId": "person_002", "source": "detected"},
     ],
 })
+no_face_smart_reframe = face.build_smart_reframe_keyframes({
+    "faceTracking": {"preserveSource": True, "backend": "no-face-preserve-source"},
+    "cropKeyframes": [],
+})
 
 # Active speaker selection must resist a brief challenger, then deliberately
 # switch only after sustained mouth motion backed by non-silent audio.
@@ -426,6 +430,7 @@ print(json.dumps({
     "trajectory": trajectory,
     "lockedTrajectory": locked_trajectory,
     "smartReframe": smart_reframe,
+    "noFaceSmartReframe": no_face_smart_reframe,
     "speakerFirst": speaker_first,
     "speakerBrief": speaker_brief,
     "speakerSwitched": speaker_switched,
@@ -522,6 +527,7 @@ const payload = JSON.parse(output.trim()) as {
   trajectory: Array<{ x: number; velocityX: number; estimatedDelayFrames: number; smoothingMode: string; trajectoryVersion: string }>;
   lockedTrajectory: Array<{ timeMs: number; source: string; velocityX: number; velocityY: number; smoothingMode: string; trajectoryVersion: string }>;
   smartReframe: { faceTracking: { enabled: boolean; smartReframe: boolean; trajectoryMode: string; allowZoom: boolean }; cropKeyframes: Array<{ timeMs: number; x: number; zoom: number; activeSpeakerTrackId?: string }> };
+  noFaceSmartReframe: { faceTracking: { preserveSource?: boolean }; cropKeyframes: unknown[] };
   speakerFirst: { personId?: string } | null;
   speakerBrief: { personId?: string } | null;
   speakerSwitched: { personId?: string } | null;
@@ -706,6 +712,8 @@ assert(payload.smartReframe.cropKeyframes.length >= 3, "smart reframe emits hold
 assert.equal(payload.smartReframe.cropKeyframes[1]?.timeMs, 499, "smart reframe holds the old composition until one millisecond before the decision");
 assert(payload.smartReframe.cropKeyframes[2]?.x > payload.smartReframe.cropKeyframes[0]?.x, "smart reframe snaps to keep the subject in the safe composition");
 assert.equal(payload.smartReframe.cropKeyframes[2]?.zoom, 1, "smart reframe suppresses zoom pumping");
+assert.equal(payload.noFaceSmartReframe.faceTracking.preserveSource, true, "smart reframe never invents a crop for a no-face source");
+assert.deepEqual(payload.noFaceSmartReframe.cropKeyframes, [], "no-face sources preserve their original composition without synthetic crop keyframes");
 assert.equal(payload.speakerFirst?.personId, "person_001", "active speaker starts from the visible subject");
 assert.equal(payload.speakerBrief?.personId, "person_001", "a brief competing mouth movement does not whip-pan the crop");
 assert.equal(payload.speakerSwitched?.personId, "person_002", "a sustained, audio-backed challenger becomes the active speaker");
@@ -787,8 +795,8 @@ assert.equal(payload.directedMethod[0]?.section_ordinal, 3, "the requested ordin
 assert.equal(payload.directedMethod[0]?.query_directed, true, "directed sections cannot be displaced by generic virality ranking");
 assert(payload.directedMethod[0]!.start <= 0.47 && payload.directedMethod[0]!.end < 10.0, "the third-method section begins at its heading and ends before the fourth method");
 assert(payload.directedMethod[0]!.transcript.toLowerCase().includes("third method"), "directed selection contains the matched spoken evidence");
-assert.equal(payload.premiumEncoding[payload.premiumEncoding.indexOf("-crf") + 1], "12", "premium export uses a high-detail CRF");
-assert.equal(payload.masterEncoding[payload.masterEncoding.indexOf("-crf") + 1], "10", "master export exposes an even higher-quality option");
+assert.equal(payload.premiumEncoding[payload.premiumEncoding.indexOf("-crf") + 1], "10", "premium export uses a high-detail CRF");
+assert.equal(payload.masterEncoding[payload.masterEncoding.indexOf("-crf") + 1], "8", "master export exposes an even higher-quality option");
 assert.equal(payload.sourceFillLandscape, true, "wide sources use a sharp foreground over a blurred portrait fill");
 assert.equal(payload.sourceFillPortraitSar, false, "non-square-pixel portrait sources do not receive landscape fill treatment");
 assert.equal(payload.rangeErrors.length, 5, "invalid, non-finite, and too-short source ranges are rejected safely");

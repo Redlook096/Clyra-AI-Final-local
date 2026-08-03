@@ -5561,7 +5561,7 @@ Please analyze the code you just wrote and fix this error.`;
   const recentChat = chats.find((chat) => chat.title.trim() && chat.messages.length > 0) ?? null;
   const inputPlaceholder = isVibeWorkspace
     ? "Tell the coding agent what to build..."
-    : "Ask Clyra anything...";
+    : "Ask Clyra anything or give it a task…";
   const firstUserMessageId = messages.find(
     (message) => message.role === "user",
   )?.id;
@@ -6744,7 +6744,7 @@ Please analyze the code you just wrote and fix this error.`;
                         >
                           <div className="clyra-chat-welcome__glow" aria-hidden="true" />
                           <span className="clyra-chat-welcome__identity">
-                            <MessageCircleDashed className="h-[30px] w-[30px] text-slate-800" />
+                            <span className="clyra-chat-welcome__orb" aria-hidden><AiOrb colorTheme={orbColorTheme} /></span>
                             <span>Clyra</span>
                           </span>
                           <motion.div
@@ -6771,14 +6771,14 @@ Please analyze the code you just wrote and fix this error.`;
                             initial={false}
                             transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
                           >
-                            What can I help you with?
+                            Good evening, Luke
                           </motion.h1>
                           <motion.p
                             layout="position"
                             className="clyra-chat-welcome__support" initial={false}
                             transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
                           >
-                            Chat, code, search and create in one workspace.
+                            What would you like to accomplish?
                           </motion.p>
                           <motion.div
                             layout="position"
@@ -6799,7 +6799,23 @@ Please analyze the code you just wrote and fix this error.`;
                               }}
                             >
                               <Globe className="h-4 w-4" />
-                              Web search
+                              Research anything
+                            </button>
+                            <button type="button" onClick={() => handleWorkspaceTabChange("vibe")}>
+                              <Code2 className="h-4 w-4" />
+                              Build an app
+                            </button>
+                            <button type="button" onClick={() => handleWorkspaceTabChange("clip")}>
+                              <Scissors className="h-4 w-4" />
+                              Create clips
+                            </button>
+                            <button type="button" onClick={() => applyQuickPrompt("Help me work through my Gmail inbox.")}>
+                              <Mail className="h-4 w-4" />
+                              Work with Gmail
+                            </button>
+                            <button type="button" onClick={() => handleWorkspaceTabChange("study")}>
+                              <GraduationCap className="h-4 w-4" />
+                              Study anything
                             </button>
                           </motion.div>
                         </motion.div>

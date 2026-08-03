@@ -721,7 +721,12 @@ export async function renderMessageStoryVideo(options: { name: string; messages:
     const background: CreatorBackgroundMedia | null = backgroundVideo || await loadImage(options.background);
     if (backgroundVideo) {
       backgroundVideo.currentTime = 0;
-      await backgroundVideo.play().catch(() => undefined);
+      // Export can take longer than the story itself to draw. Do not let an
+      // HTMLVideoElement advance on wall-clock time while the canvas records
+      // logical 60 FPS frames, or gameplay will be sped up in the retimed MP4.
+      // Each canvas frame below instead uses the same logical timestamp as the
+      // story, preserving normal 1× gameplay speed in the finished video.
+      backgroundVideo.pause();
     }
     const theme = options.theme || "ios_dark";
     const layout = options.layout || "floating_phone";
@@ -735,6 +740,11 @@ export async function renderMessageStoryVideo(options: { name: string; messages:
       source.start(audioStart + timeline.events[index]!.voiceStartMs / 1_000);
     });
     const drawFrame = (timeMs: number) => {
+      if (backgroundVideo && Number.isFinite(backgroundVideo.duration) && backgroundVideo.duration > 0) {
+        const duration = backgroundVideo.duration;
+        const frameTime = (Math.max(0, timeMs) / 1_000) % duration;
+        backgroundVideo.currentTime = Math.min(frameTime, Math.max(0, duration - 1 / 60));
+      }
       const frame = getIMessageFrame(timeline, timeMs);
       const panelHeight = layout === "floating_phone"
         ? imessageRenderToken(getIMessagePanelLayout(messages.slice(0, frame.visibleCount)).panelHeight)

@@ -81,9 +81,12 @@ MIN_AUTOMATIC_CLIP_LENGTH = 30.0
 # small, disposable analysis plate.  Keep this as one named contract so the
 # first render and any later caption refinement cannot quietly diverge.
 RENDER_QUALITY_PROFILES = {
-    "premium": {"crf": "12", "preset": "veryslow", "audio_bitrate": "320k"},
+    # Premium is the normal delivery default.  It deliberately leaves more
+    # detail for a social platform's *next* encode instead of targeting the
+    # low 1–2 Mbps files produced by the former clip path.
+    "premium": {"crf": "10", "preset": "veryslow", "audio_bitrate": "320k"},
     "balanced": {"crf": "16", "preset": "slow", "audio_bitrate": "256k"},
-    "master": {"crf": "10", "preset": "veryslow", "audio_bitrate": "320k"},
+    "master": {"crf": "8", "preset": "veryslow", "audio_bitrate": "320k"},
 }
 _FASTER_WHISPER_MODEL = None
 _OPENAI_WHISPER_MODEL = None
@@ -2346,6 +2349,7 @@ def render_final_from_master(
     subtitle_path=None,
     output_fps=OUTPUT_FPS,
     fit_source=False,
+    preserve_source=False,
     render_quality="premium",
 ):
     """Create the final file directly from the source master in one encode.
@@ -2368,7 +2372,21 @@ def render_final_from_master(
         ):
             return "source-master-per-frame-crop"
     base = ["-ss", str(clip_start), "-i", input_url, "-t", str(clip_duration)]
-    if fit_source:
+    if preserve_source:
+        # A scene with no verified face is not a tracking failure to hide by
+        # inventing a centre crop. Preserve the source composition exactly,
+        # fitting it inside the delivery canvas with neutral letterboxing.
+        # This is intentionally different from `fit_source`, which fills a
+        # vertical canvas by centre-cropping a landscape source.
+        filters = [
+            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=decrease:flags=lanczos",
+            f"pad={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih):color=black",
+            f"fps={fps}",
+        ]
+        if subtitle_path and os.path.isfile(subtitle_path):
+            filters.append(f"ass='{_escape_ass_path(subtitle_path)}'")
+        base += ["-vf", ",".join(filters), "-r", str(fps)]
+    elif fit_source:
         # Fill the requested delivery frame with the master source itself. For
         # a landscape source this is an intentional centre crop, not a blurred
         # background plus a smaller foreground video.
@@ -2425,6 +2443,7 @@ def render_from_plate(
     crop_keyframes=None,
     sendcmd_path=None,
     fit_source=False,
+    preserve_source=False,
     render_quality="premium",
     subtitle_path=None,
     output_fps=None,
@@ -2451,6 +2470,21 @@ def render_from_plate(
             render_quality=render_quality,
         ):
             return
+    if preserve_source:
+        filter_complex = (
+            f"[0:v]scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=decrease:flags=lanczos,"
+            f"pad={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih):color=black,fps={fps}[v]"
+        )
+        if subtitle_path and os.path.isfile(subtitle_path):
+            filter_complex = filter_complex.replace("[v]", f",ass='{_escape_ass_path(subtitle_path)}'[v]")
+        run_ffmpeg([
+            "-i", plate_path,
+            "-filter_complex", filter_complex,
+            "-map", "[v]", "-map", "0:a?", "-r", str(fps),
+            *render_encoding_args(render_quality),
+            clip_path,
+        ], timeout=90)
+        return
     if fit_source:
         filter_complex = (
             f"[0:v]scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
@@ -2719,7 +2753,7 @@ def refine_clip(cfg):
     caption_y = cfg.get("caption_y", cfg.get("captionY", meta.get("caption_y", meta.get("captionY"))))
     subtitle_style = str(cfg.get("subtitle_style") or cfg.get("subtitleStyle") or meta.get("subtitle_style") or "word")
     captions_enabled = bool(cfg.get("captions_enabled", meta.get("captions_enabled", True)))
-    collision_mode = str(cfg.get("caption_collision_mode") or cfg.get("captionCollisionMode") or meta.get("caption_collision_mode") or "auto").lower()
+    collision_mode = str(cfg.get("caption_collision_mode") or cfg.get("captionCollisionMode") or meta.get("caption_collision_mode") or "keep-existing").lower()
     render_quality = normalise_render_quality(cfg.get("render_quality") or cfg.get("renderQuality") or meta.get("render_quality") or "premium")
 
     edited_words = cfg.get("words")
@@ -2849,6 +2883,7 @@ def refine_clip(cfg):
             if face_cfg["enabled"] or (crop_plan.get("faceTracking") or {}).get("smartReframe")
             else None
         ),
+        preserve_source=bool((crop_plan.get("faceTracking") or {}).get("preserveSource")),
         fit_source=(
             not bool((crop_plan.get("faceTracking") or {}).get("enabled"))
             and not bool((crop_plan.get("faceTracking") or {}).get("smartReframe"))
@@ -3794,6 +3829,7 @@ def main():
                         "mode": "off",
                         "backend": "stable-fallback",
                         "fallbackReason": "auto_subject_visibility_insufficient",
+                        "preserveSource": True,
                     }
                     crop_plan["cropKeyframes"] = []
                     candidate["face_tracking_fallback"] = "stable-wide-crop"
@@ -3854,11 +3890,13 @@ def main():
                 timing_source=timing_source,
             )
 
-            # "auto" is intentionally safe *and* visible: the lower third is
-            # occupied, so relocate new Clyra captions instead of silently
-            # disabling the requested subtitle layer.  Users can still choose
-            # keep-existing or allow-overlap explicitly.
-            collision_mode = str(cfg.get("caption_collision_mode") or cfg.get("captionCollisionMode") or "auto").lower()
+            # Existing source captions are preserved by default so exports
+            # never present two competing subtitle layers. Editors can still
+            # explicitly move Clyra captions or allow both layers.
+            # Avoid duplicate subtitle layers by default: embedded source
+            # captions stay visible unless the user explicitly chooses a
+            # different collision policy.
+            collision_mode = str(cfg.get("caption_collision_mode") or cfg.get("captionCollisionMode") or "keep-existing").lower()
             caption_collision = detect_embedded_caption_risk(analysis_clip_path, os.path.join(artifact_dir, "caption-audit"))
             candidate_captions_enabled = captions_enabled and bool(transcribed_words)
             effective_caption_position = position
@@ -3931,6 +3969,7 @@ def main():
                 subtitle_path=subtitle_path if candidate_captions_enabled else None,
                 output_fps=output_frame_rate(source_quality),
                 render_quality=render_quality,
+                preserve_source=bool((crop_plan.get("faceTracking") or {}).get("preserveSource")),
                 fit_source=(
                     (crop_plan.get("faceTracking") or {}).get("backend") == "stable-fallback"
                     # A low-detail landscape crop is still allowed to follow a
