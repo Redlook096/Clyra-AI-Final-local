@@ -2,3 +2,7 @@ pytubefix>=10.6.1
 openai-whisper>=20240930
 imageio-ffmpeg>=0.6.0
 youtube-transcript-api>=1.2.0
+# Optional local Auto Reframe runtime.  Both are loaded only in the isolated
+# Python worker; Electron never imports computer-vision models.
+mediapipe>=0.10.21,<0.11
+opencv-python-headless>=4.10,<5

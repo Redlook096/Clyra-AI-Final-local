@@ -1,0 +1,14 @@
+# Clyra Auto-Reframe V2 reference pins
+#
+# These shallow clones live in ./third_party for local evaluation only. They
+# are not vendored into the desktop/runtime bundle and must not be updated
+# without repeating the source-code and model-weight licence review.
+
+rtmlib https://github.com/Tau-J/rtmlib.git 2a18a092848552e6a57128f08ca1ad9f61246452 Apache-2.0 reference-only
+mediapipe https://github.com/google-ai-edge/mediapipe.git bdddcbd09ea1588825d35fe7b715d1a14789a85a Apache-2.0 optional-adapter
+bot-sort https://github.com/NirAharon/BoT-SORT.git 251985436d6712aaf682aaaf5f71edb4987224bd MIT adapter-candidate
+bytetrack https://github.com/FoundationVision/ByteTrack.git d1bf0191adff59bc8fcfeaa0b33d3d1642552a99 MIT adapter-candidate
+opencv https://github.com/opencv/opencv.git e35ad60e4e1db55be854df5770f706af65803690 Apache-2.0 runtime-dependency
+opencv-contrib https://github.com/opencv/opencv_contrib.git a8e9acd62cabd30419dba83007f2ac0d07de5e2c Apache-2.0 reference-only
+mmpose https://github.com/open-mmlab/mmpose.git 759b39c13fea6ba094afc1fa932f51dc1b11cbf9 Apache-2.0 model-reference-only
+opencode https://github.com/anomalyco/opencode.git 1882c33827cf0ce5c948b69ab5a87ed8f6790cf8 MIT optional-runtime-adapter

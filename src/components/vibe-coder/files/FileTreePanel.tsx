@@ -16,6 +16,7 @@ interface FileTreePanelProps {
   files: Record<string, ProjectFile>;
   activeFile: string | null;
   planMd: string;
+  onSelectFile?: (path: string) => void;
 }
 
 type TreeFolder = {
@@ -113,16 +114,20 @@ function FileRow({
   node,
   depth,
   active,
+  onSelectFile,
 }: {
   node: TreeLeaf;
   depth: number;
   active: boolean;
+  onSelectFile?: (path: string) => void;
 }) {
   return (
-    <div
+    <button
+      type="button"
+      onClick={() => onSelectFile?.(node.path)}
       title={node.path}
       className={cn(
-        "group flex cursor-default items-center gap-2 rounded-lg py-1.5 pr-2 text-[12.5px] transition-colors duration-150",
+        "group flex w-full cursor-default items-center gap-2 rounded-lg py-1.5 pr-2 text-left text-[12.5px] transition-colors duration-150",
         active
           ? "bg-sky-50 font-semibold text-sky-900"
           : "text-slate-600 hover:bg-slate-100/80 hover:text-slate-900",
@@ -134,7 +139,7 @@ function FileRow({
       <span className="ml-auto flex shrink-0 items-center">
         <FileStatusBadge status={node.file.status} />
       </span>
-    </div>
+    </button>
   );
 }
 
@@ -142,10 +147,12 @@ function FolderRow({
   node,
   depth,
   activeFile,
+  onSelectFile,
 }: {
   node: TreeFolder;
   depth: number;
   activeFile: string | null;
+  onSelectFile?: (path: string) => void;
 }) {
   const [open, setOpen] = useState(true);
   return (
@@ -187,9 +194,9 @@ function FolderRow({
             />
             {node.children.map((child) =>
               child.kind === "folder" ? (
-                <FolderRow key={child.path} node={child} depth={depth + 1} activeFile={activeFile} />
+                <FolderRow key={child.path} node={child} depth={depth + 1} activeFile={activeFile} onSelectFile={onSelectFile} />
               ) : (
-                <FileRow key={child.path} node={child} depth={depth + 1} active={child.path === activeFile} />
+                <FileRow key={child.path} node={child} depth={depth + 1} active={child.path === activeFile} onSelectFile={onSelectFile} />
               ),
             )}
           </motion.div>
@@ -199,7 +206,7 @@ function FolderRow({
   );
 }
 
-export function FileTreePanel({ files, activeFile, planMd }: FileTreePanelProps) {
+export function FileTreePanel({ files, activeFile, planMd, onSelectFile }: FileTreePanelProps) {
   const fileList = useMemo(
     () => Object.values(files).sort((a, b) => a.path.localeCompare(b.path)),
     [files],
@@ -219,9 +226,11 @@ export function FileTreePanel({ files, activeFile, planMd }: FileTreePanelProps)
 
       <div className="clyra-visible-scrollbar flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2">
         {planMd ? (
-          <div
+          <button
+            type="button"
+            onClick={() => onSelectFile?.("PLAN.md")}
             className={cn(
-              "flex items-center gap-2 rounded-lg py-1.5 pl-2.5 pr-2 text-[12.5px] transition-colors duration-150",
+              "flex w-full items-center gap-2 rounded-lg py-1.5 pl-2.5 pr-2 text-left text-[12.5px] transition-colors duration-150",
               activeFile === "PLAN.md"
                 ? "bg-sky-50 font-semibold text-sky-900"
                 : "text-slate-600 hover:bg-slate-100/80 hover:text-slate-900",
@@ -230,14 +239,14 @@ export function FileTreePanel({ files, activeFile, planMd }: FileTreePanelProps)
             <FileText className="h-3.5 w-3.5 shrink-0 text-emerald-500" strokeWidth={1.8} />
             <span className="min-w-0 flex-1 truncate">PLAN.md</span>
             <CheckCircle2 className="ml-auto h-3 w-3 shrink-0 text-emerald-500" />
-          </div>
+          </button>
         ) : null}
 
         {tree.map((node) =>
           node.kind === "folder" ? (
-            <FolderRow key={node.path} node={node} depth={0} activeFile={activeFile} />
+            <FolderRow key={node.path} node={node} depth={0} activeFile={activeFile} onSelectFile={onSelectFile} />
           ) : (
-            <FileRow key={node.path} node={node} depth={0} active={node.path === activeFile} />
+            <FileRow key={node.path} node={node} depth={0} active={node.path === activeFile} onSelectFile={onSelectFile} />
           ),
         )}
 

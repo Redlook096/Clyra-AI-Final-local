@@ -10,6 +10,11 @@ import {
   creatorTimeline,
   migrateCreatorProject,
 } from "../src/lib/creatorProject";
+import {
+  buildIMessageTimeline,
+  getIMessageFrame,
+  getIMessageGroupPosition,
+} from "../src/lib/fakeTextTimeline";
 
 let assertions = 0;
 const check = (condition: unknown, message: string) => {
@@ -22,6 +27,16 @@ assert.equal(choice.type, "would_rather"); assertions += 1;
 assert.equal(choice.version, CREATOR_PROJECT_VERSION); assertions += 1;
 check(choice.rounds.length > 0, "Would You Rather should start with a playable round");
 assert.equal(choice.rounds[0].leftPercent + (100 - choice.rounds[0].leftPercent), 100); assertions += 1;
+
+const defaultFakeText = createCreatorProject("fake_text_story");
+assert.equal(defaultFakeText.type, "fake_text_story"); assertions += 1;
+if (defaultFakeText.type === "fake_text_story") {
+  assert.equal(defaultFakeText.theme, "ios_dark"); assertions += 1;
+  assert.equal(defaultFakeText.layout, "floating_phone"); assertions += 1;
+  assert.equal(defaultFakeText.gameplay?.clipId, "subway-01"); assertions += 1;
+  assert.equal(defaultFakeText.canvas.fps, 60); assertions += 1;
+  assert.notEqual(defaultFakeText.participants[0].voice, defaultFakeText.participants[1].voice); assertions += 1;
+}
 
 const migratedChoice = migrateCreatorProject({
   type: "would_rather",
@@ -99,5 +114,27 @@ const storyTimeline = creatorTimeline(story);
 check(storyTimeline.length >= 3, "Message timeline should include events and narration");
 check(storyTimeline.every((item) => item.startMs >= 0), "Timeline starts cannot be negative");
 check(creatorProjectDuration(story) > 0, "Message project duration should be positive");
+
+const iMessageScript = [
+  { id: "one", side: "left" as const, text: "First incoming message", typingSeconds: 0.4, pauseSeconds: 0.1, narration: true },
+  { id: "two", side: "left" as const, text: "A grouped follow-up", typingSeconds: 0.4, pauseSeconds: 0.1, narration: true },
+  { id: "three", side: "right" as const, text: "An outgoing reply", typingSeconds: 0.4, pauseSeconds: 0.1, narration: true },
+];
+const iMessageTimeline = buildIMessageTimeline(iMessageScript);
+assert.equal(iMessageTimeline.events.length, 3); assertions += 1;
+check(iMessageTimeline.events[1].typingStartMs >= iMessageTimeline.events[0].endMs, "Timeline events must be sequential");
+const typingFrame = getIMessageFrame(iMessageTimeline, iMessageTimeline.events[0].typingStartMs + 10);
+assert.equal(typingFrame.typingSide, null); assertions += 1;
+assert.equal(typingFrame.visibleCount, 1); assertions += 1;
+const arrivedFrame = getIMessageFrame(iMessageTimeline, iMessageTimeline.events[1].bubbleStartMs + 220);
+assert.equal(arrivedFrame.visibleCount, 2); assertions += 1;
+assert.equal(getIMessageGroupPosition(iMessageScript, 0), "start"); assertions += 1;
+assert.equal(getIMessageGroupPosition(iMessageScript, 1), "end"); assertions += 1;
+assert.equal(getIMessageGroupPosition(iMessageScript, 2), "single"); assertions += 1;
+
+const measuredVoiceTimeline = buildIMessageTimeline([
+  { id: "actual-duration", side: "left" as const, text: "Short", narration: true, voiceDurationMs: 2_340 },
+]);
+assert.equal(measuredVoiceTimeline.events[0].voiceEndMs, 2_340); assertions += 1;
 
 console.log(`creator-unit-tests: ${assertions} assertions passed`);

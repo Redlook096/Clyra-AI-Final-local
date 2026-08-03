@@ -3,6 +3,11 @@
 // synthesis brief to the renderer — never credentials or private tool output.
 const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
 const host = (url) => { try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return "source"; } };
+const substantiveExcerpt = (value) => clean(value)
+  .replace(/^Title:\s*.*?Markdown Content:\s*/i, "")
+  .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+  .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+  .trim();
 
 export class DeepResearchManager {
   constructor({ uiContents, serviceUrl, development = false }) {
@@ -74,13 +79,14 @@ export class DeepResearchManager {
     this.emit(runId, { service:"research", state:"running", label:"Searching trusted sources", detail:`${branch} research ${index} of ${total}: “${query}”` });
     const response = await fetch(`${this.serviceUrl()}/api/research/web-search`, {
       method:"POST", headers:{"content-type":"application/json"},
-      body:JSON.stringify({ query, maxResults:6, fetchTop:4 }), signal:AbortSignal.timeout(35_000),
+      body:JSON.stringify({ query, maxResults:6, fetchTop:6 }), signal:AbortSignal.timeout(45_000),
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok || !body?.ok) throw Object.assign(new Error("Research search did not return usable evidence."), { stage:"deep-research-search", httpStatus:response.status, errorCode:body?.error?.code || "search_failed" });
     const pages = (Array.isArray(body.pages) ? body.pages : [])
-      .filter((page) => page && !page.blocked && typeof page.url === "string" && clean(page.excerpt))
-      .map((page) => ({ url:page.url, excerpt:clean(page.excerpt).slice(0,900), branch, query }));
+      .map((page) => ({ ...page, excerpt:substantiveExcerpt(page?.excerpt) }))
+      .filter((page) => page && !page.blocked && typeof page.url === "string" && page.excerpt.length >= 180)
+      .map((page) => ({ url:page.url, excerpt:page.excerpt.slice(0,1600), branch, query }));
     this.log("search", { branch, resultCount:Array.isArray(body.urls) ? body.urls.length : 0, inspectedPageCount:pages.length });
     return pages;
   }

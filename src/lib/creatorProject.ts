@@ -1,5 +1,6 @@
 import { resolveCreatorVoice, type CreatorVoice } from "./creatorMedia";
 import { getFakeTextGameplayClip, type FakeTextGameplayCategory } from "../data/fakeTextGameplay";
+import { buildIMessageTimeline } from "./fakeTextTimeline";
 
 export const CREATOR_PROJECT_VERSION = 4;
 export const WOULD_RATHER_LEAD_IN_MS = 5_200;
@@ -13,7 +14,7 @@ export type CreatorProjectBase = {
   name: string;
   createdAt: string;
   updatedAt: string;
-  canvas: { width: 1080; height: 1920; fps: 30 };
+  canvas: { width: 1080; height: 1920; fps: 30 | 60 };
   audio: { musicVolume: number; sfxVolume: number; ducking: number; muted: boolean };
 };
 
@@ -141,9 +142,12 @@ export function createCreatorProject(type: CreatorProjectType): CreatorProject {
     const gameplay = getFakeTextGameplayClip();
     return {
       ...base(type, "Message Story"),
+      // Fake Text Story is rendered as a 60 fps canvas capture and final MP4.
+      // Other Creator templates retain their existing 30 fps defaults.
+      canvas: { width: 1080, height: 1920, fps: 60 },
       type,
       participants: [
-        { id: "left", name: "Alex", voice: "Ryan", color: "#2c2c2e" },
+        { id: "left", name: "Unknown", voice: "Ryan", color: "#2c2c2e" },
         { id: "right", name: "You", voice: "Aiden", color: "#0a84ff" },
       ],
       messages: [
@@ -189,7 +193,13 @@ export function migrateCreatorProject(raw: unknown, fallbackType: CreatorProject
     ...value,
     version: CREATOR_PROJECT_VERSION,
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : now(),
-    canvas: { width: 1080 as const, height: 1920 as const, fps: 30 as const },
+    canvas: {
+      width: 1080 as const,
+      height: 1920 as const,
+      // Existing non-message projects keep their prior rate; message stories
+      // are migrated to the renderer's new 60 fps contract.
+      fps: (type === "fake_text_story" ? 60 : 30) as 30 | 60,
+    },
     audio: { ...seed.audio, ...(value.audio || {}) },
   };
   if (type === "would_rather") {
@@ -217,7 +227,7 @@ export function migrateCreatorProject(raw: unknown, fallbackType: CreatorProject
     project.participants = [
       {
         id: "left",
-        name: String(participants[0]?.name || "Alex").slice(0, 30),
+        name: String(participants[0]?.name || "Unknown").slice(0, 30),
         voice: resolveCreatorVoice(participants[0]?.voice, "Ryan"),
         color: String(participants[0]?.color || "#2c2c2e"),
       },
@@ -261,10 +271,7 @@ export function creatorProjectDuration(project: CreatorProject) {
     return project.rounds.reduce((sum, round) => sum + WOULD_RATHER_LEAD_IN_MS + round.timerSeconds * 1_000 + round.revealSeconds * 1_000, 0);
   }
   if (project.type === "fake_text_story") {
-    return project.messages.reduce((sum, message) => {
-      const speech = message.narration ? Math.max(850, message.text.split(/\s+/).length * 310) : 0;
-      return sum + message.pauseSeconds * 1_000 + speech;
-    }, 0);
+    return buildIMessageTimeline(project.messages, project.playbackRate).durationMs;
   }
   return Math.max(3_000, `${project.title} ${project.body}`.split(/\s+/).length * 320);
 }
@@ -280,12 +287,14 @@ export function creatorTimeline(project: CreatorProject): CreatorTimelineItem[] 
       cursor += durationMs;
     }
   } else if (project.type === "fake_text_story") {
-    for (const [index, message] of project.messages.entries()) {
-      const speech = message.narration ? Math.max(850, message.text.split(/\s+/).length * 310) : 0;
-      const durationMs = message.pauseSeconds * 1_000 + speech;
-      items.push({ id: message.id, label: `Message ${index + 1}`, track: "visual", startMs: cursor, durationMs, color: message.side === "right" ? "#0a84ff" : "#475569" });
-      if (message.narration) items.push({ id: `${message.id}-voice`, label: "Voice", track: "voice", startMs: cursor, durationMs: speech, color: "#14b8a6" });
-      cursor += durationMs;
+    const timeline = buildIMessageTimeline(project.messages, project.playbackRate);
+    for (const event of timeline.events) {
+      const message = project.messages[event.index]!;
+      // The last outgoing segment includes its deterministic read-receipt
+      // settle hold, matching creatorProjectDuration and the exported frame.
+      const visualEndMs = event.index === timeline.events.length - 1 ? timeline.durationMs : event.endMs;
+      items.push({ id: message.id, label: `Message ${event.index + 1}`, track: "visual", startMs: event.typingStartMs, durationMs: visualEndMs - event.typingStartMs, color: message.side === "right" ? "#0a84ff" : "#475569" });
+      if (message.narration) items.push({ id: `${message.id}-voice`, label: "Voice", track: "voice", startMs: event.voiceStartMs, durationMs: event.voiceEndMs - event.voiceStartMs, color: "#14b8a6" });
     }
   } else {
     items.push({ id: project.id, label: "Story", track: "visual", startMs: 0, durationMs: creatorProjectDuration(project), color: "#f97316" });

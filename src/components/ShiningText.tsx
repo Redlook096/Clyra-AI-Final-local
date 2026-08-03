@@ -79,7 +79,7 @@ export function ShiningText({
         "inline-block bg-clip-text text-transparent",
         preset === "thinkingChat"
           ? "clyra-thinking-shimmer text-[15px] font-medium leading-none sm:text-[16px]"
-          : "clyra-shining-text bg-[linear-gradient(110deg,#404040,35%,#cbd5e1,50%,#404040,75%,#404040)] bg-[length:200%_100%]",
+          : "clyra-shining-text bg-[linear-gradient(110deg,#404040,35%,#fff,50%,#404040,75%,#404040)] bg-[length:200%_100%]",
         className,
       )}
       initial={false}

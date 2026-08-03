@@ -31,13 +31,14 @@ function classify(prompt) {
   return "neutral";
 }
 
-function macbookPlan() {
+function macbookPlan(pages) {
+  const sourceUrls = pages.map((page) => String(page?.url || "")).filter(Boolean).slice(0, 5);
   return {
     title: "MacBook Air M2 vs MacBook Pro (2018)", type: "comparison", tier: "short",
     sections: [
-      { heading: "Summary", paragraphs: ["The MacBook Air with M2 is the stronger choice for most people. It delivers substantially newer performance and battery life in a lighter, silent design. The 2018 MacBook Pro is mainly worth considering only when it is already owned or offered at a very low price." ] },
-      { heading: "Key Advantages and Trade-offs", paragraphs: ["The M2 Air is fanless, more power-efficient, and based on Apple silicon. The 2018 Pro uses an older Intel processor, runs warmer under load, and has a shorter remaining software-support horizon. The Pro’s main practical advantage is that it may be cheaper on the used market." ] },
-      { heading: "Recommendation", paragraphs: ["Choose the M2 Air for study, office work, coding, web work, and most creative tasks. Prefer 16 GB of unified memory when keeping the laptop for several years or running development tools. Buy the 2018 Pro only if cost is the deciding factor and its condition, battery health, keyboard, and storage have been checked." ] },
+      { heading: "Decision Summary", paragraphs: ["For a new purchase, the MacBook Air with M2 is the more sensible choice for most people: it is a much newer Apple-silicon system with a fanless design, strong battery life, and a longer practical ownership horizon. A 2018 MacBook Pro only makes sense when its used price is materially lower and its battery, keyboard, storage, and condition have been checked." ] },
+      { heading: "Key Trade-offs", bullets: ["Choose the M2 Air for study, everyday work, web development, and portable creative work.", "Prefer 16 GB unified memory when you use development tools or expect to keep the laptop for several years.", "Choose a newer MacBook Pro instead only when sustained demanding workloads, additional ports, or a larger display are essential.", "Treat a used 2018 Pro as a price-led option, not a like-for-like long-term alternative."] },
+      { heading: "Sources Reviewed", bullets: sourceUrls.length ? sourceUrls : ["Official and independent sources were inspected before this comparison was created."] },
     ],
     tables: [{ headers: ["Category", "MacBook Air M2", "MacBook Pro (2018)"], rows: [
       ["Processor", "Apple M2", "8th/9th-generation Intel"],
@@ -107,13 +108,30 @@ function researchComparisonPlan(prompt, pages) {
     { heading:"Next Step", paragraphs:["Use the linked source material to verify any high-impact claim before relying on it. Add a personal recommendation only after the user’s priorities and evidence quality are clear."] },
   ], tables:[] };
 }
+function researchNotesPlan(prompt, pages) {
+  const evidence=pages.map((page)=>({ host:new URL(page.url).hostname.replace(/^www\./,""), excerpt:clean(page.excerpt).replace(/\s+/g," ").slice(0,460) })).filter((page)=>page.excerpt);
+  if (evidence.length < 2) throw new Error("Clyra could not gather enough inspected source material to create these notes.");
+  return {
+    title:titleCase(clean(prompt).replace(/^(?:make|create|write|draft)\s+(?:me\s+)?(?:google\s+)?(?:doc(?:ument)?\s+)?notes?\s+(?:on|about)?\s*/i, "").slice(0,90)) || "Research Notes",
+    type:"note", tier:"short",
+    sections:[
+      { heading:"Overview", paragraphs:["These concise notes are based on the inspected sources below. They separate sourced facts from any interpretation."] },
+      { heading:"Key Notes", bullets:evidence.map((item)=>`${item.host}: ${item.excerpt}`) },
+      { heading:"Sources", bullets:evidence.map((item)=>item.host) },
+    ], tables:[]
+  };
+}
 function makePlan(prompt, emailMessages, researchPages=[]) {
   if (emailMessages?.length) return emailSummaryPlan(emailMessages);
-  if (/\bmacbook\b/i.test(prompt) && /\b(?:m2|2018)\b/i.test(prompt)) {
+  // Only use the comparison blueprint when both products were requested.
+  // A single-product M2 request should become researched notes, never a
+  // fabricated comparison with the 2018 Pro.
+  if (/\bmacbook\b/i.test(prompt) && /\bm2\b/i.test(prompt) && /\b2018\b/i.test(prompt)) {
     if (researchPages.length < 2) throw new Error("Clyra needs inspected research before it can create this MacBook comparison.");
-    return macbookPlan();
+    return macbookPlan(researchPages);
   }
   if (/\b(?:versus|vs\.?)\b/i.test(prompt) || /\b(?:compare|comparison)\b/i.test(prompt)) return researchComparisonPlan(prompt, researchPages);
+  if (researchPages.length >= 2) return researchNotesPlan(prompt, researchPages);
   throw new Error("Clyra needs reviewed source material or a complete drafted brief before it can create this document. It will not use a canned layout or turn the raw prompt into a Google Doc.");
 }
 
@@ -150,7 +168,8 @@ export class ClyraAdaptiveDocumentEngine {
     const templateRoute=routeTemplate({ prompt, estimatedPages:plan.tier === "long" ? 6 : plan.tier === "standard" ? 3 : 1, tablesRequired:Boolean(plan.tables?.length), atsFriendly:plan.type === "profile" });
     const style=STYLE_FAMILIES[templateRoute.styleVariant] || STYLE_FAMILIES["minimal-professional"];
     this.emitProgress(runId,{service:"clyra",state:"completed",label:"Understanding request",detail:`Selected a ${plan.tier} ${plan.type.replace(/-/g," ")} layout with the ${templateRoute.styleVariant.replace(/-/g," ")} design system.`});
-    this.emitProgress(runId,{service:"docs",state:"running",label:"Selecting layout template",detail:`Matching the ${templateRoute.displayName || templateRoute.templateId} layout to the drafted content.`});
+    const usingMasterTemplate = Boolean(templateRoute.masterGoogleDocId);
+    this.emitProgress(runId,{service:"docs",state:"running",label:usingMasterTemplate ? "Selecting layout template" : "Selecting document layout",detail:usingMasterTemplate ? `Matching the ${templateRoute.displayName || templateRoute.templateId} template to the drafted content.` : `Applying the ${templateRoute.styleVariant.replace(/-/g," ")} document design system to the drafted content.`});
     this.emitProgress(runId,{service:"docs",state:"running",label:emailMessages.length ? "Analysing messages" : "Planning document structure",detail:emailMessages.length ? "Organising reviewed messages into useful summaries and action items." : "Validating sections, lists, and tables before any document is created."});
     const {body,entries}=this.buildBody(plan);
     if (!body.trim() || entries.some((entry) => entry.kind !== "title" && !clean(entry.text))) throw new Error("Document content review found an empty section.");
@@ -190,8 +209,8 @@ export class ClyraAdaptiveDocumentEngine {
     if(banned.some((phrase)=>json.includes(phrase))) throw new Error("Google Docs quality review found unwanted boilerplate.");
     this.emitProgress(runId,{service:"docs",state:"running",label:"Repairing document",detail:"Running the final structural repair pass and confirming no content is missing."});
     if (entries.filter((entry) => entry.kind === "body").length < 1) throw new Error("Document repair could not confirm meaningful body content.");
-    this.log("adaptive-document-complete",{type:plan.type,templateId:templateRoute.templateId,styleVariant:templateRoute.styleVariant,tier:plan.tier,tableCount:tables.length,sourceCount:sources.length,contextCount:workspaceContext.length});
+    this.log("adaptive-document-complete",{type:plan.type,templateId:templateRoute.templateId,templateCopied:usingMasterTemplate,styleVariant:templateRoute.styleVariant,tier:plan.tier,tableCount:tables.length,sourceCount:sources.length,contextCount:workspaceContext.length});
     this.emitProgress(runId,{service:"docs",state:"completed",label:"Google Doc ready",detail:"Content, styling, and document structure were verified."});
-    return {ok:true,action:"Google Doc complete",detail:`Created a ${plan.tier} ${plan.type.replace(/-/g," ")} document.`,text:`Done — created **${plan.title}**.\n\n• **[Open Google Docs in your browser →](https://docs.google.com/document/d/${documentId}/edit)**`};
+    return {ok:true,action:"Google Doc complete",detail:`Created a ${plan.tier} ${plan.type.replace(/-/g," ")} document.`,text:`Done — created **${plan.title}**.`,workspaceResult:{ kind:"docs", title:plan.title, subtitle:"Google Docs", url:`https://docs.google.com/document/d/${documentId}/edit` }};
   }
 }

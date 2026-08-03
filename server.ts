@@ -8,6 +8,23 @@ import {
   clyraResourcePath,
   resolveClipperMediaPath,
 } from "./lib/runtime-paths";
+import {
+  createClipperPublishingFoundation,
+  isSocialPlatform,
+} from "./lib/clipper/social-publishing";
+import {
+  createLicensedFootageService,
+  FootageSearchValidationError,
+  isFootageProvider,
+} from "./lib/clipper/licensed-footage";
+import {
+  autoClipStatusMessage,
+  configuredAutoClipBaseUrl,
+  clyraStageForAutoClip,
+  type AutoClipClip,
+  type AutoClipHealth,
+  type AutoClipJob,
+} from "./lib/clipper/autoclip-adapter";
 
 dotenv.config({ path: clyraResourcePath(".env") });
 // Development Electron keeps writable state under Application Support. Load a
@@ -43,6 +60,7 @@ import { MultiPassCoder } from "./lib/vibe-coder/harness/multi-pass-coder";
 import { TaskGroupPlanner } from "./lib/vibe-coder/harness/task-group-planner";
 import { FileSpecPlanner } from "./lib/vibe-coder/harness/file-spec-planner";
 import { registerClineRoutes } from "./lib/cline/cline-routes";
+import { registerOpenCodeRoutes } from "./lib/opencode/opencode-routes";
 import { registerVoiceRoutes, attachVoiceWebSocket } from "./backend/voice";
 import { registerCreatorTtsRoutes, stopCreatorTtsWorker } from "./backend/creator-tts/service";
 import {
@@ -1258,6 +1276,16 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
   const VIBE_PORT = Number(process.env.VIBE_PORT) || 5174;
+  // This is deliberately an adapter registry rather than a set of silently
+  // enabled social networks. No provider is registered until its official
+  // backend OAuth implementation and app approval are available.
+  const clipperPublishing = createClipperPublishingFoundation(
+    clyraDataPath(".clyra", "clipper-publishing"),
+  );
+  // Provider keys remain in this backend process. The footage service returns
+  // explicit unavailable states for Pexels/Pixabay until a local server key is
+  // configured; it never falls back to scraping or client-side credentials.
+  const licensedFootage = createLicensedFootageService();
 
   app.use(express.json({ limit: "2mb" }));
 
@@ -1283,7 +1311,36 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
+  app.get("/api/clipper/publishing/capabilities", async (req, res) => {
+    const platform = String(req.query.platform || "").trim();
+    const accountId = String(req.query.accountId || "").trim() || undefined;
+    if (platform) {
+      if (!isSocialPlatform(platform)) {
+        res.status(400).json({ ok: false, error: "Unsupported publishing platform" });
+        return;
+      }
+      res.json({ ok: true, capability: await clipperPublishing.registry.getCapability(platform, accountId) });
+      return;
+    }
+    res.json({ ok: true, capabilities: await clipperPublishing.registry.listCapabilities() });
+  });
+
+  app.post("/api/clipper/publishing/preflight", async (req, res) => {
+    const platform = String(req.body?.platform || "").trim();
+    const accountId = String(req.body?.accountId || "").trim();
+    if (!isSocialPlatform(platform)) {
+      res.status(400).json({ ok: false, error: "Unsupported publishing platform" });
+      return;
+    }
+    const result = await clipperPublishing.registry.preflight({ platform, accountId });
+    // A preflight is intentionally read-only. There is no POST endpoint for
+    // publishing until a provider-specific OAuth adapter is installed and the
+    // existing final-review confirmation flow can invoke it safely.
+    res.status(result.ok ? 200 : 409).json(result);
+  });
+
   registerClineRoutes(app);
+  registerOpenCodeRoutes(app);
   registerVoiceRoutes(app);
   registerCreatorTtsRoutes(app);
 
@@ -1680,6 +1737,8 @@ async function startServer() {
       res.status(415).json({ ok: false, error: "A WebM source video is required" });
       return;
     }
+    const requestedFps = Math.round(Number(req.query.fps));
+    const outputFps = Number.isFinite(requestedFps) && requestedFps >= 24 && requestedFps <= 60 ? requestedFps : 30;
     const renderId = crypto.randomUUID();
     const renderDir = clyraDataPath(".clyra", "renders", renderId);
     const input = path.join(renderDir, "source.webm");
@@ -1694,8 +1753,35 @@ async function startServer() {
       await new Promise<void>((resolve, reject) => {
         const child = spawn(ffmpeg, [
           "-hide_banner", "-loglevel", "error", "-y", "-i", input,
-          "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-          "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", output,
+          // Canvas capture is intentionally CFR. Retaining the requested rate keeps
+          // the message timeline and gameplay motion from inheriting a slow
+          // browser draw cadence in the final MP4.
+          // Some desktop Chromium builds throttle an off-screen canvas when
+          // the window is unfocused. The fps filter expands those sparse
+          // capture timestamps to a genuine constant-rate output rather than
+          // letting the resulting MP4 advertise a 6–8 fps stream.
+          // `requestFrame()` guarantees one canvas frame per logical timeline
+          // sample, but Chromium records the source PTS from wall-clock paint
+          // time. On a slower CPU that can turn 600 requested 60 Hz samples
+          // into a 100-second WebM. Rebuild PTS from the ordered frame index:
+          // the rendered story is a deterministic frame sequence, so N/fps is
+          // its source of truth—not how long the browser took to paint it.
+          "-vf", `setpts=N/(${outputFps}*TB),fps=${outputFps}`,
+          "-r", String(outputFps),
+          // Creator exports are generated synchronously from the editor.  The
+          // previous `slower` preset turned a ten-second 1080p/60 capture into
+          // a multi-minute wait on CPU-only Macs, which could leave a perfectly
+          // good finished file stranded after the UI request timed out. CRF 15
+          // remains the quality control; `ultrafast` keeps the 1080p source
+          // fidelity while making a local 60 FPS response practical on
+          // CPU-only Macs. Export quality is controlled by CRF, not by
+          // allowing the browser to time out waiting for a slower preset.
+          // Ultrafast normally disables CABAC/B-frames and silently falls back
+          // to Baseline. Restore the few inexpensive High-profile tools that
+          // make social transcodes more resilient while retaining responsive
+          // local rendering.
+          "-c:v", "libx264", "-preset", "ultrafast", "-crf", "15", "-x264-params", "cabac=1:bframes=2:ref=3:8x8dct=1", "-profile:v", "high", "-level", "4.2", "-pix_fmt", "yuv420p",
+          "-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-shortest", "-movflags", "+faststart", output,
         ]);
         let detail = "";
         child.stderr.on("data", (chunk) => { detail = `${detail}${String(chunk)}`.slice(-4_000); });
@@ -2763,6 +2849,219 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
   });
 
   // AI Clipper
+  //
+  // AutoClip remains an optional, separately-run local service. Its public
+  // project is a text-led highlighter, so it must never silently replace the
+  // Clyra Vision engine used for evidence-verified visual requests. The
+  // adapter below translates its job contract into Clyra's existing SSE and
+  // review-media contract when a user deliberately selects the local runner.
+  app.get("/api/clipper/autoclip/status", async (_req, res) => {
+    const baseUrl = configuredAutoClipBaseUrl();
+    if (!baseUrl) {
+      res.json({
+        ok: true,
+        configured: false,
+        available: false,
+        runner: "autoclip",
+        detail: "Set CLYRA_AUTOCLIP_URL to a running local AutoClip service to enable this optional runner.",
+      });
+      return;
+    }
+
+    try {
+      const upstream = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(2_500) });
+      if (!upstream.ok) throw new Error(`AutoClip returned ${upstream.status}`);
+      const health = await upstream.json() as AutoClipHealth;
+      res.json({
+        ok: true,
+        configured: true,
+        available: health.status === "ok",
+        runner: "autoclip",
+        version: health.version,
+        queued: health.queued || 0,
+        detail: health.status === "ok" ? "Local AutoClip runner is ready." : "AutoClip responded but is not ready.",
+      });
+    } catch (error) {
+      res.json({
+        ok: true,
+        configured: true,
+        available: false,
+        runner: "autoclip",
+        detail: error instanceof Error ? `AutoClip is unavailable: ${error.message}` : "AutoClip is unavailable.",
+      });
+    }
+  });
+
+  app.post("/api/clipper/autoclip/start", async (req, res) => {
+    const baseUrl = configuredAutoClipBaseUrl();
+    const { url, uploadId, config: cfg } = req.body || {};
+    const source = String(url || "").trim();
+    if (!baseUrl) {
+      res.status(503).json({ error: "The optional AutoClip runner is not configured. Use Clyra Vision or set CLYRA_AUTOCLIP_URL." });
+      return;
+    }
+    if (uploadId) {
+      res.status(400).json({ error: "The optional AutoClip runner currently accepts public YouTube URLs. Use Clyra Vision for local uploads." });
+      return;
+    }
+    try {
+      const parsed = new URL(source);
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("Unsupported protocol");
+      if (!/(^|\.)youtube\.com$|youtu\.be$/i.test(parsed.hostname)) throw new Error("Not a YouTube URL");
+    } catch {
+      res.status(400).json({ error: "Enter a valid public YouTube URL for the optional AutoClip runner." });
+      return;
+    }
+
+    const requestAutoClip = async (endpoint: string, init: RequestInit = {}) => {
+      const response = await fetch(`${baseUrl}${endpoint}`, {
+        ...init,
+        headers: { Accept: "application/json", ...(init.headers || {}) },
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null) as { detail?: unknown; message?: string } | null;
+        const message = typeof detail?.detail === "string"
+          ? detail.detail
+          : typeof detail?.detail === "object" && detail?.detail && "message" in detail.detail
+            ? String((detail.detail as { message?: unknown }).message || "")
+            : detail?.message || `AutoClip returned ${response.status}`;
+        throw new Error(message);
+      }
+      return response;
+    };
+
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+    let cancelled = false;
+    res.once("close", () => { cancelled = true; });
+    const send = (type: string, data: Record<string, unknown>) => {
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+    };
+
+    try {
+      send("progress", { step: "captions", status: "running", message: "Sending the source to your local AutoClip runner…" });
+      const sourceResponse = await requestAutoClip("/api/sources/youtube", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: source }),
+      });
+      const imported = await sourceResponse.json() as { id?: string; title?: string };
+      if (!imported.id) throw new Error("AutoClip did not return an imported source id.");
+      if (cancelled) return;
+
+      const settings = {
+        max_duration_s: Math.max(30, Number(cfg?.clip_duration) || 30),
+        min_duration_s: 30,
+        max_clips: Math.max(1, Math.min(8, Number(cfg?.clip_count) || 3)),
+        ratio: ["9:16", "1:1", "16:9"].includes(String(cfg?.aspect_ratio)) ? cfg.aspect_ratio : "9:16",
+        caption_style: cfg?.subtitle_style === "word" ? "bold_pop" : "karaoke_fill",
+      };
+      const jobResponse = await requestAutoClip("/api/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source_id: imported.id, settings }),
+      });
+      const startedJob = await jobResponse.json() as AutoClipJob;
+      if (!startedJob.id) throw new Error("AutoClip did not create a job.");
+      send("progress", { step: "captions", status: "queued", message: `AutoClip queued ${imported.title || "the source"}.` });
+
+      let job: AutoClipJob = startedJob;
+      const deadline = Date.now() + 12 * 60_000;
+      while (!cancelled && Date.now() < deadline) {
+        const jobResponse = await requestAutoClip(`/api/jobs/${encodeURIComponent(startedJob.id)}`);
+        job = await jobResponse.json() as AutoClipJob;
+        const step = clyraStageForAutoClip(job.current_stage);
+        send("progress", {
+          step,
+          status: job.status,
+          message: `AutoClip: ${autoClipStatusMessage(job)}`,
+        });
+        if (job.status === "failed" || job.status === "cancelled") throw new Error(job.error || `AutoClip job ${job.status}.`);
+        if (job.status === "done") break;
+        await new Promise<void>((resolve) => setTimeout(resolve, 850));
+      }
+      if (cancelled) return;
+      if (job.status !== "done") throw new Error("AutoClip did not finish before the local runner timeout.");
+
+      send("progress", { step: "render", status: "running", message: "Exporting AutoClip candidates into Clyra’s review studio…" });
+      const clipsResponse = await requestAutoClip(`/api/jobs/${encodeURIComponent(startedJob.id)}/clips`);
+      const clips = await clipsResponse.json() as AutoClipClip[];
+      if (!Array.isArray(clips) || !clips.length) throw new Error("AutoClip finished without any candidates.");
+      await fs.mkdir(clipperOutputDir(), { recursive: true });
+      const results: Array<Record<string, unknown>> = [];
+
+      for (const clip of clips.slice(0, settings.max_clips)) {
+        if (cancelled) return;
+        const exportResponse = await requestAutoClip(`/api/clips/${encodeURIComponent(clip.id)}/export`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ratio: settings.ratio, style: settings.caption_style }),
+        });
+        const exported = await exportResponse.json() as { download_url?: string; size_bytes?: number };
+        const downloadPath = String(exported.download_url || "");
+        const downloadUrl = new URL(downloadPath, `${baseUrl}/`);
+        if (downloadUrl.origin !== new URL(baseUrl).origin) throw new Error("AutoClip returned an unsafe media URL.");
+        const mediaResponse = await fetch(downloadUrl, { signal: AbortSignal.timeout(180_000) });
+        if (!mediaResponse.ok) throw new Error(`AutoClip export download failed (${mediaResponse.status}).`);
+        const destination = path.join(clipperOutputDir(), `autoclip-${crypto.randomUUID()}.mp4`);
+        await fs.writeFile(destination, Buffer.from(await mediaResponse.arrayBuffer()));
+        const fileStat = await fs.stat(destination);
+        const result = {
+          id: `autoclip-${clip.id}`,
+          rank: Number(clip.rank) || results.length + 1,
+          output: destination,
+          title: clip.title || `AutoClip candidate ${results.length + 1}`,
+          source_title: imported.title || "AutoClip source",
+          source_start: `${Math.max(0, Number(clip.start_s) || 0).toFixed(2)}s`,
+          source_end: `${Math.max(0, Number(clip.end_s) || 0).toFixed(2)}s`,
+          clip_duration: `${Math.max(0, Number(clip.duration_s) || 0).toFixed(1)}s`,
+          reason: clip.reason || clip.hook || "Selected by the optional AutoClip runner.",
+          score: Number(clip.score) || 0,
+          clip_potential_score: Number(clip.score) || 0,
+          file_size: fileStat.size,
+          output_quality: `AutoClip local export · ${settings.ratio}`,
+          captions_enabled: true,
+          caption_position: cfg?.position || "bottom",
+        };
+        results.push(result);
+        send("clip_result", { step: "render", status: "ready", message: `AutoClip export ${results.length} ready.`, result });
+      }
+
+      send("complete", { step: "complete", status: "complete", message: `${results.length} AutoClip exports are ready in Clyra.`, results });
+    } catch (error) {
+      send("error", { message: error instanceof Error ? error.message : "AutoClip integration failed." });
+    } finally {
+      if (!res.writableEnded) res.end();
+    }
+  });
+
+  app.get("/api/clipper/footage/search", async (req, res) => {
+    const rawProvider = String(req.query.provider || "all").trim().toLowerCase();
+    const providers = rawProvider === "all"
+      ? undefined
+      : rawProvider.split(",").map((value) => value.trim()).filter(Boolean);
+    if (providers && (!providers.length || providers.some((provider) => !isFootageProvider(provider)))) {
+      res.status(400).json({ ok: false, error: "Choose a supported licensed-footage provider." });
+      return;
+    }
+    const rawLimit = Number(req.query.limit);
+    try {
+      const result = await licensedFootage.search({
+        query: String(req.query.q || req.query.query || ""),
+        limit: Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : undefined,
+        providers: providers as Array<"wikimedia" | "pexels" | "pixabay"> | undefined,
+        cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      });
+      res.setHeader("Cache-Control", "private, max-age=45");
+      res.json({ ok: true, ...result });
+    } catch (error) {
+      const message = error instanceof FootageSearchValidationError
+        ? error.message
+        : "Licensed footage search could not be completed safely.";
+      res.status(error instanceof FootageSearchValidationError ? 400 : 502).json({ ok: false, error: message });
+    }
+  });
+
   app.post("/api/clipper/upload", async (req, res) => {
     const contentType = String(req.headers["content-type"] || "");
     const originalName = String(req.query.filename || "video.mp4").slice(0, 180);
@@ -2932,28 +3231,38 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
       output_name: body.outputName || body.output_name,
       words: body.words,
       ass: body.ass,
-      face_tracking: body.faceTracking || body.face_tracking || {
-        enabled: body.faceTrackingMode ? body.faceTrackingMode !== "off" : true,
-        mode: body.faceTrackingMode || body.mode || "smooth",
-        selectedTrackId: body.selectedPersonId || body.selectedTrackId || body.selected_face_id || null,
-        selectedPersonId: body.selectedPersonId || body.selected_person_id || body.selectedTrackId || body.selected_face_id || null,
-        sceneMode: body.sceneMode || body.scene_mode || body.personMode || body.person_mode || "strict",
-        personMode: body.sceneMode || body.personMode || body.person_mode || "strict",
-        allowZoom: body.allowZoom !== false,
-        sceneRules: body.sceneRules || body.scene_rules,
-      },
-      face_tracking_mode: body.faceTrackingMode || body.mode,
-      selected_face_id: body.selectedPersonId || body.selectedTrackId,
-      selected_person_id: body.selectedPersonId || body.selected_person_id || body.selectedTrackId,
-      person_mode: body.sceneMode || body.personMode || body.person_mode || "strict",
-      scene_mode: body.sceneMode || body.scene_mode || body.personMode || "strict",
+      // Preserve the editor's tracking intent. The worker produces one
+      // timestamped crop path shared by preview artifacts and FFmpeg; it
+      // downgrades to a stable composition when confidence is insufficient.
+      face_tracking: body.faceTracking && typeof body.faceTracking === "object"
+        ? body.faceTracking
+        : {
+            enabled: String(body.faceTrackingMode || body.face_tracking_mode || "responsive") !== "off",
+            mode: body.faceTrackingMode || body.face_tracking_mode || "responsive",
+            selectedTrackId: body.selectedTrackId || body.selected_track_id || undefined,
+            selectedPersonId: body.selectedPersonId || body.selected_person_id || undefined,
+            sceneMode: body.sceneMode || body.scene_mode || "flexible",
+            personMode: body.personMode || body.person_mode || body.sceneMode || "flexible",
+            allowZoom: body.allowZoom ?? body.allow_zoom ?? true,
+            smartReframe: body.smartReframe ?? body.smart_reframe ?? true,
+            reframeMode: body.reframeMode || body.reframe_mode || "auto",
+            speakerMode: body.speakerMode || body.speaker_mode || "auto",
+            trackingQuality: body.trackingQuality || body.tracking_quality || "balanced",
+            splitScreen: body.splitScreen ?? body.split_screen ?? false,
+          },
+      face_tracking_mode: body.faceTrackingMode || body.face_tracking_mode || "responsive",
       aspect_ratio: body.aspectRatio || body.aspect_ratio,
       crop_focus: body.cropFocus || body.crop_focus,
       font: body.font,
       font_size: body.fontSize ?? body.font_size,
       text_colour: body.textColour || body.text_colour,
       position: body.position,
+      caption_x: body.captionX ?? body.caption_x,
+      caption_y: body.captionY ?? body.caption_y,
+      subtitle_style: body.subtitleStyle || body.subtitle_style,
       captions_enabled: body.captionsEnabled ?? body.captions_enabled ?? true,
+      caption_collision_mode: body.captionCollisionMode || body.caption_collision_mode || "auto",
+      render_quality: body.renderQuality || body.render_quality || "premium",
     };
     spawnClipperPipeline(["--refine", JSON.stringify(cfg)], res, "Refining crop and captions...");
   });
@@ -3109,16 +3418,19 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
         });
       }, 350);
     }
-    // Start the static M1 stack alongside Clyra so the global boot sequence
-    // absorbs its cold start and Vibe opens without a second loading screen.
-    // CLYRA_M1_WARMUP=0 remains the explicit low-resource opt-out.
-    void import("./lib/openhands/m1-stack")
-      .then(({ warmupM1StackInBackground }) => {
-        warmupM1StackInBackground();
-      })
-      .catch((error) => {
-        console.warn("[m1] failed to schedule warmup:", error);
-      });
+    // OpenCode owns the active Vibe Coder runtime.  The previous M1/OpenHands
+    // harness must not consume ports, memory, or paint an alternate UI in a
+    // normal Clyra session.  Keep a strictly opt-in compatibility switch for
+    // migrations only; it is never part of the current Vibe workflow.
+    if (process.env.CLYRA_ENABLE_LEGACY_M1 === "1") {
+      void import("./lib/openhands/m1-stack")
+        .then(({ warmupM1StackInBackground }) => {
+          warmupM1StackInBackground();
+        })
+        .catch((error) => {
+          console.warn("[m1] failed to schedule warmup:", error);
+        });
+    }
   });
 
   let shuttingDown = false;

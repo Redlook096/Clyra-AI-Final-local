@@ -49,14 +49,6 @@ export function ChatWelcome({
             Ask a question, start a task, or continue work across{" "}
             <button
               type="button"
-              onClick={() => onNavigateWorkspace("browser")}
-              className="clyra-chat-welcome__link"
-            >
-              Browser
-            </button>
-            ,{" "}
-            <button
-              type="button"
               onClick={() => onNavigateWorkspace("vibe")}
               className="clyra-chat-welcome__link"
             >

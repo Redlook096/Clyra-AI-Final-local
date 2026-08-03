@@ -26,7 +26,12 @@
     "test:voice-e2e:dictation": "node tools/voice-call-e2e.mjs --dictation",
     "test:browser": "tsx tools/openbrowser-e2e.ts",
     "test:creator": "tsx tools/creator-unit-tests.ts",
+    "test:fake-text:timeline": "tsx tools/fake-text-timeline-unit-tests.ts",
+    "test:fake-text:visual": "playwright test --config=playwright.fake-text.config.ts",
+    "test:fake-text:render": "playwright test --config=playwright.fake-text.render.config.ts",
     "test:clipper": "tsx tools/clipper-unit-tests.ts",
+    "test:clipper-publishing": "tsx tools/clipper-publishing-unit-tests.ts",
+    "test:licensed-footage": "tsx tools/licensed-footage-unit-tests.ts",
     "test:agent-controller": "tsx tools/agent-controller-unit-tests.ts",
     "test:vibe-runtime": "tsx tools/vibe-runtime-unit-tests.ts"
   },
@@ -129,6 +134,10 @@
       {
         "from": "clipper_face_tracking.py",
         "to": "clipper_face_tracking.py"
+      },
+      {
+        "from": "clipper_intelligence.py",
+        "to": "clipper_intelligence.py"
       },
       {
         "from": "package-lock.json",

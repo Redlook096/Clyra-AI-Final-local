@@ -10,10 +10,8 @@ type HarnessMode = "plan" | "fast";
 // surface remains behind a flag for future iteration.
 const VIBE_PLAN_REVIEW_ENABLED = false;
 
-// The full Vibe Coder M1 fork is the product surface for Vibe. The older Clyra
-// workspace remains below as a fallback while its project/session code is
-// retained, but it must not replace the actual OpenHands canvas with a summary
-// of agent events.
+// The familiar Clyra workspace remains the product surface. OpenCode supplies
+// its execution events through the existing workspace state.
 const VIBE_CODER_M1_EMBED_ENABLED = false;
 import {
   AlertTriangle,
@@ -462,6 +460,7 @@ function buildActivityItems({
 type VibeCoderWorkspaceProps = {
   orbColorTheme?: OrbColorTheme;
   onEngaged?: () => void;
+  onOpenBrowser?: () => void;
 };
 
 type M1Status = {
@@ -567,12 +566,14 @@ function VibeCoderM1Surface({ onEngaged }: Pick<VibeCoderWorkspaceProps, "onEnga
 }
 
 export default function VibeCoderWorkspace(props: VibeCoderWorkspaceProps) {
-  if (VIBE_CODER_M1_EMBED_ENABLED) return <VibeCoderM1Surface onEngaged={props.onEngaged} />;
+  // Keep the familiar Clyra Vibe shell.  Only the execution harness is new:
+  // its activity stream is supplied by the OpenCode adapter rather than the
+  // prior M1/OpenHands conversation UI.
   return <LegacyVibeCoderWorkspace {...props} />;
 }
 
 function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: VibeCoderWorkspaceProps) {
-  const { state, resetToIdle, setState, loadSavedProject, restoreProject } = useVibeCoderWorkspace("project-advanced-vibe");
+  const { state, resetToIdle, setState, loadSavedProject, restoreProject, startTask } = useVibeCoderWorkspace("project-advanced-vibe");
 
   const [mode, setMode] = useState<"plan" | "fast">("fast");
   const [promptInput, setPromptInput] = useState("");
@@ -725,7 +726,10 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
 
   useEffect(() => {
     const projectId = state.projectId;
-    if (!projectId || projectId === "project-advanced-vibe" || state.stage === "idle") return;
+    // OpenCode streams directly into `useVibeCoderWorkspace`; it has no M1
+    // runtime snapshot to poll. Never wake the retired harness while a real
+    // OpenCode task is active.
+    if (!projectId || projectId === "project-advanced-vibe" || state.stage === "idle" || state.taskId) return;
     let cancelled = false;
     const loadRuntime = async () => {
       try {
@@ -825,17 +829,7 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
     void loadProjects();
   }, [loadProjects]);
 
-  useEffect(() => {
-    if (state.stage !== "idle") return;
-    void fetch("/api/vibe/m1-status", { cache: "no-store" })
-      .then((response) => response.ok ? response.json() : null)
-      .then((status: { uiUrl?: string } | null) => {
-        if (!status?.uiUrl) return;
-        setM1UiUrl(status.uiUrl);
-        window.sessionStorage.setItem("clyra-m1-ui-url", status.uiUrl);
-      })
-      .catch(() => undefined);
-  }, [state.stage]);
+  // The retained shell no longer probes or wakes M1/OpenHands when idle.
 
   const persistCurrentSession = useCallback(() => {
     if (state.stage === "idle" || !state.projectId) return;
@@ -1007,118 +1001,30 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
       setM1Launching(true);
       setM1Runtime(null);
       setM1RuntimeEvents([]);
-      // A fresh launch always starts running; stale pause intent must not
-      // block the polling loop's auto-resume for the new conversation.
-      userPausedRef.current = false;
-      autoResumeRef.current = { projectId: "", attempts: 0, lastAt: 0 };
-      // Do not hand the shell to the iframe until launch has returned a real
-      // conversation. A warmup probe can succeed while M1's ingress is still
-      // waiting for its agent server, which otherwise produces a white or
-      // "refused to connect" workspace immediately after Send.
       setSkipEnterAnimation(false);
       setWelcomeView("home");
       if (opts.projectName) setActiveProjectName(opts.projectName);
-
-      const engineWarm = isVibeEngineWarm();
-      if (!engineWarm) {
-        setWarmupStatusHint("Starting coding engine…");
-        // Non-blocking nudge — boot usually already warmed this.
-        void fetch("/api/vibe/m1-warmup", { method: "POST" }).catch(() => undefined);
-      } else {
-        setWarmupStatusHint(null);
-      }
-
       try {
-        const requestLaunch = () =>
-          fetch("/api/vibe/m1-launch", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            signal: AbortSignal.timeout(85_000),
-            body: JSON.stringify({
-              prompt: opts.prompt,
-              projectId: opts.projectId,
-              planMode: !!opts.planMode,
-              continueExisting: !!opts.continueExisting,
-            }),
-          });
-
-        let res: Response;
-        try {
-          res = await requestLaunch();
-        } catch (error) {
-          // The M1 warmup process can briefly overlap a local dev-server HMR
-          // reconnect. One quiet retry keeps Send deterministic without
-          // masking a persistent network failure behind a spinner.
-          if (!(error instanceof TypeError)) throw error;
-          await new Promise((resolve) => window.setTimeout(resolve, 650));
-          res = await requestLaunch();
-        }
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data?.error || "Failed to launch Vibe Coder M1");
-        }
-        const conversationId = String(data.conversationId || "");
-        const uiUrl = typeof data.uiUrl === "string" ? data.uiUrl.replace(/\/$/, "") : "";
-        if (uiUrl) {
-          setM1UiUrl(uiUrl);
-          window.sessionStorage.setItem("clyra-m1-ui-url", uiUrl);
-        }
-        const conversationUrl =
-          typeof data.conversationUrl === "string" && data.conversationUrl
-            ? String(data.conversationUrl).replace(/\?openPreview=1&/, "?").replace(/\?openPreview=1$/, "").replace(/&openPreview=1/, "")
-            : uiUrl && conversationId
-              ? `${uiUrl}/conversations/${encodeURIComponent(conversationId)}`
-              : "";
-        if (!conversationUrl) throw new Error("Vibe Coder M1 did not return a conversation workspace.");
         setWarmupStatusHint(null);
         onEngaged?.();
-        // Hold the chat-style thinking surface for a short, difficulty-scaled
-        // beat so the iframe never flashes the optimistic bubble away mid-thought.
-        const holdMs = opts.continueExisting ? 720 : vibeThinkingHoldMs(opts.prompt || "");
-        setThinkingHoldMs((current) => (current > 0 && !opts.continueExisting ? current : holdMs));
-        setThinkingStartedAt((current) => current ?? Date.now());
-        setHandoffSummary(vibeHandoffSummary(opts.prompt || ""));
+        // OpenCode owns execution and streams its events into the existing
+        // Clyra workspace state. Opening an existing project needs no
+        // background harness launch; submitting a prompt starts an OpenCode
+        // run in that Clyra-owned project directory.
+        const prompt = opts.prompt?.trim();
+        if (!prompt) return;
+        setThinkingStartedAt(Date.now());
+        setHandoffSummary(vibeHandoffSummary(prompt));
         setHandoffReady(true);
-        setPendingM1Url(conversationUrl);
-        setState((prev) => ({
-          ...prev,
-          projectId: String(data.projectId || prev.projectId),
-          stage: "generating-file",
-          taskId: conversationId,
-          prompt: opts.prompt || prev.prompt || "",
-          planMode: !!opts.planMode,
-          startedAt: prev.startedAt || Date.now(),
-          error: null,
-        }));
         setActiveProjectName(
           opts.projectName ||
-            String(opts.prompt || "").slice(0, 70) ||
+            prompt.slice(0, 70) ||
             "Vibe project",
         );
-        const launchedId = String(data.projectId || opts.projectId || "");
-        void loadProjects();
-        if (launchedId && launchedId !== "project-advanced-vibe") {
-          // Capture a fresh card preview after the workspace updates.
-          window.setTimeout(() => {
-            void fetch(
-              `/api/vibe/projects/${encodeURIComponent(launchedId)}/thumbnail/refresh`,
-              { method: "POST" },
-            )
-              .then(() => loadProjects())
-              .catch(() => undefined);
-          }, 8000);
-          window.setTimeout(() => {
-            void fetch(
-              `/api/vibe/projects/${encodeURIComponent(launchedId)}/thumbnail/refresh`,
-              { method: "POST" },
-            )
-              .then(() => loadProjects())
-              .catch(() => undefined);
-          }, 45000);
-        }
+        await startTask(prompt, !!opts.planMode);
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : "Failed to launch M1";
+          error instanceof Error ? error.message : "OpenCode could not start";
         setM1LaunchError(message);
         setWarmupStatusHint(null);
         setState((prev) => ({ ...prev, stage: "failed", error: message }));
@@ -1126,7 +1032,7 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
         setM1Launching(false);
       }
     },
-    [loadProjects, onEngaged, setState],
+    [onEngaged, setState, startTask],
   );
 
   const preparePlanReview = useCallback(async (prompt: string, projectId?: string) => {
@@ -1593,10 +1499,10 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
                     <motion.div
                       key={message.id}
                       layout="position"
-                      initial={{ opacity: 0, y: 12, scale: 0.98 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
                       transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
-                      className="clyra-chat-user-bubble ml-auto max-w-[92%] rounded-[18px] rounded-br-md border border-slate-200/70 bg-[#f4f4f4] px-3.5 py-3 text-left text-[13px] font-medium leading-relaxed text-slate-800"
+                      className="max-w-[92%] px-0.5 text-left text-[15px] font-medium leading-relaxed text-slate-900"
                     >
                       {message.content}
                     </motion.div>
@@ -1643,13 +1549,7 @@ function LegacyVibeCoderWorkspace({ orbColorTheme = "default", onEngaged }: Vibe
                       },
                     ]);
                     setPromptInput("");
-                    if (m1Runtime?.projectId) {
-                      void fetch(`/api/vibe/runtime/${encodeURIComponent(m1Runtime.projectId)}/control`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ command: "message", message: followUp }),
-                      }).catch(() => undefined);
-                    }
+                    void launchM1({ prompt: followUp, projectId: state.projectId, planMode: false });
                   }}
                   mode={mode}
                   onModeChange={setMode}
@@ -2027,7 +1927,7 @@ function AgentActivityFeed({ items }: { items: AgentActivityItem[] }) {
   if (items.length === 0) return null;
   return (
     <div className="mt-1 max-w-[720px]">
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         <AnimatePresence initial={false}>
           {items.map((item) => (
             <AgentActivityRow key={item.id} item={item} />
@@ -2052,31 +1952,28 @@ function AgentActivityRow({ item }: { item: AgentActivityItem }) {
   return (
     <motion.div
       layout
-      initial={{ opacity: 0, y: 6, scale: 0.985 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: -4, scale: 0.99 }}
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -4 }}
       transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
       className={cn(
-        "group relative overflow-hidden rounded-[20px] border bg-white/78 px-3.5 py-3 text-left shadow-[0_10px_30px_rgba(15,23,42,0.03)]",
-        item.status === "active" && "agent-soft-shimmer border-slate-200/90",
-        item.status === "success" && "border-slate-200/65",
-        item.status === "pending" && "border-slate-200/55 opacity-75",
-        item.status === "error" && "border-rose-200/90 bg-rose-50/45",
+        "group flex items-start gap-3 px-0.5 py-2 text-left",
+        item.status === "active" && "agent-soft-shimmer",
+        item.status === "pending" && "opacity-75",
+        item.status === "error" && "text-rose-700",
       )}
-      style={{ contain: "layout paint" }}
     >
-      <div className="flex items-start gap-3">
-        <span
-          className={cn(
-            "mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-[14px] border bg-white text-slate-400",
-            item.status === "active" && "border-slate-200 text-slate-600",
-            item.status === "success" && "border-emerald-100 text-emerald-600",
-            item.status === "error" && "border-rose-100 text-rose-500",
-          )}
-        >
-          {item.status === "active" ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}
-        </span>
-        <div className="min-w-0 flex-1">
+      <span
+        className={cn(
+          "mt-0.5 grid h-5 w-5 shrink-0 place-items-center text-slate-400",
+          item.status === "active" && "text-slate-600",
+          item.status === "success" && "text-emerald-600",
+          item.status === "error" && "text-rose-500",
+        )}
+      >
+        {item.status === "active" ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Icon className="h-3.5 w-3.5" />}
+      </span>
+      <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             {item.type === "file" && item.filePath ? (
               <FileEditActivity item={item} />
@@ -2099,17 +1996,6 @@ function AgentActivityRow({ item }: { item: AgentActivityItem }) {
                 {item.title}
               </p>
             )}
-            <span
-              className={cn(
-                "rounded-full px-2 py-0.5 text-[9.5px] font-black uppercase tracking-[0.1em]",
-                item.status === "active" && "bg-slate-100 text-slate-500",
-                item.status === "success" && "bg-emerald-50 text-emerald-600",
-                item.status === "pending" && "bg-slate-50 text-slate-400",
-                item.status === "error" && "bg-rose-100 text-rose-600",
-              )}
-            >
-              {item.status === "active" ? "active" : item.status}
-            </span>
           </div>
           {item.description ? (
             <p className="mt-1 text-[12px] font-medium leading-relaxed text-slate-500">
@@ -2121,11 +2007,10 @@ function AgentActivityRow({ item }: { item: AgentActivityItem }) {
               {item.filePath}
             </p>
           ) : null}
-        </div>
-        <span className="shrink-0 text-[10px] font-bold text-slate-300">
-          {relativeTime(new Date(item.timestamp).toISOString())}
-        </span>
       </div>
+      <span className="mt-1 shrink-0 text-[10px] font-bold text-slate-300">
+        {relativeTime(new Date(item.timestamp).toISOString())}
+      </span>
     </motion.div>
   );
 }
@@ -2184,7 +2069,7 @@ function FileEditActivity({ item }: { item: AgentActivityItem }) {
         initial={{ opacity: 0, scale: 0.94 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-        className="inline-flex items-center gap-1.5 rounded-full bg-slate-50 px-2 py-0.5"
+        className="inline-flex items-center gap-1.5 px-1 py-0.5"
       >
         <AnimatedDiffCount value={item.added ?? 0} tone="add" active={active} />
         <AnimatedDiffCount value={item.removed ?? 0} tone="remove" active={active} />

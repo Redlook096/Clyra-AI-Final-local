@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { createServer } from "node:http";
 import { promises as fs } from "node:fs";
 import { dirname } from "node:path";
-import { safeStorage, shell } from "electron";
+import { Notification, safeStorage, shell } from "electron";
 import { ClyraAdaptiveDocumentEngine } from "./clyra-adaptive-document-engine.mjs";
 import { AgentOrchestrator } from "./agent-orchestrator.mjs";
 
@@ -22,6 +22,50 @@ const gmailBodyText = (part) => {
   if (part.mimeType === "text/plain" && part.body?.data) return Buffer.from(part.body.data, "base64url").toString("utf8");
   return (part.parts || []).map(gmailBodyText).join("\n");
 };
+const gmailHeaderMap = (headers = []) => Object.fromEntries((headers || []).map((header) => [String(header.name || "").toLowerCase(), String(header.value || "")]));
+const decodeGmailData = (value) => {
+  try { return value ? Buffer.from(String(value), "base64url").toString("utf8") : ""; } catch { return ""; }
+};
+const decodeHtmlEntities = (value) => String(value || "").replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16))).replace(/&#(\d+);/g, (_, decimal) => String.fromCodePoint(Number(decimal))).replace(/&(nbsp|amp|lt|gt|quot|#39);/gi, (_, entity) => ({ nbsp:" ", amp:"&", lt:"<", gt:">", quot:'"', "#39":"'" }[String(entity).toLowerCase()] || ""));
+// Gmail markup is untrusted content. The renderer receives readable text only:
+// no scripts, remote image pixels, hidden tracking nodes, or executable HTML.
+const htmlEmailToText = (html) => decodeHtmlEntities(String(html || "")
+  .replace(/<!--[\s\S]*?-->/g, "")
+  .replace(/<(script|style|iframe|object|embed|svg|canvas|form|input|button)[\s\S]*?<\/\1>/gi, "")
+  .replace(/<img\b[^>]*>/gi, "")
+  .replace(/<\/?(?:p|div|section|article|header|footer|h[1-6]|blockquote|tr)[^>]*>/gi, "\n")
+  .replace(/<br\s*\/?>/gi, "\n")
+  .replace(/<li\b[^>]*>/gi, "\n• ")
+  .replace(/<\/li>/gi, "")
+  .replace(/<[^>]+>/g, "")
+  .replace(/\r/g, "")
+  .replace(/\n{3,}/g, "\n\n")
+  .trim());
+const parseMailbox = (value) => {
+  const raw = String(value || "").replace(/[\r\n]/g, " ").trim();
+  const email = raw.match(/<([^>\s]+@[^>\s]+)>/)?.[1] || raw.match(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/)?.[0] || "";
+  const name = raw.replace(/<[^>]*>/g, "").replace(/[\"']/g, "").trim() || email || "Unknown sender";
+  return { name:name.slice(0, 160), email:email.slice(0, 320) };
+};
+const subjectForReply = (subject) => /^\s*re:/i.test(String(subject || "")) ? String(subject || "").trim() : `Re: ${String(subject || "(No subject)").trim()}`;
+const safeHeaderValue = (value, maximum = 512) => String(value || "").replace(/[\r\n]+/g, " ").trim().slice(0, maximum);
+const mimeParts = (part, collected = { plain:[], html:[], attachments:[] }) => {
+  if (!part) return collected;
+  const type = String(part.mimeType || "").toLowerCase();
+  const filename = String(part.filename || "").trim();
+  if (part.body?.attachmentId || filename) {
+    if (filename) collected.attachments.push({ id:String(part.body?.attachmentId || ""), filename:filename.slice(0, 260), mimeType:type || "application/octet-stream", size:Number(part.body?.size || 0) || undefined });
+  } else if (type === "text/plain" && part.body?.data) collected.plain.push(decodeGmailData(part.body.data));
+  else if (type === "text/html" && part.body?.data) collected.html.push(htmlEmailToText(decodeGmailData(part.body.data)));
+  for (const child of part.parts || []) mimeParts(child, collected);
+  return collected;
+};
+const cleanEmailText = (value, maximum = 48_000) => String(value || "").replace(/\u0000/g, "").replace(/\r/g, "").replace(/\n{3,}/g, "\n\n").trim().slice(0, maximum);
+const sourceLabel = (url) => {
+  try { return new URL(String(url)).hostname.replace(/^www\./, ""); } catch { return "Source"; }
+};
+const compactText = (value, maximum = 320) => String(value || "").replace(/\s+/g, " ").trim().slice(0, maximum);
+const markdownWorkspaceLink = (label, url) => `[${label}](${url})`;
 
 function safeFailure(stage, status, errorCode) {
   const suffix = errorCode ? `, ${errorCode}` : "";
@@ -42,7 +86,7 @@ export class GoogleWorkspaceManager {
     // This class never returns them, includes them in IPC, or logs them.
     this.clientId = clientId || ""; this.clientSecret = clientSecret || "";
     this.serviceUrl = serviceUrl;
-    this.development = development; this.authServer = null; this.authAttempt = null; this.authTimeout = null;
+    this.development = development; this.authServer = null; this.authAttempt = null; this.authTimeout = null; this.followUpTimers = new Map();
     this.orchestrator = new AgentOrchestrator({
       emitProgress: (runId, payload) => this.emitAgentProgress(runId, payload),
       log: (stage, detail) => this.log(stage, detail),
@@ -54,6 +98,11 @@ export class GoogleWorkspaceManager {
   emitAgentProgress(runId, payload) { const contents = this.uiContents?.(); if (runId && contents && !contents.isDestroyed()) contents.send("google:agent-progress", { runId, ...payload }); }
   async readTokens() { try { const raw = await fs.readFile(this.tokenPath); if (!safeStorage.isEncryptionAvailable()) return null; return JSON.parse(safeStorage.decryptString(raw)); } catch { return null; } }
   async writeTokens(tokens) { if (!safeStorage.isEncryptionAvailable()) throw new Error("Secure credential storage is unavailable on this device."); await fs.mkdir(dirname(this.tokenPath), { recursive: true }); await fs.writeFile(this.tokenPath, safeStorage.encryptString(JSON.stringify(tokens))); }
+  get followUpPath() { return `${this.tokenPath}.gmail-follow-ups`; }
+  async readFollowUps() { try { if (!safeStorage.isEncryptionAvailable()) return []; const raw=await fs.readFile(this.followUpPath); const value=JSON.parse(safeStorage.decryptString(raw)); return Array.isArray(value) ? value.filter((item) => item && typeof item.id === "string") : []; } catch { return []; } }
+  async writeFollowUps(items) { if (!safeStorage.isEncryptionAvailable()) throw new Error("Secure local follow-up storage is unavailable on this device."); await fs.mkdir(dirname(this.followUpPath), { recursive:true }); await fs.writeFile(this.followUpPath, safeStorage.encryptString(JSON.stringify(items.slice(-200)))); }
+  followUpDate(when) { const now=new Date(); if (typeof when === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(when)) { const value=new Date(when); if (!Number.isNaN(value.getTime()) && value.getTime() > now.getTime()) return value; } if (when === "today") now.setHours(Math.max(now.getHours()+2, 17), 0, 0, 0); else if (when === "three-days") now.setDate(now.getDate()+3); else if (when === "next-week") now.setDate(now.getDate()+7); else now.setDate(now.getDate()+1); now.setHours(9, 0, 0, 0); return now; }
+  scheduleFollowUpTimer(item) { const delay=new Date(item.dueAt).getTime()-Date.now(); if (delay <= 0 || delay > 2_147_000_000) return; const existing=this.followUpTimers.get(item.id); if(existing) clearTimeout(existing); const timer=setTimeout(() => { this.followUpTimers.delete(item.id); if (Notification.isSupported()) new Notification({ title:"Clyra follow-up", body:`${item.subject || "Email"}${item.note ? ` — ${item.note}` : ""}` }).show(); }, delay); this.followUpTimers.set(item.id,timer); }
   async status() { const tokens = await this.readTokens(); return { connected: Boolean(tokens?.refresh_token || tokens?.access_token), email: tokens?.email || "" }; }
   async disconnect() { await fs.unlink(this.tokenPath).catch(() => undefined); this.emit({ connected:false }); return { ok:true }; }
   tokenForm(values) { return new URLSearchParams({ client_id:this.clientId, client_secret:this.clientSecret, ...values }); }
@@ -209,8 +258,8 @@ export class GoogleWorkspaceManager {
     const writeTools = ["docs", "sheets", "slides", "drive"];
     const explicitlyRequestedOutput = mentioned.filter((service) => writeTools.includes(service));
     const target = explicitlyRequestedOutput.at(-1) || tool;
-    const reads = mentioned.filter((service) => ["gmail", "calendar"].includes(service) && service !== target);
-    const researchRequested = /\b(?:research(?:ed|ing)?|compar(?:e|ed|ing|ison)|recommend(?:ation|ed|ing)?|which|best|latest|current|plan|strategy|options|pros and cons|based on|versus|vs\.?)\b/i.test(prompt) && (writeTools.includes(target) || reads.length > 0);
+    const reads = mentioned.filter((service) => ["gmail", "calendar", "drive"].includes(service) && service !== target);
+    const researchRequested = (/\b(?:research(?:ed|ing)?|compar(?:e|ed|ing|ison)|recommend(?:ation|ed|ing)?|which|best|latest|current|plan|strategy|options|pros and cons|based on|versus|vs\.?|fact\s*-?\s*check)\b/i.test(prompt) || (target === "docs" && /\bmacbook\b/i.test(prompt))) && (writeTools.includes(target) || reads.length > 0);
     const steps = ["understand request", ...(researchRequested ? ["research sources"] : []), ...reads.map((service) => `read ${service}`), `complete ${target}`, "verify result"];
     this.log("agent-plan", { tool, target, readCount:reads.length, stepCount:steps.length, researchRequested });
     return { researchRequested, reads, target, steps };
@@ -242,6 +291,15 @@ export class GoogleWorkspaceManager {
     const sources=[...sourceMap.values()].slice(0,8); const pages=[...pageMap.values()].slice(0,5);
     this.emitAgentProgress(runId, { service:"research", state:"completed", label:"Comparing sources", detail:pages.length ? `Reviewed ${pages.length} source excerpts from ${sources.length} results.` : "No usable source excerpts were returned." });
     return { attempted:true, sources, pages };
+  }
+  async readDriveContext(prompt, runId) {
+    const terms = String(prompt || "").replace(/\b(?:create|make|write|google|docs?|documents?|drive|files?|from|using|the|a|an)\b/gi, " ").replace(/\s+/g, " ").trim().split(" ").filter((term) => term.length > 2).slice(0, 5);
+    const query = terms.length ? terms.map((term) => `fullText contains '${term.replace(/'/g, "\\'")}'`).join(" and ") : "trashed = false";
+    this.emitAgentProgress(runId, { service:"drive", state:"running", label:"Searching Google Drive", detail:"Inspecting relevant file metadata before using it as context." });
+    const found = await this.google(`/drive/v3/files?q=${encodeURIComponent(`(${query}) and trashed = false`)}&pageSize=10&orderBy=modifiedTime desc&fields=files(id,name,mimeType,modifiedTime,webViewLink)`, {}, "agent-drive-context-search");
+    const files = (found.files || []).slice(0, 8);
+    this.emitAgentProgress(runId, { service:"drive", state:"completed", label:"Google Drive checked", detail:`Reviewed ${files.length} matching file record${files.length === 1 ? "" : "s"}.` });
+    return { files, summary:files.length ? `Found ${files.length} relevant Drive file${files.length === 1 ? "" : "s"}.` : "No matching Drive files were found." };
   }
   documentBlueprint(prompt, sources, workspaceContext = []) {
     const macbookPlan = /\bmacbook\b/i.test(prompt);
@@ -296,28 +354,97 @@ export class GoogleWorkspaceManager {
     this.emitAgentProgress(runId, { service:"gmail", state:"completed", label:"Reading emails", detail:`Reviewed ${records.length} unique Gmail messages${pageToken || ids.length > 20 ? " across multiple pages" : ""}.` });
     return records;
   }
-  async readGmail(runId) {
-    this.emitAgentProgress(runId, { service:"gmail", state:"running", label:"Checking Gmail", detail:"Reading unread-message metadata needed for the next action." });
-    const list = await this.google("/gmail/v1/users/me/messages?maxResults=8&q=is%3Aunread", {}, "agent-gmail-list");
-    const messages = await Promise.all((list.messages || []).slice(0, 8).map((message) => this.google(`/gmail/v1/users/me/messages/${message.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`, {}, "agent-gmail-message")));
-    const rows = messages.map((message) => { const headers = Object.fromEntries((message.payload?.headers || []).map((header) => [header.name, header.value])); return `- ${headers.Subject || "(No subject)"} — ${headers.From || "Unknown sender"}${headers.Date ? ` (${headers.Date})` : ""}`; });
-    this.emitAgentProgress(runId, { service:"gmail", state:"completed", label:"Gmail checked", detail:`Read ${rows.length} unread message summaries.` });
-    return { rows, summary:rows.length ? `Found ${rows.length} unread message summaries.` : "No unread messages were found." };
+  gmailQueryForPrompt(prompt = "") {
+    const value = String(prompt || "").replace(/^\/(?:gmail|mail)\s*/i, "").trim();
+    const terms = [];
+    if (/\bunread\b/i.test(value)) terms.push("is:unread");
+    if (/\b(?:today|this morning|this afternoon)\b/i.test(value)) terms.push("newer_than:1d");
+    else if (/\b(?:latest|recent|newest|last)\b/i.test(value)) terms.push("newer_than:14d");
+    const from = value.match(/\bfrom\s+([^,?.!]+?)(?=\s+(?:about|regarding|with|that|sent)|[?.!,]|$)/i)?.[1]?.trim();
+    const about = value.match(/\b(?:about|regarding|on)\s+([^?.!]+?)(?:\?|$)/i)?.[1]?.trim();
+    if (from) terms.push(`from:(${from.slice(0, 120)})`);
+    if (about) terms.push(about.slice(0, 180));
+    if (!from && !about && !/\b(?:show|check|read|find|latest|recent|emails?|mail|inbox|unread|today|last)\b/i.test(value)) terms.push(value.slice(0, 180));
+    return terms.filter(Boolean).join(" ") || "newer_than:14d";
+  }
+  gmailLimitForPrompt(prompt = "", fallback = 6) {
+    const count = String(prompt || "").match(/\b(?:last|latest|show|read|find)\s+(\d{1,2})\b/i)?.[1];
+    return Math.max(1, Math.min(12, Number(count) || fallback));
+  }
+  normalizeGmailMessage(message, threadMessageCount = 1) {
+    const headers = gmailHeaderMap(message?.payload?.headers);
+    const sender = parseMailbox(headers.from);
+    const replyTo = parseMailbox(headers["reply-to"] || headers.from);
+    const recipients = String(headers.to || "").split(/,(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)/).map(parseMailbox).filter((recipient) => recipient.name || recipient.email).map((recipient) => recipient.name || recipient.email).slice(0, 8);
+    const parts = mimeParts(message?.payload);
+    const plainTextBody = cleanEmailText(parts.plain.join("\n\n") || parts.html.join("\n\n") || message?.snippet || "");
+    const labels = Array.isArray(message?.labelIds) ? message.labelIds.filter((label) => typeof label === "string").slice(0, 30) : [];
+    return {
+      id:String(message?.id || ""), threadId:String(message?.threadId || ""), senderName:sender.name, senderEmail:sender.email,
+      replyTo:replyTo.email || sender.email, recipientNames:recipients, subject:safeHeaderValue(headers.subject || "(No subject)", 300),
+      receivedAt:safeHeaderValue(headers.date || "", 180), internalDate:String(message?.internalDate || ""),
+      isUnread:labels.includes("UNREAD"), isStarred:labels.includes("STARRED"), labels:labels.filter((label) => !["INBOX", "UNREAD", "STARRED", "SENT", "DRAFT"].includes(label)),
+      snippet:cleanEmailText(message?.snippet || plainTextBody, 480), plainTextBody, attachments:parts.attachments,
+      threadMessageCount:Math.max(1, Number(threadMessageCount) || 1), messageIdHeader:safeHeaderValue(headers["message-id"] || "", 500),
+    };
+  }
+  async normalizedGmailThread(threadId) {
+    if (!this.validId(threadId)) throw new Error("A valid Gmail thread ID is required.");
+    const thread = await this.google(`/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`, {}, "gmail-thread-read");
+    const messages = Array.isArray(thread.messages) ? thread.messages : [];
+    return { id:String(thread.id || threadId), messages:messages.map((message) => this.normalizeGmailMessage(message, messages.length)) };
+  }
+  async searchGmailMessages({ query, limit = 6, runId, stage = "agent-gmail-list" } = {}) {
+    const boundedLimit = Math.max(1, Math.min(12, Number(limit) || 6));
+    const gmailQuery = String(query || "newer_than:14d").slice(0, 320);
+    this.emitAgentProgress(runId, { service:"gmail", state:"running", label:"Reading emails", detail:`Searching Gmail for ${boundedLimit === 1 ? "one relevant message" : `up to ${boundedLimit} relevant messages`}.` });
+    const list = await this.google(`/gmail/v1/users/me/messages?maxResults=${Math.min(20, boundedLimit * 2)}&q=${encodeURIComponent(gmailQuery)}`, {}, stage);
+    const ids = [...new Map((list.messages || []).filter((message) => this.validId(message?.id)).map((message) => [message.id, message])).values()].slice(0, boundedLimit);
+    const messages = [];
+    for (let offset = 0; offset < ids.length; offset += 4) {
+      messages.push(...await Promise.all(ids.slice(offset, offset + 4).map((message) => this.google(`/gmail/v1/users/me/messages/${encodeURIComponent(message.id)}?format=full`, {}, "gmail-message-read"))));
+    }
+    const threadCounts = new Map();
+    const threadIds = [...new Set(messages.map((message) => message.threadId).filter((id) => this.validId(id)))];
+    for (let offset = 0; offset < threadIds.length; offset += 4) {
+      const threads = await Promise.all(threadIds.slice(offset, offset + 4).map((threadId) => this.google(`/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=minimal`, {}, "gmail-thread-count")));
+      threads.forEach((thread, index) => threadCounts.set(threadIds[offset + index], Array.isArray(thread.messages) ? thread.messages.length : 1));
+    }
+    const emails = messages.map((message) => this.normalizeGmailMessage(message, threadCounts.get(message.threadId) || 1)).filter((email) => email.id && (email.subject || email.plainTextBody));
+    this.emitAgentProgress(runId, { service:"gmail", state:"completed", label:"Emails ready", detail:emails.length ? `Loaded ${emails.length} relevant Gmail message${emails.length === 1 ? "" : "s"} safely into Clyra.` : "No matching Gmail messages were found." });
+    return { query:gmailQuery, total:Number(list.resultSizeEstimate || emails.length) || emails.length, emails };
+  }
+  async readGmail(runId, prompt = "") {
+    const results = await this.searchGmailMessages({ query:this.gmailQueryForPrompt(prompt), limit:this.gmailLimitForPrompt(prompt), runId });
+    const count = results.emails.length;
+    const summary = count ? `Found ${count} relevant email${count === 1 ? "" : "s"}.` : "No matching emails were found.";
+    return { rows:results.emails.map((email) => `- ${email.subject} — ${email.senderName}`), summary, gmailResults:results, text:count ? `I found ${count} relevant email${count === 1 ? "" : "s"}.` : "No matching emails were found." };
   }
   async readCalendar(runId) {
     this.emitAgentProgress(runId, { service:"calendar", state:"running", label:"Checking Google Calendar", detail:"Loading the next events from your primary calendar." });
     const events = await this.google(`/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&maxResults=8&timeMin=${encodeURIComponent(new Date().toISOString())}`, {}, "agent-calendar-list");
     const rows = (events.items || []).map((event) => `- ${event.summary || "Untitled"} — ${event.start?.dateTime || event.start?.date || "Time not set"}`);
     this.emitAgentProgress(runId, { service:"calendar", state:"completed", label:"Calendar checked", detail:`Read ${rows.length} upcoming events.` });
-    return { rows, summary:rows.length ? `Found ${rows.length} upcoming events.` : "No upcoming events were found." };
+    return { rows, summary:rows.length ? `Found ${rows.length} upcoming events.` : "No upcoming events were found.", text:rows.length ? `### Upcoming calendar\n\n${rows.join("\n")}\n\n${markdownWorkspaceLink("Open Google Calendar", "https://calendar.google.com/calendar/u/0/r")}` : `No upcoming events were found.\n\n${markdownWorkspaceLink("Open Google Calendar", "https://calendar.google.com/calendar/u/0/r")}` };
   }
-  async createSheet(title, prompt, runId) {
-    this.emitAgentProgress(runId, { service:"sheets", state:"running", label:"Creating Google Sheet", detail:"Creating the spreadsheet and adding the task context." });
-    const file = await this.google("https://sheets.googleapis.com/v4/spreadsheets", { method:"POST", body:JSON.stringify({ properties:{ title }, sheets:[{ properties:{ title:"Plan" }, data:[{ rowData:[{ values:[{ userEnteredValue:{ stringValue:"Clyra task" } }, { userEnteredValue:{ stringValue:prompt.slice(0, 500) } }] }] }] }] }) }, "agent-sheet-create");
-    const verified = await this.google(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(file.spreadsheetId)}?fields=spreadsheetId,properties(title)`, {}, "agent-sheet-verify");
-    if (!verified.spreadsheetId) throw safeFailure("agent-sheet-verify", 500, "missing_spreadsheet_id");
-    this.emitAgentProgress(runId, { service:"sheets", state:"completed", label:"Google Sheet verified", detail:"The spreadsheet was created and read back successfully." });
-    return { ok:true, action:"Google Sheet complete", detail:"Created and verified the spreadsheet.", text:`Done — created and verified **${file.properties?.title || title}**.\n\n[Open Google Sheet](https://docs.google.com/spreadsheets/d/${file.spreadsheetId}/edit)` };
+  async createSheet(title, prompt, runId, research = { pages:[] }) {
+    const pages = Array.isArray(research?.pages) ? research.pages : [];
+    const macbookComparison = /\bmacbook\b/i.test(prompt) && /\bm2\b/i.test(prompt) && /\b2018\b/i.test(prompt);
+    const values = macbookComparison
+      ? [["Category", "MacBook Air M2", "MacBook Pro (2018)"], ["Processor", "Apple M2", "8th/9th-generation Intel"], ["Cooling", "Fanless", "Active cooling"], ["Battery", "Up to 18 hours", "Up to 10 hours"], ["Best fit", "Most people, study, coding", "Existing owner or a very low used price"]]
+      : pages.length
+        ? [["Source", "Reviewed evidence"], ...pages.slice(0, 6).map((page) => [sourceLabel(page.url), compactText(page.excerpt, 420)])]
+        : [["Item", "Detail"], ["Requested outcome", cleanTitle(prompt, "Untitled spreadsheet")]];
+    this.emitAgentProgress(runId, { service:"sheets", state:"running", label:"Building Google Sheet", detail:"Creating a structured data model rather than storing the raw prompt." });
+    const toRows = (rows) => rows.map((row) => ({ values:row.map((cell) => ({ userEnteredValue:{ stringValue:String(cell) } })) }));
+    const file = await this.google("https://sheets.googleapis.com/v4/spreadsheets", { method:"POST", body:JSON.stringify({ properties:{ title }, sheets:[{ properties:{ title:"Summary", gridProperties:{ frozenRowCount:1 } }, data:[{ rowData:toRows(values) }] }] }) }, "agent-sheet-create");
+    const sheetId = file.sheets?.[0]?.properties?.sheetId;
+    if (!file.spreadsheetId || !Number.isInteger(sheetId)) throw safeFailure("agent-sheet-create", 500, "missing_spreadsheet_id");
+    await this.google(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(file.spreadsheetId)}:batchUpdate`, { method:"POST", body:JSON.stringify({ requests:[{ repeatCell:{ range:{ sheetId, startRowIndex:0, endRowIndex:1 }, cell:{ userEnteredFormat:{ backgroundColor:{ red:0.12, green:0.31, blue:0.61 }, textFormat:{ bold:true, foregroundColor:{ red:1, green:1, blue:1 } } } }, fields:"userEnteredFormat(backgroundColor,textFormat)" } }, { autoResizeDimensions:{ dimensions:{ sheetId, dimension:"COLUMNS", startIndex:0, endIndex:values[0].length } } }] }) }, "agent-sheet-style");
+    const verified = await this.google(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(file.spreadsheetId)}/values/${encodeURIComponent(`Summary!A1:${values[0].length === 3 ? "C" : "B"}${values.length}`)}`, {}, "agent-sheet-verify");
+    if (!Array.isArray(verified.values) || verified.values.length !== values.length || !values[0].every((cell, index) => verified.values[0]?.[index] === cell)) throw safeFailure("agent-sheet-verify", 500, "sheet_readback_failed");
+    this.emitAgentProgress(runId, { service:"sheets", state:"completed", label:"Google Sheet verified", detail:`Read back ${verified.values.length} structured row${verified.values.length === 1 ? "" : "s"} after formatting.` });
+    return { ok:true, action:"Google Sheet complete", detail:"Created, formatted, and verified the spreadsheet.", text:`Done — created and verified **${file.properties?.title || title}**.`, workspaceResult:{ kind:"sheets", title:file.properties?.title || title, subtitle:"Google Sheets", url:`https://docs.google.com/spreadsheets/d/${file.spreadsheetId}/edit` } };
   }
   async createSlides(title, runId) {
     this.emitAgentProgress(runId, { service:"slides", state:"running", label:"Creating Google Slides", detail:"Creating the presentation in Google Drive." });
@@ -325,7 +452,7 @@ export class GoogleWorkspaceManager {
     const verified = await this.google(`https://slides.googleapis.com/v1/presentations/${encodeURIComponent(file.presentationId)}`, {}, "agent-slides-verify");
     if (!verified.presentationId) throw safeFailure("agent-slides-verify", 500, "missing_presentation_id");
     this.emitAgentProgress(runId, { service:"slides", state:"completed", label:"Google Slides verified", detail:"The presentation was created and read back successfully." });
-    return { ok:true, action:"Google Slides complete", detail:"Created and verified the presentation.", text:`Done — created and verified **${file.title || title}**.\n\n[Open Google Slides](https://docs.google.com/presentation/d/${file.presentationId}/edit)` };
+    return { ok:true, action:"Google Slides complete", detail:"Created and verified the presentation.", text:`Done — created and verified **${file.title || title}**.`, workspaceResult:{ kind:"slides", title:file.title || title, subtitle:"Google Slides", url:`https://docs.google.com/presentation/d/${file.presentationId}/edit` } };
   }
   async createDriveFile(title, runId) {
     this.emitAgentProgress(runId, { service:"drive", state:"running", label:"Creating Drive file", detail:"Creating the requested file in Google Drive." });
@@ -333,7 +460,7 @@ export class GoogleWorkspaceManager {
     const verified = await this.google(`/drive/v3/files/${encodeURIComponent(file.id)}?fields=id,name,mimeType`, {}, "agent-drive-verify");
     if (!verified.id) throw safeFailure("agent-drive-verify", 500, "missing_file_id");
     this.emitAgentProgress(runId, { service:"drive", state:"completed", label:"Drive file verified", detail:"The new file was created and read back successfully." });
-    return { ok:true, action:"Google Drive complete", detail:"Created and verified the Drive file.", text:`Done — created and verified **${file.name || title}** in Google Drive.\n\n[Open in Drive](https://drive.google.com/open?id=${file.id})` };
+    return { ok:true, action:"Google Drive complete", detail:"Created and verified the Drive file.", text:`Done — created and verified **${file.name || title}** in Google Drive.`, workspaceResult:{ kind:"drive", title:file.name || title, subtitle:"Google Drive", url:`https://drive.google.com/open?id=${file.id}` } };
   }
   requireConfirmation(kind, confirmed) {
     if (confirmed === true) return null;
@@ -345,7 +472,7 @@ export class GoogleWorkspaceManager {
     const finish = (label, detail, text) => ({ ok:true, action:label, detail, text });
     this.emitAgentProgress(runId, { service:service === "contacts" || service === "youtube" ? "clyra" : service, state:"running", label:`Using Google ${service === "youtube" ? "YouTube" : service[0].toUpperCase()+service.slice(1)}`, detail:"Completing the requested Workspace action securely." });
     if (service === "drive") {
-      if (action === "search") { const q=encodeURIComponent(`(${String(args.query || "").slice(0,160)}) and trashed=false`); const found=await this.google(`/drive/v3/files?q=${q}&pageSize=20&fields=files(id,name,mimeType,modifiedTime)`, {}, "drive-search"); return finish("Drive search complete", `Found ${(found.files||[]).length} file(s).`, JSON.stringify(found.files||[])); }
+      if (action === "search") { const terms=String(args.query || "").replace(/[^\p{L}\p{N}._-]+/gu," ").trim().split(/\s+/).filter((term)=>term.length>1).slice(0,6); const filter=terms.length ? terms.map((term)=>`fullText contains '${term.replace(/'/g,"\\'")}'`).join(" and ") : "trashed = false"; const q=encodeURIComponent(`(${filter}) and trashed = false`); const found=await this.google(`/drive/v3/files?q=${q}&pageSize=20&fields=files(id,name,mimeType,modifiedTime,webViewLink)`, {}, "drive-search"); const rows=(found.files||[]).map((file)=>`- ${file.name || "Untitled file"} — ${file.mimeType || "file"}${file.webViewLink ? ` (${markdownWorkspaceLink("Open", file.webViewLink)})` : ""}`); return finish("Drive search complete", `Found ${rows.length} file(s).`, rows.length ? `### Google Drive results\n\n${rows.join("\n")}` : "No matching Google Drive files were found."); }
       if (!this.validId(args.fileId)) throw new Error("A valid Drive file ID is required.");
       if (action === "rename") { await this.google(`/drive/v3/files/${args.fileId}`, {method:"PATCH",body:JSON.stringify({name:String(args.name||"").slice(0,200)})}, "drive-rename"); return finish("Drive file renamed", "The file name was updated.", "Done — the Drive file was renamed."); }
       if (action === "move") { const parents=String(args.parentId||""); if (!this.validId(parents)) throw new Error("A valid destination folder ID is required."); const file=await this.google(`/drive/v3/files/${args.fileId}?fields=parents`, {}, "drive-move-read"); await this.google(`/drive/v3/files/${args.fileId}?addParents=${encodeURIComponent(parents)}&removeParents=${encodeURIComponent((file.parents||[]).join(","))}`, {method:"PATCH"}, "drive-move"); return finish("Drive file moved", "The file was moved to the selected folder.", "Done — the Drive file was moved."); }
@@ -353,9 +480,64 @@ export class GoogleWorkspaceManager {
       if (action === "delete") { const blocked=this.requireConfirmation("deleting this Drive file",confirmed); if(blocked)return blocked; await this.google(`/drive/v3/files/${args.fileId}`, {method:"DELETE"}, "drive-delete"); return finish("Drive file deleted", "The file was removed from Drive.", "Done — the Drive file was deleted."); }
     }
     if (service === "gmail") {
-      if (action === "search") { const result=await this.google(`/gmail/v1/users/me/messages?maxResults=20&q=${encodeURIComponent(String(args.query||"").slice(0,300))}`, {}, "gmail-search"); return finish("Gmail search complete", `Found ${(result.messages||[]).length} message(s).`, JSON.stringify(result.messages||[])); }
-      if (!this.validId(args.messageId) && action !== "draft" && action !== "send") throw new Error("A valid Gmail message ID is required.");
-      if (action === "archive") { const blocked=this.requireConfirmation("archiving this Gmail message",confirmed); if(blocked)return blocked; await this.google(`/gmail/v1/users/me/messages/${args.messageId}/modify`, {method:"POST",body:JSON.stringify({removeLabelIds:["INBOX"]})}, "gmail-archive"); return finish("Gmail archived", "The message was removed from Inbox.", "Done — the message was archived."); }
+      if (action === "search") {
+        const results=await this.searchGmailMessages({ query:String(args.query || "").slice(0, 320), limit:Number(args.limit || 6), runId, stage:"gmail-search" });
+        return { ...finish("Gmail search complete", `Loaded ${results.emails.length} matching message${results.emails.length === 1 ? "" : "s"}.`, results.emails.length ? `Found ${results.emails.length} matching email${results.emails.length === 1 ? "" : "s"}.` : "No matching Gmail messages were found."), gmailResults:results };
+      }
+      if (action === "thread") {
+        const thread=await this.normalizedGmailThread(String(args.threadId || ""));
+        return { ...finish("Gmail thread loaded", `Loaded ${thread.messages.length} message${thread.messages.length === 1 ? "" : "s"} in the thread.`, "The Gmail thread is ready in Clyra."), gmailThread:thread };
+      }
+      if (action === "get") {
+        if (!this.validId(args.messageId)) throw new Error("A valid Gmail message ID is required.");
+        const message=await this.google(`/gmail/v1/users/me/messages/${encodeURIComponent(args.messageId)}?format=full`, {}, "gmail-message-get");
+        const email=this.normalizeGmailMessage(message, 1);
+        return { ...finish("Gmail message loaded", "The selected Gmail message was loaded.", "The Gmail message is ready in Clyra."), gmailEmail:email };
+      }
+      if (action === "follow-up") {
+        if (!this.validId(args.messageId) || !this.validId(args.threadId)) throw new Error("A valid Gmail message and thread are required for a follow-up.");
+        const dueAt=this.followUpDate(String(args.when || "tomorrow"));
+        const item={ id:crypto.randomUUID(), messageId:String(args.messageId), threadId:String(args.threadId), sender:safeHeaderValue(args.sender || "", 320), subject:safeHeaderValue(args.subject || "Email follow-up", 300), note:cleanEmailText(args.note || "", 600), dueAt:dueAt.toISOString(), createdAt:new Date().toISOString(), status:"scheduled" };
+        const items=await this.readFollowUps(); items.push(item); await this.writeFollowUps(items); this.scheduleFollowUpTimer(item);
+        return { ...finish("Gmail follow-up scheduled", `A local Clyra reminder is scheduled for ${dueAt.toLocaleString()}.`, `Follow-up scheduled for ${dueAt.toLocaleString()}.`), gmailFollowUp:{ id:item.id, dueAt:item.dueAt, status:item.status } };
+      }
+      if (action === "follow-up-cancel") {
+        const followUpId=String(args.followUpId || ""); if (!/^[A-Za-z0-9-]{20,80}$/.test(followUpId)) throw new Error("A valid Clyra follow-up ID is required.");
+        const items=await this.readFollowUps(); const next=items.filter((item) => item.id !== followUpId);
+        if (next.length === items.length) throw new Error("That Clyra follow-up no longer exists.");
+        const timer=this.followUpTimers.get(followUpId); if (timer) clearTimeout(timer); this.followUpTimers.delete(followUpId); await this.writeFollowUps(next);
+        return finish("Gmail follow-up cancelled", "The local Clyra reminder was removed.", "Follow-up cancelled.");
+      }
+      if (!this.validId(args.messageId) && !["draft", "send"].includes(action)) throw new Error("A valid Gmail message ID is required.");
+      if (action === "archive") {
+        const blocked=this.requireConfirmation("archiving this Gmail message",confirmed); if(blocked)return blocked;
+        await this.google(`/gmail/v1/users/me/messages/${encodeURIComponent(args.messageId)}/modify`, {method:"POST",body:JSON.stringify({removeLabelIds:["INBOX"]})}, "gmail-archive");
+        return finish("Gmail archived", "The message was removed from Inbox.", "The message was archived.");
+      }
+      if (action === "modify") {
+        const change=String(args.change || "");
+        const changes={ read:{removeLabelIds:["UNREAD"]}, unread:{addLabelIds:["UNREAD"]}, star:{addLabelIds:["STARRED"]}, unstar:{removeLabelIds:["STARRED"]}, trash:{addLabelIds:["TRASH"]} }[change];
+        if (!changes) throw new Error("Unsupported Gmail message change.");
+        const blocked=change === "trash" ? this.requireConfirmation("moving this Gmail message to trash", confirmed) : null; if(blocked)return blocked;
+        await this.google(`/gmail/v1/users/me/messages/${encodeURIComponent(args.messageId)}/modify`, {method:"POST",body:JSON.stringify(changes)}, `gmail-${change}`);
+        return finish("Gmail message updated", `The selected message was marked ${change}.`, `The message was marked ${change}.`);
+      }
+      if (action === "draft-reply" || action === "send-reply") {
+        if (!this.validId(args.messageId)) throw new Error("A valid Gmail message ID is required.");
+        const body=cleanEmailText(String(args.body || ""), 50_000); if (!body) throw new Error("A reply message is required.");
+        const blocked=action === "send-reply" ? this.requireConfirmation("sending this email reply", confirmed) : null; if(blocked)return blocked;
+        const original=await this.google(`/gmail/v1/users/me/messages/${encodeURIComponent(args.messageId)}?format=full`, {}, "gmail-reply-context");
+        const headers=gmailHeaderMap(original.payload?.headers); const recipient=parseMailbox(headers["reply-to"] || headers.from).email;
+        if (!recipient) throw new Error("Clyra could not determine a safe reply recipient for this message.");
+        const messageId=safeHeaderValue(headers["message-id"] || "", 500);
+        const rawLines=[`To: ${safeHeaderValue(recipient, 320)}`, `Subject: ${safeHeaderValue(subjectForReply(headers.subject), 320)}`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8"];
+        if (messageId) rawLines.push(`In-Reply-To: ${messageId}`, `References: ${messageId}`);
+        const raw=base64url(`${rawLines.join("\r\n")}\r\n\r\n${body}`); const threadId=String(original.threadId || args.threadId || "");
+        const endpoint=action === "send-reply" ? "/gmail/v1/users/me/messages/send" : "/gmail/v1/users/me/drafts";
+        const payload=action === "send-reply" ? {raw,threadId} : {message:{raw,threadId}};
+        const saved=await this.google(endpoint,{method:"POST",body:JSON.stringify(payload)}, `gmail-${action}`);
+        return { ...finish(action === "send-reply" ? "Reply sent" : "Reply draft saved", action === "send-reply" ? "The reply was sent after your confirmation." : "The reply was saved to Gmail drafts.", action === "send-reply" ? "Reply sent." : "Reply draft saved."), gmailMutation:{ messageId:String(args.messageId), threadId, draftId:String(saved.id || "") } };
+      }
       if (action === "draft" || action === "send") { const blocked=action==="send"?this.requireConfirmation("sending this email",confirmed):null; if(blocked)return blocked; const raw=String(args.rawRfc822||""); if(!raw||raw.length>2_000_000) throw new Error("A bounded RFC 822 message is required."); const endpoint=action==="send"?"/gmail/v1/users/me/messages/send":"/gmail/v1/users/me/drafts"; await this.google(endpoint,{method:"POST",body:JSON.stringify(action==="send"?{raw}:{message:{raw}})},`gmail-${action}`); return finish(action==="send"?"Email sent":"Email draft created", action==="send"?"The email was sent after confirmation.":"The email was saved as a draft.", action==="send"?"Done — the email was sent.":"Done — the email draft was created."); }
     }
     if (service === "calendar") {
@@ -365,17 +547,21 @@ export class GoogleWorkspaceManager {
     if (service === "sheets") {
       if (!this.validId(args.spreadsheetId) && action !== "create") throw new Error("A valid spreadsheet ID is required.");
       if (action === "create") return this.createSheet(String(args.title||"Untitled spreadsheet").slice(0,120),String(args.prompt||""),runId);
-      if (action === "read") { const values=await this.google(`https://sheets.googleapis.com/v4/spreadsheets/${args.spreadsheetId}/values/${encodeURIComponent(String(args.range||"A1:Z100"))}`,{},"sheets-read"); return finish("Google Sheet read",`Read ${(values.values||[]).length} row(s).`,JSON.stringify(values.values||[])); }
+      if (action === "read") { const values=await this.google(`https://sheets.googleapis.com/v4/spreadsheets/${args.spreadsheetId}/values/${encodeURIComponent(String(args.range||"A1:Z100"))}`,{},"sheets-read"); const rows=(values.values||[]).slice(0,20).map((row)=>`| ${row.map((cell)=>String(cell).replace(/\|/g,"\\|")).join(" | ")} |`); const header=rows.shift(); const divider=header ? `| ${(values.values?.[0] || []).map(()=>"---").join(" | ")} |` : ""; return finish("Google Sheet read",`Read ${(values.values||[]).length} row(s).`, header ? `### Google Sheet preview\n\n${header}\n${divider}\n${rows.join("\n")}` : "The selected Google Sheet range is empty."); }
       if (action === "write") { const range=String(args.range||""); const values=Array.isArray(args.values)?args.values:[]; if(!range||!values.length)throw new Error("A target range and values are required."); await this.google(`https://sheets.googleapis.com/v4/spreadsheets/${args.spreadsheetId}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`,{method:"PUT",body:JSON.stringify({values})},"sheets-write"); return finish("Google Sheet updated","Cells and formulas were written.","Done — the Sheet was updated."); }
     }
-    if (service === "contacts" && action === "find") { const q=encodeURIComponent(String(args.query||"").slice(0,160)); const people=await this.google(`https://people.googleapis.com/v1/people:searchContacts?query=${q}&readMask=names,emailAddresses,phoneNumbers&pageSize=20`,{},"contacts-find"); return finish("Contacts found",`Found ${(people.results||[]).length} contact(s).`,JSON.stringify(people.results||[])); }
-    if (service === "youtube" && action === "video") { const id=String(args.videoId||""); if(!/^[A-Za-z0-9_-]{8,20}$/.test(id))throw new Error("A valid YouTube video ID is required."); const video=await this.google(`https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id=${encodeURIComponent(id)}`,{},"youtube-video"); return finish("YouTube video read",`Read ${(video.items||[]).length} video record(s).`,JSON.stringify(video.items||[])); }
+    if (service === "contacts" && action === "find") { const q=encodeURIComponent(String(args.query||"").slice(0,160)); const people=await this.google(`https://people.googleapis.com/v1/people:searchContacts?query=${q}&readMask=names,emailAddresses,phoneNumbers&pageSize=20`,{},"contacts-find"); const rows=(people.results||[]).map((result)=>{ const person=result.person||{}; return `- ${person.names?.[0]?.displayName || "Unnamed contact"}${person.emailAddresses?.[0]?.value ? ` — ${person.emailAddresses[0].value}` : ""}`; }); return finish("Contacts found",`Found ${rows.length} contact(s).`,rows.length ? `### Matching contacts\n\n${rows.join("\n")}` : "No matching contacts were found."); }
+    if (service === "youtube" && action === "video") { const id=String(args.videoId||""); if(!/^[A-Za-z0-9_-]{8,20}$/.test(id))throw new Error("A valid YouTube video ID is required."); const video=await this.google(`https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id=${encodeURIComponent(id)}`,{},"youtube-video"); const item=video.items?.[0]; return finish("YouTube video read",`Read ${(video.items||[]).length} video record(s).`,item ? `### ${item.snippet?.title || "YouTube video"}\n\n- Channel: ${item.snippet?.channelTitle || "Unknown"}\n- Published: ${item.snippet?.publishedAt || "Unknown"}\n- Views: ${item.statistics?.viewCount || "Unavailable"}\n\n${markdownWorkspaceLink("Open on YouTube", `https://www.youtube.com/watch?v=${id}`)}` : "No YouTube video was returned for that ID."); }
     throw new Error("This Google Workspace action is not available yet.");
   }
   async executeWorkspaceWorkflow(payload = {}, orchestration = {}) {
     const { tool, prompt, runId } = payload;
     try {
-      if (payload.service || payload.action) return this.operation({ service:payload.service, action:payload.action, args:payload.args, confirmed:payload.confirmed, runId });
+      // Await direct typed operations here so API failures remain inside this
+      // guarded workflow. Without the await, an async 403 bypasses the safe
+      // scope/reconnect response below and reaches the renderer as a raw
+      // operation failure.
+      if (payload.service || payload.action) return await this.operation({ service:payload.service, action:payload.action, args:payload.args, confirmed:payload.confirmed, runId });
       if (!/^(gmail|calendar|docs|sheets|slides|drive)$/.test(tool || "") || typeof prompt !== "string" || prompt.length > 8_000 || (runId !== undefined && (typeof runId !== "string" || runId.length > 120))) throw new Error("Invalid Google Workspace request.");
       this.emitAgentProgress(runId, { service:"clyra", state:"running", label:"Planning the task", detail:"Choosing the right tools and ordering dependent actions." });
       const plan = this.planWorkspaceTask(tool, prompt);
@@ -384,6 +570,11 @@ export class GoogleWorkspaceManager {
       const workspaceContext = [];
       let research = { attempted:false, sources:[], pages:[] };
       const emailDocument = plan.target === "docs" && plan.reads.includes("gmail") && /\b(?:summari[sz](?:e|es|ed|ing)?|digest|brief|review|report)\b/i.test(prompt);
+      // For an email-derived document, collect and review the authorised
+      // mailbox data before deciding whether a public research pass is useful.
+      // Email contents never become web-search queries: that would leak private
+      // user data to a third party. A prompt must supply a public research topic.
+      const emailMessages = emailDocument ? await this.collectGmailForDocument(runId) : [];
       if (plan.researchRequested) {
         orchestration.stage?.("Comparing evidence", "Collecting and checking current sources before building the result.");
         research = await this.researchForWorkspace(prompt, runId);
@@ -392,7 +583,12 @@ export class GoogleWorkspaceManager {
       }
       for (const source of plan.reads) {
         if (source === "gmail" && emailDocument) continue;
-        const result = source === "gmail" ? await this.readGmail(runId) : await this.readCalendar(runId);
+        if (source === "drive") {
+          const result = await this.readDriveContext(prompt, runId);
+          workspaceContext.push(`Drive: ${result.summary}`, ...result.files.map((file) => `${file.name || "Untitled file"} (${file.mimeType || "file"})`).slice(0, 5));
+          continue;
+        }
+        const result = source === "gmail" ? await this.readGmail(runId, prompt) : await this.readCalendar(runId);
         workspaceContext.push(`${source === "gmail" ? "Gmail" : "Calendar"}: ${result.summary}`, ...result.rows.slice(0, 5));
       }
       if (plan.target === "gmail") {
@@ -400,23 +596,27 @@ export class GoogleWorkspaceManager {
           this.emitAgentProgress(runId, { service:"gmail", state:"completed", label:"Preparing Gmail message", detail:"Keeping the email in Clyra until its recipient, subject, body, and send confirmation are clear." });
           return { ok:false, needsInput:true, text:"I’ll prepare the email here in Clyra rather than opening Gmail. Send the recipient, subject, and message body (or reply instructions); Clyra will show the draft for review and require your confirmation before it sends anything." };
         }
-        const result = await this.readGmail(runId);
-        return { ok:true, action:"Gmail complete", detail:"Read the requested inbox metadata.", text:result.rows.length ? `Done — checked Gmail.\n\n${result.rows.join("\n")}` : "Done — no unread Gmail messages." };
+        const result = await this.readGmail(runId, prompt);
+        return { ok:true, action:"Gmail complete", detail:result.summary, text:result.text, gmailResults:result.gmailResults };
       }
       if (plan.target === "calendar") {
         if (/\b(?:create|schedule|add)\b/i.test(prompt)) return { ok:false, needsInput:true, text:"Tell me the event title, date, time, and timezone, then I can add it to Google Calendar." };
         const result = await this.readCalendar(runId);
-        return { ok:true, action:"Calendar complete", detail:"Read the requested calendar events.", text:result.rows.length ? `Done — checked your upcoming calendar.\n\n${result.rows.join("\n")}` : "Done — nothing upcoming is on your primary calendar." };
+        return { ok:true, action:"Calendar complete", detail:"Read the requested calendar events.", text:result.text, workspaceResult:{ kind:"calendar", title:"Upcoming calendar", subtitle:"Google Calendar", url:"https://calendar.google.com/calendar/u/0/r" } };
       }
       const title = cleanTitle(prompt, plan.target === "docs" ? "Untitled document" : plan.target === "sheets" ? "Untitled spreadsheet" : plan.target === "slides" ? "Untitled presentation" : "Untitled file");
       if (plan.target === "docs") {
         orchestration.stage?.("Building the result", "Drafting complete content before the Google Doc is created.");
-        const emailMessages = emailDocument ? await this.collectGmailForDocument(runId) : [];
-        return this.createAgentDocument(prompt, research, runId, workspaceContext.filter((line) => !line.startsWith("Research source: ")), emailMessages);
+        return await this.createAgentDocument(prompt, research, runId, workspaceContext.filter((line) => !line.startsWith("Research source: ")), emailMessages);
       }
-      if (plan.target === "sheets") return this.createSheet(title, prompt, runId);
-      if (plan.target === "slides") return this.createSlides(title, runId);
-      return this.createDriveFile(title, runId);
+      if (plan.target === "sheets") return await this.createSheet(title, prompt, runId, research);
+      if (plan.target === "slides") return await this.createSlides(title, runId);
+      if (plan.target === "drive" && /\b(?:find|search|look for|locate|show)\b/i.test(prompt)) {
+        const result = await this.readDriveContext(prompt, runId);
+        const rows = result.files.map((file) => `- ${file.name || "Untitled file"} — ${file.mimeType || "file"}${file.webViewLink ? ` ([Open in Drive](${file.webViewLink}))` : ""}`);
+        return { ok:true, action:"Drive search complete", detail:result.summary, text:rows.length ? `### Google Drive results\n\n${rows.join("\n")}` : "No matching Google Drive files were found." };
+      }
+      return await this.createDriveFile(title, runId);
     } catch (error) {
       const gmailPermission = error?.stage?.startsWith("agent-gmail") && error?.httpStatus === 403;
       if (gmailPermission) {

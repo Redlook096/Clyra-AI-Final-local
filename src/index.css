@@ -2122,6 +2122,7 @@ body,
 
 /* The verified Docs result remains a normal external link semantically, but
    reads as one calm, compact action in chat rather than a loose URL. */
+.markdown-body .clyra-workspace-open-link,
 .markdown-body .clyra-document-open-link {
   display: inline-flex;
   align-items: center;
@@ -2140,6 +2141,7 @@ body,
   transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
 }
 
+.markdown-body .clyra-workspace-open-link:hover,
 .markdown-body .clyra-document-open-link:hover {
   transform: translateY(-1px);
   border-color: #bed0e5;
@@ -2148,6 +2150,7 @@ body,
   color: #1f416d;
 }
 
+.markdown-body .clyra-workspace-open-link:focus-visible,
 .markdown-body .clyra-document-open-link:focus-visible {
   outline: 3px solid rgba(37, 99, 235, .20);
   outline-offset: 2px;
@@ -4421,20 +4424,16 @@ body,
 
 .clyra-shining-text {
   background-position: 200% 0;
-  animation: clyra-text-shine 1.7s linear infinite;
+  animation: clyra-text-shine 2s linear infinite;
   will-change: background-position;
 }
 
 .clyra-thinking-shimmer {
-  --clyra-thinking-base: #a1a1aa;
-  --clyra-thinking-highlight: #111827;
-  background-image:
-    linear-gradient(90deg, transparent calc(50% - 16px), var(--clyra-thinking-highlight), transparent calc(50% + 16px)),
-    linear-gradient(var(--clyra-thinking-base), var(--clyra-thinking-base));
-  background-position: 100% center, 0 0;
+  background-image: linear-gradient(110deg, #404040 0%, #404040 35%, #fff 50%, #404040 75%, #404040 100%);
+  background-position: 200% 0;
   background-repeat: no-repeat;
-  background-size: 250% 100%, auto;
-  animation: clyra-thinking-shimmer 2.35s cubic-bezier(.45, 0, .55, 1) infinite;
+  background-size: 200% 100%;
+  animation: clyra-text-shine 2s linear infinite;
   will-change: background-position;
 }
 
@@ -5059,14 +5058,14 @@ body,
 .clyra-status-text-shimmer {
   display: inline-block;
   max-width: 100%;
-  color: #53677d;
-  background-image: linear-gradient(105deg, #53677d 0%, #53677d 38%, #8da5bf 45%, #edf5fb 50%, #6c8eaf 55%, #53677d 62%, #53677d 100%);
-  background-size: 280% 100%;
-  background-position: 115% 50%;
+  color: #404040;
+  background-image: linear-gradient(110deg, #404040 0%, #404040 35%, #fff 50%, #404040 75%, #404040 100%);
+  background-size: 200% 100%;
+  background-position: 200% 0;
   background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: clyra-status-text-shimmer 2.4s cubic-bezier(.45, 0, .55, 1) infinite;
+  animation: clyra-text-shine 2s linear infinite;
   will-change: background-position;
 }
 
@@ -5084,15 +5083,20 @@ body,
 /* The active tool label remains readable, while the small moving highlight
    connects the normal thinking state to web and Google Workspace stages. */
 .clyra-thinking-wave--shimmer {
-  color: #53677d;
-  background-image: linear-gradient(105deg, #53677d 0%, #53677d 38%, #8da5bf 45%, #eef6fc 50%, #6c8eaf 55%, #53677d 62%, #53677d 100%);
-  background-size: 280% 100%;
-  background-position: 115% 50%;
+  color: #404040;
+  background-image: linear-gradient(110deg, #404040 0%, #404040 35%, #fff 50%, #404040 75%, #404040 100%);
+  background-size: 200% 100%;
+  background-position: 200% 0;
   background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: clyra-status-text-shimmer 2.4s cubic-bezier(.45, 0, .55, 1) infinite;
+  animation: clyra-text-shine 2s linear infinite;
   will-change: background-position;
+}
+
+@keyframes clyra-thinking-shimmer-pass {
+  from { background-position: 180% 50%; }
+  to { background-position: -180% 50%; }
 }
 
 @media (prefers-reduced-motion: reduce) {

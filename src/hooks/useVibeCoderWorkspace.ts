@@ -303,6 +303,8 @@ export function useVibeCoderWorkspace(projectId: string) {
           if (next.files[event.path]) {
             next.files[event.path].status = "complete";
             next.files[event.path].code = event.content;
+            next.files[event.path].added = event.added;
+            next.files[event.path].removed = event.removed;
           }
           next.currentStreamingFile = null;
           break;
@@ -409,7 +411,7 @@ export function useVibeCoderWorkspace(projectId: string) {
     }));
 
     try {
-      const res = await fetch("/api/vibe/start", {
+      const res = await fetch("/api/opencode/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -419,6 +421,7 @@ export function useVibeCoderWorkspace(projectId: string) {
         }),
       });
       const data = await res.json();
+      if (!res.ok) throw new Error(typeof data?.error === "string" ? data.error : "OpenCode could not start.");
 
       setState((prev) => ({
         ...prev,
@@ -426,7 +429,7 @@ export function useVibeCoderWorkspace(projectId: string) {
         projectId: typeof data.projectId === "string" ? data.projectId : prev.projectId,
       }));
 
-      const es = new EventSource(`/api/vibe/events/${data.taskId}`);
+      const es = new EventSource(`/api/opencode/events/${data.taskId}`);
       eventSourceRef.current = es;
 
       es.onmessage = (e) => {
@@ -443,7 +446,7 @@ export function useVibeCoderWorkspace(projectId: string) {
 
   const cancelTask = useCallback(async () => {
     if (state.taskId) {
-      await fetch(`/api/vibe/cancel/${state.taskId}`, { method: "POST" });
+      await fetch(`/api/opencode/cancel/${state.taskId}`, { method: "POST" });
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
       }

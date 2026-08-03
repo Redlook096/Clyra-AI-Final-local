@@ -28,3 +28,4 @@ src-tauri/binaries/*
 desktop-binaries/
 release-electron/
 vendor-src/
+third_party/

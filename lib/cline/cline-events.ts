@@ -91,6 +91,9 @@ export type VibeCoderEvent =
       type: "file_completed";
       path: string;
       content: string;
+      /** Actual line changes measured by the OpenCode workspace adapter. */
+      added?: number;
+      removed?: number;
       timestamp?: number;
     }
   | {

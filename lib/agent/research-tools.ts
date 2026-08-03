@@ -54,6 +54,7 @@ export type ResearchContext = {
 function extractUrlsFromDuckDuckGoHtml(html: string, max = 6) {
   const urls: string[] = [];
   const seen = new Set<string>();
+  const hostCounts = new Map<string, number>();
 
   const pushUrl = (raw: string) => {
     try {
@@ -63,8 +64,9 @@ function extractUrlsFromDuckDuckGoHtml(html: string, max = 6) {
       if (/bing\.com\/aclick/i.test(decoded)) return;
       const url = decoded.split("#")[0];
       const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
-      if (!host || host.includes("duckduckgo.com") || seen.has(host)) return;
-      seen.add(host);
+      if (!host || host.includes("duckduckgo.com") || seen.has(url) || (hostCounts.get(host) || 0) >= 2) return;
+      seen.add(url);
+      hostCounts.set(host, (hostCounts.get(host) || 0) + 1);
       urls.push(url);
     } catch {
       // ignore
@@ -101,11 +103,18 @@ export async function webSearch(query: string, maxResults = 6): Promise<string[]
 
   for (const ddgUrl of candidates) {
     try {
+      // Jina's reader proxy rejects the desktop-browser UA in some regions,
+      // even though the same query succeeds without it. Direct DuckDuckGo
+      // requests still receive a conventional UA. Treat the two providers as
+      // distinct transports so one policy cannot make all research empty.
+      const useReaderProxy = ddgUrl.startsWith("https://r.jina.ai/");
       const response = await fetch(ddgUrl, {
-        headers: {
-          "user-agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        },
+        headers: useReaderProxy
+          ? undefined
+          : {
+              "user-agent":
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            },
         signal: AbortSignal.timeout(15000),
       });
       const html = await response.text();
@@ -119,7 +128,10 @@ export async function webSearch(query: string, maxResults = 6): Promise<string[]
 }
 
 export async function fetchUrl(url: string): Promise<{ url: string; text: string; blocked: boolean }> {
-  const attempts = [url, `https://r.jina.ai/http://${url.replace(/^https?:\/\//, "")}`];
+  // Prefer Reader's extracted text. Fetching a site directly first often
+  // returns a page shell or binary PDF which looks non-empty but gives the
+  // research model no usable evidence.
+  const attempts = [`https://r.jina.ai/http://${url.replace(/^https?:\/\//, "")}`, url];
   for (const attempt of attempts) {
     try {
       const response = await fetch(attempt, {
@@ -128,8 +140,12 @@ export async function fetchUrl(url: string): Promise<{ url: string; text: string
       });
       const text = await response.text();
       const blocked = /enable javascript|access denied|just a moment|captcha/i.test(text.slice(0, 1200));
-      if ((response.ok || attempt.includes("r.jina.ai")) && text.trim() && !blocked) {
-        return { url, text, blocked: false };
+      const binary = /^%PDF-|\u0000/.test(text);
+      const usableText = attempt.includes("r.jina.ai")
+        ? text
+        : text.replace(/<script\b[^>]*>[\s\S]*?<\/script>|<style\b[^>]*>[\s\S]*?<\/style>|<[^>]+>/gi, " ").replace(/\s+/g, " ").trim();
+      if ((response.ok || attempt.includes("r.jina.ai")) && usableText.trim() && !blocked && !binary) {
+        return { url, text: usableText, blocked: false };
       }
     } catch {
       // try next

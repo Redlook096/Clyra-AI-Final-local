@@ -72,6 +72,14 @@ import {
   type WouldRatherProject,
   type WouldRatherRound,
 } from "../lib/creatorProject";
+import {
+  buildIMessageTimeline,
+  getIMessageFrame,
+  getIMessageFloatingPanelGeometry,
+  getIMessagePanelLayout,
+  IMESSAGE_CANVAS,
+  IMESSAGE_TOKENS,
+} from "../lib/fakeTextTimeline";
 
 export type CreatorMode = "would-rather" | "reddit-story" | "fake-text";
 
@@ -954,29 +962,51 @@ function WouldRatherPreview({
 
 function MessagePreview({
   project,
-  visible,
   isPlaying = false,
-  playbackMs = 0,
+  playbackMs,
+  visible,
   windowStart = 0,
-  typingSide = null,
 }: {
   project: FakeTextProject;
-  visible: number;
   isPlaying?: boolean;
   playbackMs?: number;
+  /** Legacy editor fallback. The active template editor always uses playbackMs. */
+  visible?: number;
   windowStart?: number;
-  typingSide?: "left" | "right" | null;
 }) {
   const gameplayVideo = useRef<HTMLVideoElement | null>(null);
-  const shown = project.messages.slice(windowStart, visible);
-  // Keep the chat surface content-sized. Six messages can be visible without
-  // creating the old empty black transcript area.
-  const floatingHeight = `${Math.min(94, 34 + Math.max(0, shown.length) * 12)}%`;
+  const messageScroll = useRef<HTMLDivElement | null>(null);
+  const timeline = useMemo(() => buildIMessageTimeline(project.messages, project.playbackRate), [project.messages, project.playbackRate]);
+  // The active editor always supplies media time, including zero. Treat that
+  // first frame as a deterministic timeline frame so the first message is
+  // present at t=0 exactly like the public Framelabs template. The legacy
+  // compact fallback intentionally omits playbackMs and keeps its own visible
+  // message count.
+  const isTimelineControlled = playbackMs !== undefined;
+  const safePlaybackMs = playbackMs ?? 0;
+  const frame = getIMessageFrame(timeline, safePlaybackMs);
+  const frameVisible = isTimelineControlled ? frame.visibleCount : (visible ?? project.messages.length);
+  const shown = project.messages.slice(windowStart, windowStart + frameVisible);
+  // A Fake Text sheet is content-fit by design: its footer follows the newest
+  // bubble and lets the gameplay remain visible below.  When a real overflow
+  // occurs, this shared layout caps the sheet and the message list scrolls.
+  const floatingLayout = getIMessagePanelLayout(shown);
+  const floatingGeometry = getIMessageFloatingPanelGeometry(floatingLayout);
+  const floatingHeight = `${(floatingGeometry.height / IMESSAGE_CANVAS.height * 100).toFixed(3)}%`;
+  const floatingLeft = `${(floatingGeometry.x / IMESSAGE_CANVAS.width * 100).toFixed(3)}%`;
+  const floatingTop = `${(floatingGeometry.y / IMESSAGE_CANVAS.height * 100).toFixed(3)}%`;
+  const floatingWidth = `${(floatingGeometry.width / IMESSAGE_CANVAS.width * 100).toFixed(3)}%`;
+  // `cqw` resolves against the outer 9:16 preview, not the floating card.
+  // Express all fixed visual tokens against the logical canvas so DOM preview
+  // and canvas export scale with the same 1080px reference width.
+  const floatingRadius = `${(floatingGeometry.radius / IMESSAGE_CANVAS.width * 100).toFixed(3)}cqw`;
+  const fullHeaderHeight = `${(IMESSAGE_TOKENS.headerHeight / IMESSAGE_CANVAS.width * 100).toFixed(3)}cqw`;
+  const floatingHeaderHeight = fullHeaderHeight;
   const panelGeometry = project.layout === "full_chat"
-    ? { left: "0%", top: "0%", width: "100%", height: "100%", radius: "0px", headerHeight: "12%" }
+    ? { left: "0%", top: "0%", width: "100%", height: "100%", radius: "0px", headerHeight: fullHeaderHeight }
     : project.layout === "chat_gameplay"
-      ? { left: "0%", top: "0%", width: "100%", height: "62%", radius: "0px", headerHeight: "18.7%" }
-      : { left: "0.5%", top: "1%", width: "99%", height: floatingHeight, radius: "clamp(22px,7cqw,38px)", headerHeight: "34%" };
+      ? { left: "0%", top: "0%", width: "100%", height: "68%", radius: "0px", headerHeight: fullHeaderHeight }
+      : { left: floatingLeft, top: floatingTop, width: floatingWidth, height: floatingHeight, radius: floatingRadius, headerHeight: floatingHeaderHeight };
   const palette = project.theme === "ios_light"
     ? { panel: "#ffffff", header: "#f4f4f6", incoming: "#e9e9eb", outgoing: "#0a84ff", incomingText: "#111114", contact: "#26262b", accent: "#0a84ff", avatar: "#aab0bb" }
     : { panel: "#000000", header: "#1c1c1e", incoming: "#2c2c2e", outgoing: "#0a84ff", incomingText: "#f5f5f7", contact: "#d8d8dc", accent: "#0a84ff", avatar: "#aab0bb" };
@@ -991,15 +1021,26 @@ function MessagePreview({
   useEffect(() => {
     const video = gameplayVideo.current;
     if (!video || isPlaying || !Number.isFinite(video.duration) || video.duration <= 0) return;
-    const nextTime = (playbackMs / 1_000) % video.duration;
+    const nextTime = (safePlaybackMs / 1_000) % video.duration;
     if (Math.abs(video.currentTime - nextTime) > 0.12) video.currentTime = nextTime;
-  }, [isPlaying, playbackMs, project.gameplay?.src]);
+  }, [isPlaying, safePlaybackMs, project.gameplay?.src]);
+
+  useEffect(() => {
+    const container = messageScroll.current;
+    if (!container || !isTimelineControlled) return;
+    // The header never participates in the scroll.  Resolve the destination
+    // directly from the media time instead of relying on a lingering smooth
+    // scroll animation: a scrubbed frame, a paused frame, and an exported
+    // frame must all describe the identical message stack.
+    container.scrollTo({ top: Math.max(0, container.scrollHeight - container.clientHeight), behavior: "auto" });
+  }, [frameVisible, isTimelineControlled]);
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-[#2a7659]">
+    <div data-testid="fake-text-preview" className="relative h-full w-full overflow-hidden bg-[#2a7659]">
       {project.gameplay ? (
         <video
           ref={gameplayVideo}
+          data-testid="fake-text-gameplay"
           key={project.gameplay.src}
           src={project.gameplay.src}
           poster={project.gameplay.poster}
@@ -1016,6 +1057,11 @@ function MessagePreview({
         <div className="absolute inset-0 bg-[linear-gradient(155deg,#328d68,#2a7659_52%,#205844)]" />
       )}
       <div
+        data-testid="imessage-conversation-canvas"
+        // Height is already derived from the deterministic media timeline
+        // (from the media timestamp). A separate CSS transition would keep running
+        // after a seek, which means a scrubbed frame can briefly use a
+        // different layout than the exact same video timestamp in export.
         className="absolute flex flex-col overflow-hidden"
         style={{
           left: panelGeometry.left,
@@ -1024,39 +1070,51 @@ function MessagePreview({
           height: panelGeometry.height,
           borderRadius: panelGeometry.radius,
           backgroundColor: palette.panel,
+          borderBottom: "none",
         }}
       >
-          {windowStart === 0 ? <div className="relative shrink-0 border-b border-white/5" style={{ height: panelGeometry.headerHeight, backgroundColor: palette.header }}>
-            <div className="absolute left-[3.5%] top-[44%] flex -translate-y-1/2 items-center gap-1" style={{ color: palette.accent }}>
-              <span className="text-[clamp(26px,8cqw,42px)] font-light leading-none">‹</span><span className="grid h-[clamp(28px,9cqw,43px)] w-[clamp(28px,9cqw,43px)] place-items-center rounded-full bg-[#0a84ff] text-[clamp(10px,3.6cqw,16px)] font-medium text-white">99</span>
+          <div data-testid="imessage-header" className="relative shrink-0 border-b border-white/[.04]" style={{ height: panelGeometry.headerHeight, backgroundColor: palette.header }}>
+            <div className="absolute left-[3.2%] top-1/2 flex -translate-y-1/2 items-center gap-[.49cqw]" style={{ color: palette.accent }}>
+              <span className="text-[3.33cqw] font-light leading-none">‹</span><span className="grid h-[4cqw] w-[4cqw] place-items-center rounded-full bg-[#0a84ff] text-[2.1cqw] font-medium text-white">99</span>
             </div>
-            <div className="absolute left-1/2 top-[10%] flex -translate-x-1/2 flex-col items-center">
-              <span className="grid h-[clamp(44px,16cqw,80px)] w-[clamp(44px,16cqw,80px)] place-items-center rounded-full text-[clamp(18px,7cqw,34px)] font-light text-white" style={{ backgroundColor: palette.avatar }}>{(project.participants[0].name || "Unknown").slice(0, 1).toUpperCase()}</span>
-              <span className="mt-[clamp(2px,1cqw,6px)] whitespace-nowrap text-[clamp(15px,5cqw,27px)] font-medium leading-none" style={{ color: palette.contact }}>{project.participants[0].name || "Unknown"} ›</span>
+            <div className="absolute left-1/2 top-[6%] flex -translate-x-1/2 flex-col items-center">
+              <span className="grid h-[5.93cqw] w-[5.93cqw] place-items-center rounded-full text-[2.6cqw] font-medium text-white" style={{ backgroundColor: palette.avatar }}>{(project.participants[0].name || "Unknown").slice(0, 1).toUpperCase()}</span>
+              <span className="mt-[.74cqw] whitespace-nowrap text-[2.4cqw] font-semibold leading-none" style={{ color: palette.contact }}>{project.participants[0].name || "Unknown"} ›</span>
             </div>
-            <Video className="absolute right-[4%] top-[44%] h-[clamp(22px,7cqw,32px)] w-[clamp(31px,10cqw,44px)] -translate-y-1/2" style={{ color: palette.accent }} strokeWidth={1.8} />
-          </div> : null}
-          <div className="flex min-h-0 flex-1 flex-col justify-start gap-[clamp(5px,1.8cqw,10px)] overflow-hidden px-[3.5%] pb-[clamp(7px,2.5cqw,13px)] pt-[clamp(10px,4cqw,20px)]" style={{ backgroundColor: palette.panel }}>
-            <AnimatePresence initial={false}>
-              {shown.map((message) => (
-                <motion.div
+            <Video className="absolute right-[3.5%] top-1/2 h-[2.96cqw] w-[4.44cqw] -translate-y-1/2" style={{ color: palette.accent }} strokeWidth={1.7} />
+          </div>
+          <div ref={messageScroll} className="flex min-h-0 flex-1 flex-col overflow-y-auto px-[2.47%] pb-[1.296cqw] pt-[1.481cqw] [scrollbar-width:none]" style={{ backgroundColor: palette.panel }}>
+              {shown.map((message, localIndex) => {
+                const index = windowStart + localIndex;
+                return (
+                <div
                   key={message.id}
-                  initial={{ opacity: 0, y: 6, scale: 0.94 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  transition={{ duration: 0.18, ease: [0.2, 0.82, 0.2, 1] }}
+                  data-testid={`imessage-bubble-${index}`}
                   className={cn(
-                    "relative w-fit max-w-[62%] rounded-[clamp(22px,7cqw,30px)] px-[clamp(13px,4.5cqw,20px)] py-[clamp(9px,3cqw,14px)] text-[clamp(14px,5cqw,28px)] leading-[1.13]",
+                    "flex min-h-[5.926cqw] w-fit max-w-[60.5%] items-center [overflow-wrap:anywhere] px-[1.481cqw] py-[.833cqw] text-[2.315cqw] font-normal leading-[1.2]",
                     message.side === "right" ? "ml-auto text-white" : "",
                   )}
-                  style={{ backgroundColor: message.side === "right" ? palette.outgoing : palette.incoming, color: message.side === "right" ? "#ffffff" : palette.incomingText }}
+                  style={{
+                    backgroundColor: message.side === "right" ? palette.outgoing : palette.incoming,
+                    color: message.side === "right" ? "#ffffff" : palette.incomingText,
+                    borderRadius: "1.667cqw",
+                    // Messages and the content-fit bottom edge commit at the
+                    // same media timestamp. Keeping every existing row fixed
+                    // avoids flicker and list movement during export/scrubs.
+                    // Consecutive iMessage bubbles sit fractionally closer
+                    // together than a sender change. Keep these values tied
+                    // to the shared 1080px tokens used by the canvas renderer.
+                    marginTop: localIndex
+                      ? `${((shown[localIndex - 1]!.side === message.side
+                        ? IMESSAGE_TOKENS.sameSenderGap
+                        : IMESSAGE_TOKENS.senderSwitchGap) / IMESSAGE_CANVAS.width * 100).toFixed(3)}cqw`
+                      : 0,
+                  }}
                 >
-                  {message.side === "left" ? <span className="absolute -bottom-[1px] -left-[3px] h-3 w-3 rounded-bl-[9px] [clip-path:polygon(100%_0,100%_100%,0_100%)]" style={{ backgroundColor: palette.incoming }} /> : null}
-                  {message.side === "right" ? <span className="absolute -bottom-[1px] -right-[3px] h-3 w-3 rounded-br-[9px] [clip-path:polygon(0_0,100%_100%,0_100%)]" style={{ backgroundColor: palette.outgoing }} /> : null}
                   <span className="relative">{message.text}</span>
-                </motion.div>
-              ))}
-              {typingSide ? <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className={cn("w-fit rounded-[20px] px-3 py-2", typingSide === "right" ? "ml-auto bg-[#0a84ff]" : "bg-[#292929]")}><span className="flex gap-1">{[0, 1, 2].map((dot) => <motion.i key={dot} className="h-1.5 w-1.5 rounded-full bg-white/75" animate={{ opacity: [0.35, 1, 0.35], y: [0, -2, 0] }} transition={{ duration: 0.72, repeat: Infinity, delay: dot * 0.12 }} />)}</span></motion.div> : null}
-            </AnimatePresence>
+                </div>
+                );
+              })}
           </div>
       </div>
     </div>
@@ -1327,7 +1385,6 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
   const [playing, setPlaying] = useState(false);
   const [visibleMessages, setVisibleMessages] = useState(project.type === "fake_text_story" ? project.messages.length : 0);
   const [messageWindowStart, setMessageWindowStart] = useState(0);
-  const [typingSide, setTypingSide] = useState<"left" | "right" | null>(null);
   const [previewRound, setPreviewRound] = useState(0);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [revealed, setRevealed] = useState(false);
@@ -1343,6 +1400,7 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
   const [messageDraft, setMessageDraft] = useState("");
   const [messageDraftSide, setMessageDraftSide] = useState<"left" | "right">("right");
   const playback = useRef<AbortController | null>(null);
+  const previewFrame = useRef<number | null>(null);
   const renderTask = useRef<AbortController | null>(null);
   const importInput = useRef<HTMLInputElement | null>(null);
   const duration = creatorProjectDuration(project);
@@ -1351,7 +1409,7 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
     : ["script", "audio"];
 
   useEffect(() => {
-    if (!playing || project.type === "would_rather") return;
+    if (!playing || project.type !== "would_rather") return;
     const timer = window.setInterval(() => setCurrentTime((value) => Math.min(duration, value + 100)), 100);
     return () => window.clearInterval(timer);
   }, [duration, playing, project.type]);
@@ -1373,8 +1431,9 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
   const stopPreview = useCallback(() => {
     playback.current?.abort();
     playback.current = null;
+    if (previewFrame.current !== null) window.cancelAnimationFrame(previewFrame.current);
+    previewFrame.current = null;
     setPlaying(false);
-    setTypingSide(null);
     setCountdown(null);
     setWouldRatherPhase("second");
     setMessageWindowStart(0);
@@ -1471,31 +1530,59 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
           });
         }
       } else {
-        setVisibleMessages(0);
-        setMessageWindowStart(0);
-        for (let index = 0; index < project.messages.length; index += 1) {
-          const message = project.messages[index]!;
-          setSelectedId(message.id);
-          if (index > 0 && index % 6 === 0) setMessageWindowStart(index);
-          setTypingSide(message.side);
-          await waitFor(Math.max(180, Math.min(900, (message.typingSeconds ?? 0.45) * 500)), controller.signal);
-          setTypingSide(null);
-          setVisibleMessages(index + 1);
-          if (message.narration) {
-            const voice = project.participants.find((participant) => participant.id === message.side)?.voice || "Ryan";
-            const speech = await playCreatorSpeech(message.text, voice, controller.signal);
-            setEngine(speech.engine);
-          }
-          await waitFor(message.pauseSeconds * 1_000 / project.playbackRate, controller.signal);
-        }
+        // Visual state, scrubbing, and exported timing all resolve from this one
+        // timeline. Voice playback is triggered from bubble entrance but never
+        // controls the visual clock, avoiding the old network/TTS-driven drift.
+        const timeline = buildIMessageTimeline(project.messages, project.playbackRate);
+        const voiced = new Set<string>();
+        await new Promise<void>((resolve, reject) => {
+          const startedAt = performance.now();
+          const abort = () => {
+            if (previewFrame.current !== null) window.cancelAnimationFrame(previewFrame.current);
+            previewFrame.current = null;
+            reject(new DOMException("Preview stopped", "AbortError"));
+          };
+          controller.signal.addEventListener("abort", abort, { once: true });
+          const step = (now: number) => {
+            // buildIMessageTimeline already applies playbackRate to every
+            // authored duration. Applying it again here made 1.25×/1.5×
+            // previews finish too early while exports stayed on the correct
+            // timeline. Keep the visual clock in the same milliseconds that
+            // the renderer and scrubber consume.
+            const elapsed = Math.min(timeline.durationMs, now - startedAt);
+            const frame = getIMessageFrame(timeline, elapsed);
+            setCurrentTime(elapsed);
+            if (frame.activeMessageId) setSelectedId(frame.activeMessageId);
+            const event = timeline.events.find((item) => item.bubbleStartMs <= elapsed && !voiced.has(item.id));
+            if (event && !voiced.has(event.id)) {
+              voiced.add(event.id);
+              const message = project.messages[event.index]!;
+              if (message.narration) {
+                const voice = project.participants.find((participant) => participant.id === message.side)?.voice || "Ryan";
+                void playCreatorSpeech(message.text, voice, controller.signal).then((speech) => setEngine(speech.engine)).catch((cause) => {
+                  if (!(cause instanceof DOMException && cause.name === "AbortError")) setError(cause instanceof Error ? cause.message : String(cause));
+                });
+              }
+            }
+            if (elapsed >= timeline.durationMs) {
+              previewFrame.current = null;
+              controller.signal.removeEventListener("abort", abort);
+              resolve();
+              return;
+            }
+            previewFrame.current = window.requestAnimationFrame(step);
+          };
+          previewFrame.current = window.requestAnimationFrame(step);
+        });
       }
       setCurrentTime(duration);
     } catch (cause) {
       if (!(cause instanceof DOMException && cause.name === "AbortError")) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
+      if (previewFrame.current !== null) window.cancelAnimationFrame(previewFrame.current);
+      previewFrame.current = null;
       if (playback.current === controller) playback.current = null;
       setPlaying(false);
-      setTypingSide(null);
     }
   };
 
@@ -1527,10 +1614,10 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
     } else {
       const index = Math.max(0, project.messages.findIndex((message) => message.id === active.id));
       const message = project.messages[index]!;
-      const local = value - active.startMs;
       setSelectedId(message.id);
-      setMessageWindowStart(Math.floor(index / 6) * 6);
-      setVisibleMessages(index + 1);
+      // Keep 0 as a timeline-controlled typing frame while preserving the
+      // rich all-message editor preview when no preview/scrub has occurred.
+      setCurrentTime(Math.max(0.01, value));
     }
   };
 
@@ -1597,7 +1684,7 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
     try {
       const mp4 = project.type === "would_rather"
         ? await renderWouldRatherVideo({ rounds: project.rounds.map((round) => ({ ...round, topColor: project.style.topColor, bottomColor: project.style.bottomColor })), voice: project.voice, signal: controller.signal, onProgress: setRenderProgress })
-        : await renderMessageStoryVideo({ name: project.participants[0].name, messages: project.messages, voices: { left: project.participants[0].voice, right: project.participants[1].voice }, background: project.background, backgroundVideo: project.gameplay?.src, theme: project.theme, layout: project.layout, signal: controller.signal, onProgress: setRenderProgress });
+        : await renderMessageStoryVideo({ name: project.participants[0].name, messages: project.messages, voices: { left: project.participants[0].voice, right: project.participants[1].voice }, background: project.background, backgroundVideo: project.gameplay?.src, theme: project.theme, layout: project.layout, playbackRate: project.playbackRate, signal: controller.signal, onProgress: setRenderProgress });
       if (resultUrl) URL.revokeObjectURL(resultUrl);
       setResultUrl(URL.createObjectURL(mp4));
     } catch (cause) {
@@ -1635,7 +1722,7 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
 
   const preview = project.type === "would_rather"
     ? <WouldRatherPreview project={project} round={project.rounds[Math.min(previewRound, project.rounds.length - 1)]!} phase={wouldRatherPhase} countdown={countdown} revealed={revealed} />
-    : <MessagePreview project={project} visible={visibleMessages} windowStart={messageWindowStart} typingSide={typingSide} isPlaying={playing} playbackMs={currentTime} />;
+    : <MessagePreview project={project} visible={visibleMessages} windowStart={messageWindowStart} isPlaying={playing} playbackMs={currentTime} />;
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-white text-[#111318]">
@@ -1731,7 +1818,7 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
                   {project.type === "fake_text_story" ? project.participants.map((participant, index) => (
                     <VoicePicker
                       key={participant.id}
-                      label={index === 0 ? "Sender voice" : "Receiver voice"}
+                      label={index === 0 ? "Grey incoming voice" : "Blue outgoing voice"}
                       value={participant.voice}
                       onChange={(voice) => edit((draft) => { if (draft.type === "fake_text_story") draft.participants[index].voice = voice; })}
                       onPreview={(voice) => void playCreatorVoicePreview(voice).then((speech) => setEngine(speech.engine)).catch((cause) => setError(String(cause)))}
@@ -1813,7 +1900,6 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
   const [messagePanel, setMessagePanel] = useState<"messages" | "participants">("messages");
   const [playing, setPlaying] = useState(false);
   const [visibleMessages, setVisibleMessages] = useState(project.type === "fake_text_story" ? project.messages.length : 0);
-  const [typingSide, setTypingSide] = useState<"left" | "right" | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [wouldRatherPhase, setWouldRatherPhase] = useState<WouldRatherPhase>("second");
@@ -1842,7 +1928,6 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
     playback.current?.abort();
     playback.current = null;
     setPlaying(false);
-    setTypingSide(null);
     setCountdown(null);
     setWouldRatherPhase("second");
     setMessageWindowStart(0);
@@ -1924,9 +2009,6 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
           const message = project.messages[index];
           setSelectedId(message.id);
           if (index > 0 && index % 6 === 0) setMessageWindowStart(index);
-          setTypingSide(message.side);
-          await waitFor(Math.max(180, Math.min(900, (message.typingSeconds ?? 0.45) * 500)), controller.signal);
-          setTypingSide(null);
           setVisibleMessages(index + 1);
           if (message.narration) {
             const voice = project.participants.find((participant) => participant.id === message.side)?.voice || "Ryan";
@@ -1944,7 +2026,6 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
     } finally {
       if (playback.current === controller) playback.current = null;
       setPlaying(false);
-      setTypingSide(null);
     }
   }, [playing, project, stopPreview]);
 
@@ -2208,7 +2289,7 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
   const preview = project.type === "would_rather" && project.rounds.length ? (
     <WouldRatherPreview project={project} round={project.rounds[Math.min(previewRound, project.rounds.length - 1)]} phase={wouldRatherPhase} countdown={countdown} revealed={revealed} />
   ) : project.type === "fake_text_story" ? (
-    <MessagePreview project={project} visible={visibleMessages} windowStart={messageWindowStart} typingSide={typingSide} isPlaying={playing} />
+    <MessagePreview project={project} visible={visibleMessages} windowStart={messageWindowStart} isPlaying={playing} />
   ) : project.type === "story_video" ? (
     <StoryPreview project={project} />
   ) : null;
@@ -2314,7 +2395,7 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
       {project.type === "fake_text_story" ? project.participants.map((participant, index) => (
         <VoicePicker
           key={participant.id}
-          label={index === 0 ? "Sender voice" : "Receiver voice"}
+          label={index === 0 ? "Grey incoming voice" : "Blue outgoing voice"}
           value={participant.voice}
           onChange={(voice) => edit((draft) => { if (draft.type === "fake_text_story") draft.participants[index].voice = voice; })}
           onPreview={(voice) => void previewVoice(voice)}
