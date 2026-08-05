@@ -54,6 +54,25 @@ export type VibeChatMessage = {
   timestamp: number;
 };
 
+export type OpenCodeAction = {
+  id: string;
+  sessionId: string;
+  messageId: string;
+  partId: string;
+  tool: string;
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  target: string;
+  input?: string;
+  output?: string;
+  cwd?: string;
+  startedAt?: number;
+  completedAt?: number;
+  additions?: number;
+  deletions?: number;
+  diff?: string;
+  error?: string;
+};
+
 export type WorkspaceState = {
   projectId: string;
   taskId: string | null;
@@ -83,6 +102,7 @@ export type WorkspaceState = {
   error: string | null;
   planMd: string;
   chatMessages: VibeChatMessage[];
+  actions: Record<string, OpenCodeAction>;
   restored: boolean;
 };
 
@@ -179,6 +199,7 @@ function createIdleState(projectId: string): WorkspaceState {
     error: null,
     planMd: "",
     chatMessages: [],
+    actions: {},
     restored: false,
   };
 }
@@ -187,6 +208,7 @@ export function useVibeCoderWorkspace(projectId: string) {
   const [state, setState] = useState<WorkspaceState>(() => createIdleState(projectId));
 
   const eventSourceRef = useRef<EventSource | null>(null);
+  const activeOpenCodeSessionRef = useRef<string | null>(null);
   const projectIdRef = useRef(projectId);
   const saveTimerRef = useRef<number | null>(null);
   const stateRef = useRef(state);
@@ -370,6 +392,121 @@ export function useVibeCoderWorkspace(projectId: string) {
     });
   }, []);
 
+  /** Maps the SDK event stream into the existing Clyra workspace state while
+   * preserving stable OpenCode part identities. Hidden reasoning is never
+   * rendered; only real tool state and assistant text are retained. */
+  const processOpenCodeEvent = useCallback((event: any) => {
+    const payload = event?.payload ?? event;
+    const properties = payload?.properties ?? {};
+    const part = properties.part ?? {};
+    const eventSessionId = String(part.sessionID || properties.sessionID || event?.sessionId || "");
+    // The SSE endpoint deliberately replays project events for reconnects.
+    // Before a newly-created session is selected, drop replayed session parts;
+    // afterwards accept only the active session so old rows cannot leak into
+    // the current conversation.
+    if (eventSessionId && activeOpenCodeSessionRef.current && eventSessionId !== activeOpenCodeSessionRef.current) return;
+    const timestamp = Number(event?.timestamp) || Date.now();
+    const eventId = event?.id || `${payload?.type}-${timestamp}`;
+    if (payload?.type === "message.part.updated") {
+      if (part.type === "text") {
+        const text = String(part.text ?? properties.delta ?? "");
+        if (!text) return;
+        setState((previous) => {
+          // OpenCode also emits the user's submitted text as a part. The
+          // optimistic user bubble already owns that message, so never render
+          // it again as an assistant reply.
+          if (text === previous.prompt || previous.chatMessages.some((message) => message.role === "user" && message.content === text)) return previous;
+          const messages = [...previous.chatMessages];
+          const existing = messages.findIndex((message) => message.id === `assistant-${part.messageID}`);
+          const next = { id: `assistant-${part.messageID}`, role: "assistant" as const, content: text, timestamp };
+          if (existing >= 0) messages[existing] = next; else messages.push(next);
+          return { ...previous, chatMessages: messages };
+        });
+        return;
+      }
+      if (part.type === "tool") {
+        const tool = String(part.tool || "tool");
+        const state = part.state || {};
+        const input = state.input || {};
+        const rawTarget = String(input.filePath || input.path || input.file || input.command || input.cmd || state.title || "");
+        const target = rawTarget.replace(/^.*\/projects\/[^/]+\/files\//, "");
+        const sessionId = String(part.sessionID || properties.sessionID || event.sessionId || "");
+        const messageId = String(part.messageID || event.messageId || "");
+        const partId = String(part.id || event.partId || "");
+        const stableId = `${sessionId}:${messageId}:${partId}`;
+        const toolStatus = state.status === "error" || state.status === "failed"
+          ? "failed" : state.status === "running" ? "running" : state.status === "pending" ? "pending"
+            : state.status === "cancelled" ? "cancelled" : "completed";
+        setState((previous) => ({
+          ...previous,
+          actions: {
+            ...previous.actions,
+            [stableId]: {
+              ...previous.actions[stableId],
+              id: stableId, sessionId, messageId, partId, tool, status: toolStatus,
+              target,
+              input: typeof input === "string" ? input : JSON.stringify(input),
+              output: String(state.output || state.result || previous.actions[stableId]?.output || ""),
+              cwd: String(input.cwd || input.workingDirectory || ""),
+              startedAt: previous.actions[stableId]?.startedAt ?? timestamp,
+              completedAt: toolStatus === "completed" || toolStatus === "failed" || toolStatus === "cancelled" ? timestamp : undefined,
+              error: toolStatus === "failed" ? String(state.error || "OpenCode tool failed") : undefined,
+            },
+          },
+        }));
+        if (/^(bash|shell|command)$/.test(tool) && state.status === "running") processEvent({ type: "terminal_started", command: target || tool, timestamp } as VibeCoderEvent);
+        if (/^(bash|shell|command)$/.test(tool) && state.status !== "running") {
+          processEvent({ type: "terminal_completed", command: target || tool, exitCode: state.status === "error" ? 1 : 0, timestamp } as VibeCoderEvent);
+        }
+        if (/^(write|edit)$/.test(tool) && target) {
+          const action = tool === "write" ? "create" : "edit";
+          if (state.status === "running" || state.status === "pending") {
+            processEvent({ type: "file_started", path: target, action, language: inferLanguage(target), stepId: eventId, timestamp } as VibeCoderEvent);
+          } else {
+            processEvent({ type: "file_started", path: target, action, language: inferLanguage(target), stepId: eventId, timestamp } as VibeCoderEvent);
+            processEvent({ type: "file_completed", path: target, content: "", added: undefined, removed: undefined, timestamp } as VibeCoderEvent);
+          }
+        }
+        // Diff responses are source-of-truth. Fetch after completed file tools
+        // and fold exact OpenCode additions/deletions back into the same row.
+        if (/^(write|edit|delete)$/.test(tool) && toolStatus === "completed" && sessionId) {
+          window.setTimeout(() => {
+            void fetch(`/api/opencode/sessions/${encodeURIComponent(projectIdRef.current)}/${encodeURIComponent(sessionId)}/diff`)
+              .then((response) => response.ok ? response.json() : [])
+              .then((diffs: Array<{ file?: string; additions?: number; deletions?: number; before?: string; after?: string }>) => {
+                const match = diffs.find((diff) => String(diff.file || "").replace(/^.*\/files\//, "") === target);
+                if (!match) return;
+                setState((previous) => ({ ...previous, actions: {
+                  ...previous.actions,
+                  [stableId]: { ...previous.actions[stableId], additions: match.additions, deletions: match.deletions, diff: `--- before\n${match.before || ""}\n+++ after\n${match.after || ""}` },
+                } }));
+              }).catch(() => undefined);
+          }, 450);
+        }
+        return;
+      }
+    }
+    if (payload?.type === "file.edited") {
+      processEvent({ type: "thinking", text: `Edited ${String(properties.file || "a file")}`, timestamp } as VibeCoderEvent);
+      return;
+    }
+    if (payload?.type === "permission.updated") {
+      processEvent({ type: "thinking", text: `Waiting for approval: ${String(properties.title || properties.type || "OpenCode action")}`, timestamp } as VibeCoderEvent);
+      return;
+    }
+    if (payload?.type === "session.error") {
+      processEvent({ type: "error", message: String(properties.error?.data?.message || properties.error?.message || "OpenCode session failed."), recoverable: true, timestamp } as VibeCoderEvent);
+      return;
+    }
+    if (payload?.type === "session.idle") {
+      processEvent({ type: "complete", summary: "OpenCode completed the request.", timestamp } as VibeCoderEvent);
+      return;
+    }
+    if (payload?.type === "session.status" && properties.status?.type === "busy") {
+      processEvent({ type: "stage", stage: "task-created", message: "Thinking…", timestamp } as VibeCoderEvent);
+    }
+  }, [processEvent]);
+
   const startTask = useCallback(async (prompt: string, planMode: boolean) => {
     const activeProjectId = projectIdRef.current || projectId;
     const isFreshProject = !activeProjectId || activeProjectId === PLACEHOLDER_PROJECT_ID;
@@ -384,6 +521,7 @@ export function useVibeCoderWorkspace(projectId: string) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
+    activeOpenCodeSessionRef.current = null;
 
     setState((prev) => ({
       ...prev,
@@ -411,42 +549,46 @@ export function useVibeCoderWorkspace(projectId: string) {
     }));
 
     try {
-      const res = await fetch("/api/opencode/start", {
+      const runtime = await fetch("/api/opencode/runtime/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt,
-          planMode,
-          projectId: isFreshProject ? undefined : activeProjectId,
-        }),
+        body: JSON.stringify({ projectId: activeProjectId }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(typeof data?.error === "string" ? data.error : "OpenCode could not start.");
+      const runtimeData = await runtime.json();
+      if (!runtime.ok) throw new Error(typeof runtimeData?.error === "string" ? runtimeData.error : "OpenCode could not start.");
+
+      // Subscribe before creating/sending a prompt so no early session events
+      // can be lost. One stream is held for the active project, not per render.
+      const es = new EventSource(`/api/opencode/events/${encodeURIComponent(activeProjectId)}`);
+      eventSourceRef.current = es;
+      es.onmessage = (event) => { try { processOpenCodeEvent(JSON.parse(event.data)); } catch { /* malformed local event ignored */ } };
+      es.onerror = () => setState((previous) => previous.stage === "complete" ? previous : { ...previous, error: "OpenCode event stream disconnected. Retry or inspect runtime logs." });
+
+      const sessionResponse = await fetch("/api/opencode/sessions", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectId: activeProjectId, title: prompt.slice(0, 72) }),
+      });
+      const session = await sessionResponse.json();
+      if (!sessionResponse.ok) throw new Error(String(session?.error || "OpenCode could not create a session."));
 
       setState((prev) => ({
         ...prev,
-        taskId: data.taskId,
-        projectId: typeof data.projectId === "string" ? data.projectId : prev.projectId,
+        taskId: session.id,
+        projectId: activeProjectId,
       }));
-
-      const es = new EventSource(`/api/opencode/events/${data.taskId}`);
-      eventSourceRef.current = es;
-
-      es.onmessage = (e) => {
-        const ev = JSON.parse(e.data) as VibeCoderEvent;
-        processEvent(ev);
-        if (ev.type === "complete" || (ev.type === "error" && !ev.recoverable)) {
-          es.close();
-        }
-      };
+      activeOpenCodeSessionRef.current = session.id;
+      const promptResponse = await fetch(`/api/opencode/sessions/${encodeURIComponent(activeProjectId)}/${encodeURIComponent(session.id)}/prompt`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: prompt, agent: planMode ? "plan" : undefined }),
+      });
+      const promptData = await promptResponse.json();
+      if (!promptResponse.ok) throw new Error(String(promptData?.error || "OpenCode could not accept the prompt."));
     } catch (e: any) {
       setState((prev) => ({ ...prev, stage: "failed", error: e.message }));
     }
-  }, [projectId, processEvent]);
+  }, [projectId, processOpenCodeEvent]);
 
   const cancelTask = useCallback(async () => {
     if (state.taskId) {
-      await fetch(`/api/opencode/cancel/${state.taskId}`, { method: "POST" });
+      await fetch(`/api/opencode/sessions/${encodeURIComponent(state.projectId)}/${encodeURIComponent(state.taskId)}/abort`, { method: "POST" });
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
       }
@@ -567,6 +709,11 @@ export function useVibeCoderWorkspace(projectId: string) {
     });
   }, [loadSavedProject]);
 
+  const updateProjectId = useCallback((nextProjectId: string) => {
+    projectIdRef.current = nextProjectId;
+    setState((prev) => ({ ...prev, projectId: nextProjectId }));
+  }, []);
+
   const resetToIdle = useCallback(() => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
@@ -584,6 +731,7 @@ export function useVibeCoderWorkspace(projectId: string) {
     approvePlan,
     loadSavedProject,
     restoreProject,
+    updateProjectId,
     resetToIdle,
     setState,
   };

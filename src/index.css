@@ -4185,7 +4185,7 @@ body,
 .clyra-chat-page .clyra-assistant-message { max-width: min(78%, 760px); padding-top: 0; }
 .clyra-chat-page .clyra-message-actions { margin-top: 7px; }
 
-.clyra-chat-page .clyra-composer-transition { width: 100%; max-width: 860px; padding-inline: 20px; }
+.clyra-chat-page .clyra-composer-transition { width: 100%; max-width: 720px; padding-inline: 16px; }
 .clyra-composer-tools { position: relative; z-index: 40; margin: 0 0 8px 12px; pointer-events: auto; }
 .clyra-composer-tools button { min-height: 31px; border-radius: 999px; padding: 0 11px; font-size: 11px; pointer-events: auto; }
 .clyra-chat-page .input-wrapper:not(.loading) { min-height: 64px; border-radius: 999px !important; }

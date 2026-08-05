@@ -56,6 +56,8 @@ if (embedParams.get("vibe_embed") === "1") {
     /* No StrictMode: double mount would re-run Babel preview boot twice in the embed iframe. */
     root.render(<m.default />);
   });
+} else if (window.location.pathname === "/__dev/opencode") {
+  void import("./dev-fixtures/clyra-code/OpenCodeDiagnostic.tsx").then((m) => root.render(<m.default />));
 } else if (window.location.pathname === "/preview") {
   const searchParams = new URLSearchParams(window.location.search);
   const theme = searchParams.get("theme");

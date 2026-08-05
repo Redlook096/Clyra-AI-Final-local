@@ -612,7 +612,7 @@ for (let index = 0; index < payload.candidates.length; index += 1) {
   }
 }
 
-assert.equal(payload.shortDuration, 30, "automatic clips never default below 30 seconds");
+assert.equal(payload.shortDuration, 15, "automatic clips honour the fast 15-second delivery option");
 assert.equal(payload.longDuration, 60, "maximum clip duration is enforced");
 assert.equal(payload.cleanName, "my-clip-final", "output names are safely normalised");
 assert(payload.customKeywords.includes("laugh"), "custom prompts receive semantic expansion");
@@ -643,9 +643,9 @@ assert(!/\bbecause$/i.test(payload.repaired.transcript.trim()), "repair refuses 
 
 assert(payload.clamped.end - payload.clamped.start <= 30 * 1.08 + 0.05, "hard clamp caps overlong candidates");
 assert(payload.clamped.duration_clamped === true, "clamp marks duration_clamped");
-assert.equal(payload.minimumExtended.end - payload.minimumExtended.start, 30, "automatic hooks expand into a complete 30-second scene plate");
+assert.equal(payload.minimumExtended.end - payload.minimumExtended.start, 15, "automatic hooks expand into a complete fast-delivery scene plate");
 assert.equal(payload.minimumExtended.minimum_duration_extended, true, "automatic duration extension is explained in candidate metadata");
-assert.equal(payload.minimumSourceLimited.end - payload.minimumSourceLimited.start, 17, "short sources remain source-bounded rather than creating invalid media");
+assert.equal(payload.minimumSourceLimited.end - payload.minimumSourceLimited.start, 15, "short sources respect the fast delivery duration");
 
 assert(payload.scored.score >= payload.scoredBad.score, "complete payoff scores at least as high as hanging connective");
 assert(payload.scored.reason.includes("—"), "local score emits explanation");
@@ -795,8 +795,8 @@ assert.equal(payload.directedMethod[0]?.section_ordinal, 3, "the requested ordin
 assert.equal(payload.directedMethod[0]?.query_directed, true, "directed sections cannot be displaced by generic virality ranking");
 assert(payload.directedMethod[0]!.start <= 0.47 && payload.directedMethod[0]!.end < 10.0, "the third-method section begins at its heading and ends before the fourth method");
 assert(payload.directedMethod[0]!.transcript.toLowerCase().includes("third method"), "directed selection contains the matched spoken evidence");
-assert.equal(payload.premiumEncoding[payload.premiumEncoding.indexOf("-crf") + 1], "10", "premium export uses a high-detail CRF");
-assert.equal(payload.masterEncoding[payload.masterEncoding.indexOf("-crf") + 1], "8", "master export exposes an even higher-quality option");
+assert.equal(payload.premiumEncoding[payload.premiumEncoding.indexOf("-crf") + 1], "15", "premium export keeps a high-quality, responsive CRF");
+assert.equal(payload.masterEncoding[payload.masterEncoding.indexOf("-crf") + 1], "12", "master export exposes a higher-detail option");
 assert.equal(payload.sourceFillLandscape, true, "wide sources use a sharp foreground over a blurred portrait fill");
 assert.equal(payload.sourceFillPortraitSar, false, "non-square-pixel portrait sources do not receive landscape fill treatment");
 assert.equal(payload.rangeErrors.length, 5, "invalid, non-finite, and too-short source ranges are rejected safely");

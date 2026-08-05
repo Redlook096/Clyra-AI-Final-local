@@ -2785,7 +2785,16 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
   const getPreviewProjectArgs = async (rawProjectId: string) => {
     const projectId = safeProjectId(rawProjectId);
     const metadata = await readProjectMetadata(projectId);
-    if (!metadata) return null;
+    // OpenCode projects are intentionally created by the trusted runtime,
+    // rather than the legacy Vibe metadata writer. They still live in the
+    // same selected-workspace root and can be previewed safely when they have
+    // a real files directory. This keeps an active agent's static preview
+    // from being incorrectly reported as a generic build failure.
+    if (!metadata) {
+      const runtimeFiles = clyraDataPath("projects", projectId, "files");
+      if (!existsSync(runtimeFiles)) return null;
+      return { projectId, projectPath: runtimeFiles, projectName: projectId };
+    }
     return {
       projectId: metadata.id,
       projectPath: path.join(projectRoot(metadata.id), "files"),

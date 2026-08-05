@@ -150,3 +150,19 @@ OpenCode's `--auto` permission flag; deployments may opt in with
 `CLYRA_OPENCODE_AUTO_APPROVE=true` after their own security review. A configured
 OpenCode provider/model is required for execution. OpenCode is a third-party
 runtime and Clyra is not affiliated with its authors.
+
+## Clyra Code V5 technical references (2026-08-04)
+
+The following repositories are shallow, local-only technical references under
+`.references/`. They are ignored by Git and are neither bundled nor copied
+into Clyra. Clyra uses its own UI and integration code.
+
+| Reference | Revision | Source licence | Intended reference use |
+| --- | --- | --- | --- |
+| anomalyco/opencode | `6c32991` | MIT | SDK types, events, sessions, permissions and diffs. |
+| ItsWendell/palot | `fd63a75` | MIT (verify before reuse) | OpenCode GUI lifecycle and reconnect patterns. |
+| microsoft/vscode | `cc2c3484` | MIT | Workbench density and interaction concepts only. |
+| microsoft/monaco-editor | shallow local checkout | MIT | Editor API reference; Clyra uses the published package. |
+| xtermjs/xterm.js | shallow local checkout | MIT | Terminal API reference; Clyra uses the published package. |
+
+No source sections from these repositories were adapted in this change.

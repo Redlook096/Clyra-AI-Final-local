@@ -429,6 +429,7 @@ export function buildSessionFromApi(
           timestamp: updatedAt,
         },
       ],
+      actions: {},
       restored: true,
     },
     ui: {

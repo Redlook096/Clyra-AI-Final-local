@@ -24,7 +24,15 @@ export function buildWelcomeRows(chats: WelcomeConversation[]): WelcomeRow[] {
     .filter((chat) => chat.messages.length > 0)
     .sort((a, b) => b.updatedAt - a.updatedAt);
   const latest = saved[0];
-  if (!latest) return [];
+  if (!latest) {
+    // A new account used to leave the area beneath the composer blank because
+    // the welcome section only knew how to render saved conversations.
+    return [
+      { id: "new-plan", kind: "new", title: "Make a plan", preview: "Turn an idea into clear next steps.", prompt: "Help me make a plan for " },
+      { id: "new-write", kind: "new", title: "Write something", preview: "Draft, improve, or explain with Clyra.", prompt: "Help me write " },
+      { id: "new-build", kind: "new", title: "Build a project", preview: "Start a coding task or product idea.", prompt: "Help me build " },
+    ];
+  }
 
   const userText = compact(latest.messages.filter((message) => message.role === "user").map((message) => message.content).join(" "));
   const title = compact(latest.title) || "your last conversation";

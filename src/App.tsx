@@ -24,9 +24,12 @@ import {
 } from "motion/react";
 import {
   AppWindow,
+  Bell,
   Brain,
+  ChevronDown,
   CircleAlert,
   Code2,
+  Gift,
   Scissors,
   ArrowUpIcon,
   Check,
@@ -38,6 +41,7 @@ import {
   GraduationCap,
   Heart,
   Loader2,
+  MessageCircle,
   MessageCircleDashed,
   Mail,
   MessagesSquare,
@@ -54,6 +58,7 @@ import {
   RotateCcw,
   ThumbsDown,
   ThumbsUp,
+  User,
   Volume2,
   X,
   XIcon,
@@ -2173,6 +2178,8 @@ export default function App() {
   );
   const [hoveredWorkspaceTab, setHoveredWorkspaceTab] =
     useState<WorkspaceTabId | null>(null);
+  const [workflowTabsHidden, setWorkflowTabsHidden] = useState(false);
+  const workflowTabsRevealTimerRef = useRef<number | null>(null);
   const [clipInitialUrl, setClipInitialUrl] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [chats, setChats] = useState<ChatSession[]>(() => {
@@ -2667,6 +2674,10 @@ export default function App() {
     });
   }, []);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [showChatDropdown, setShowChatDropdown] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [showRewards, setShowRewards] = useState(false);
+  const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [showClipsLibrary, setShowClipsLibrary] = useState(false);
   const [theme, setTheme] = useState("Light");
   const [sendOnEnter, setSendOnEnter] = useState(true);
@@ -3075,8 +3086,8 @@ export default function App() {
       } else if ((e.ctrlKey || e.metaKey) && key === "k") {
         e.preventDefault();
         setIsTaskViewOpen(false);
-        setIsAppLauncherOpen(false);
-        setIsCommandPalettePinned((open) => !open);
+        setIsAppLauncherOpen((open) => !open);
+        setShowCommandPalette(false);
         appLauncherChordRef.current = false;
         requestAnimationFrame(() => textareaRef.current?.focus());
       } else if (key === "k" && !e.ctrlKey && !e.metaKey && !e.altKey && isAppLauncherOpen) {
@@ -3087,6 +3098,10 @@ export default function App() {
       } else if (e.key === "Escape") {
         setIsAppLauncherOpen(false);
         setIsTaskViewOpen(false);
+        setShowChatDropdown(false);
+        setShowNotifications(false);
+        setShowRewards(false);
+        setShowAccountMenu(false);
         appLauncherChordRef.current = false;
       }
     };
@@ -4495,6 +4510,9 @@ Please analyze the code you just wrote and fix this error.`;
       const researchRunId = isDeepResearchMode ? `${aiMsgId}-research` : undefined;
 
       const isVibeMode = userCommandId === "vibe" || Boolean(vibeCommand);
+      if (isVibeMode || activeWorkspaceTab === "chat") {
+        setWorkflowTabsHidden(true);
+      }
       const thinkingMode: Message["thinkingMode"] = isYoutubeMode
         ? "youtube"
         : isDeepResearchMode
@@ -5588,7 +5606,14 @@ Please analyze the code you just wrote and fix this error.`;
     !isStudyWorkspace;
   const showWorkflowTabs =
     !isEmbeddedToolPreview &&
-    (activeWorkspaceTab === "chat" || workflowTabsRestingVisible);
+    (activeWorkspaceTab === "chat" || workflowTabsRestingVisible) &&
+    !workflowTabsHidden;
+
+  useEffect(() => {
+    const hide = () => setWorkflowTabsHidden(true);
+    window.addEventListener("clyra:workflow-tabs-hide", hide);
+    return () => window.removeEventListener("clyra:workflow-tabs-hide", hide);
+  }, []);
   const sidebarWidthPx = 272;
   const sidebarClearancePx = sidebarWidthPx + 24;
   const effectiveWorkspaceViewport =
@@ -5622,7 +5647,7 @@ Please analyze the code you just wrote and fix this error.`;
   ];
   const workspaceSwipeTransition = {
     type: "tween" as const,
-    duration: 0.82,
+    duration: 0,
     ease: workspaceSwipeEase,
   };
   const workspacePanelVariants = {
@@ -5815,15 +5840,12 @@ Please analyze the code you just wrote and fix this error.`;
     // Always derive direction from a stable order so Chat ↔ tool swipes are
     // perfect mirrors (returning to Chat must not reverse or spawn).
     setWorkspaceTransitionDirection(fromTaskView ? 0 : toIndex >= fromIndex ? 1 : -1);
-    setIsWorkspaceSwitching(!fromTaskView);
+    // All workspace loading happens during boot. Switching tools should be
+    // immediate rather than showing a second transition/loading treatment.
+    setIsWorkspaceSwitching(false);
+    setWorkflowTabsHidden(false);
     if (workspaceSwitchTimeoutRef.current != null) {
       window.clearTimeout(workspaceSwitchTimeoutRef.current);
-    }
-    if (!fromTaskView) {
-      workspaceSwitchTimeoutRef.current = window.setTimeout(() => {
-        setIsWorkspaceSwitching(false);
-        workspaceSwitchTimeoutRef.current = null;
-      }, 860);
     }
     setActiveWorkspaceTab(tabId);
     setIsTaskViewOpen(false);
@@ -5918,7 +5940,6 @@ Please analyze the code you just wrote and fix this error.`;
       <AnimatePresence>
         {isAppLauncherOpen ? (
           <AppLauncher
-            orbColorTheme={orbColorTheme}
             onClose={() => setIsAppLauncherOpen(false)}
             onOpenTool={(tool) => {
               setIsAppLauncherOpen(false);
@@ -6477,6 +6498,25 @@ Please analyze the code you just wrote and fix this error.`;
         )}
 
         <div className={cn("clyra-main-surface relative z-10 flex min-h-0 min-w-0 flex-1 flex-col bg-white sm:border-transparent", activeWorkspaceTab === "chat" && "clyra-chat-page")}>
+          {workflowTabsHidden && !isEmbeddedToolPreview ? (
+            <div
+              aria-label="Show workspace switcher"
+              className="absolute inset-x-0 top-0 z-[189] h-12"
+              onMouseEnter={() => {
+                if (workflowTabsRevealTimerRef.current != null) window.clearTimeout(workflowTabsRevealTimerRef.current);
+                workflowTabsRevealTimerRef.current = window.setTimeout(() => {
+                  setWorkflowTabsHidden(false);
+                  workflowTabsRevealTimerRef.current = null;
+                }, 1000);
+              }}
+              onMouseLeave={() => {
+                if (workflowTabsRevealTimerRef.current != null) {
+                  window.clearTimeout(workflowTabsRevealTimerRef.current);
+                  workflowTabsRevealTimerRef.current = null;
+                }
+              }}
+            />
+          ) : null}
           <AnimatePresence initial={false}>
           {showWorkflowTabs ? (
           <motion.div
@@ -6695,14 +6735,7 @@ Please analyze the code you just wrote and fix this error.`;
                         <Suspense fallback={
                           <div className="h-full w-full bg-white" aria-hidden="true" />
                         }>
-                          <VibeCoderWorkspace
-                            orbColorTheme={orbColorTheme}
-                            // Clyra owns the live Vibe surface. M1 is the
-                            // execution backend, not a second full-screen UI
-                            // that can paint a blank iframe over this shell.
-                            onEngaged={() => setWorkspaceChromeEngaged(false)}
-                            onOpenBrowser={() => setActiveWorkspaceTab("browser")}
-                          />
+                          <VibeCoderWorkspace />
                         </Suspense>
                       ) : isClipWorkspace ? (
                         <Suspense fallback={null}>
@@ -6733,90 +6766,37 @@ Please analyze the code you just wrote and fix this error.`;
                           />
                         </Suspense>
                       ) : messages.length === 0 ? (
-                        <motion.div
-                          initial={false}
-                          className={cn(
-                            "clyra-chat-welcome text-center flex flex-col items-center max-w-[680px] mx-auto w-full",
-                            showWorkspaceLivePreview
-                              ? "px-3 sm:px-4"
-                              : "px-5 sm:px-8",
-                          )}
-                        >
-                          <div className="clyra-chat-welcome__glow" aria-hidden="true" />
-                          <span className="clyra-chat-welcome__identity">
-                            <span className="clyra-chat-welcome__orb" aria-hidden><AiOrb colorTheme={orbColorTheme} /></span>
-                            <span>Clyra</span>
-                          </span>
                           <motion.div
                             initial={false}
-                            animate={isTemporaryChat
-                              ? { height: "auto", opacity: 1, marginTop: 12, marginBottom: 0 }
-                              : { height: 0, opacity: 0, marginTop: 0, marginBottom: 0 }
-                            }
-                            transition={{
-                              height: { duration: 0.45, ease: [0.22, 1, 0.36, 1] },
-                              opacity: { duration: 0.35, ease: "easeOut" },
-                              marginTop: { duration: 0.45, ease: [0.22, 1, 0.36, 1] },
-                            }}
-                            className="relative z-[1] overflow-hidden pointer-events-none"
+                            className="flex flex-col w-full max-w-[720px] mx-auto px-5 sm:px-8"
                           >
-                            <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-neutral-100/90 text-neutral-500 font-medium text-[11px] backdrop-blur-xl border border-neutral-200/60 shadow-[0_2px_10px_rgba(0,0,0,0.04)]">
-                              <MessageCircleDashed className="w-3 h-3 stroke-[2] text-neutral-400" />
-                              Temporary Chat
+                            <motion.div
+                            initial={false}
+                            className="flex flex-col items-center text-center pt-24 pb-4"
+                          >
+                            <span className="clyra-chat-welcome__identity mb-5 flex items-center gap-2">
+                              <span className="clyra-chat-welcome__orb" aria-hidden><AiOrb colorTheme={orbColorTheme} /></span>
+                              <span className="text-[15px] font-semibold text-slate-500">Clyra</span>
                             </span>
-                          </motion.div>
-                          <motion.h1
-                            layout="position"
-                            className="clyra-chat-welcome__title text-slate-800"
-                            initial={false}
-                            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-                          >
-                            Good evening, Luke
-                          </motion.h1>
-                          <motion.p
-                            layout="position"
-                            className="clyra-chat-welcome__support" initial={false}
-                            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-                          >
-                            What would you like to accomplish?
-                          </motion.p>
-                          <motion.div
-                            layout="position"
-                            className="clyra-chat-welcome__actions"
-                            initial={false}
-                            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-                          >
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const searchCommand = commandSuggestions.find((command): command is BuiltInCommandSuggestion => command.id === "search");
-                                if (!searchCommand) return;
-                                setSelectedCommand(searchCommand);
-                                setValue("");
-                                setIsComposerFocused(true);
-                                setIsInputExpanded(true);
-                                window.setTimeout(() => textareaRef.current?.focus(), 0);
-                              }}
+                            <motion.div
+                              initial={false}
+                              animate={isTemporaryChat
+                                ? { height: "auto", opacity: 1, marginBottom: 8 }
+                                : { height: 0, opacity: 0, marginBottom: 0 }
+                              }
+                              className="overflow-hidden"
                             >
-                              <Globe className="h-4 w-4" />
-                              Research anything
-                            </button>
-                            <button type="button" onClick={() => handleWorkspaceTabChange("vibe")}>
-                              <Code2 className="h-4 w-4" />
-                              Build an app
-                            </button>
-                            <button type="button" onClick={() => handleWorkspaceTabChange("clip")}>
-                              <Scissors className="h-4 w-4" />
-                              Create clips
-                            </button>
-                            <button type="button" onClick={() => applyQuickPrompt("Help me work through my Gmail inbox.")}>
-                              <Mail className="h-4 w-4" />
-                              Work with Gmail
-                            </button>
-                            <button type="button" onClick={() => handleWorkspaceTabChange("study")}>
-                              <GraduationCap className="h-4 w-4" />
-                              Study anything
-                            </button>
+                              <span className="inline-flex items-center gap-2 rounded-full bg-neutral-100/90 px-3 py-1.5 text-[11px] font-medium text-neutral-500">
+                                <MessageCircleDashed className="h-3 w-3" />
+                                Temporary Chat
+                              </span>
+                            </motion.div>
+                            <h1 className="text-[40px] font-semibold tracking-[-0.04em] text-slate-900 sm:text-[48px]">
+                              Good evening, <span className="text-blue-600">Luke</span>
+                            </h1>
+                            <p className="mt-2 text-[17px] text-slate-500">
+                              What would you like to accomplish today?
+                            </p>
                           </motion.div>
                         </motion.div>
                       ) : (
@@ -7111,7 +7091,7 @@ Please analyze the code you just wrote and fix this error.`;
                               backfaceVisibility: "hidden",
                             }}
                             className={cn(
-                              "clyra-composer-transition absolute inset-x-0 bottom-0 w-full z-20 max-w-3xl mx-auto",
+                              "clyra-composer-transition absolute inset-x-0 bottom-0 w-full z-20 max-w-2xl mx-auto",
                               showWorkspaceLivePreview
                                 ? "px-3 sm:px-4"
                                 : "px-5 sm:px-8",
@@ -7786,9 +7766,9 @@ Please analyze the code you just wrote and fix this error.`;
                                           >
                                             <span className="flex items-center gap-1.5">
                                               <kbd className="font-sans px-1 py-[1.5px] rounded-sm bg-slate-100/50 border border-slate-200/50 shadow-[0_1px_0.5px_rgba(0,0,0,0.02)] text-slate-400">
-                                                Ctrl/⌘K
+                                                /
                                               </kbd>
-                                              <span>Commands</span>
+                                              Commands
                                             </span>
                                           </motion.button>
                                         ) : null}

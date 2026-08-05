@@ -390,7 +390,7 @@ export async function transcodeCreatorVideo(webm: Blob, filename: string, signal
   return mp4;
 }
 
-async function prepareRecorder({ width = 720, height = 1280, fps = 30 }: { width?: number; height?: number; fps?: number } = {}) {
+async function prepareRecorder({ width = 720, height = 1280, fps = 30, manualFrameCapture = true }: { width?: number; height?: number; fps?: number; manualFrameCapture?: boolean } = {}) {
   if (typeof MediaRecorder === "undefined") throw new Error("This browser does not support video recording");
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -409,14 +409,13 @@ async function prepareRecorder({ width = 720, height = 1280, fps = 30 }: { width
   await audioContext.resume();
   const audioDestination = audioContext.createMediaStreamDestination();
   const outputFps = Math.max(24, Math.min(60, Math.round(fps)));
-  // Manually request each canvas frame.  Browser timers can otherwise make a
-  // nominal 60 FPS capture contain unevenly spaced samples when a 1080p draw
-  // takes slightly longer than one refresh.  The story renderer below drives
-  // this track from its own 60 Hz timeline, so the background, chat and audio
-  // share one output clock.
-  const videoStream = canvas.captureStream(0);
+  // Fixed-rate capture records every logical render tick. The Fake Text
+  // renderer drives this in real time so gameplay and overlay share one 1×
+  // clock; other offline renderers use the same precise mechanism.
+  const videoStream = canvas.captureStream(manualFrameCapture ? 0 : outputFps);
   const videoTrack = videoStream.getVideoTracks()[0];
   const captureFrame = () => {
+    if (!manualFrameCapture) return;
     const manualTrack = videoTrack as (MediaStreamTrack & { requestFrame?: () => void }) | undefined;
     manualTrack?.requestFrame?.();
   };
@@ -714,18 +713,14 @@ export async function renderMessageStoryVideo(options: { name: string; messages:
   const timeline = buildIMessageTimeline(timedMessages, options.playbackRate || 1);
   // Fake Text Story is rendered at its actual project resolution; the drawing
   // code scales one fixed logical canvas so preview and export keep their ratios.
-  const setup = await prepareRecorder({ width: 1080, height: 1920, fps: 60 });
+  const setup = await prepareRecorder({ width: 1080, height: 1920, fps: 60, manualFrameCapture: true });
   let backgroundVideo: HTMLVideoElement | null = null;
   try {
     backgroundVideo = await loadVideo(options.backgroundVideo);
     const background: CreatorBackgroundMedia | null = backgroundVideo || await loadImage(options.background);
     if (backgroundVideo) {
       backgroundVideo.currentTime = 0;
-      // Export can take longer than the story itself to draw. Do not let an
-      // HTMLVideoElement advance on wall-clock time while the canvas records
-      // logical 60 FPS frames, or gameplay will be sped up in the retimed MP4.
-      // Each canvas frame below instead uses the same logical timestamp as the
-      // story, preserving normal 1× gameplay speed in the finished video.
+      backgroundVideo.playbackRate = 1;
       backgroundVideo.pause();
     }
     const theme = options.theme || "ios_dark";
@@ -739,12 +734,34 @@ export async function renderMessageStoryVideo(options: { name: string; messages:
       source.connect(setup.audioDestination);
       source.start(audioStart + timeline.events[index]!.voiceStartMs / 1_000);
     });
+    const gameplaySampleFps = 30;
+    const synchroniseGameplayFrame = async (timeMs: number) => {
+      if (!backgroundVideo || !Number.isFinite(backgroundVideo.duration) || backgroundVideo.duration <= 0) return;
+      const targetTime = Math.min(
+        (Math.max(0, timeMs) / 1_000) % backgroundVideo.duration,
+        Math.max(0, backgroundVideo.duration - 1 / gameplaySampleFps),
+      );
+      if (Math.abs(backgroundVideo.currentTime - targetTime) < 0.001 && !backgroundVideo.seeking) return;
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const settle = () => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timeout);
+          backgroundVideo.removeEventListener("seeked", settle);
+          backgroundVideo.removeEventListener("error", settle);
+          resolve();
+        };
+        // A bounded source-frame wait keeps an unavailable decoder from
+        // blocking an export forever. The next 30 FPS sample will retry.
+        const timeout = window.setTimeout(settle, 250);
+        backgroundVideo.addEventListener("seeked", settle, { once: true });
+        backgroundVideo.addEventListener("error", settle, { once: true });
+        backgroundVideo.currentTime = targetTime;
+        if (!backgroundVideo.seeking) requestAnimationFrame(settle);
+      });
+    };
     const drawFrame = (timeMs: number) => {
-      if (backgroundVideo && Number.isFinite(backgroundVideo.duration) && backgroundVideo.duration > 0) {
-        const duration = backgroundVideo.duration;
-        const frameTime = (Math.max(0, timeMs) / 1_000) % duration;
-        backgroundVideo.currentTime = Math.min(frameTime, Math.max(0, duration - 1 / 60));
-      }
       const frame = getIMessageFrame(timeline, timeMs);
       const panelHeight = layout === "floating_phone"
         ? imessageRenderToken(getIMessagePanelLayout(messages.slice(0, frame.visibleCount)).panelHeight)
@@ -764,24 +781,22 @@ export async function renderMessageStoryVideo(options: { name: string; messages:
     const outputFps = 60;
     const frameDurationMs = 1_000 / outputFps;
     const lastFrameIndex = Math.ceil(timeline.durationMs / frameDurationMs);
-    const startedAt = performance.now();
     for (let frameIndex = 0; frameIndex <= lastFrameIndex; frameIndex += 1) {
       throwIfCancelled(options.signal);
-      // Do not derive story state from a late browser timer.  Every output
-      // sample has an exact 60 Hz logical timestamp; a slow draw may hold the
-      // last fully rendered frame, but it can never skip a chat state or make
-      // the overlay animate at a different cadence to the exported video.
       const elapsed = Math.min(timeline.durationMs, frameIndex * frameDurationMs);
+      // Gameplay assets are normally 30 FPS. Decode one fresh source frame
+      // every other 60 FPS delivery frame; the second frame is the natural
+      // duplicate of that source frame, never a stale frame from an old seek.
+      if (frameIndex % Math.max(1, Math.round(outputFps / gameplaySampleFps)) === 0) {
+        await synchroniseGameplayFrame(elapsed);
+      }
       drawFrame(elapsed);
       setup.captureFrame();
       options.onProgress?.(0.3 + elapsed / timeline.durationMs * 0.64);
-      if (frameIndex >= lastFrameIndex) break;
-      const nextFrameAt = startedAt + (frameIndex + 1) * frameDurationMs;
-      await cancellableDelay(Math.max(0, nextFrameAt - performance.now()), options.signal);
     }
     // Keep one final frame in the MediaRecorder without adding a visible
     // post-roll to the story timeline.
-    await cancellableDelay(frameDurationMs, options.signal);
+    await cancellableDelay(1_000 / outputFps, options.signal);
     const blob = await finishRecording(setup);
     options.onProgress?.(0.97);
     const mp4 = await transcodeCreatorVideo(blob, "clyra-message-story", options.signal, 60);

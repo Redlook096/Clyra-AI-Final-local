@@ -70,23 +70,26 @@ def resolve_output_dir():
 OUTPUT_DIR = resolve_output_dir()
 OUTPUT_WIDTH = 1080
 OUTPUT_HEIGHT = 1920
+# 30fps is the right delivery contract for short-form social clips on the
+# local fast path: it halves the final encode work without a visible loss in
+# normal talking-head and podcast footage.
 OUTPUT_FPS = 30
 MAX_CLIP_LENGTH = 60.0
 # Clyra's automatic clips are complete, reviewable scenes rather than the
 # 6–15 second fragments used by the old picker. A directed whole-section
 # request remains allowed to end at the next real section boundary instead of
 # quietly spilling into a different method.
-MIN_AUTOMATIC_CLIP_LENGTH = 30.0
+MIN_AUTOMATIC_CLIP_LENGTH = 15.0
 # Final renders deliberately use a considerably higher quality target than the
 # small, disposable analysis plate.  Keep this as one named contract so the
 # first render and any later caption refinement cannot quietly diverge.
 RENDER_QUALITY_PROFILES = {
-    # Premium is the normal delivery default.  It deliberately leaves more
-    # detail for a social platform's *next* encode instead of targeting the
-    # low 1–2 Mbps files produced by the former clip path.
-    "premium": {"crf": "10", "preset": "veryslow", "audio_bitrate": "320k"},
-    "balanced": {"crf": "16", "preset": "slow", "audio_bitrate": "256k"},
-    "master": {"crf": "8", "preset": "veryslow", "audio_bitrate": "320k"},
+    # Delivery settings are deliberately bounded: the interactive product
+    # should finish a short social clip promptly rather than holding the UI
+    # on a veryslow x264 pass after its analysis is complete.
+    "premium": {"crf": "15", "preset": "medium", "audio_bitrate": "256k"},
+    "balanced": {"crf": "20", "preset": "veryfast", "audio_bitrate": "160k"},
+    "master": {"crf": "12", "preset": "slow", "audio_bitrate": "320k"},
 }
 _FASTER_WHISPER_MODEL = None
 _OPENAI_WHISPER_MODEL = None
@@ -1265,7 +1268,7 @@ def query_directed_candidates(words, video_duration, request, target_duration, c
     return candidates[:max(1, int(count or 1))]
 
 
-def select_progressive_stream(yt):
+def select_progressive_stream(yt, max_height=1080):
     streams = list(yt.streams.filter(progressive=True, file_extension="mp4"))
     if not streams:
         fail("No browser-friendly MP4 stream is available for this video")
@@ -1274,9 +1277,8 @@ def select_progressive_stream(yt):
         match = re.search(r"(\d+)", stream.resolution or "")
         return int(match.group(1)) if match else 9999
 
-    # Never cap the source master at 720p.  Progressive streams contain audio
-    # and are the portable fallback; choose their highest legal source quality.
-    return max(streams, key=height)
+    bounded = [stream for stream in streams if height(stream) <= max_height]
+    return max(bounded or streams, key=height)
 
 
 def _stream_height(stream):
@@ -1311,7 +1313,7 @@ def select_adaptive_audio_stream(yt):
     return max(streams, key=_stream_audio_bitrate) if streams else None
 
 
-def download_adaptive_youtube_master(yt, job_dir):
+def download_adaptive_youtube_master(yt, job_dir, max_height=None):
     """Download and mux the highest available adaptive video/audio master.
 
     This is the quality-preserving fallback when yt-dlp cannot obtain a
@@ -1323,7 +1325,7 @@ def download_adaptive_youtube_master(yt, job_dir):
         configured_max = int(os.environ.get("CLYRA_SOURCE_MAX_HEIGHT", "1080"))
     except (TypeError, ValueError):
         configured_max = 1080
-    max_height = max(360, min(2160, configured_max))
+    max_height = max(360, min(2160, int(max_height or configured_max)))
     video_stream = select_adaptive_video_stream(yt, max_height=max_height)
     audio_stream = select_adaptive_audio_stream(yt)
     if video_stream is None or audio_stream is None:
@@ -1349,7 +1351,7 @@ def download_adaptive_youtube_master(yt, job_dir):
     return master_path
 
 
-def download_progressive_youtube_master(yt, job_dir):
+def download_progressive_youtube_master(yt, job_dir, max_height=1080):
     """Use the already-resolved public YouTube stream when yt-dlp is blocked.
 
     YouTube increasingly requires a GVS proof-of-origin token for adaptive
@@ -1359,14 +1361,14 @@ def download_progressive_youtube_master(yt, job_dir):
     transcript-only result.  The source-quality audit remains responsible for
     warning when that public fallback is lower resolution.
     """
-    stream = select_progressive_stream(yt)
+    stream = select_progressive_stream(yt, max_height=max_height)
     path = stream.download(job_dir, filename="source-master.mp4")
     if not path or not os.path.isfile(path) or os.path.getsize(path) <= 8_192:
         raise RuntimeError("youtube_progressive_stream_download_failed")
     return path
 
 
-def download_public_source_master(url, job_dir):
+def download_public_source_master(url, job_dir, max_height=1080):
     """Download the legal, highest available public source once for the job.
 
     Analysis proxies and expiring CDN stream URLs are never valid final-render
@@ -1377,7 +1379,7 @@ def download_public_source_master(url, job_dir):
 
     template = os.path.join(job_dir, "source-master.%(ext)s")
     options = {
-        "format": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+        "format": f"bestvideo[height<={int(max_height)}]+bestaudio/best[height<={int(max_height)}]/best",
         "merge_output_format": "mp4",
         "outtmpl": template,
         "quiet": True,
@@ -1431,6 +1433,19 @@ def ass_text(value):
 def normalise_render_quality(value):
     requested = str(value or "premium").strip().lower().replace("_", "-")
     return requested if requested in RENDER_QUALITY_PROFILES else "premium"
+
+
+def output_dimensions(aspect, render_quality="premium"):
+    """Keep the 720p option genuinely lighter than the 1080p delivery path."""
+    if normalise_render_quality(render_quality) == "balanced":
+        return {
+            "1:1": (720, 720),
+            "16:9": (1280, 720),
+        }.get(str(aspect), (720, 1280))
+    return {
+        "1:1": (1080, 1080),
+        "16:9": (1920, 1080),
+    }.get(str(aspect), (1080, 1920))
 
 
 def render_encoding_args(render_quality="premium"):
@@ -2739,10 +2754,8 @@ def refine_clip(cfg):
         fail("Plate clip missing; cannot refine face tracking without re-download")
 
     aspect = str(cfg.get("aspect_ratio") or meta.get("aspect_ratio") or "9:16")
-    OUTPUT_WIDTH, OUTPUT_HEIGHT = {
-        "1:1": (1080, 1080),
-        "16:9": (1920, 1080),
-    }.get(aspect, (1080, 1920))
+    render_quality = normalise_render_quality(cfg.get("render_quality") or cfg.get("renderQuality") or meta.get("render_quality") or "premium")
+    OUTPUT_WIDTH, OUTPUT_HEIGHT = output_dimensions(aspect, render_quality)
     crop_focus = str(cfg.get("crop_focus") or meta.get("crop_focus") or "center")
     face_cfg = face_tracking_config(cfg)
     font = str(cfg.get("font") or meta.get("font") or "Impact")
@@ -2754,7 +2767,6 @@ def refine_clip(cfg):
     subtitle_style = str(cfg.get("subtitle_style") or cfg.get("subtitleStyle") or meta.get("subtitle_style") or "word")
     captions_enabled = bool(cfg.get("captions_enabled", meta.get("captions_enabled", True)))
     collision_mode = str(cfg.get("caption_collision_mode") or cfg.get("captionCollisionMode") or meta.get("caption_collision_mode") or "keep-existing").lower()
-    render_quality = normalise_render_quality(cfg.get("render_quality") or cfg.get("renderQuality") or meta.get("render_quality") or "premium")
 
     edited_words = cfg.get("words")
     if isinstance(edited_words, list) and edited_words:
@@ -2776,7 +2788,7 @@ def refine_clip(cfg):
         clip_duration,
         OUTPUT_WIDTH,
         OUTPUT_HEIGHT,
-        mode=face_cfg["mode"] if face_cfg["enabled"] else "smooth",
+        mode=face_cfg["mode"] if face_cfg["enabled"] else "off",
         selected_track_id=face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId"),
         selected_person_id=face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId"),
         person_mode=face_cfg.get("personMode") or face_cfg.get("sceneMode", "strict"),
@@ -2821,18 +2833,13 @@ def refine_clip(cfg):
     caption_collision = detect_embedded_caption_risk(plate_path, os.path.join(artifact_dir, "caption-audit"))
     effective_caption_position = position
     custom_caption_position = has_manual_caption_placement(cfg, caption_x, caption_y)
+    # A Clyra export is explicitly a captioned export. Detection can be
+    # recorded for diagnostics, but it must never silently remove the user’s
+    # selected, word-timed subtitle layer from the final MP4.
     effective_captions_enabled = captions_enabled
     if captions_enabled and caption_collision.get("detected"):
-        if collision_mode == "keep-existing":
-            effective_captions_enabled = False
-            caption_collision["action"] = "kept-existing"
-        elif collision_mode != "allow-overlap" and not custom_caption_position and position in {"bottom", "bottom-centre"}:
-            effective_caption_position = "top"
-            caption_collision["action"] = "relocated"
-            caption_collision["placement"] = "top"
-        else:
-            caption_collision["action"] = "preserved"
-            caption_collision["placement"] = position
+        caption_collision["action"] = "preserved"
+        caption_collision["placement"] = position
 
     render_caption_x = caption_x
     render_caption_y = caption_y
@@ -3084,11 +3091,11 @@ def main():
     remove_fillers = bool(cfg.get("remove_fillers", True))
     render_quality = normalise_render_quality(cfg.get("render_quality") or cfg.get("renderQuality") or "premium")
     clip_count = min(8, max(1, int(cfg.get("clip_count", 3))))
+    # The 720p option is a genuine fast lane: avoid downloading and decoding
+    # pixels the final delivery cannot use.
+    source_max_height = 720 if render_quality == "balanced" else 1080
     face_cfg = face_tracking_config(cfg)
-    OUTPUT_WIDTH, OUTPUT_HEIGHT = {
-        "1:1": (1080, 1080),
-        "16:9": (1920, 1080),
-    }.get(aspect, (1080, 1920))
+    OUTPUT_WIDTH, OUTPUT_HEIGHT = output_dimensions(aspect, render_quality)
     base_name = clean_name(str(cfg.get("clip_name", "clip")))
     job_id = f"{base_name}-{int(time.time() * 1000) % 1000000}"
 
@@ -3118,28 +3125,34 @@ def main():
                 title = yt.title or "YouTube video"
                 duration = float(yt.length or requested_duration)
                 words = load_caption_words(yt)
-                stream_url = select_progressive_stream(yt).url
-                emit("captions", "running", message="Retaining a local source master for analysis and final rendering...")
-                try:
-                    source = download_public_source_master(source, job_tmp)
-                except Exception:
-                    # The adaptive fallback keeps a 1080p source master when
-                    # yt-dlp is blocked by YouTube's proof-of-origin gate.
-                    # Only fall all the way back to progressive 360p when the
-                    # separate audio/video adaptive streams truly cannot load.
-                    emit("captions", "running", message="Retaining the best available adaptive YouTube video and audio streams...")
+                stream_url = select_progressive_stream(yt, max_height=source_max_height).url
+                if render_quality == "balanced":
+                    # The one-minute path renders directly from the temporary
+                    # progressive stream. FFmpeg fetches only the selected
+                    # 15-second range instead of first downloading a whole
+                    # long-form YouTube master to disk.
+                    emit("captions", "running", message="Opening the fast social-video stream...")
+                    source = stream_url
+                    fallback_path = stream_url
+                    local_source = False
+                else:
+                    emit("captions", "running", message="Retaining a local source master for analysis and final rendering...")
                     try:
-                        source = download_adaptive_youtube_master(yt, job_tmp)
+                        source = download_public_source_master(source, job_tmp, max_height=source_max_height)
                     except Exception:
-                        emit("captions", "running", message="Using the accessible progressive YouTube stream fallback for real video analysis...")
-                        source = download_progressive_youtube_master(yt, job_tmp)
-                stream_url = source
-                fallback_path = source
-                local_source = True
+                        emit("captions", "running", message="Retaining the best available adaptive YouTube video and audio streams...")
+                        try:
+                            source = download_adaptive_youtube_master(yt, job_tmp, max_height=source_max_height)
+                        except Exception:
+                            emit("captions", "running", message="Using the accessible progressive YouTube stream fallback for real video analysis...")
+                            source = download_progressive_youtube_master(yt, job_tmp, max_height=source_max_height)
+                    stream_url = source
+                    fallback_path = source
+                    local_source = True
             except Exception:
                 emit("captions", "running", message="Preparing the public video source...")
                 try:
-                    source = download_public_source_master(source, job_tmp)
+                    source = download_public_source_master(source, job_tmp, max_height=source_max_height)
                 except Exception as exc:
                     fail(f"Clyra could not retain a local source master for final rendering ({type(exc).__name__}).")
                 stream_url = source
@@ -3225,7 +3238,7 @@ def main():
                     raise
                 fallback_path = os.path.join(job_tmp, "source.mp4")
                 if not os.path.isfile(fallback_path):
-                    select_progressive_stream(yt).download(job_tmp, filename="source.mp4")
+                    select_progressive_stream(yt, max_height=source_max_height).download(job_tmp, filename="source.mp4")
                 extract_plate_clip(
                     fallback_path,
                     fallback_path,
@@ -3303,9 +3316,14 @@ def main():
         write_json(os.path.join(source_cache, "intelligence-capabilities.json"), intelligence_caps)
         analysis_source = source if local_source and os.path.isfile(source) else stream_url
         try:
-            intelligence_limit = max(1.0, float(os.environ.get("CLIPPER_INTELLIGENCE_MAX_SECONDS", 1800) or 1800))
+            intelligence_limit = max(1.0, float(os.environ.get("CLIPPER_INTELLIGENCE_MAX_SECONDS", 900) or 900))
         except (TypeError, ValueError):
-            intelligence_limit = 1800.0
+            intelligence_limit = 900.0
+        if render_quality == "balanced":
+            # The fast 720p path ranks from the full caption track but bounds
+            # expensive waveform work to the opening evidence window. This
+            # keeps a normal one-clip request inside the one-minute target.
+            intelligence_limit = min(intelligence_limit, 45.0)
         required_analysis_coverage = analysis_coverage_ms(duration, intelligence_limit)
 
         audio_path = os.path.join(source_cache, "audio-evidence.json")
@@ -3341,12 +3359,30 @@ def main():
             cache_hit=not audio_recomputed,
         )
 
+        # Broad highlight requests (the normal "viral moment" workflow) are
+        # deliberately transcript-led.  Analysing every frame before ranking a
+        # spoken moment made local jobs unnecessarily slow. Visual evidence is
+        # reserved for explicit visual-state requests, where transcript alone
+        # would be dishonest. Candidate crop tracking still happens later on
+        # the selected 15–60 second clip rather than the whole source.
+        visual_requirement = parse_moment_query(moment_request) if moment_request else None
+        needs_full_visual_pass = bool(visual_requirement and visual_requirement.get("requires", {}).get("visual"))
         visual_path = os.path.join(source_cache, "visual-evidence.json")
-        visual_evidence = read_json(visual_path, {})
+        visual_evidence = read_json(visual_path, {}) if needs_full_visual_pass else {
+            "schemaVersion": INTELLIGENCE_SCHEMA_VERSION,
+            "available": False,
+            "reason": "transcript_led_selection",
+            "samples": [],
+            "events": [],
+            "coverageEndMs": 0,
+        }
         visual_recomputed = False
-        visual_source = {"available": False, "reason": "opencv_unavailable"}
-        emit("vision", "running", message="Sampling visual motion and scene changes...")
-        if intelligence_caps.get("adaptiveVisualSampling"):
+        visual_source = {"available": False, "reason": "transcript_led_selection"}
+        if needs_full_visual_pass:
+            emit("vision", "running", message="Sampling visual motion and scene changes for the requested visual event...")
+        else:
+            emit("vision", "complete", message="Using the complete transcript to find the strongest viral moments; full-video visual sampling skipped.", available=False, samples=0, events=0, transcript_led=True)
+        if needs_full_visual_pass and intelligence_caps.get("adaptiveVisualSampling"):
             visual_source = prepare_visual_source(
                 analysis_source,
                 source_cache,
@@ -3354,19 +3390,29 @@ def main():
                 duration,
                 max_seconds=intelligence_limit,
             )
-        if not intelligence_cache_valid(
+        if needs_full_visual_pass and (not intelligence_cache_valid(
             visual_evidence,
             INTELLIGENCE_SCHEMA_VERSION,
             minimum_coverage_ms=required_analysis_coverage,
         ) or (
             not visual_evidence.get("available") and visual_source.get("available")
-        ):
+        )):
             check_cancelled()
             if visual_source.get("available"):
+                def report_visual_progress(phase, completed, total):
+                    emit(
+                        "vision",
+                        "running",
+                        message=f"Sampling visual evidence ({phase} pass): {completed}/{total} frames analysed",
+                        sampled_frames=completed,
+                        total_frames=total,
+                        progress=completed / max(1, total),
+                    )
                 visual_evidence = adaptive_visual_evidence(
                     visual_source.get("path", ""),
                     duration,
                     max_seconds=intelligence_limit,
+                    progress_callback=report_visual_progress,
                 )
                 visual_evidence["inputKind"] = visual_source.get("kind")
                 visual_evidence["inputCoverageEndMs"] = visual_source.get("coverageEndMs", 0)
@@ -3381,27 +3427,29 @@ def main():
                 }
             write_json(visual_path, visual_evidence)
             visual_recomputed = True
-        emit(
-            "vision",
-            "complete",
-            message=(
-                f"Adaptive visual pass found {len(visual_evidence.get('events') or [])} scene or motion events"
-                if visual_evidence.get("available")
-                else "Visual evidence unavailable for this source"
-            ),
-            available=bool(visual_evidence.get("available")),
-            samples=len(visual_evidence.get("samples") or []),
-            events=len(visual_evidence.get("events") or []),
-            cache_hit=not visual_recomputed,
-        )
+        if needs_full_visual_pass:
+            emit(
+                "vision",
+                "complete",
+                message=(
+                    f"Adaptive visual pass found {len(visual_evidence.get('events') or [])} scene or motion events"
+                    if visual_evidence.get("available")
+                    else "Visual evidence unavailable for this source"
+                ),
+                available=bool(visual_evidence.get("available")),
+                samples=len(visual_evidence.get("samples") or []),
+                events=len(visual_evidence.get("events") or []),
+                cache_hit=not visual_recomputed,
+            )
 
         ocr_path = os.path.join(source_cache, "ocr-evidence.json")
         ocr_evidence = read_json(ocr_path, {})
         ocr_recomputed = False
-        emit("ocr", "running", message="Reading informative on-screen text...")
-        if not intelligence_cache_valid(ocr_evidence, INTELLIGENCE_SCHEMA_VERSION) or (
+        if needs_full_visual_pass:
+            emit("ocr", "running", message="Reading informative on-screen text...")
+        if needs_full_visual_pass and (not intelligence_cache_valid(ocr_evidence, INTELLIGENCE_SCHEMA_VERSION) or (
             not ocr_evidence.get("available") and intelligence_caps.get("ocr") and visual_source.get("available")
-        ):
+        )):
             check_cancelled()
             ocr_evidence = analyze_ocr_evidence(visual_source.get("path", ""), visual_evidence)
             write_json(ocr_path, ocr_evidence)
@@ -3768,7 +3816,7 @@ def main():
                 # Even with visible face/body tracking switched off we retain
                 # the lightweight analysis pass. Its active-speaker and
                 # exit-risk evidence powers the discrete smart reframe mode.
-                mode=face_cfg["mode"] if face_cfg["enabled"] else "smooth",
+                mode=face_cfg["mode"] if face_cfg["enabled"] else "off",
                 selected_track_id=face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId"),
                 selected_person_id=face_cfg.get("selectedPersonId") or face_cfg.get("selectedTrackId"),
                 person_mode=face_cfg.get("personMode") or face_cfg.get("sceneMode", "strict"),
@@ -3890,39 +3938,27 @@ def main():
                 timing_source=timing_source,
             )
 
-            # Existing source captions are preserved by default so exports
-            # never present two competing subtitle layers. Editors can still
-            # explicitly move Clyra captions or allow both layers.
-            # Avoid duplicate subtitle layers by default: embedded source
-            # captions stay visible unless the user explicitly chooses a
-            # different collision policy.
+            # Caption detection is advisory. A captioned Clyra clip must
+            # always burn the exact word-timed layer selected in the UI;
+            # silently retaining only source captions makes the editor timing
+            # data disagree with the downloaded video.
             collision_mode = str(cfg.get("caption_collision_mode") or cfg.get("captionCollisionMode") or "keep-existing").lower()
             caption_collision = detect_embedded_caption_risk(analysis_clip_path, os.path.join(artifact_dir, "caption-audit"))
             candidate_captions_enabled = captions_enabled and bool(transcribed_words)
             effective_caption_position = position
             custom_caption_position = has_manual_caption_placement(cfg, caption_x, caption_y)
-            if captions_enabled and caption_collision.get("detected") and collision_mode == "keep-existing":
-                candidate_captions_enabled = False
-                caption_collision["action"] = "kept-existing"
-                emit("subtitles", "running", message="Existing captions detected; keeping the source captions at your request.", caption_collision=caption_collision)
-            elif captions_enabled and caption_collision.get("detected") and collision_mode != "allow-overlap" and not custom_caption_position and position in {"bottom", "bottom-centre"}:
-                effective_caption_position = "top"
-                caption_collision["action"] = "relocated"
-                caption_collision["placement"] = "top"
-                emit("subtitles", "running", message="Existing captions detected; placing Clyra's timed captions in the top safe zone.", caption_collision=caption_collision)
-            else:
-                if captions_enabled and caption_collision.get("detected"):
-                    caption_collision["action"] = "preserved"
-                    caption_collision["placement"] = position
-                emit(
-                    "subtitles", "running",
-                    message=(
-                        f"Styling captions for candidate {candidate_index + 1}..."
-                        if candidate_captions_enabled
-                        else "Preparing clean output without a generated caption layer..."
-                    ),
-                    caption_collision=caption_collision,
-                )
+            if captions_enabled and caption_collision.get("detected"):
+                caption_collision["action"] = "preserved"
+                caption_collision["placement"] = position
+            emit(
+                "subtitles", "running",
+                message=(
+                    f"Styling captions for candidate {candidate_index + 1}..."
+                    if candidate_captions_enabled
+                    else "Preparing clean output without a generated caption layer..."
+                ),
+                caption_collision=caption_collision,
+            )
             subtitle_path = os.path.join(job_tmp, f"{item_name}.ass")
             subtitle_count = 0
             if candidate_captions_enabled:

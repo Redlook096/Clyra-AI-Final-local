@@ -1,0 +1,2023 @@
+================================================================================
+                    CLYRA AI — COMPLETE PROJECT ANALYSIS
+================================================================================
+
+TABLE OF CONTENTS
+  1.  Project Overview & Identity
+  2.  Tech Stack Summary
+  3.  Complete File Tree
+  4.  Architecture Overview (Diagram)
+  5.  Environment Configuration
+  6.  Build & Development System
+  7.  Main Server (server.ts) — Every API Endpoint
+  8.  Vibe Sandbox Server (vibe-server.ts)
+  9.  Electron Desktop App (electron/main.mjs)
+  10. Voice Pipeline (Python/FastAPI)
+  11. React Frontend Architecture
+  12. Vibe Coder Agent System
+  13. Agent Controller System
+  14. Managed Browser Runtime
+  15. Vibe Coder Harness / Orchestration Engine
+  16. Cline SDK Integration
+  17. OpenCode Integration
+  18. OpenHands Integration (Legacy M1)
+  19. Creator Studio Tools
+  20. Study Pal Tools
+  21. Research Tools
+  22. AI Clipper Tools
+  23. OpenPencil Design Canvas Integration
+  24. Dictation & Smart Toolbar
+  25. Google Workspace Integration
+  26. Local Memory System
+  27. Deep Research System
+  28. Python Research Tools
+  29. Third-Party APIs & External Services Used
+  30. Key Design Patterns & Conventions
+  31. Safety & Security Architecture
+
+
+================================================================================
+1. PROJECT OVERVIEW & IDENTITY
+================================================================================
+
+Name:       Clyra AI (codenamed "Clyra AI Final")
+Type:       Local-first AI desktop workspace application
+GitHub:     https://github.com/Redlook096/Clyra-AI-Final
+License:    ISC (code), parts Apache-2.0
+App ID:     ai.clyra.desktop
+
+Clyra AI is an all-in-one AI assistant that provides:
+- Chat with streaming LLM responses (DeepSeek by default)
+- Vibe Coder — AI code generation with live preview
+- AI Clipper — AI video clipping and social publishing
+- Web Browser — Built-in managed Chromium browser with AI agent control
+- Creator Studio — Fake Text Stories, Would You Rather, Story Videos
+- Study Pal — Source-grounded study tools (quiz, flashcards, notes)
+- Voice Calls — Real-time voice assistant with STT/TTS
+- Dictation — System-wide voice dictation
+- OpenPencil — AI-powered design canvas
+- Google Workspace integration (Gmail, Drive, etc.)
+
+The app runs as a web app (via server.ts + Vite) OR as an Electron desktop
+app. The Electron shell provides native Chromium browser tabs, dictation
+overlay, and system-level integration.
+
+================================================================================
+2. TECH STACK SUMMARY
+================================================================================
+
+FRONTEND
+- React 19 (with TypeScript)
+- Vite 6 (bundler with HMR)
+- Tailwind CSS 4 (via @tailwindcss/vite plugin)
+- motion/react (Framer Motion successor) for animations
+- GSAP for advanced animations
+- Lucide React for icons
+- Radix UI (dropdown-menu, progress, icons)
+- Monaco Editor (@monaco-editor/react) for code editing
+- XYFlow (@xyflow/react) for node graphs
+- react-markdown + remark-gfm for rendering
+- react-syntax-highlighter for code highlighting
+- marked for Markdown parsing
+- clsx + tailwind-merge for className utilities
+
+BACKEND (Node.js / TypeScript)
+- Express HTTP server with Vite middleware
+- WebSocket (ws package) for voice streaming
+- tsx for running TypeScript directly
+- esbuild for server bundling
+- Electron 43 for desktop shell
+- electron-builder for packaging
+
+LLM INTEGRATION
+- OpenAI-compatible API (DeepSeek by default)
+- @cline/sdk / cline for Cline coding agent
+- @openhands/typescript-client for OpenHands (legacy M1)
+- @opencode-ai/sdk for OpenCode integration
+
+VOICE PIPELINE (Python)
+- FastAPI + Uvicorn (HTTP + WebSocket server)
+- Faster-Whisper for STT (speech-to-text)
+- Chatterbox-Turbo for TTS (text-to-speech)
+- Silero VAD for voice activity detection
+- LiveKit for optional WebRTC transport
+- Torch, NumPy, librosa, transformers, diffusers
+
+TESTING
+- Playwright for browser/E2E testing
+- tsx for TypeScript test scripts
+
+DESKTOP
+- Electron with native Chromium WebContentsView
+- Native OSA/dictation integration
+
+================================================================================
+3. COMPLETE FILE TREE
+================================================================================
+
+/Users/lukesimpson/Documents/Coding Projects/Clyra-AI-Final/
+├── .agentic-browser-profile/          # Persistent Playwright browser data
+├── .cache/                             # Cached deps (e.g., OpenPencil)
+├── .clyra/                             # App data (settings, clipper states)
+├── .env                                # Environment variables
+├── .env.example                        # Template for .env
+├── .env.local                          # Local environment overrides
+├── .gitignore
+├── .references/
+├── .venv-qwen-tts/                     # Python venv (legacy TTS)
+├── .venv-voice/                        # Python venv (voice)
+├── .venv-voice311/                     # Python 3.11 venv (active voice)
+├── AGENT_CONTROLLER_ARCHITECTURE.md
+├── AUDIT.md
+├── CHAT_UI_ARCHITECTURE.md
+├── CLIPPER_*.md                        # Clipper architecture docs
+├── Clyra-AI-Final/                     # (nested ghost copy)
+├── DEPENDENCY_COMMITS.lock
+├── MODEL_LICENSES.md
+├── OPUS_FEATURE_PARITY_MATRIX.md
+├── README.md
+├── README_AUTO_REFRAME.md
+├── THIRD_PARTY_NOTICES.md
+├── app_changes.diff, doc_changes.diff, recent_changes.diff
+├── build/                              # Build config (entitlements)
+├── desktop-binaries/                   # Platform-specific Electron binaries
+├── dist/                               # Built output
+├── docker/
+├── docs/                               # Architecture & integration docs (>27 docs)
+│   ├── AI_SUITE_INTEGRATION_AUDIT.md
+│   ├── BROWSER_AGENT_*.md              # Browser agent architecture
+│   ├── multimodal-*.md                 # Multimodal docs
+│   ├── openpencil-integration.md       # OpenPencil integration
+│   ├── voice-architecture-and-benchmark.md
+│   ├── voice-reference.md
+│   ├── voice-samples/
+│   └── vibe-coder-v5/
+├── download_assets.cjs, download_better_assets.cjs
+├── electron/                           # Electron main process
+│   ├── main.mjs                        # Electron app lifecycle
+│   ├── preload.cjs                     # Context bridge preload
+│   ├── browser-manager.mjs             # Chromium tab management
+│   ├── surface-manager.mjs             # Native overlay surfaces
+│   ├── dictation-manager.mjs           # Dictation (mic + pill UI)
+│   ├── dictation-preload.cjs
+│   ├── dictation-pill.html
+│   ├── agent-orchestrator.mjs          # Agent orchestration
+│   ├── deep-research-manager.mjs       # Deep research pipeline
+│   ├── google-workspace-manager.mjs    # Google Workspace integration
+│   ├── local-memory-manager.mjs        # Local memory/persistence
+│   ├── clyra-adaptive-document-engine.mjs
+│   ├── clyra-template-router.mjs
+│   ├── smart-toolbar.html
+│   ├── smart-toolbar-manager.mjs
+│   └── smart-toolbar-preload.cjs
+├── index.html                          # Main HTML entry
+├── todo.html                           # Secondary HTML entry
+├── main.mjs                            # (legacy root script)
+├── server.ts                           # Main Express + Vite server (3475 lines)
+├── vibe-server.ts                      # Isolated vibe sandbox server (447 lines)
+├── vite.config.ts                      # Vite build configuration
+├── tsconfig.json                       # TypeScript configuration
+├── package.json                        # NPM configuration
+├── package-lock.json
+├── metadata.json                       # Application metadata
+├── requirements.txt                    # Python deps (yt-dlp, whisper, etc.)
+├── requirements-openhands.txt          # OpenHands Python deps
+├── requirements-voice.txt              # Voice pipeline Python deps (25 lines)
+├── lib/                                # Server-side TypeScript library modules
+│   ├── agent/                          # Agent system
+│   │   ├── agent-loop.ts
+│   │   ├── code-mode-orchestrator.ts
+│   │   ├── plan-mode-orchestrator.ts
+│   │   ├── context-engine.ts
+│   │   ├── tool-router.ts
+│   │   ├── preview-manager.ts
+│   │   ├── plan-md-writer.ts
+│   │   ├── research-tools.ts
+│   │   └── website-style-analyser.ts
+│   ├── cline/                          # Cline SDK integration
+│   │   ├── cline-adapter.ts
+│   │   ├── cline-config.ts
+│   │   ├── cline-events.ts
+│   │   ├── cline-runner.ts
+│   │   ├── cline-routes.ts
+│   │   ├── cline-sdk-session.ts
+│   │   └── cline-tools.ts
+│   ├── clipper/                        # Video clipper publishing
+│   │   ├── autoclip-adapter.ts
+│   │   ├── licensed-footage.ts
+│   │   └── social-publishing.ts
+│   ├── openbrowser/                    # Managed browser runtime
+│   │   └── browser-runtime.ts          # (1200+ lines)
+│   ├── opencode/                       # OpenCode integration
+│   │   ├── opencode-routes.ts
+│   │   └── OpenCodeRuntimeManager.ts
+│   ├── openhands/                      # OpenHands integration (legacy M1)
+│   │   ├── openhands-adapter.ts
+│   │   ├── m1-launch.ts
+│   │   ├── m1-stack.ts
+│   │   ├── deep-build-harness.ts
+│   │   ├── openhands-events.ts
+│   │   ├── openhands-payload.ts
+│   │   ├── openhands-process.ts
+│   │   └── harness/                    # Build suffixes & mode prompts
+│   ├── research/                       # Research tools
+│   │   ├── research-handlers.ts        # Web search, YouTube
+│   │   └── weather.ts                  # Open-Meteo weather
+│   ├── runtime-paths.ts                # Runtime path resolution
+│   ├── clyraVoicePrompt.ts             # Voice system prompt builder
+│   └── vibe-coder/                     # Vibe Coder backend
+│       ├── browser/                     # Agent browser controller
+│       │   ├── agent-browser-controller.ts
+│       │   ├── browser-actions.ts
+│       │   ├── browser-permissions.ts
+│       │   └── browser-safety.ts
+│       ├── context/                     # Project context detection
+│       │   ├── framework-detector.ts
+│       │   ├── package-detector.ts
+│       │   └── rules-loader.ts
+│       ├── harness/                     # Build orchestration engine
+│       │   ├── smart-mode-router.ts     # Request classification
+│       │   ├── deep-coding-mode.ts
+│       │   ├── deep-work-budget.ts
+│       │   ├── multi-pass-coder.ts
+│       │   ├── phase-scheduler.ts
+│       │   ├── step-orchestrator.ts
+│       │   ├── task-group-planner.ts
+│       │   ├── file-spec-planner.ts
+│       │   ├── product-architect-agent.ts
+│       │   ├── validation-runner.ts
+│       │   ├── error-fixer.ts
+│       │   ├── review-agent.ts
+│       │   ├── build-depth-scorer.ts
+│       │   ├── weak-build-detector.ts
+│       │   ├── security-pass.ts
+│       │   ├── presentable-software-pass.ts
+│       │   ├── flow-variety-engine.ts
+│       │   ├── scripted-feel-detector.ts
+│       │   ├── mini-code-box-queue.ts
+│       │   ├── agent-render-queue.ts
+│       │   └── plan-mode-browser-test-loop.ts
+│       ├── llm/                         # LLM utilities
+│       │   └── visible-thought-preview.ts
+│       ├── preview/                     # Preview/dev server management
+│       │   ├── preview-runner.ts
+│       │   ├── dev-server.ts
+│       │   ├── preview-errors.ts
+│       │   ├── preview-health.ts
+│       │   └── port-detector.ts
+│       ├── project-session.ts           # Vibe project session state
+│       └── terminal/
+│           ├── package-manager.ts
+│           └── script-detector.ts
+├── src/                                # Frontend React/TypeScript source
+│   ├── main.tsx                        # React entry point
+│   ├── App.tsx                         # Main app component (~8124 lines)
+│   ├── vibe-embed.tsx                  # Vibe embed iframe entry
+│   ├── TodoApp.tsx                     # Todo app
+│   ├── index.css                       # Global styles
+│   ├── components/
+│   │   ├── AIClipper.tsx               # AI video clipper
+│   │   ├── VibeCoderWorkspace.tsx      # Vibe Coder workspace
+│   │   ├── WebBrowserWorkspace.tsx     # Browser workspace
+│   │   ├── CreatorStudioWorkspace.tsx  # Creator Studio workspace
+│   │   ├── StudyPalWorkspace.tsx       # Study Pal workspace
+│   │   ├── OpenCodeVibeWorkspace.tsx   # OpenCode Vibe workspace
+│   │   ├── AgentControlledPreview.tsx  # Agent-controlled preview UI
+│   │   ├── WorkspaceTaskView.tsx       # Task view component
+│   │   ├── MarkdownMessageContent.tsx  # Markdown rendering
+│   │   ├── ChatSearchModal.tsx
+│   │   ├── SettingsModal.tsx
+│   │   ├── AppLauncher.tsx             # App launcher
+│   │   ├── DictationController.tsx     # Dictation UI
+│   │   ├── AiOrb.tsx                   # Animated AI orb
+│   │   ├── BlurTextEffect.tsx
+│   │   ├── TextEffect.tsx
+│   │   ├── ShiningText.tsx
+│   │   ├── GradientWaveText.tsx
+│   │   ├── WeatherDiagramCard.tsx      # Weather display
+│   │   ├── YoutubeScanEmbed.tsx        # YouTube analysis
+│   │   ├── GmailEmailResults.tsx       # Gmail results card
+│   │   ├── ElectronWebContentsSurface.tsx
+│   │   ├── core/                       # Core animation components
+│   │   │   ├── text-loop.tsx
+│   │   │   ├── status-text-reveal.tsx
+│   │   │   └── gradient-wave-text.tsx
+│   │   ├── ui/                         # UI primitives
+│   │   │   ├── dropdown-menu.tsx
+│   │   │   ├── document-card.tsx
+│   │   │   ├── progress.tsx
+│   │   │   ├── text-blur-in.tsx
+│   │   │   ├── text-fade-in.tsx
+│   │   │   ├── text-effect.tsx
+│   │   │   ├── blurred-stagger-text.tsx
+│   │   │   └── shining-text.tsx
+│   │   ├── vibe/                       # Vibe-specific components
+│   │   │   ├── VibeTextLine.tsx
+│   │   │   ├── VibeRunBlock.tsx
+│   │   │   ├── VibeAnalysingBanner.tsx
+│   │   │   ├── VibeAgentMessageBody.tsx
+│   │   │   ├── VibeFinalSummary.tsx
+│   │   │   ├── VibeMiniCodeBox.tsx
+│   │   │   ├── VibeThoughtPanel.tsx
+│   │   │   └── VibeLivePreviewPanel.tsx
+│   │   ├── vibe-coder/                 # Vibe Coder sub-components
+│   │   │   ├── files/                   # File tree
+│   │   │   │   ├── FileTree.tsx
+│   │   │   │   └── FileTreePanel.tsx
+│   │   │   ├── preview/                # Live preview components (14 files)
+│   │   │   │   ├── LivePreviewPanel.tsx
+│   │   │   │   ├── PreviewIframe.tsx
+│   │   │   │   ├── PreviewBrowserChrome.tsx
+│   │   │   │   ├── PreviewToolbar.tsx
+│   │   │   │   ├── PreviewTabBar.tsx
+│   │   │   │   ├── PreviewUrlInput.tsx
+│   │   │   │   ├── PreviewDeviceSwitcher.tsx
+│   │   │   │   ├── PreviewSkeletonLayout.tsx
+│   │   │   │   ├── PreviewStatusOverlay.tsx
+│   │   │   │   ├── PreviewErrorOverlay.tsx
+│   │   │   │   ├── PreviewHealthStatus.tsx
+│   │   │   │   ├── PreviewEmptyState.tsx
+│   │   │   │   ├── AgentBrowserPermissionCard.tsx
+│   │   │   │   ├── AgentControlOverlay.tsx
+│   │   │   │   └── AgentCursor.tsx
+│   │   │   ├── plan/                   # Planning UI
+│   │   │   │   ├── PlanPanel.tsx
+│   │   │   │   ├── PlanCard.tsx
+│   │   │   │   ├── PlanMarkdownViewer.tsx
+│   │   │   │   ├── PlanQualityScore.tsx
+│   │   │   │   └── ModeDropdown.tsx
+│   │   │   ├── code/                   # Code display
+│   │   │   │   ├── MiniCodeBoxQueue.tsx
+│   │   │   │   └── MiniCodeBoxAnimator.tsx
+│   │   │   ├── review/                 # Review panel
+│   │   │   │   └── ReviewPanel.tsx
+│   │   │   ├── validation/             # Validation
+│   │   │   │   └── ValidationStatusCard.tsx
+│   │   │   ├── thinking/               # Thinking indicators
+│   │   │   │   ├── ThinkingStep.tsx
+│   │   │   │   ├── ThinkingUnderText.tsx
+│   │   │   │   └── ThinkingStatus.tsx
+│   │   │   ├── tasks/                  # Task display
+│   │   │   │   ├── AgentActivityStrip.tsx
+│   │   │   │   └── CompactTaskStatus.tsx
+│   │   │   ├── terminal/               # Terminal panel
+│   │   │   │   └── TerminalPanel.tsx
+│   │   │   ├── harness/                # Agent flow renderer
+│   │   │   │   └── AgentFlowRenderer.tsx
+│   │   │   └── design/                 # Design canvas
+│   │   │       ├── OpenPencilWorkspace.tsx
+│   │   │       └── DesignCanvas.tsx
+│   │   └── voice/                      # Voice UI components
+│   │       ├── VoiceCallOverlay.tsx
+│   │       ├── VoiceWaveform.tsx
+│   │       ├── VoiceWaveIcon.tsx
+│   │       └── VoiceTranscriptPanel.tsx
+│   ├── features/                       # Feature modules
+│   │   └── chat/                       # Chat feature
+│   │       ├── ChatWorkspace.tsx
+│   │       ├── ChatComposer.tsx
+│   │       ├── ChatWelcome.tsx
+│   │       ├── ChatWorkspaceHeader.tsx
+│   │       ├── RecentConversations.tsx
+│   │       ├── RecentConversationRow.tsx
+│   │       ├── welcomeSuggestions.ts
+│   │       ├── types.ts
+│   │       └── index.ts
+│   ├── hooks/                          # React hooks
+│   │   ├── useVibeCoderWorkspace.ts
+│   │   └── useVoiceCall.ts
+│   ├── lib/                            # Frontend utility libraries
+│   │   ├── utils.ts                    # cn() className utility
+│   │   ├── constants.ts                # Calculator key definitions
+│   │   ├── evaluate.ts                 # Math expression evaluator
+│   │   ├── clyraChatPrompt.ts          # Chat system prompt
+│   │   ├── vibeAgentConstants.ts       # Vibe agent system prompt + delimiters
+│   │   ├── parseVibeAgentContent.ts    # Stream parser for Vibe agent tokens
+│   │   ├── agentController.ts          # Agent bridge types & control descriptors
+│   │   ├── electron-runtime.ts         # Electron desktop bridge client
+│   │   ├── voiceSpeech.ts              # Speech normalization & TTS prep
+│   │   ├── voicePcmCapture.ts          # Browser PCM16 mic capture
+│   │   ├── voicePcmPacket.ts           # Binary PCM packet encoder/decoder
+│   │   ├── voiceTurnDetection.ts       # Voice turn detection thresholds
+│   │   ├── buildVibePreviewSrcDoc.ts   # In-browser TSX preview builder
+│   │   ├── buildLocalVibeFallback.ts   # Offline vibe fallback responses
+│   │   ├── extractCodeOutline.ts       # Code outline extractor
+│   │   ├── creatorProject.ts           # Creator tools
+│   │   ├── creatorMedia.ts
+│   │   ├── fakeTextTimeline.ts         # Fake Text story timeline
+│   │   └── vibe-coder/
+│   │       └── project-session.ts      # Vibe project session management
+│   ├── types/                          # TypeScript type definitions
+│   │   ├── index.ts
+│   │   ├── vibe-flow.ts
+│   │   ├── vibe-preview.ts
+│   │   ├── vibe-task.ts
+│   │   ├── vibe-validation.ts
+│   │   ├── vibe-review.ts
+│   │   └── vibe-deep-coding.ts
+│   ├── data/                           # Static/game data
+│   │   └── fakeTextGameplay.ts         # Fake Text gameplay data
+│   └── dev-fixtures/
+│       └── clyra-code/
+│           └── OpenCodeDiagnostic.tsx
+├── backend/                            # Backend services
+│   ├── voice/                          # Voice service (TypeScript)
+│   │   ├── index.ts
+│   │   ├── config.ts
+│   │   ├── routes.ts
+│   │   ├── session/
+│   │   │   └── voice-session-manager.ts
+│   │   ├── websocket/
+│   │   │   ├── voice-stream-handler.ts  # Main WebSocket voice handler
+│   │   │   └── voice-stream-protocol.ts
+│   │   ├── pipeline/
+│   │   │   └── client.ts              # Python pipeline client
+│   │   ├── async/
+│   │   │   ├── async-voice-session.ts   # Async TTS (remote hosted)
+│   │   │   └── async-stt-session.ts     # Async STT (remote hosted)
+│   │   ├── transport/
+│   │   │   └── livekit.ts              # LiveKit WebRTC transport
+│   │   └── metrics/
+│   │       └── voice-metrics.ts
+│   ├── voice-pipeline/                 # Python voice pipeline worker
+│   │   ├── main.py                    # FastAPI app (WebSocket + REST)
+│   │   ├── config.py
+│   │   ├── stt_stream.py              # Faster-Whisper STT streaming
+│   │   ├── tts_stream.py              # Chatterbox-Turbo TTS streaming
+│   │   ├── vad.py                     # Silero VAD
+│   │   ├── test_pipeline_unit.py
+│   │   └── __init__.py
+│   └── creator-tts/
+│       └── service.ts                  # Creator TTS service
+├── tools/                              # Development & test tools
+│   ├── dev-full.mjs                    # Full development launcher
+│   ├── electron-dev.mjs                # Electron development launcher
+│   ├── build-electron-sidecar.mjs      # Build Electron sidecar
+│   ├── seed-desktop-runtime-config.mjs
+│   ├── setup-voice.sh                  # Setup voice pipeline
+│   ├── openpencil-*.mjs                # OpenPencil setup/launch/check
+│   ├── voice-*.mjs, voice-*.ts         # Voice test scripts
+│   ├── clipper-*.ts                    # Clipper unit tests
+│   ├── creator-unit-tests.ts
+│   ├── fake-text-timeline-unit-tests.ts
+│   ├── agent-controller-unit-tests.ts
+│   ├── vibe-runtime-unit-tests.ts
+│   ├── openbrowser-e2e.ts              # Browser E2E tests
+│   ├── dictation-test.mjs
+│   ├── Google_image_downloader_tool.py
+│   ├── website_theme_scraper_tool.py
+│   ├── codebase_search_tool.py
+│   ├── canvas_ui_tool.py
+│   ├── research_tool_tool.py
+│   ├── game_vision_compare_tool.py
+│   ├── site_icon_downloader_tool.py
+│   ├── video-understanding-local-runner.py
+│   ├── voice-profile-stages.py
+│   ├── research/                      # Research tools library
+│   │   ├── research_tool.py
+│   │   ├── game_vision.py
+│   │   ├── website_theme_scraper.py
+│   │   └── google_images.py
+│   ├── image_downloader/
+│   │   └── google_images.py
+│   └── icon_downloader/
+│       └── download_site_icon.py
+├── output/                            # Generated video output files
+├── resources/
+├── scripts/
+├── tests/
+├── third_party/
+├── tmp/
+├── vibe-coder-audit.txt
+├── vibe-sandbox/                      # Vibe sandbox files directory
+├── vendor-src/
+└── youtube_transcript_engine/         # YouTube transcript Python engine
+    ├── __init__.py, __main__.py
+    ├── manager.py, cleaner.py, language.py
+    ├── cache.py, retry.py, types.py
+    ├── README.md
+    └── tests/
+
+
+================================================================================
+4. ARCHITECTURE OVERVIEW
+================================================================================
+
+┌──────────────────────────────────────────────────────────────────┐
+│  ELECTRON DESKTOP SHELL (electron/main.mjs)                      │
+│  ├── BrowserWindow  (hosts React UI via WebContentsView)         │
+│  ├── ChromiumBrowserManager (native tabbed browsing)             │
+│  ├── ChromiumSurfaceManager (native overlay surfaces)            │
+│  ├── DictationManager     (system-wide dictation)                │
+│  ├── SmartToolbarManager  (selected-text actions)                │
+│  ├── GoogleWorkspaceManager (Google OAuth & API)                 │
+│  ├── DeepResearchManager   (multi-step research pipeline)        │
+│  ├── LocalMemoryManager    (persistent memory storage)           │
+│  └── Spawns local Express server (server.ts via tsx)             │
+└──────────────┬───────────────────────────────────────────────────┘
+               │ HTTP + WebSocket (loopback)
+┌──────────────▼───────────────────────────────────────────────────┐
+│  MAIN SERVER (server.ts) — Express + Vite                         │
+│  ├── /api/health                                                  │
+│  ├── /api/clyra/chat — LLM chat streaming proxy                   │
+│  ├── /api/deepseek/chat — alias for chat                         │
+│  ├── /api/openpencil/v1/chat/completions — OpenPencil LLM adapter│
+│  ├── /api/dictation/* — cleanup, optimise                        │
+│  ├── /api/smart-toolbar/* — selected-text actions                │
+│  ├── /api/creator/* — generate, transcode                        │
+│  ├── /api/study/* — fetch, ask, quiz, flashcards, notes          │
+│  ├── /api/openbrowser/* — managed Playwright browser (30+ routes)│
+│  ├── /api/research/* — YouTube, web-search, deep, weather        │
+│  ├── /api/vibe/* — project CRUD, plan, preview, scan            │
+│  ├── /api/clipper/* — publishing, autoclip, footage, upload      │
+│  ├── /api/openpencil/* — health, design                          │
+│  ├── Cline routes (lib/cline/cline-routes.ts)                    │
+│  ├── OpenCode routes (lib/opencode/opencode-routes.ts)           │
+│  ├── Voice WebSocket (/voice/stream)                             │
+│  └── Vite middleware (serves React frontend in dev)              │
+└──────────────┬───────────────────────────────────────────────────┘
+               │
+┌──────────────▼───────────────────────────────────────────────────┐
+│  VIBE SANDBOX SERVER (vibe-server.ts, port 5174)                  │
+│  ├── /api/health                                                  │
+│  ├── /api/session — create preview session from files             │
+│  ├── /api/test-preview — Playwright-based preview testing         │
+│  └── Serves vibe-sandbox/ files with Vite HMR                     │
+└──────────────┬───────────────────────────────────────────────────┘
+               │
+┌──────────────▼───────────────────────────────────────────────────┐
+│  VOICE PIPELINE (Python/FastAPI, port 8787)                       │
+│  ├── /health — pipeline status                                   │
+│  ├── /stt — HTTP speech-to-text (base64 PCM16 → text)            │
+│  ├── /tts — HTTP text-to-speech (text → base64 PCM16)           │
+│  └── /stream — WebSocket streaming voice session                 │
+└──────────────────────────────────────────────────────────────────┘
+
+
+OVERALL DATA FLOW:
+  1. User types message → React ChatComposer → App.tsx calls API
+  2. API routes through server.ts → proxies to DeepSeek API
+  3. LLM response streams back via SSE → App.tsx parses & renders
+  4. For voice: Mic PCM16 → WebSocket → Python STT → text → LLM → TTS → audio back
+  5. For Vibe Coder: User prompt → LLM generates structured tokens → parser
+     extracts code → files saved → preview server starts → iframe renders
+  6. For managed browser: User URL → server.ts → Playwright CDP → Chromium
+
+
+================================================================================
+5. ENVIRONMENT CONFIGURATION
+================================================================================
+
+Key environment variables (from .env.example):
+
+  DEEPSEEK_API_KEY        — Required LLM API key (never sent to browser)
+  DEEPSEEK_BASE_URL       — OpenAI-compatible endpoint (default: api.deepseek.com)
+  DEEPSEEK_MODEL          — Model name (default: deepseek-chat)
+
+  PORT                    — HTTP port (default: 3000)
+  VIBE_PORT               — Vibe sandbox server port (default: 5174)
+  HMR_PORT                — Vite HMR port (default: 24678)
+
+  OPENPENCIL_HOST/PORT    — OpenPencil design canvas location (default: 127.0.0.1:3100)
+
+  LIVEKIT_URL/API_KEY     — Optional WebRTC transport for voice
+
+  VOICE_ENABLED           — Enable/disable voice pipeline (default: true)
+  VOICE_PIPELINE_URL      — Python pipeline URL (default: http://127.0.0.1:8787)
+  VOICE_STT_MODEL         — Whisper model (default: tiny.en)
+  VOICE_STT_LANGUAGE      — STT language (default: en)
+  VOICE_TTS_VOICE         — TTS voice name (default: Ryan)
+  VOICE_TTS_ENGINE        — TTS engine (default: chatterbox-turbo)
+
+  ASYNC_API_KEY           — Async/Remote TTS API key (server-side)
+  ASYNC_TTS_MODEL         — Async TTS model (default: async_flash_v1.5)
+
+  CLYRA_GOOGLE_CLIENT_ID   — Google OAuth client ID (Electron only)
+  CLYRA_GOOGLE_CLIENT_SECRET — Google OAuth client secret (Electron only)
+
+  CLYRA_RESOURCE_ROOT      — Application root path
+  CLYRA_DATA_ROOT          — Writable data path (Application Support)
+  CLYRA_BROWSER_CDP_URL    — Chromium DevTools Protocol URL (Electron)
+  CLYRA_ELECTRON_BROWSER_BRIDGE — Electron browser bridge URL
+  CLYRA_M1_WARMUP          — Legacy M1 warmup flag (default: off)
+
+Environment files are loaded in order:
+  1. .env (project root — general config)
+  2. .env.local (project root — local overrides)
+  3. Data-path .env.local (Application Support — user data overrides)
+
+
+================================================================================
+6. BUILD & DEVELOPMENT SYSTEM
+================================================================================
+
+NPM SCRIPTS (from package.json):
+
+  dev                   — Full dev: starts server + OpenPencil together
+  dev:app               — Build then run production server
+  dev:source            — Run server directly via tsx (HMR/Vite dev mode)
+  desktop:dev           — Run Electron in development mode
+  desktop:build         — Build Electron desktop app (electron-builder)
+  desktop:prepare       — Build + Electron sidecar + seed config
+  dev:openpencil        — Run OpenPencil dev server
+  setup:openpencil      — Install/setup OpenPencil
+  vibe-server           — Run isolated vibe sandbox server
+
+  build:server          — Bundle server.ts with esbuild (Node ESM)
+  build                 — Vite build + server bundle
+  preview               — Vite preview server
+  lint                  — TypeScript typecheck (tsc --noEmit)
+
+  test:voice            — Voice unit tests
+  test:voice-e2e        — Voice E2E tests
+  test:browser          — Browser/Playwright E2E tests
+  test:creator          — Creator tools unit tests
+  test:clipper          — Clipper unit tests
+  test:agent-controller — Agent controller unit tests
+  test:vibe-runtime     — Vibe runtime unit tests
+
+DEVELOPMENT MODE:
+  - 'npm run dev' launches server.ts via tsx + OpenPencil concurrently
+  - Vite HMR runs in middleware mode on port 24678
+  - React frontend auto-reloads on source changes
+
+PRODUCTION BUILD:
+  - 'vite build' bundles frontend to dist/
+  - 'npm run build:server' bundles server.ts with esbuild to dist/server.js
+  - Electron package: files in dist/, electron/, tools/, backend/voice-pipeline/
+
+ELECTRON BUILD (electron-builder):
+  - App ID: ai.clyra.desktop
+  - Targets: DMG + ZIP (macOS), NSIS (Windows), AppImage + deb (Linux)
+  - Hardened runtime on macOS with microphone entitlements
+  - Bundles dist/, electron-main, voice-pipeline, tools/ as resources
+  - User data at ~/Library/Application Support/clyra (macOS)
+
+TSCONFIG:
+  - Target: ES2022
+  - Module: ESNext, bundler resolution
+  - JSX: react-jsx
+  - Path alias: @/* → src/*
+  - Excludes: dist, vibe-sandbox, projects, venvs, vendor
+
+
+================================================================================
+7. MAIN SERVER (server.ts) — EVERY API ENDPOINT
+================================================================================
+
+server.ts is the central backend of Clyra AI. It is an Express + Vite server
+that handles all API routes, proxies LLM requests, manages previews, and
+orchestrates all subsystems. Key subsystems:
+
+----- HEALTH -----
+  GET  /api/health
+    → Returns { status: "ok" }
+
+----- CHAT / LLM PROXY -----
+  POST /api/clyra/chat
+    → Proxies raw request body to DeepSeek (or configured endpoint)
+    → Streams response body back to client
+    → Requires DEEPSEEK_API_KEY in .env
+
+  POST /api/deepseek/chat
+    → Alias for /api/clyra/chat
+
+  POST /api/openpencil/v1/chat/completions
+    → OpenPencil LLM adapter — same proxy as chat
+    → Used by OpenPencil design canvas to access Clyra's LLM
+
+----- DICTATION -----
+  POST /api/dictation/cleanup
+    → Cleans up speech-to-text transcript using LLM
+    → Parameters: transcript, level (raw/light/polished), dictionary[]
+    → Fallback: conservative regex-based cleanup when no API key
+
+  POST /api/dictation/optimise
+    → Rewrites selected text based on spoken instruction
+    → Parameters: selectedText, instruction
+    → Fallback: conservative text optimisation
+
+----- SMART TOOLBAR -----
+  POST /api/smart-toolbar/action
+    → Processes selected-text actions from native macOS toolbar
+    → Parameters: text, instruction
+    → Uses DeepSeek API with local fallback
+
+----- CREATOR STUDIO -----
+  POST /api/creator/generate
+    → Generates scripts for: fake_text_story, story_video, would_rather
+    → Parameters: kind, prompt, count, tone
+    → Returns structured JSON from LLM (json_object mode)
+
+  POST /api/creator/transcode
+    → Transcodes WebM video to MP4 using FFmpeg
+    → Parameters: fps (24-60), filename
+    → Uses H.264 ultrafast with CRF 15, AAC audio
+    → Output: downloadable MP4
+
+----- STUDY PAL -----
+  POST /api/study/fetch
+    → Fetches and extracts text from a URL
+    → Strips HTML, scripts, styles; extracts readable text
+    → Blocks private network addresses
+
+  POST /api/study/ask
+    → Answers questions grounded in study sources
+    → Modes: answer, summary, flashcards, quiz, plan
+    → Citations inline as [S1], [S2] referencing sources
+
+  POST /api/study/quiz
+    → Generates practice quiz from topic and/or sources
+    → JSON mode with 4-option multiple choice
+    → Returns questions with hints and explanations
+
+  POST /api/study/flashcards
+    → Generates flashcards from topic and/or sources
+    → JSON mode with front/back/tag structure
+
+  POST /api/study/notes
+    → Generates Cornell-method study notes
+    → Sections with cues and key points
+    → Self-test questions with model answers
+    → Inline source citations
+
+----- MANAGED BROWSER (Playwright) -----
+  GET  /api/openbrowser/state
+    → Returns full browser state (URL, title, tabs, history, etc.)
+
+  GET  /api/openbrowser/observe
+    → Returns structured page observation (elements, headings, text, etc.)
+
+  GET  /api/openbrowser/frame
+    → Returns JPEG screenshot of current page
+    → ?fresh=1 forces new capture
+
+  GET  /api/openbrowser/session
+    → Returns current agent task session state
+
+  GET  /api/openbrowser/new-tab
+    → Returns HTML for new browser tab page
+
+  POST /api/openbrowser/navigate
+    → Navigate to URL or search query
+    → Parameters: { target: "url or search" }
+
+  POST /api/openbrowser/action
+    → Execute browser action (click, type, scroll, etc.)
+    → Parameters: { action: BrowserAction }
+    → Supports: navigate, search, click, type, press, scroll, extract, etc.
+
+  POST /api/openbrowser/assist
+    → Run AI agent on browser task
+    → Streaming SSE or JSON response
+    → Agent uses page observation + LLM to decide actions
+    → Parameters: { task: "description" }
+    → Timeout: 6 min default (configurable)
+
+  POST /api/openbrowser/cancel
+    → Cancel running browser agent task
+
+  POST /api/openbrowser/control
+    → Pause/resume/take_control/return_control/stop
+    → Parameters: { command: "pause"|"resume"|"take_control"|"stop" }
+
+  PATCH /api/openbrowser/settings
+    → Update browser settings (search engine, privacy, etc.)
+    → Parameters: BrowserSettings patch object
+
+  POST /api/openbrowser/bookmarks
+    → Add bookmark
+    → Parameters: { url, title, folder? }
+
+  DELETE /api/openbrowser/bookmarks/:id
+    → Remove bookmark by ID
+
+  DELETE /api/openbrowser/history
+    → Clear history (optionally by specific IDs)
+
+  POST /api/openbrowser/find
+    → Find text in page
+    → Parameters: { text }
+
+  POST /api/openbrowser/zoom
+    → Zoom page
+    → Parameters: { delta: number | "reset" }
+
+  POST /api/openbrowser/viewport
+    → Resize viewport
+    → Parameters: { width, height }
+
+----- RESEARCH -----
+  POST /api/research/youtube
+    → Retrieve YouTube transcript
+    → Parameters: url, preferredLanguages[], translateTo, question
+    → Also returns analysisPrompt for LLM follow-up
+
+  POST /api/research/web-search
+    → Web search via DuckDuckGo
+    → Parameters: query, maxResults, fetchTop
+    → Fetches top result pages and extracts text
+
+  POST /api/research/deep
+    → Deep research pipeline (multi-step)
+    → Streaming SSE or JSON
+    → Uses DeepResearchManager
+
+  POST /api/research/weather
+    → Live weather data from Open-Meteo
+    → Parameters: location
+    → Returns current + forecast
+
+----- VIBE CODER (Projects) -----
+  GET  /api/vibe/scan
+  POST /api/vibe/scan
+    → Scans current codebase for framework, package manager, relevant files
+    → Returns { framework, packageManager, relevantFiles }
+
+  POST /api/vibe/plan
+    → Generates build plan for a prompt
+    → Optionally uses deepseek-reasoner for dynamic plan (legacy flag)
+    → Returns markdown plan, task graph, quality score, build confidence
+
+  GET  /api/vibe/projects
+    → Lists all Vibe Coder projects (sorted by updatedAt desc)
+
+  POST /api/vibe/projects
+    → Creates new project
+    → Parameters: prompt, name?, mode (plan|fast)
+    → Creates project folder structure with metadata, checkpoints, agent state
+
+  GET  /api/vibe/projects/:id
+    → Gets project metadata + file tree + plan.md
+
+  PATCH /api/vibe/projects/:id
+    → Renames project
+    → Parameters: { name }
+
+  DELETE /api/vibe/projects/:id
+    → Deletes project folder (recursive)
+
+  GET  /api/vibe/projects/:id/session
+    → Gets workspace session state
+
+  PUT  /api/vibe/projects/:id/session
+    → Saves workspace session state
+    → Parameters: { session }
+
+  GET  /api/vibe/projects/:id/thumbnail
+    → Returns project thumbnail (PNG or SVG)
+
+  POST /api/vibe/projects/:id/thumbnail/refresh
+    → Triggers background thumbnail capture (Playwright screenshot)
+
+----- VIBE CODER (Write Plan) -----
+  POST /api/vibe/write-plan
+    → Saves approved plan.md to project, creates checkpoints
+    → Parameters: projectId, plan, files, taskGraph
+    → Writes: plan.md, AGENTS.md, checkpoint, agent state, memory
+
+----- VIBE CODER (Preview) -----
+  POST /api/vibe/preview/start
+    → Starts preview dev server for project
+    → Parameters: { projectId }
+    → Starts Vite dev server for project's files/
+
+  POST /api/vibe/preview/restart
+    → Restarts preview dev server
+
+  POST /api/vibe/preview/stop
+    → Stops preview dev server
+
+  POST /api/vibe/preview/refresh
+    → Refreshes preview (HMR trigger)
+
+  GET  /api/vibe/preview/status/:id
+    → Gets preview session status
+
+  GET  /api/vibe/preview/logs/:id
+    → Gets preview session logs
+
+----- VIBE CODER (Validation) -----
+  POST /api/vibe/validate
+    → Quick structural validation (checks file existence)
+    → Parameters: { projectId }
+    → Returns { status, checks[] }
+
+----- OPENPENCIL -----
+  GET  /api/openpencil/health
+    → Checks if OpenPencil is available at configured host:port
+
+  POST /api/openpencil/design
+    → Sends design prompt to OpenPencil canvas
+    → Parameters: { prompt, target, history? }
+    → Streams response from OpenPencil's /api/ai/standard
+
+----- CLIPPER PUBLISHING -----
+  GET  /api/clipper/publishing/capabilities
+    → Lists publishing platform capabilities
+    → ?platform=... for specific platform
+
+  POST /api/clipper/publishing/preflight
+    → Publishing preflight check
+    → Parameters: { platform, accountId }
+
+----- CLIPPER AUTO CLIP -----
+  GET  /api/clipper/autoclip/status
+    → Checks AutoClip runner availability
+
+  POST /api/clipper/autoclip/start
+    → Starts AutoClip job for YouTube URL
+    → Streaming SSE progress updates
+    → Downloads finished clips to local output dir
+
+----- CLIPPER FOOTAGE -----
+  GET  /api/clipper/footage/search
+    → Searches licensed stock footage (Pexels, Pixabay, Wikimedia)
+    → Parameters: q, limit, provider, cursor
+
+----- CLIPPER UPLOAD -----
+  POST /api/clipper/upload
+    → Uploads video file (up to 1.25 GB)
+    → Streaming upload with size limit enforcement
+
+----- CLIPPER MEDIA -----
+  GET /api/clipper/media/:filename
+    → Serves generated clip video inline
+
+  GET /api/clipper/download/:filename
+    → Serves generated clip video as download
+
+  GET /api/clipper/artifact/:id/plate.mp4
+    → Serves clipper artifact plate video
+
+  GET /api/clipper/artifact/:id/faces/:file
+    → Serves face tracking thumbnails
+
+  GET /api/clipper/face-cache/:jobId/thumbs/:file
+    → Serves face scan thumbnails
+
+----- CLIPPER PIPELINE -----
+  POST /api/clipper/start
+    → Starts video clipping pipeline (Python subprocess)
+    → Parameters: url or uploadId
+    → Streaming SSE: progress → result
+
+  POST /api/clipper/rerender
+    → Rerenders clip with adjusted captions/tracking
+    → Parameters: artifactId, faceTracking config, word list
+
+  POST /api/clipper/scan-people
+    → Scans uploaded video for faces/people
+    → Parameters: uploadId, start, duration, maxPeople
+
+
+================================================================================
+8. VIBE SANDBOX SERVER (vibe-server.ts)
+================================================================================
+
+A standalone Express + Vite server that serves generated Vibe Coder project
+files in an isolated sandbox with hot module replacement.
+
+PORT: Default 5174 (VIBE_PORT env var)
+
+ENDPOINTS:
+  GET  /api/health
+    → { status: "ok", service: "vibe-server", sandbox: "..." }
+
+  POST /api/session
+    → Creates a preview session from files
+    → Parameters: { files: { "path": "content", ... } }
+    → Hash-based caching to avoid recreating identical sessions
+    → Sessions expire after 3 hours of inactivity
+    → Returns { sessionId, url, files[] }
+
+  POST /api/test-preview
+    → Runs Playwright-based preview testing
+    → Parameters: { files?, url?, testPrompt?, headfulMode? }
+    → Auto-detects calculator tests (1+2=3)
+    → Auto-detects platformer/game tests (canvas + keyboard)
+    → Returns { success, title, visibleText, screenshot, errors }
+
+FEATURES:
+  - Sandbox path sanitization (no ../ traversal, no symlinks)
+  - Max 80 files, max 512 KB per file
+  - Blocks package.json, vite.config, tsconfig.json, .env files
+  - Auto-generates index.html + entry point if missing
+  - Inject focus mode script (element inspector overlay)
+  - Suppresses Tailwind CDN production warnings
+  - Tailwind CDN support for quick previews
+  - React 19 + Vite in middleware mode
+  - Automatic old session cleanup (3-hour TTL)
+
+
+================================================================================
+9. ELECTRON DESKTOP APP (electron/main.mjs)
+================================================================================
+
+The Electron main process manages:
+  - A local Express server (spawns server.ts as child process)
+  - A BrowserWindow with sandboxed WebContentsView for the UI
+  - Native Chromium browser tabs (via ChromiumBrowserManager)
+  - Native overlay surfaces (ChromiumSurfaceManager)
+  - System-wide dictation (DictationManager)
+  - Smart text toolbar (SmartToolbarManager)
+  - Google Workspace integration (GoogleWorkspaceManager)
+  - Deep Research pipeline (DeepResearchManager)
+  - Local memory storage (LocalMemoryManager)
+
+KEY ARCHITECTURAL DECISIONS:
+  - All OAuth tokens/credentials stay in the main process, never over IPC
+  - Sandboxed UI WebContentsView (contextIsolation, no nodeIntegration)
+  - Background throttling disabled for dictation responsiveness
+  - Separate browser profile (not system Chrome)
+  - Browser bridge (HTTP server on loopback) for Renderer ↔ Browser communication
+  - Permission handler allows microphone only for local origins
+
+BOOT SEQUENCE:
+  1. Start browser bridge HTTP server (port 9224)
+  2. Start local Express service (spawns server.ts via tsx)
+     - Development: tsx server.ts
+     - Production: Electron binary with dist/server.js
+  3. Wait for /api/health to respond (45s timeout)
+  4. Create BrowserWindow with WebContentsView
+  5. Initialize managers (browser, dictation, toolbar, Google, research, memory)
+  6. Load http://127.0.0.1:{port} in WebContentsView
+  7. Show window when page finishes loading
+
+SHUTDOWN SEQUENCE:
+  1. Destroy native managers
+  2. Close browser bridge
+  3. SIGTERM → local service → wait up to 8s → SIGKILL
+  4. app.exit(0)
+
+IPC CHANNELS (renderer → main):
+  browser:get-state         → Get browser state
+  browser:set-surface       → Set visible browser bounds
+  browser:navigate          → Navigate browser
+  browser:action            → Browser action (click/type/scroll)
+  browser:find              → Find in page
+  browser:zoom              → Zoom
+  browser:add-bookmark      → Add bookmark
+  browser:remove-bookmark   → Remove bookmark
+  browser:clear-history     → Clear history
+  browser:inspect           → Get accessibility tree
+  browser:set-cursor        → Set agent cursor position
+  browser:devtools          → Open DevTools
+  taskview:capture          → Capture workspace preview
+  surface:update            → Update overlay surface
+  surface:hide              → Hide overlay surface
+  dictation:set-state       → Set dictation phase
+  dictation:toggle          → Toggle dictation
+  dictation:shortcut-status → Check shortcut registered
+  dictation:service-url     → Get server URL
+  dictation:insert          → Insert dictation text
+  dictation:ensure-permissions → Check mic permissions
+  google:status             → Google connection status
+  google:sign-in            → Initiate Google sign-in
+  google:disconnect         → Disconnect Google
+  google:execute            → Execute Google Workspace action
+  research:execute          → Start deep research
+  memory:list               → List saved memories
+  memory:search             → Search memories
+  memory:add                → Add memory
+  memory:update             → Update memory
+  memory:remove             → Remove memory
+  memory:clear              → Clear all memories
+
+DICTATION PILL IPC (separate channel):
+  dictation:pill-action     → Cancel/accept dictation
+
+
+================================================================================
+10. VOICE PIPELINE (Python / FastAPI)
+================================================================================
+
+Location: backend/voice-pipeline/
+Runtime:  Python 3.11 venv (.venv-voice311)
+Port:     8787
+
+ARCHITECTURE:
+  FastAPI app providing:
+    1. REST endpoints for health, STT, TTS
+    2. WebSocket endpoint for real-time streaming voice sessions
+
+COMPONENTS:
+  main.py         — FastAPI application, WebSocket handler, session management
+  config.py       — Configuration (models, sample rates, voices)
+  stt_stream.py   — Streaming speech-to-text using Faster-Whisper
+  tts_stream.py   — Text-to-speech using Chatterbox-Turbo
+  vad.py          — Voice Activity Detection using Silero VAD
+
+MODELS USED:
+  STT: Faster-Whisper (configurable model, default: tiny.en)
+  TTS: Chatterbox-Turbo (persistent on-device synthesis)
+  VAD: Silero VAD (fallback to energy-based detection)
+
+REST ENDPOINTS:
+  GET  /health
+    → { status: "ok", stt_model, tts_voice, tts_engine, vad, ... }
+
+  POST /stt
+    → Convert base64 PCM16 audio to text
+    → { audio: "base64...", sampleRate: 16000 }
+
+  POST /tts
+    → Convert text to base64 PCM16 audio
+    → { text: "hello", voice: "Ryan", sampleRate: 44100 }
+
+WEBSOCKET PROTOCOL (/stream):
+  Client → Server:
+    { type: "session_start", sessionId: "..." }
+    { type: "audio", data: "base64..." }
+    { type: "flush" }
+    { type: "mute", muted: true/false }
+    { type: "barge_in" }
+    { type: "tts", text: "...", voice: "...", requestId: "..." }
+    { type: "ping" }
+    { type: "end" }
+
+  Server → Client:
+    { type: "ready", sessionId, sampleRate, sttModel, vad }
+    { type: "transcript_partial", sessionId, text, confidence }
+    { type: "transcript_final", sessionId, text, confidence, metrics }
+    { type: "tts_chunk", sessionId, requestId, data, seq, codec: "pcm16" }
+    { type: "tts_done", sessionId, requestId, metrics }
+    { type: "barge_in", sessionId }
+    { type: "pong" }
+    { type: "error", message }
+
+SESSION STATE:
+  - Each WebSocket connection creates a SessionState
+  - Audio worker thread for non-blocking transcription
+  - Sender task for ordered WebSocket writes
+  - Automatic model warmup on startup
+
+TTS RUNTIME:
+  - Single persistent Chatterbox-Turbo model shared by voice calls + creator narration
+  - Remote Async Flash TTS available as alternative (via Node gateway)
+  - Local pipeline TTS only warmed on startup with VOICE_PIPELINE_WARM_LOCAL_TTS=1
+
+STARTUP:
+  - Auto-started by server.ts if VOICE_ENABLED=true
+  - Searches for Python venvs: .venv-voice311 > .venv-voice
+  - Runs: python -m uvicorn main:app --host 127.0.0.1 --port 8787
+  - Health check before spawning to avoid duplicates
+
+
+================================================================================
+11. REACT FRONTEND ARCHITECTURE
+================================================================================
+
+ENTRY POINTS:
+  - src/main.tsx — Mounts <App /> to #root
+  - src/vibe-embed.tsx — Alternative entry for iframe embed mode
+  - index.html — Main HTML with #root div
+  - todo.html — Secondary HTML for todo app
+
+MAIN APP (src/App.tsx, ~8124 lines):
+  The App component is a massive workspace hub managing:
+    - Tab-based workspace routing (Chat, Vibe, Clip, Browser, Study, Creator)
+    - Chat message streaming and rendering
+    - Workspace state management
+    - Agent orchestration
+    - Theming and preferences
+    - Sidebar navigation
+
+  Key state managed:
+    - activeWorkspace — Which workspace tab is active
+    - chatMessages — Message history array
+    - streamingMessage — Current streaming partial message
+    - workspaces — Map of workspace states
+    - config — Settings and capabilities
+
+WORKSPACE SYSTEM:
+  Tabs are lazily loaded via React.lazy():
+    - ChatWorkspace        — Main chat interface
+    - VibeCoderWorkspace    — AI code generation workspace
+    - AIClipper             — Video clipping workspace
+    - WebBrowserWorkspace   — Managed browser workspace
+    - CreatorStudioWorkspace — Creator tools (Fake Text, WYR, Story)
+    - StudyPalWorkspace     — Study tools workspace
+
+KEY FRONTEND LIBRARIES (src/lib/):
+  vibeAgentConstants.ts   — System prompt for Vibe Coder agent + delimiters
+  parseVibeAgentContent.ts — Parser for <<<VIBE_*>>> structured token stream
+  agentController.ts       — Agent bridge types & UI control descriptors
+  electron-runtime.ts      — IPC bridge for Electron desktop features
+  voiceSpeech.ts           — Speech normalization & TTS preparation
+  voicePcmCapture.ts       — Browser mic PCM16 capture
+  voicePcmPacket.ts        — Binary PCM packet encoding/decoding
+  voiceTurnDetection.ts    — Voice turn detection thresholds
+  buildVibePreviewSrcDoc.ts — Builds server-less preview HTML for components
+
+
+================================================================================
+12. VIBE CODER AGENT SYSTEM
+================================================================================
+
+The Vibe Coder uses a custom structured agent protocol with machine-readable
+delimiters that the UI parses into visual cards. The system prompt is defined
+in src/lib/vibeAgentConstants.ts.
+
+TOKEN DELIMITERS:
+  <<<VIBE_THINKING>>>
+    Agent reasoning/status block. Used for session reasoning, active agent
+    name, phase, intent, context, TodoWrite snapshots, failure analysis,
+    discoveries, and next tool decision.
+    Structure:
+      Build session
+      Active agent: <Build|Plan|Explore|General|Scout>
+      Phase: <Interpret|Discover|Design|Implement|Diagnose|Verify|Summarize>
+      Intent: <what the user asked for>
+      Context: <what is known from this session>
+      TodoWrite: <short status list with one in-progress item>
+      Next tool: <Read|Glob|Grep|Write|Edit|ApplyPatch|Bash|TodoWrite|Task|none>
+      Why: <short reason>
+    <<<END_VIBE_THINKING>>>
+
+  <<<VIBE_ANALYZE path="vibe-project/...">>>
+    Read existing generated files. Maps to Read/Glob/Grep tools.
+    Rendered as stacked reading lines in UI.
+    Only used for follow-up requests (existing files exist).
+    <<<END_VIBE_ANALYZE>>>
+
+  <<<VIBE_CODE file="vibe-project/..." added="N" removed="M">>>
+    File write/edit/apply_patch output. Contains raw source code.
+    One block per final file body.
+    added = line count of the shipped file
+    removed = lines removed (for edits)
+    <<<END_VIBE_CODE>>>
+
+  <<<VIBE_RUN>>>
+    Shell command verification block.
+    Shows command, purpose, and output.
+    <<<END_VIBE_RUN>>>
+
+AGENT ROLES (visible in thinking blocks):
+  Build   — Default execution agent. Reads files, writes/edits code, verifies.
+  Plan    — Used when user explicitly asks for planning or for complex design.
+  Explore — Read-only project researcher for locating files and patterns.
+  General — Broader reasoning for multi-step architecture and edge cases.
+  Scout   — External/docs research agent for uncertain API/library usage.
+
+OPERATIONAL ORDER:
+  1. Interpret the product type and constraints
+  2. Define complete product surface
+  3. Create TodoWrite snapshot
+  4. Form multi-file implementation map
+  5. Write in dependency order
+  6. Diagnose import/type/runtime risks
+  7. Run verification
+  8. Return final summary
+
+SANDBOX MODEL:
+  - All file paths must be under vibe-project/<project-folder>/
+  - Cannot access or modify Clyra's own source tree
+  - Live preview loads only from the sandbox namespace
+  - Separate project folders prevent cross-contamination
+
+CODE QUALITY REQUIREMENTS:
+  - Minimum 6 focused source files for non-trivial projects
+  - React 19 + TypeScript + Tailwind-compatible code
+  - Split into types, logic/hooks, components, data, and App wiring
+  - Complete UI states: empty, loading, error, disabled, hover, focus, mobile
+  - No placeholder lorem ipsum, fake links, dead controls
+  - Games must be playable; calculators must calculate
+  - Landing pages include: navbar, hero, features, benefits, pricing, FAQ, footer
+  - Dashboards include: sidebar, stats, charts, activity, settings
+  - Varied layouts, color palettes, motion languages across projects
+  - Unique output for identical prompts (uniqueness seeds)
+
+
+================================================================================
+13. AGENT CONTROLLER SYSTEM
+================================================================================
+
+Location: src/lib/agentController.ts
+
+The Agent Controller manages agent-bridge control for web UIs. It provides:
+
+AGENT CONTROLLER STATE (AgentControllerState):
+  queued, planning, inspecting, acting, waiting, verifying, recovering,
+  needs_approval, paused_by_user, user_controlling, completed, failed, cancelled
+
+AGENT ACTIONS (38 types):
+  inspect_page, inspect_region, inspect_element, move_cursor, click,
+  double_click, right_click, hover, focus, type_text, replace_text,
+  press_key, press_shortcut, select_option, toggle_control, scroll_page,
+  scroll_element, scroll_into_view, drag_and_drop, resize_panel, upload_file,
+  download_file, open_menu, close_modal, navigate, go_back, go_forward,
+  reload, open_tab, close_tab, switch_tab, wait_for_element, wait_for_state,
+  wait_for_navigation, wait_for_build, read_notification, capture_screenshot,
+  verify_condition
+
+AGENT PLAN:
+  - Steps with ids, labels, and status (pending/active/complete/blocked)
+  - Task tracking per message+agent combination
+  - Persisted to localStorage
+
+AGENT BRIDGE:
+  - window.__CLYRA_AGENT_BRIDGE__ for inter-frame communication
+  - snapshot() — Returns current UI state (route, controls, scroll, notifications)
+  - act() — Performs action on UI controls
+  - describeControls() — Extracts interactive elements from DOM
+
+CONTROL DESCRIPTORS:
+  - Interactive elements discovered from the DOM
+  - Properties: id, tag, role, name, text, placeholder, value, enabled
+  - Bounds: x, y, width, height
+  - Actions: focus, click, scroll_into_view
+
+
+================================================================================
+14. MANAGED BROWSER RUNTIME
+================================================================================
+
+Location: lib/openbrowser/browser-runtime.ts (~1200+ lines)
+
+A complete managed browser system built on Playwright (Chromium).
+
+BROWSER ACTION TYPES (~40 types):
+  navigate, search, go_back, go_forward, reload, stop_loading, click,
+  double_click, right_click, hover, focus, scroll_to, click_at, type,
+  press, press_key, key_combination, select_option, check, uncheck, drag,
+  scroll, scroll_to_top, scroll_to_bottom, open_tab, switch_tab, close_tab,
+  duplicate_tab, restore_closed_tab, wait, read_page, find_text, extract,
+  ask_user, done
+
+BROWSER AGENT STATUS:
+  idle, planning, observing, executing, verifying, recovering,
+  waiting_for_user, paused, completed, failed, cancelled
+
+BROWSER STATE (ManagedBrowserState):
+  - url, title, loading status
+  - Viewport dimensions
+  - Interactive elements (with positions, roles, labels)
+  - Tab list with states
+  - History, bookmarks, downloads
+  - Settings
+  - Agent state (status, paused, manualControl, task)
+
+DUAL MODE OPERATION:
+  1. Standalone (Playwright headless context)
+     - Launch persistent Chromium context with user data
+     - Viewport: 1440x900
+     - Downloads directory
+     - Persistent history/profile/bookmarks
+
+  2. Electron Bridge (native Chromium)
+     - Connects to Electron's CDP endpoint
+     - Reads tab state from Electron bridge HTTP API
+     - Maps Playwright pages to Electron tab IDs
+     - Agent cursor events forwarded to native UI
+
+PAGE OBSERVATION:
+  - Structured page analysis: URL, title, headings, interactive elements
+  - Element indexing: a, button, input, textarea, select, [role] elements
+  - Filters invisible, disabled, skip-link elements
+  - Fingerprints for change detection
+  - Prompt injection detection (ignores suspicious instructions in page text)
+
+AGENT LOOP:
+  1. Observe current page (elements, text, headings)
+  2. Send observation to LLM with task context
+  3. LLM returns action + reasoning
+  4. Validate action against safety rules
+  5. Execute action (move cursor → click → wait → observe)
+  6. Evaluate result, update progress
+  7. Repeat until done or max steps (48)
+
+SAFETY:
+  - Only HTTP/HTTPS URLs allowed
+  - Wait limited to 5 seconds
+  - Key combinations limited to 4 keys
+  - High-impact actions (login, purchase, delete) require user confirmation
+  - Validates targets against live observation before execution
+  - Progressive mouse movement (not teleporting)
+  - Progressive scrolling (not instant)
+  - Google search simulation for agent navigation
+
+PROFILE PERSISTENCE:
+  - History (up to 2000 entries)
+  - Bookmarks (up to 500)
+  - Recently closed tabs (up to 20)
+  - Downloads (up to 100)
+  - Settings
+  - Last tabs for session restore
+  - Saved as JSON in .clyra/browser/profile.json
+
+
+================================================================================
+15. VIBE CODER HARNESS / ORCHESTRATION ENGINE
+================================================================================
+
+Location: lib/vibe-coder/harness/ (20+ files)
+
+SMART MODE ROUTER (smart-mode-router.ts):
+  classifies VibeRequestKind — routes user prompts to the right build intensity:
+
+    VibeRequestKind:
+    - tiny_edit           (quick)  — Locate → Patch → Validate → Refresh
+    - ui_tweak            (focused)— Find component → Match style → Patch UI → Preview
+    - bug_fix             (focused)— Reproduce → Map error → Patch → Validate
+    - feature_build       (deep)   — Scan → Plan.md → Task graph → Build → Review
+    - refactor            (deep)   — Risk scan → Checkpoint → Patch → Full validation
+    - design_change       (focused)— Inspect → Variant pass → Patch → Responsive check
+    - full_app_build      (deep)   — Architecture → Plan → Files → Preview → Review
+    - file_search_edit    (focused)— Search → Open target → Patch → Validate
+    - preview_issue       (focused)— Read logs → Health check → Patch → Restart
+    - review_request      (focused)— Inspect → Risk pass → Preview → Report
+    - explain_code        (quick)  — Read context → Summarise → Link files
+    - continue_previous   (focused)— Load state → Resume → Continue → Review
+    - undo_rollback       (focused)— Find checkpoint → Confirm → Restore → Validate
+
+  Intensity levels: quick, focused, deep
+  Classification uses regex pattern matching on the prompt text
+
+  PlanQuality Scoring:
+    - Scores markdown plans 0-98 based on required sections
+    - Labels: Strong (≥88), Ready (≥74), Needs refinement (<74)
+
+  BuildConfidence Estimation:
+    - Combines plan quality, preview plan, checkpoint plan, risk level
+    - Labels: High confidence (≥90), Ready with checks (≥75), Needs review (<75)
+
+OTHER HARNESS COMPONENTS:
+  deep-coding-mode.ts       — Tracks deep mode sessions
+  deep-work-budget.ts       — Budget/token tracking for long builds
+  multi-pass-coder.ts       — Multi-pass code generation
+  phase-scheduler.ts        — Phase-based build scheduling
+  step-orchestrator.ts      — Step-by-step task orchestration
+  task-group-planner.ts     — Groups tasks into executable batches
+  file-spec-planner.ts      — Plans file specifications
+  product-architect-agent.ts— Architecture planning agent
+  validation-runner.ts      — Runs validation commands
+  error-fixer.ts            — Error fixing loop (up to 5 attempts)
+  review-agent.ts           — Final review agent
+  build-depth-scorer.ts     — Scores build completeness
+  weak-build-detector.ts    — Detects shallow/incomplete builds
+  security-pass.ts          — Security review pass
+  presentable-software-pass.ts — Checks production readiness
+  flow-variety-engine.ts    — Generates varied UIs across projects
+  scripted-feel-detector.ts — Detects repetitive AI patterns
+  mini-code-box-queue.ts    — Manages code box display queue
+  agent-render-queue.ts     — Agent rendering pipeline
+  plan-mode-browser-test-loop.ts — Browser testing for plan mode
+
+PREVIEW SYSTEM (lib/vibe-coder/preview/):
+  preview-runner.ts — Manages dev server lifecycle (start/stop/refresh)
+  dev-server.ts     — Vite-based dev server for project files
+  preview-errors.ts — Error capture and reporting
+  preview-health.ts — Health checking
+  port-detector.ts  — Available port discovery
+
+CONTEXT DETECTION (lib/vibe-coder/context/):
+  framework-detector.ts — Detects React/Vite/Next.js
+  package-detector.ts   — Detects npm/yarn/pnpm
+  rules-loader.ts       — Loads project rules
+
+BROWSER AGENT (lib/vibe-coder/browser/):
+  agent-browser-controller.ts — Controls Playwright browser for agent
+  browser-actions.ts          — Low-level browser interactions
+  browser-permissions.ts      — Permission management
+  browser-safety.ts           — Safety guardrails
+
+
+================================================================================
+16. CLINE SDK INTEGRATION
+================================================================================
+
+Location: lib/cline/ (7 files)
+
+Cline is a VS Code-style coding agent SDK. The integration files:
+  cline-adapter.ts      — Adapter layer between Clyra and Cline SDK
+  cline-config.ts       — Configuration for Cline sessions
+  cline-events.ts       — Event handling (streaming, tool calls, etc.)
+  cline-runner.ts       — Session runner/executor
+  cline-routes.ts       — Express route registration for Cline API
+  cline-sdk-session.ts  — Cline SDK session management
+  cline-tools.ts        — Tool definitions for Cline
+
+Dependency: @cline/sdk ^0.0.52, cline ^3.0.30
+
+These are registered as Express routes via registerClineRoutes(app) in server.ts.
+
+================================================================================
+17. OPENCODE INTEGRATION
+================================================================================
+
+Location: lib/opencode/ (2 files)
+
+OpenCode is an alternative coding runtime used as the active Vibe Coder backend.
+
+  opencode-routes.ts           — Express route registration
+  OpenCodeRuntimeManager.ts    — Manages the OpenCode coding runtime session
+
+Dependency: @opencode-ai/sdk ^1.18.12
+
+OpenCode is the current primary Vibe Coder runtime. It replaced the legacy
+M1/OpenHands stack. The manager handles session lifecycle, file operations,
+and tool execution within the sandboxed project workspace.
+
+================================================================================
+18. OPENHANDS INTEGRATION (LEGACY M1)
+================================================================================
+
+Location: lib/openhands/ (9 files)
+
+The M1 stack is the legacy build system, now superseded by OpenCode. It is
+only available via CLYRA_ENABLE_LEGACY_M1=true.
+
+  openhands-adapter.ts   — Adapter for OpenHands SDK
+  m1-launch.ts           — Launches M1 build sessions
+  m1-stack.ts            — M1 stack orchestration (warmup, shutdown)
+  deep-build-harness.ts  — Advanced build completion
+  openhands-events.ts    — Event types and handling
+  openhands-payload.ts   — Request/response payload types
+  openhands-process.ts   — Process management
+  harness/               — Build suffixes & mode prompts
+
+Dependency: @openhands/typescript-client ^1.32.1
+
+The M1 stack connects to OpenHands for multi-agent build orchestration. It is
+kept as an explicit opt-in for migrations only; it is never part of the
+current Vibe workflow and does not consume resources in normal sessions.
+
+================================================================================
+19. CREATOR STUDIO TOOLS
+================================================================================
+
+Creates social-media-ready content using LLM generation + video rendering.
+
+TOOLS:
+  1. Fake Text Story
+     - Generates simulated chat/text message conversations
+     - JSON schema: { title, contactName, messages:[{side, text}] }
+     - Renders as animated text conversation with typing indicators
+     - Supports TTS voice narration for each character
+     - Export as video
+
+  2. Would You Rather
+     - Generates "Would you rather" game rounds
+     - JSON schema: { title, rounds:[{question, left, right, leftPercent}] }
+     - Interactive voting UI
+     - Shareable video export
+
+  3. Story Video
+     - Generates narrated story scripts
+     - JSON schema: { title, body }
+     - TTS voice-over with animated visuals
+     - Video export
+
+VIDEO TRANSCODING:
+  - POST /api/creator/transcode
+  - WebM → MP4 using FFmpeg
+  - H.264 with ultrafast preset, CRF 15
+  - AAC 256k audio
+  - HFR (High profile) with CABAC, B-frames
+  - yuv420p pixel format for compatibility
+  - Configurable FPS (24-60)
+
+CREATOR TTS:
+  - backend/creator-tts/service.ts
+  - Character voice mapping
+  - System voice fallback on macOS
+  - Async Flash TTS for remote quality
+
+================================================================================
+20. STUDY PAL TOOLS
+================================================================================
+
+Source-grounded study assistant. All results explicitly cite sources.
+
+TOOLS:
+  1. Source Fetcher (POST /api/study/fetch)
+     - Downloads web pages, extracts text
+     - Blocks private/internal network addresses
+     - Strips scripts, styles, HTML tags
+     - Extracts readable text (up to 120K chars)
+     - Returns title and clean text
+
+  2. Question Answering (POST /api/study/ask)
+     - Source-grounded Q&A
+     - Modes: answer, summary, flashcards, quiz, plan
+     - Inline citations as [S1], [S2]
+     - Never invents facts; states when evidence is incomplete
+
+  3. Quiz Generator (POST /api/study/quiz)
+     - 3-12 multiple choice questions
+     - 4 plausible options each
+     - Correct answer + hint + explanation
+     - Grounded in source evidence
+
+  4. Flashcard Generator (POST /api/study/flashcards)
+     - 4-24 cards
+     - Front/back pairs with tags
+     - Grounded in source evidence
+
+  5. Notes Generator (POST /api/study/notes)
+     - Cornell method format
+     - 4-8 sections, each with heading, cue, key points
+     - 4-6 self-test questions with model answers
+     - Source citations inline
+
+================================================================================
+21. RESEARCH TOOLS
+================================================================================
+
+Location: lib/research/
+
+  1. YouTube Transcript (POST /api/research/youtube)
+     - Retrieves transcripts using youtube_transcript_engine
+     - Supports language preferences and translation
+     - Optional analysis question for LLM processing
+     - Returns analysisPrompt for downstream LLM use
+
+  2. Web Search (POST /api/research/web-search)
+     - Searches via DuckDuckGo
+     - Optionally fetches top result pages
+     - Extracts text from fetched pages
+     - Returns analysisPrompt for LLM use
+
+  3. Weather (POST /api/research/weather)
+     - Fetches from Open-Meteo API
+     - Location geocoding
+     - Current conditions + multi-day forecast
+     - Error suggestions for misspelled locations
+
+  4. Deep Research (POST /api/research/deep)
+     - Multi-step research pipeline
+     - Streaming SSE progress events
+     - Uses DeepResearchManager (Electron or standalone)
+
+
+================================================================================
+22. AI CLIPPER TOOLS
+================================================================================
+
+Automatic video clipping and social media publishing system.
+
+PUBLISHING (lib/clipper/social-publishing.ts):
+  - Platform registry for social media platforms
+  - Capability listing per platform/account
+  - Preflight checks before publishing
+  - No provider is registered until OAuth is implemented
+
+LICENSED FOOTAGE (lib/clipper/licensed-footage.ts):
+  - Stock footage search across providers
+  - Providers: Wikimedia, Pexels, Pixabay
+  - Cursor-based pagination
+  - Configurable provider keys (never exposed to browser)
+  - Validation error type for search failures
+
+AUTO CLIP (lib/clipper/autoclip-adapter.ts):
+  - Integration with local AutoClip service
+  - YouTube URL → highlight clips pipeline
+  - Streaming SSE progress updates
+  - Configurable: duration, count, aspect ratio, caption style
+  - Downloads finished clips to local output directory
+
+CLIPPER PIPELINE (Python subprocess):
+  - POST /api/clipper/start — Start full pipeline
+  - POST /api/clipper/rerender — Re-render with adjusted settings
+  - POST /api/clipper/scan-people — Face detection scan
+  - Manages artifact storage in tmp/clipper-artifacts/
+  - Face tracking with face_tracking.py
+  - Subtitle/caption rendering
+
+
+================================================================================
+23. OPENPENCIL DESIGN CANVAS INTEGRATION
+================================================================================
+
+OpenPencil is an AI-powered vector/UI design canvas that runs as a separate
+process (Rust/WASM). Clyra integrates with it for AI design generation.
+
+INTEGRATION ARCHITECTURE:
+  1. OpenPencil runs locally (default: 127.0.0.1:3100)
+  2. Cavas sends design prompts via Clyra proxy
+  3. Clyra proxies LLM requests to OpenPencil
+  4. OpenPencil calls back to Clyra at /api/openpencil/v1/chat/completions
+
+ENDPOINTS:
+  GET  /api/openpencil/health
+    → Checks if OpenPencil is running
+    → Returns { ok, editorUrl, llmAdapter }
+
+  POST /api/openpencil/design
+    → Sends design prompt to OpenPencil
+    → Streams response from OpenPencil's /api/ai/standard
+    → Parameters: { prompt, target ("web-app"), history? }
+    → Prompt enhancement for hierarchy, components, spacing, contrast
+
+DEV SCRIPTS (tools/):
+  npm run dev:openpencil     — Launch OpenPencil dev server
+  npm run setup:openpencil   — Install/setup OpenPencil
+  npm run check:openpencil   — Check OpenPencil availability
+
+
+================================================================================
+24. DICTATION & SMART TOOLBAR
+================================================================================
+
+DICTATION (Electron only):
+  - System-wide voice dictation via macOS Speech Recognition
+  - Toggle with Cmd+Shift+K
+  - Floating pill UI overlay (dictation-pill.html)
+  - DictationManager handles mic access, recognition, insertion
+  - Transcribed text cleaned via LLM (/api/dictation/cleanup)
+  - Selected text can be optimized via spoken instruction (/api/dictation/optimise)
+  - Conservative local fallback when LLM unavailable
+  - Microphone permission management
+
+SMART TOOLBAR (Electron only):
+  - Native macOS floating toolbar for selected text
+  - Appears next to text selection in any app
+  - Actions: rewrite, summarize, polish, format
+  - Sends selected text + action to /api/smart-toolbar/action
+  - Never has direct API credentials
+  - Suppressed when dictation is active
+
+
+================================================================================
+25. GOOGLE WORKSPACE INTEGRATION
+================================================================================
+
+Location: electron/google-workspace-manager.mjs
+
+Desktop-only Google Workspace integration providing:
+  - Gmail access (read, compose, search)
+  - Google Drive access
+  - Google Calendar access
+  - Google authentication via OAuth 2.0
+
+SECURITY:
+  - OAuth tokens stored only in Electron main process
+  - Never transmitted over IPC
+  - Renderer sends only request envelopes (no tokens)
+  - Client ID/secret from environment variables
+  - Token persistence in google-workspace.dat
+
+IPC CHANNELS:
+  google:status     → Connection status
+  google:sign-in    → Initiate OAuth flow
+  google:disconnect → Revoke tokens
+  google:execute    → Execute workspace action (tool, prompt, args)
+  google:diagnostic → Diagnostic info (dev only)
+
+
+================================================================================
+26. LOCAL MEMORY SYSTEM
+================================================================================
+
+Location: electron/local-memory-manager.mjs
+
+Persistent local memory storage that survives sessions.
+
+FEATURES:
+  - File-backed storage (clyra-memory.dat)
+  - Per-user memory isolation
+  - Full-text search
+  - Add/update/remove/clear operations
+  - Memory deduplication
+
+IPC CHANNELS:
+  memory:list   → List all memories for user
+  memory:search → Search memories by query
+  memory:add    → Add new memory with optional force
+  memory:update → Update existing memory
+  memory:remove → Remove memory by ID
+  memory:clear  → Clear all memories for user
+
+
+================================================================================
+27. DEEP RESEARCH SYSTEM
+================================================================================
+
+Location: electron/deep-research-manager.mjs
+
+Multi-step research pipeline that:
+  1. Breaks research topic into sub-questions
+  2. Searches web for each sub-question
+  3. Fetches and analyzes relevant pages
+  4. Synthesizes findings into structured reports
+  5. Streams progress events via SSE
+
+Available in two modes:
+  - Electron: Full featured with Google/Wikipedia integration
+  - Web fallback: Token-free research from public sources only
+
+IPC: research:execute — Start or continue deep research session
+
+
+================================================================================
+28. PYTHON RESEARCH TOOLS
+================================================================================
+
+Location: tools/ (standalone Python scripts)
+
+  research_tool.py           — General research assistant
+  game_vision.py             — Game visual analysis/comparison
+  website_theme_scraper.py   — Extract design tokens from websites
+  google_images.py           — Google image search and download
+  codebase_search_tool.py    — Codebase exploration tool
+  canvas_ui_tool.py          — Canvas-based UI manipulation
+  video-understanding-local-runner.py — Video content analysis (local)
+
+  research_tool_tool.py         — CLI wrapper for research tool
+  Google_image_downloader_tool.py — CLI wrapper for image download
+  website_theme_scraper_tool.py  — CLI wrapper for theme scraper
+  game_vision_compare_tool.py    — CLI wrapper for game vision
+  site_icon_downloader_tool.py   — CLI wrapper for site icons
+
+These tools are executed as standalone Python subprocesses. They are not
+part of the main server runtime but are available for specific tasks.
+
+
+================================================================================
+29. THIRD-PARTY APIs & EXTERNAL SERVICES USED
+================================================================================
+
+LLM / AI:
+  - DeepSeek API (api.deepseek.com) — Primary LLM for chat, code gen, tools
+    Models: deepseek-chat, deepseek-reasoner (legacy plan mode)
+  - OpenAI-compatible API — Configurable, supports any compatible endpoint
+  - Async Flash TTS (remote) — Alternative TTS for voice calls
+  - Cline SDK (@cline/sdk) — Coding agent SDK
+  - OpenCode SDK (@opencode-ai/sdk) — Current Vibe Coder runtime
+  - OpenHands SDK (@openhands/typescript-client) — Legacy M1 build system
+
+VOICE (Python local):
+  - Faster-Whisper — Speech-to-text model (tiny.en default)
+  - Chatterbox-Turbo — Text-to-speech model (persistent)
+  - Silero VAD — Voice activity detection
+  - LiveKit — Optional WebRTC transport
+
+BROWSER & TESTING:
+  - Playwright — Headless Chromium for managed browser, E2E tests
+  - Electron (Chromium 131) — Native desktop browser
+  - CDP (Chrome DevTools Protocol) — Browser control
+
+RESEARCH:
+  - DuckDuckGo — Web search (no API key needed)
+  - Open-Meteo — Weather data (free, no key needed)
+  - YouTube Transcript API — Transcript retrieval
+
+FOOTAGE:
+  - Pexels API — Stock video footage
+  - Pixabay API — Stock video/photos
+  - Wikimedia Commons — Free licensed media
+
+DESKTOP:
+  - Electron — Desktop app shell
+  - electron-builder — App packaging
+  - macOS Speech Recognition — System dictation
+  - FFmpeg — Video transcoding
+
+DESIGN:
+  - OpenPencil — AI design canvas (Rust/WASM, locally installed)
+
+BUILD:
+  - Vite — Frontend bundler with HMR
+  - esbuild — Server bundler
+  - tsx — TypeScript execution
+
+
+================================================================================
+30. KEY DESIGN PATTERNS & CONVENTIONS
+================================================================================
+
+1. LOCAL-FIRST PRINCIPLE
+   - All LLM API keys stay on the server, never sent to browser
+   - Voice pipeline runs locally on device
+   - Browser profiles are persistent and user-owned
+   - Memory is file-backed and never sent to cloud
+
+2. STREAMING ARCHITECTURE
+   - Chat responses stream via SSE
+   - Vibe agent output streams with custom token delimiters
+   - Voice audio streams via WebSocket
+   - Clipper pipeline streams via SSE
+   - Deep research streams via SSE
+
+3. SANDBOXED ISOLATION
+   - Vibe projects isolated to specific directories
+   - Sandbox paths cannot traverse out of project root
+   - Managed browser blocks non-HTTP/HTTPS URLs
+   - Page text is sanitized for prompt injection
+   - No ../ traversal, no symlinks, no drive letters
+
+4. FALLBACK STRATEGY
+   - Dictation: conservative regex cleanup when LLM unavailable
+   - Voice: Async Flash TTS when local pipeline unavailable
+   - Chat: API key required; no fallback needed
+   - Preview: Instant SVG placeholder, async PNG capture
+   - Electron: Packaged Node fallback if Bun sidecar fails
+
+5. COMPONENT PATTERNS
+   - Lazy-loaded workspace components (React.lazy)
+   - Tab-based workspace switching
+   - AnimatePresence for enter/exit animations
+   - motion/react for declarative animations
+   - GSAP for advanced/cinematic animations
+
+6. AGENT PATTERNS
+   - Custom delimiter-based protocol for structured AI output
+   - Token parser in the UI to render cards
+   - Agent roles specified in thinking blocks
+   - Tool mapping: Analyze→Read, Code→Write, Run→Bash
+   - TodoWrite snapshots for task tracking within sessions
+
+7. SECURITY PATTERNS
+   - OAuth tokens NEVER cross IPC (Electron)
+   - Renderer only sends command envelopes, not credentials
+   - Browser permission handler restricts to local origins only
+   - Prompt injection detection in page observations
+   - Sensitive actions require user confirmation
+   - High-impact browser actions blocked for agents
+   - File paths sanitized aggressively (no path traversal)
+
+8. PERSISTENCE PATTERNS
+   - Browser: profile.json for history/bookmarks/downloads/settings
+   - Projects: metadata.json + files/ + checkpoints/ + .agent/
+   - Voice: session state in memory during call
+   - Local memory: clyra-memory.dat (file-backed)
+   - Chat: browser localStorage for conversations
+
+9. ERROR HANDLING PATTERNS
+   - All external API calls wrapped in try/catch with proper fallbacks
+   - Streaming endpoints handle disconnect gracefully
+   - Browser agent has recovery step for transient errors
+   - Validation/fix loop (up to 5 retries)
+   - Graceful shutdown with resource cleanup
+
+10. NAMING CONVENTIONS
+    - camelCase for variables, functions, components
+    - PascalCase for React components, types, interfaces
+    - kebab-case for file system, slugs, routes
+    - snake_case for JSON schema fields (API compatibility)
+    - UPPER_SNAKE for environment variables
+    - Prefix clyra- for project-specific identifiers
+
+
+================================================================================
+31. SAFETY & SECURITY ARCHITECTURE
+================================================================================
+
+FILE SYSTEM SAFETY:
+  - All paths sanitized: no .. traversal, /../, null bytes
+  - Sandbox root enforcement (path must resolve within sandbox)
+  - Max path length enforced (96 chars per segment, 220 total)
+  - Max file count (80 files per session)
+  - Max file size (512 KB per file)
+  - Blocked files: package.json, vite.config.*, tsconfig.json, .env*
+  - Safe project ID characters only: [a-zA-Z0-9_-]
+
+NETWORK SAFETY:
+  - Study Pal blocks private/internal network addresses
+  - Managed browser: only HTTP/HTTPS navigation
+  - Origin checking on all CORS-enabled endpoints
+  - Browser bridge authenticated with random token
+  - IPC authorization checks sender identity
+
+PROMPT INJECTION DEFENSE:
+  - Page text scanned for instruction-like patterns
+  - Suspicious lines removed from agent observation
+  - Patterns detected: "ignore instructions", "reveal system prompt",
+    "upload files", "mark task complete", "run shell command"
+  - Dictation transcripts treated as untrusted data, never instructions
+  - Selected text in smart toolbar treated as untrusted data
+
+LLM SAFETY:
+  - API keys never sent to browser (server-side only)
+  - Response streaming proxied through server
+  - Unified auth via single API key
+  - Max token limits enforced on all LLM calls
+  - Timeout limits on all external API calls
+
+DESKTOP SAFETY:
+  - Sandboxed WebContentsView (no node integration)
+  - Context isolation enabled
+  - Web security enabled
+  - Permission handler restricts microphone to local origins only
+  - Google OAuth tokens never sent over IPC
+  - Renderer IPC payloads validated for allowed fields only
+
+OPERATION SAFETY:
+  - Browser agent: wait ≤5s, keys ≤4, high-risk actions need confirmation
+  - File deletions require user confirmation
+  - Git destructive commands require approval
+  - Project deletion requires metadata check first
+  - Upload size limited (1.25 GB max)
+  - Body size limit on Express (2 MB JSON)
+
+DATA PRIVACY:
+  - All data stored locally in Application Support directory
+  - Browser profile isolated from system Chrome
+  - Individual user data directory configurable via CLYRA_USER_DATA_DIR
+  - History/bookmarks only recorded when saveHistory is enabled
+  - Private mode disables history recording
+
+================================================================================
+                              END OF ANALYSIS
+================================================================================

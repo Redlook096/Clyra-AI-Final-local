@@ -12,8 +12,6 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion, useMotionValue, useReducedMotion, useSpring } from "motion/react";
 import { type PointerEvent, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
-import { AiOrb, type OrbColorTheme } from "./AiOrb";
-
 export type LauncherToolId =
   | "chat"
   | "vibe"
@@ -24,7 +22,6 @@ export type LauncherToolId =
   | "fake-text";
 
 interface AppLauncherProps {
-  orbColorTheme?: OrbColorTheme;
   onOpenTool: (tool: LauncherToolId) => void;
   onClose: () => void;
 }
@@ -103,7 +100,7 @@ function readLastTool(): LauncherToolId {
   return tools.some((tool) => tool.id === stored) ? stored! : "chat";
 }
 
-export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: AppLauncherProps) {
+export function AppLauncher({ onOpenTool, onClose }: AppLauncherProps) {
   const reduceMotion = useReducedMotion();
   const initialToolIndex = Math.max(0, tools.findIndex((tool) => tool.id === readLastTool()));
   const [activeIndex, setActiveIndex] = useState(initialToolIndex);
@@ -306,15 +303,16 @@ export function AppLauncher({ orbColorTheme = "default", onOpenTool, onClose }: 
               );
             })}
 
-            <div className="clyra-launcher-orb absolute left-1/2 top-1/2 z-20 grid h-[24%] w-[24%] -translate-x-1/2 -translate-y-1/2 place-items-center">
+            <div className="absolute left-1/2 top-1/2 z-20 flex h-[24%] w-[24%] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center">
               <motion.div
                 initial={{ opacity: 0, scale: 0.96 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.96, transition: motionOff ?? LAUNCHER_CLOSE }}
                 transition={motionOff ?? { ...LAUNCHER_OPEN, delay: 0.1 }}
-                className="scale-[0.9]"
+                className="flex flex-col items-center gap-1"
               >
-                <AiOrb colorTheme={orbColorTheme} introActive={false} />
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Clyra</span>
+                <span className="text-[9px] font-medium text-slate-400">{activeTool.shortLabel}</span>
               </motion.div>
             </div>
           </motion.div>

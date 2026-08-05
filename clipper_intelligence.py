@@ -24,7 +24,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from clipper_video_understanding import (
     capability_report as video_understanding_capability_report,
@@ -35,9 +35,14 @@ from clipper_video_understanding import (
 TIMELINE_SCHEMA_VERSION = "clyra.timeline-knowledge-graph.v1"
 INTELLIGENCE_SCHEMA_VERSION = "clyra.clipper-intelligence.v1"
 MOMENT_QUERY_SCHEMA_VERSION = "clyra.moment-query.v2"
-DEFAULT_MAX_ANALYSIS_SECONDS = 1_800.0
-DEFAULT_MAX_BASE_SAMPLES = 900
-DEFAULT_MAX_TOTAL_SAMPLES = 1_800
+# This is the local, 8 GB-friendly evidence pass.  The former 900/1800 frame
+# budget could hold the UI in "Visual intelligence" for many minutes on a
+# long YouTube source even though work was proceeding.  These are still real
+# coarse and adaptive samples; they simply cap CPU work to a usable desktop
+# budget and emit measured progress for every pass.
+DEFAULT_MAX_ANALYSIS_SECONDS = 900.0
+DEFAULT_MAX_BASE_SAMPLES = 120
+DEFAULT_MAX_TOTAL_SAMPLES = 240
 DEFAULT_AUDIO_SAMPLE_RATE = 8_000
 
 
@@ -486,6 +491,7 @@ def adaptive_visual_evidence(
     max_seconds: Optional[float] = None,
     max_base_samples: int = DEFAULT_MAX_BASE_SAMPLES,
     max_total_samples: int = DEFAULT_MAX_TOTAL_SAMPLES,
+    progress_callback: Optional[Callable[[str, int, int], None]] = None,
 ) -> Dict[str, Any]:
     """Analyse a local video using coarse frames plus dense samples near events.
 
@@ -540,9 +546,11 @@ def adaptive_visual_evidence(
         coarse_times = _timestamps(analysis_duration, interval)
         coarse: List[Dict[str, Any]] = []
         previous_gray = previous_hist = None
-        for time_seconds, frame in _iter_frames_at_times(cv2, capture, coarse_times):
+        for coarse_index, (time_seconds, frame) in enumerate(_iter_frames_at_times(cv2, capture, coarse_times), start=1):
             metrics, previous_gray, previous_hist = _frame_metrics(cv2, frame, previous_gray, previous_hist)
             coarse.append({"timeMs": int(round(time_seconds * 1000)), "sampleType": "coarse", **metrics})
+            if progress_callback and (coarse_index == 1 or coarse_index % 8 == 0 or coarse_index == len(coarse_times)):
+                progress_callback("coarse", coarse_index, len(coarse_times))
 
         dense_times = set()
         for sample in coarse:
@@ -559,7 +567,7 @@ def adaptive_visual_evidence(
         samples: List[Dict[str, Any]] = []
         previous_gray = previous_hist = None
         coarse_set = {round(value, 3) for value in coarse_times}
-        for time_seconds, frame in _iter_frames_at_times(cv2, capture, all_times):
+        for sample_index, (time_seconds, frame) in enumerate(_iter_frames_at_times(cv2, capture, all_times), start=1):
             metrics, previous_gray, previous_hist = _frame_metrics(cv2, frame, previous_gray, previous_hist)
             samples.append(
                 {
@@ -568,6 +576,8 @@ def adaptive_visual_evidence(
                     **metrics,
                 }
             )
+            if progress_callback and (sample_index == 1 or sample_index % 8 == 0 or sample_index == len(all_times)):
+                progress_callback("adaptive", sample_index, len(all_times))
         events: List[Dict[str, Any]] = []
         for sample in samples:
             if sample["sceneChange"] >= 0.30:
