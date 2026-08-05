@@ -317,7 +317,10 @@ function workspaceTabIndex(tabId: WorkspaceTabId) {
 
 function readEmbeddedWorkspace(): WorkspaceTabId {
   if (typeof window === "undefined") return "chat";
-  const tool = new URLSearchParams(window.location.search).get("embedTool");
+  const params = new URLSearchParams(window.location.search);
+  // Visual-QA shortcut for the desktop clip editor fixture.
+  if (params.get("clipDemo") === "1") return "clip";
+  const tool = params.get("embedTool");
   // Keep the existing browser implementation available in source, but do not
   // expose it while the replacement integration is awaiting a compatible licence.
   if (tool === "browse" || tool === "browser") return "chat";
@@ -5603,7 +5606,8 @@ Please analyze the code you just wrote and fix this error.`;
   const workflowTabsRestingVisible =
     !isCreatorWorkspace &&
     !isBrowserWorkspace &&
-    !isStudyWorkspace;
+    !isStudyWorkspace &&
+    !isClipWorkspace;
   const showWorkflowTabs =
     !isEmbeddedToolPreview &&
     (activeWorkspaceTab === "chat" || workflowTabsRestingVisible) &&

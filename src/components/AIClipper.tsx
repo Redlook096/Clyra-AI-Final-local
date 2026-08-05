@@ -463,8 +463,53 @@ function clipFilename(value?: string) {
 
 /** Serve clips through Express so Electron (CLYRA_DATA_ROOT) and web share one path. */
 function outputUrl(value?: string) {
+  if (!value) return "";
+  // Absolute public/demo paths pass through so visual fixtures can load without
+  // living under the clipper media API.
+  if (/^(https?:)?\/\//i.test(value) || value.startsWith("/media/") || value.startsWith("/api/")) return value;
   const filename = clipFilename(value);
   return filename ? `/api/clipper/media/${encodeURIComponent(filename)}` : "";
+}
+
+/** Visual-QA fixture used when `?clipDemo=1` is present. */
+function demoClipFixture(): ClipResult {
+  const words = [
+    "YOU", "IF", "IT'S", "MY", "TURN", "THEN", "WE", "GOTTA", "GO", "NOW",
+    "AND", "KEEP", "IT", "MOVING", "THROUGH", "THE", "ROUND", "WITHOUT", "SLOWING", "DOWN",
+  ].map((word, index) => {
+    const start = index * 0.42;
+    return { word, text: word, start, end: start + 0.36 };
+  });
+  return {
+    id: "demo-clip-editor",
+    rank: 1,
+    title: "Rust Bucket Chaos: Blackjack and Laughs",
+    output: "/media/fake-text/gameplay/gta/gta-01.mp4",
+    clip_duration: "32s",
+    artifact_id: "demo-clip-editor",
+    captions_enabled: true,
+    subtitles_burned: false,
+    words,
+    crop_keyframes: [
+      { timeMs: 0 },
+      { timeMs: 4200 },
+      { timeMs: 9600 },
+      { timeMs: 16800 },
+      { timeMs: 24100 },
+      { timeMs: 30000 },
+    ],
+    caption_style: {
+      font: "Montserrat",
+      font_size: 62,
+      text_colour: "#FFFFFF",
+      position: "bottom",
+      caption_x: 50,
+      caption_y: 82,
+      subtitle_style: "karaoke",
+    },
+    score: 74,
+    clip_potential_score: 74,
+  };
 }
 
 function formatWordTime(seconds: number) {
@@ -979,6 +1024,19 @@ export default function AIClipper({
     if (!initialUrl) return;
     setDraft((current) => ({ ...current, source: { mode: "url", url: initialUrl } }));
   }, [initialUrl]);
+
+  useEffect(() => {
+    // Visual QA fixture: `?clipDemo=1` opens the desktop editor with a real
+    // local video + synthetic word timings so layout can be screenshot-checked
+    // without running the Python pipeline.
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("clipDemo") !== "1") return;
+    const fixture = demoClipFixture();
+    setResults([fixture]);
+    setSelectedId(fixture.id);
+    setView("results");
+    window.dispatchEvent(new CustomEvent("clyra:workflow-tabs-hide"));
+  }, []);
 
   useEffect(() => {
     const url = draft.source.url.trim();
