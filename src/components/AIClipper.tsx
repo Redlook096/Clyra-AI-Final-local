@@ -56,6 +56,9 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "../lib/utils";
+import ClipperEditor from "./clipper/ClipperEditor";
+import ProgressRing from "./clipper/ProgressRing";
+import { type CaptionStyle } from "./clipper/SubtitleOverlay";
 
 interface Props {
   onClose: () => void;
@@ -139,6 +142,10 @@ type ClipResult = {
   };
   artifact_id?: string;
   words?: CaptionWord[];
+  /** Style contract emitted by the pipeline so the live overlay matches the burn-in. */
+  caption_style?: CaptionStyle;
+  /** True when subtitles are already composited into this MP4's pixels. */
+  subtitles_burned?: boolean;
   available_faces?: AvailableFace[];
   face_tracking?: {
     enabled?: boolean;
@@ -757,7 +764,6 @@ function ProcessingScreen({
     "Finalising",
   ];
   const loaderIcons = [Search, FileVideo2, WandSparkles, Check];
-  const LoaderIcon = loaderIcons[Math.min(loaderStage, loaderIcons.length - 1)];
   return createPortal(
     <motion.div
       initial={{ opacity: 0 }}
@@ -774,7 +780,7 @@ function ProcessingScreen({
         className="w-full max-w-[460px] overflow-hidden rounded-[28px] border border-[#e7eaf0] bg-white shadow-[0_18px_52px_rgba(15,23,42,.08)]"
       >
         <div className="flex flex-col items-center px-8 pb-8 pt-10">
-          <div className="relative mb-7"><motion.svg viewBox="0 0 120 120" className="h-[108px] w-[108px]" animate={finishing ? { rotate: 0 } : { rotate: 360 }} transition={finishing ? { duration: .25 } : { duration: 1.8, ease: "linear", repeat: Infinity }}><circle cx="60" cy="60" r="52" fill="none" stroke="#f1f5f9" strokeWidth="5" /><circle cx="60" cy="60" r="52" fill="none" stroke={finishing ? "#10b981" : "#4F7CFF"} strokeWidth="5" strokeLinecap="round" strokeDasharray="92 235" /></motion.svg><motion.span animate={finishing ? { scale: 1 } : { scale: [1, 1.08, 1] }} transition={{ duration: .78, repeat: finishing ? 0 : Infinity, ease: "easeInOut" }} className="absolute inset-0 grid place-items-center rounded-full">{finishing ? <Check className="h-6 w-6 text-emerald-500" /> : <LoaderIcon className="h-6 w-6 text-[#4F7CFF]" />}</motion.span></div>
+          <div className="relative mb-7"><ProgressRing percent={progress} size={108} strokeWidth={6} color={finishing ? "#10b981" : "#1677FF"} /></div>
           <p className="mb-2 text-[11px] font-semibold uppercase tracking-[.14em] text-[#4F7CFF]">Clyra AI Clipper</p>
           <h2 className="text-[17px] font-semibold tracking-[-.02em] text-slate-900">{finishing ? "Finalising your clips" : "Creating your best clips"}</h2>
           <div className="mt-5 flex items-center gap-2 text-[12px] font-medium text-slate-400"><Clock3 className="h-3.5 w-3.5" /><span className="tabular-nums">{elapsed}s</span>{readyCount > 0 ? <><span className="text-slate-300">·</span><span>{readyCount} clip{readyCount !== 1 ? "s" : ""} ready</span></> : null}</div>
@@ -787,17 +793,21 @@ function ProcessingScreen({
   );
 }
 
-function ExportScreen({ state, mode = "export" }: { state: "exporting" | "done"; mode?: "export" | "subtitles" }) {
+function ExportScreen({ state, mode = "export", percent = 0 }: { state: "exporting" | "done"; mode?: "export" | "subtitles"; percent?: number }) {
   const complete = state === "done";
   const rerenderingSubtitles = mode === "subtitles";
   return createPortal(
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }} className="fixed inset-0 z-[10000] grid place-items-center bg-[#f7f8fa]/92 px-5 backdrop-blur-sm">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }} className="fixed inset-0 z-[10001] grid place-items-center bg-[#f7f8fa]/92 px-5 backdrop-blur-sm">
       <motion.section initial={{ opacity: 0, y: 12, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: .32, ease: [0.16, 1, .3, 1] }} className="w-full max-w-[360px] rounded-[26px] border border-slate-200/80 bg-white px-8 py-9 text-center shadow-[0_18px_52px_rgba(15,23,42,.10)]">
-        <motion.div className={cn("mx-auto grid h-14 w-14 place-items-center rounded-full", complete ? "bg-emerald-50 text-emerald-500" : "bg-[#eff4ff] text-[#4F7CFF]")} animate={complete ? { scale: [1, 1.08, 1] } : { rotate: 360 }} transition={complete ? { duration: .35 } : { duration: 1.5, ease: "linear", repeat: Infinity }}>
-          {complete ? <Check className="h-7 w-7" /> : <Loader2 className="h-6 w-6" />}
-        </motion.div>
-        <h2 className="mt-5 text-[17px] font-semibold tracking-[-.025em] text-slate-900">{complete ? "Export ready" : rerenderingSubtitles ? "Re-rendering subtitles" : "Exporting your clip"}</h2>
-        <p className="mt-2 text-[12px] leading-5 text-slate-500">{complete ? "Your MP4 download is starting now." : rerenderingSubtitles ? "Applying your exact word timing and subtitle style." : "Preparing a share-ready MP4."}</p>
+        {complete ? (
+          <motion.div className="mx-auto grid h-[88px] w-[88px] place-items-center rounded-full bg-emerald-50 text-emerald-500" animate={{ scale: [1, 1.06, 1] }} transition={{ duration: .35 }}>
+            <Check className="h-8 w-8" />
+          </motion.div>
+        ) : (
+          <div className="mx-auto grid place-items-center"><ProgressRing percent={percent} size={96} strokeWidth={6} /></div>
+        )}
+        <h2 className="mt-5 text-[17px] font-semibold tracking-[-.025em] text-slate-900">{complete ? "Export ready" : rerenderingSubtitles ? "Updating your clip" : "Exporting your clip"}</h2>
+        <p className="mt-2 text-[12px] leading-5 text-slate-500">{complete ? "Your MP4 download is starting now." : rerenderingSubtitles ? "Applying your framing changes to the preview." : "Burning your edited subtitles into a share-ready MP4."}</p>
       </motion.section>
     </motion.div>,
     document.body,
@@ -851,115 +861,6 @@ function ClipCard({
 function formatTimelineTime(seconds: number) {
   const safe = Math.max(0, seconds || 0);
   return `${String(Math.floor(safe / 60)).padStart(2, "0")}:${String(Math.floor(safe % 60)).padStart(2, "0")}.${String(Math.floor((safe % 1) * 1000)).padStart(3, "0")}`;
-}
-
-function WordCueEditor({
-  words,
-  activeIndex,
-  onSelect,
-  onChange,
-  onRegenerate,
-  busy,
-  canRegenerate,
-}: {
-  words: CaptionWord[];
-  activeIndex: number;
-  onSelect: (index: number) => void;
-  onChange: (text: string) => void;
-  onRegenerate: () => void;
-  busy: boolean;
-  canRegenerate: boolean;
-}) {
-  const activeWord = words[activeIndex];
-  const [allSelected, setAllSelected] = useState(false);
-  const copyTimestamp = async () => {
-    const timestamp = formatTimelineTime(activeWord?.start || 0);
-    try { await navigator.clipboard?.writeText(timestamp); } catch { /* Clipboard access is optional. */ }
-  };
-  return <div className="flex h-full min-h-0 flex-col bg-white px-4 pb-4 pt-3">
-    <div className="flex items-center gap-2 border-b border-slate-100 pb-3"><WandSparkles className="h-3.5 w-3.5 text-slate-800" /><p className="text-[12px] font-semibold tracking-[-.015em] text-slate-900">Word timing</p></div>
-    <button type="button" onClick={() => void copyTimestamp()} aria-label="Copy current timestamp" className="mt-3 flex h-9 items-center justify-between rounded-lg border border-slate-100 bg-[#fbfcfe] px-3 font-mono text-[11px] font-medium tabular-nums text-slate-700 transition-colors hover:border-blue-200 hover:bg-blue-50/40"><span>{formatTimelineTime(activeWord?.start || 0)}</span><Copy className="h-3.5 w-3.5 text-slate-400" /></button>
-    <div className="mt-3 flex items-center justify-between"><p className="text-[10px] text-slate-500">Edit each word and its timing.</p><button type="button" onClick={() => setAllSelected((value) => !value)} className="text-[10px] font-semibold text-[#4F7CFF] hover:text-blue-700">{allSelected ? "Clear" : "Select all"}</button></div>
-    <div className="clyra-visible-scrollbar mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto pr-0.5">
-      {words.length ? words.map((word, index) => <button key={`${index}-${word.start}`} type="button" onClick={() => { setAllSelected(false); onSelect(index); }} className={cn("grid w-full grid-cols-[70px_minmax(0,1fr)_38px] items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition-[background-color,border-color,box-shadow] duration-150", activeIndex === index ? "border-blue-300 bg-[#f4f8ff] shadow-[0_1px_2px_rgba(79,124,255,.08)]" : allSelected ? "border-blue-100 bg-blue-50/50" : "border-slate-100 bg-white hover:border-slate-200 hover:bg-slate-50")}><span className="font-mono text-[9px] font-medium tabular-nums text-[#4F7CFF]">{formatTimelineTime(word.start)}</span><span className="truncate text-center text-[10px] font-semibold uppercase tracking-[.02em] text-slate-700">{wordText(word) || "—"}</span><span className="text-right text-[9px] tabular-nums text-slate-400">{Math.max(0, word.end - word.start).toFixed(2)}s</span></button>) : <p className="px-2 py-3 text-[11px] text-slate-400">Timed subtitle words will appear here.</p>}
-    </div>
-    <div className="mt-3 shrink-0 border-t border-slate-100 pt-3"><label className="block"><span className="sr-only">Selected subtitle word</span><input value={wordText(activeWord)} onChange={(event) => onChange(event.target.value)} className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-center text-[11px] font-semibold uppercase tracking-[.02em] text-slate-700 outline-none transition-[border-color,box-shadow] focus:border-blue-400 focus:ring-2 focus:ring-blue-100" aria-label="Selected subtitle word" /></label><p className="mt-1 text-center font-mono text-[9px] text-slate-400">{formatTimelineTime(activeWord?.start || 0)} – {formatTimelineTime(activeWord?.end || 0)}</p><button type="button" onClick={onRegenerate} disabled={busy || !canRegenerate} className="mt-2 flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-blue-100 bg-white text-[11px] font-semibold text-[#4F7CFF] transition-colors hover:bg-blue-50 active:scale-[.99] disabled:opacity-40"><WandSparkles className="h-3.5 w-3.5" />{busy ? "Regenerating…" : "Regenerate subtitles"}</button></div>
-  </div>;
-}
-
-function EditorTimeline({
-  clipId,
-  output,
-  duration,
-  currentTime,
-  video,
-  onSeek,
-  playbackLocked = false,
-  words,
-  cropKeyframes,
-}: {
-  clipId: string;
-  output: string;
-  duration: number;
-  currentTime: number;
-  video: MutableRefObject<HTMLVideoElement | null>;
-  onSeek?: (time: number) => void;
-  playbackLocked?: boolean;
-  words: CaptionWord[];
-  cropKeyframes: NonNullable<ClipResult["crop_keyframes"]>;
-}) {
-  const [zoom, setZoom] = useState(1);
-  const [snapping, setSnapping] = useState(true);
-  const [trim, setTrim] = useState({ start: 0, end: duration });
-  const [sections, setSections] = useState(() => [{ id: "source", start: 0, end: duration }]);
-  const [keyframes, setKeyframes] = useState(() => cropKeyframes.map((keyframe, index) => ({ id: `${keyframe.timeMs}-${index}`, time: keyframe.timeMs / 1000 })));
-  const [selectedItem, setSelectedItem] = useState<string>("source");
-  const [history, setHistory] = useState<Array<{ sections: typeof sections; trim: typeof trim; keyframes: typeof keyframes }>>([]);
-  const [future, setFuture] = useState<Array<{ sections: typeof sections; trim: typeof trim; keyframes: typeof keyframes }>>([]);
-  const [thumbs, setThumbs] = useState<string[]>([]);
-  const [peaks, setPeaks] = useState<number[]>([]);
-  const rulerRef = useRef<HTMLDivElement | null>(null);
-  const dragRef = useRef<"playhead" | "trim-start" | "trim-end" | null>(null);
-  const contentWidth = `${100 * zoom}%`;
-  const captionSegments = useMemo(() => {
-    const groups: Array<{ id: string; start: number; end: number; text: string }> = [];
-    for (let index = 0; index < words.length; index += 5) {
-      const batch = words.slice(index, index + 5);
-      if (!batch.length) continue;
-      groups.push({ id: `caption-${index}`, start: batch[0].start, end: batch.at(-1)?.end || batch[0].end, text: batch.map(wordText).join(" ") });
-    }
-    return groups;
-  }, [words]);
-  const snapshot = () => { setHistory((value) => [...value.slice(-24), { sections, trim, keyframes }]); setFuture([]); };
-  const seek = (time: number) => { const next = Math.max(trim.start, Math.min(trim.end, time)); if (video.current) video.current.currentTime = next; onSeek?.(next); };
-  const timeAtEvent = (event: PointerEvent<HTMLElement> | MouseEvent<HTMLElement>) => { const target = event.currentTarget; const rect = target.getBoundingClientRect(); const pointerX = target.scrollLeft + event.clientX - rect.left; const ratio = Math.max(0, Math.min(1, pointerX / Math.max(1, target.scrollWidth))); return Math.max(trim.start, Math.min(trim.end, trim.start + ratio * (trim.end - trim.start))); };
-
-  useEffect(() => {
-    const stateKey = `clyra.timeline.${clipId}`;
-    const saved = localStorage.getItem(stateKey);
-    if (!saved) return;
-    try { const value = JSON.parse(saved); if (value.trim) setTrim(value.trim); if (value.sections) setSections(value.sections); if (value.keyframes) setKeyframes(value.keyframes); } catch { /* Ignore an older draft. */ }
-  }, [clipId]);
-  useEffect(() => { localStorage.setItem(`clyra.timeline.${clipId}`, JSON.stringify({ trim, sections, keyframes })); }, [clipId, trim, sections, keyframes]);
-  useEffect(() => {
-    let cancelled = false;
-    const sampler = document.createElement("video"); sampler.src = output; sampler.muted = true; sampler.playsInline = true; sampler.crossOrigin = "anonymous";
-    const makeThumbs = async () => { try { await new Promise<void>((resolve, reject) => { sampler.onloadedmetadata = () => resolve(); sampler.onerror = () => reject(); }); const canvas = document.createElement("canvas"); canvas.width = 160; canvas.height = 90; const context = canvas.getContext("2d"); if (!context) return; const next: string[] = []; for (let index = 0; index < 8; index += 1) { await new Promise<void>((resolve) => { sampler.onseeked = () => resolve(); sampler.currentTime = Math.min(Math.max(.05, ((index + .5) / 8) * duration), Math.max(.05, duration - .05)); }); context.drawImage(sampler, 0, 0, canvas.width, canvas.height); next.push(canvas.toDataURL("image/jpeg", .72)); } if (!cancelled) setThumbs(next); } catch { if (!cancelled) setThumbs([]); } };
-    void makeThumbs(); return () => { cancelled = true; sampler.removeAttribute("src"); sampler.load(); };
-  }, [duration, output]);
-  useEffect(() => {
-    let cancelled = false;
-    void fetch(output).then((response) => response.arrayBuffer()).then(async (buffer) => { const context = new AudioContext(); const audio = await context.decodeAudioData(buffer); const data = audio.getChannelData(0); const step = Math.max(1, Math.floor(data.length / 96)); const next = Array.from({ length: 96 }, (_, index) => { let max = 0; for (let cursor = index * step; cursor < Math.min(data.length, (index + 1) * step); cursor += 1) max = Math.max(max, Math.abs(data[cursor])); return max; }); await context.close(); if (!cancelled) setPeaks(next); }).catch(() => { if (!cancelled) setPeaks([]); }); return () => { cancelled = true; };
-  }, [output]);
-  useEffect(() => { const onKey = (event: KeyboardEvent) => { if ((event.target as HTMLElement)?.matches("input,textarea,select")) return; if (event.code === "Space") { event.preventDefault(); if (!playbackLocked) video.current?.paused ? void video.current.play() : video.current?.pause(); } if (event.key === "ArrowLeft") seek(currentTime - (event.shiftKey ? 1 / 30 : 1)); if (event.key === "ArrowRight") seek(currentTime + (event.shiftKey ? 1 / 30 : 1)); if (event.key.toLowerCase() === "s") setSnapping((value) => !value); if (event.key.toLowerCase() === "f") setZoom(1); if (event.key === "-" ) setZoom((value) => Math.max(1, value - .25)); if (event.key === "+" || event.key === "=") setZoom((value) => Math.min(5, value + .25)); }; window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, [currentTime, playbackLocked]);
-  const split = () => { const target = sections.find((section) => currentTime > section.start + .15 && currentTime < section.end - .15); if (!target) return; snapshot(); setSections((value) => value.flatMap((section) => section.id === target.id ? [{ ...section, id: `${section.id}-a`, end: currentTime }, { ...section, id: `${section.id}-b`, start: currentTime }] : section)); setSelectedItem(`${target.id}-b`); };
-  const undo = () => { const previous = history.at(-1); if (!previous) return; setFuture((value) => [...value, { sections, trim, keyframes }]); setSections(previous.sections); setTrim(previous.trim); setKeyframes(previous.keyframes); setHistory((value) => value.slice(0, -1)); };
-  const redo = () => { const next = future.at(-1); if (!next) return; setHistory((value) => [...value, { sections, trim, keyframes }]); setSections(next.sections); setTrim(next.trim); setKeyframes(next.keyframes); setFuture((value) => value.slice(0, -1)); };
-  const iconButton = "grid h-7 w-7 place-items-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 disabled:opacity-30";
-  return <section className="mx-auto mt-4 h-[286px] w-full max-w-[820px] shrink-0 overflow-hidden rounded-xl border border-slate-200/80 bg-white text-slate-800 shadow-[0_4px_18px_rgba(15,23,42,.035)]" aria-label="Video timeline">
-    <div className="flex h-11 items-center gap-0.5 border-b border-slate-100 px-3"><button type="button" onClick={() => seek(trim.start)} className={iconButton} aria-label="Jump to beginning"><ChevronsLeft className="h-3.5 w-3.5" /></button><button type="button" onClick={() => seek(currentTime - 1 / 30)} className={iconButton} aria-label="Step backward"><ChevronLeft className="h-3.5 w-3.5" /></button><button type="button" disabled={playbackLocked} onClick={() => { const item = video.current; if (item?.paused) void item.play(); else item?.pause(); }} className="grid h-7 w-7 place-items-center rounded-md text-slate-900 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30" aria-label="Play or pause"><Play className="ml-0.5 h-4 w-4 fill-current" /></button><button type="button" onClick={() => seek(currentTime + 1 / 30)} className={iconButton} aria-label="Step forward"><ChevronRight className="h-3.5 w-3.5" /></button><button type="button" onClick={() => seek(trim.end)} className={iconButton} aria-label="Jump to end"><ChevronsRight className="h-3.5 w-3.5" /></button><span className="ml-3 border-l border-slate-200 pl-3 font-mono text-[10px] font-medium tabular-nums text-slate-700">{formatTimelineTime(currentTime)} / {formatTimelineTime(trim.end - trim.start)}</span><button type="button" onClick={split} className={cn(iconButton, "ml-3")} aria-label="Split at playhead"><Scissors className="h-3.5 w-3.5" /></button><button type="button" onClick={() => { if (selectedItem.startsWith("key")) { snapshot(); setKeyframes((value) => value.filter((keyframe) => keyframe.id !== selectedItem)); } }} className={iconButton} aria-label="Delete selected item"><Trash2 className="h-3.5 w-3.5" /></button><button type="button" onClick={() => setSnapping((value) => !value)} className={cn(iconButton, snapping && "bg-blue-50 text-blue-600")} aria-label="Toggle snapping"><Link2 className="h-3.5 w-3.5" /></button><button type="button" disabled={!history.length} onClick={undo} className={iconButton} aria-label="Undo"><Undo2 className="h-3.5 w-3.5" /></button><button type="button" disabled={!future.length} onClick={redo} className={iconButton} aria-label="Redo"><Redo2 className="h-3.5 w-3.5" /></button><div className="ml-auto flex items-center gap-1"><button type="button" onClick={() => setZoom((value) => Math.max(1, value - .25))} className={iconButton} aria-label="Zoom out"><Minus className="h-3.5 w-3.5" /></button><input aria-label="Timeline zoom" type="range" min="1" max="5" step=".25" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} className="w-14 accent-[#4F7CFF]" /><button type="button" onClick={() => setZoom((value) => Math.min(5, value + .25))} className={iconButton} aria-label="Zoom in"><Plus className="h-3.5 w-3.5" /></button><button type="button" onClick={() => setZoom(1)} className="h-7 rounded-md border border-slate-100 px-2 text-[10px] font-semibold text-slate-600 hover:bg-slate-50">Fit</button></div></div>
-    <div className="grid h-[244px] grid-cols-[92px_minmax(0,1fr)] overflow-hidden"><div className="border-r border-slate-100 bg-[#fbfcfe] pt-7 text-[10px] font-medium text-slate-500"><div className="flex h-[60px] items-center gap-2 px-3"><Video className="h-3 w-3" />Video</div><div className="flex h-9 items-center gap-2 px-3"><MessageSquare className="h-3 w-3" />Captions</div><div className="flex h-11 items-center gap-2 px-3"><Volume2 className="h-3 w-3" />Audio</div><div className="flex h-9 items-center gap-2 px-3"><Crop className="h-3 w-3" />Crop</div></div><div ref={rulerRef} className="relative overflow-x-auto overflow-y-hidden" onPointerDown={(event) => { dragRef.current = "playhead"; event.currentTarget.setPointerCapture(event.pointerId); seek(timeAtEvent(event)); }} onPointerMove={(event) => { if (dragRef.current === "playhead") seek(timeAtEvent(event)); }} onPointerUp={() => { dragRef.current = null; }}><div className="relative min-w-full" style={{ width: contentWidth }}><div className="relative h-7 border-b border-slate-100 bg-white">{Array.from({length: Math.max(2, Math.ceil(duration / (zoom > 2 ? 1 : 5)) + 1)}, (_, index) => { const time = index * (zoom > 2 ? 1 : 5); return time <= duration ? <span key={time} className="absolute top-2 text-[9px] tabular-nums text-slate-400" style={{left:`${time / duration * 100}%`}}>{formatTimelineTime(time).slice(3, 8)}</span> : null; })}</div><div className="relative h-[60px] border-b border-slate-100 bg-[#f8fafc]">{sections.map((section) => <button key={section.id} type="button" onClick={(event) => { event.stopPropagation(); setSelectedItem(section.id); seek(section.start); }} className={cn("absolute top-1.5 bottom-1.5 overflow-hidden rounded-[5px] border text-left", selectedItem === section.id ? "border-blue-400 bg-blue-50" : "border-slate-200 bg-white")} style={{left:`${section.start / duration * 100}%`,width:`${(section.end-section.start) / duration*100}%`}}>{thumbs.length ? <span className="flex h-full">{thumbs.map((thumb, index) => <img key={index} src={thumb} alt="" className="h-full min-w-0 flex-1 object-cover opacity-90" />)}</span> : <span className="block h-full bg-slate-200" />}</button>)}<span className="absolute top-0 bottom-0 z-20 w-px bg-[#4F7CFF]" style={{left:`${currentTime / duration * 100}%`}} /></div><div className="relative h-9 border-b border-slate-100 bg-white">{captionSegments.map((segment) => <button key={segment.id} type="button" title={segment.text} onDoubleClick={() => setSelectedItem(segment.id)} onClick={(event) => { event.stopPropagation(); seek(segment.start); }} className={cn("absolute top-1 h-7 truncate rounded-[4px] border px-1.5 text-left text-[8px] font-medium", selectedItem === segment.id ? "border-blue-400 bg-blue-50 text-blue-900" : "border-slate-100 bg-[#f8fafc] text-slate-500 hover:border-blue-200")} style={{left:`${segment.start / duration*100}%`,width:`${Math.max(3,(segment.end-segment.start)/duration*100)}%`}}>{segment.text}</button>)}<span className="absolute top-0 bottom-0 z-20 w-px bg-[#4F7CFF]" style={{left:`${currentTime / duration*100}%`}} /></div><div className="relative flex h-11 items-center gap-px overflow-hidden border-b border-slate-100 bg-[#fbfcfe] px-1">{peaks.length ? peaks.map((peak,index) => <span key={index} className="w-full rounded-full bg-[#78a4ef]/70" style={{height:`${Math.max(2, peak*38)}px`}} />) : <span className="px-2 text-[9px] text-slate-400">Audio waveform unavailable</span>}<span className="absolute top-0 bottom-0 z-20 w-px bg-[#4F7CFF]" style={{left:`${currentTime / duration*100}%`}} /></div><div className="relative h-9 bg-white" onDoubleClick={(event) => { snapshot(); const time = timeAtEvent(event); setKeyframes((value) => [...value, {id:`key-${Date.now()}`,time}]); }}>{keyframes.length ? keyframes.map((keyframe) => <button key={keyframe.id} type="button" title={formatTimelineTime(keyframe.time)} onClick={(event) => { event.stopPropagation(); setSelectedItem(keyframe.id); seek(keyframe.time); }} className={cn("absolute top-3 h-2.5 w-2.5 rotate-45 border", selectedItem === keyframe.id ? "border-blue-600 bg-blue-400" : "border-blue-400 bg-white")} style={{left:`${keyframe.time/duration*100}%`}} />) : <span className="px-2 text-[9px] leading-9 text-slate-400">Double-click to add a crop keyframe</span>}<span className="absolute top-0 bottom-0 z-20 w-px bg-[#4F7CFF]" style={{left:`${currentTime / duration*100}%`}} /></div></div></div></div>
-  </section>;
 }
 
 function ClipperEnginePicker({
@@ -1046,10 +947,10 @@ export default function AIClipper({
   const [readyCount, setReadyCount] = useState(0);
   const [captionWords, setCaptionWords] = useState<CaptionWord[]>([]);
   const [activeCaptionIndex, setActiveCaptionIndex] = useState(0);
-  const [captionDirty, setCaptionDirty] = useState(false);
-  const [editingClipTitle, setEditingClipTitle] = useState(false);
   const [rewriteBusy, setRewriteBusy] = useState(false);
   const [refineBusy, setRefineBusy] = useState(false);
+  const [refineProgress, setRefineProgress] = useState(0);
+  const [exportProgress, setExportProgress] = useState(0);
   const [selectedFaceId, setSelectedFaceId] = useState<string>("");
   const [previewTimeMs, setPreviewTimeMs] = useState(0);
   const [wizardPeople, setWizardPeople] = useState<AvailableFace[]>([]);
@@ -1348,8 +1249,15 @@ export default function AIClipper({
             word_count?: number;
             timing_source?: string;
             progress?: number;
+            overall?: number;
           };
           if (event.type === "error") throw new Error(event.message || "Clip rendering failed");
+          // The pipeline reports a monotonic stage-weighted overall percent;
+          // use it directly so the ring fills smoothly and honestly.
+          const overall = Number(event.overall);
+          if (Number.isFinite(overall) && overall > 0) {
+            setProgress((current) => Math.max(current, Math.min(99, overall)));
+          }
           const stage = pipelineStageFor(event.step);
           if (stage) {
             setActiveStep(stage);
@@ -1459,13 +1367,27 @@ export default function AIClipper({
       || "",
     );
     setPreviewTimeMs(0);
-    // Old projects created while collision detection could suppress Clyra
-    // captions are deliberately held for one safe re-render.
-    setCaptionDirty(Boolean(selected?.captions_enabled === false && (selected?.words?.length || selected?.caption)));
-  // A different clip gets a fresh committed subtitle state. Do not reset on
-  // every word mutation: pending edits must continue to block playback until
-  // their re-render is complete.
+    setActiveCaptionIndex(0);
+  // A different clip gets a fresh committed subtitle state. Subtitle edits
+  // never block playback: the detached overlay renders them instantly.
   }, [selected?.id]);
+
+  // Hydrate word timing from the artifact store when a stored project has an
+  // artifact id but its result payload lost the word array (older sessions).
+  useEffect(() => {
+    if (!selected?.artifact_id || selected.words?.length || captionWords.length) return;
+    const controller = new AbortController();
+    void fetch(`/api/clipper/artifact/${encodeURIComponent(selected.artifact_id)}/words.json`, { signal: controller.signal })
+      .then((response) => (response.ok ? response.json() as Promise<CaptionWord[]> : null))
+      .then((value) => {
+        if (!Array.isArray(value) || !value.length) return;
+        const hydrated = value.map((item) => ({ ...item, word: wordText(item), text: wordText(item) }));
+        setCaptionWords(hydrated);
+        setResults((items) => items.map((item) => (item.id === selected.id ? { ...item, words: hydrated } : item)));
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [selected?.id, selected?.artifact_id]);
 
   const liveOverlayFaces = useMemo(() => {
     const tracks = selected?.face_overlay;
@@ -1518,6 +1440,7 @@ export default function AIClipper({
     if (!selected?.artifact_id || refineBusy) return;
     persistSelectedEdits();
     setRefineBusy(true);
+    setRefineProgress(0);
     setError("");
     try {
       const payloadWords = captionWords
@@ -1575,15 +1498,16 @@ export default function AIClipper({
         for (const rawLine of lines) {
           const line = rawLine.trim();
           if (!line.startsWith("data: ")) continue;
-          const event = JSON.parse(line.slice(6)) as { type?: string; message?: string; result?: ClipResult };
+          const event = JSON.parse(line.slice(6)) as { type?: string; message?: string; result?: ClipResult; overall?: number };
           if (event.type === "error") throw new Error(event.message || "Re-render failed");
+          const overall = Number(event.overall);
+          if (Number.isFinite(overall) && overall > 0) setRefineProgress((current) => Math.max(current, Math.min(99, overall)));
           if (event.result) updated = event.result;
         }
       }
       if (updated) {
         setResults((items) => items.map((item) => (item.id === selected.id ? { ...item, ...updated, id: selected.id } : item)));
         if (updated.words?.length) setCaptionWords(updated.words);
-        setCaptionDirty(false);
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -1592,13 +1516,15 @@ export default function AIClipper({
     }
   };
 
+  // "Regenerate subtitles" is near-instant: it only rewrites the overlay's
+  // word-timing data. No FFmpeg re-encode happens until an explicit export.
   const rewriteSelectedCaption = async () => {
     if (!selected || rewriteBusy) return;
     setRewriteBusy(true);
     try {
       const cleaned = rewriteTimedWords(captionWords);
       setCaptionWords(cleaned);
-      setCaptionDirty(true);
+      setResults((items) => items.map((item) => (item.id === selected.id ? { ...item, words: cleaned, caption: cleaned.map(wordText).filter(Boolean).join(" ").slice(0, 220) } : item)));
     } finally {
       setRewriteBusy(false);
     }
@@ -1616,21 +1542,96 @@ export default function AIClipper({
     });
   };
 
-  const exportSelectedClip = () => {
+  // Export is the ONLY step that burns subtitles into pixels: the edited
+  // word-timing JSON is sent to the Python/FFmpeg burn-in, which composites
+  // the caption layer onto the already-rendered clean clip in one encode.
+  const exportSelectedClip = async () => {
     if (!selected || exportState !== "idle") return;
-    if (captionDirty) {
-      void refineSelected();
+    persistSelectedEdits();
+    const downloadFile = (href: string) => {
+      const anchor = document.createElement("a");
+      anchor.href = href;
+      anchor.download = "";
+      anchor.click();
+    };
+    const wantsCaptionBurn = selected.captions_enabled !== false && captionWords.length > 0 && !selected.subtitles_burned;
+    if (!selected.artifact_id || !wantsCaptionBurn) {
+      // Nothing to composite (captions off, already burned, or no artifacts):
+      // the rendered MP4 is already the export.
+      setExportState("exporting");
+      setExportProgress(100);
+      window.setTimeout(() => {
+        setExportState("done");
+        downloadFile(outputUrl(selected.output));
+        window.setTimeout(() => setExportState("idle"), 1_000);
+      }, 320);
       return;
     }
     setExportState("exporting");
-    window.setTimeout(() => {
+    setExportProgress(0);
+    setError("");
+    try {
+      const style = selected.caption_style;
+      const payloadWords = captionWords
+        .map((word) => {
+          const text = wordText(word);
+          if (!text) return null;
+          return { word: text, text, start: Number(word.start) || 0, end: Math.max((Number(word.start) || 0) + 0.05, Number(word.end) || 0.2) };
+        })
+        .filter(Boolean);
+      const response = await fetch("/api/clipper/rerender", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          artifactId: selected.artifact_id,
+          subtitlesOnly: true,
+          burnCaptions: true,
+          captionsEnabled: true,
+          words: payloadWords,
+          font: style?.font ?? draft.font,
+          fontSize: style?.font_size ?? draft.fontSize,
+          textColour: style?.text_colour ?? draft.colour,
+          position: style?.position ?? draft.position,
+          captionX: style?.caption_x ?? draft.captionX,
+          captionY: style?.caption_y ?? draft.captionY,
+          subtitleStyle: style?.subtitle_style ?? draft.subtitleStyle,
+          renderQuality: draft.renderQuality,
+        }),
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(detail.error || `Export failed (${response.status})`);
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("Export returned no stream");
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let exported: ClipResult | null = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line.startsWith("data: ")) continue;
+          const event = JSON.parse(line.slice(6)) as { type?: string; message?: string; result?: ClipResult; overall?: number };
+          if (event.type === "error") throw new Error(event.message || "Export failed");
+          const overall = Number(event.overall);
+          if (Number.isFinite(overall) && overall > 0) setExportProgress((current) => Math.max(current, Math.min(99, overall)));
+          if (event.result?.output) exported = event.result;
+        }
+      }
+      if (!exported?.output) throw new Error("Export finished without a downloadable MP4");
+      setExportProgress(100);
       setExportState("done");
-      const anchor = document.createElement("a");
-      anchor.href = outputUrl(selected.output);
-      anchor.download = "";
-      anchor.click();
-      window.setTimeout(() => setExportState("idle"), 1_000);
-    }, 760);
+      downloadFile(outputUrl(exported.output));
+      window.setTimeout(() => setExportState("idle"), 1_100);
+    } catch (cause) {
+      setExportState("idle");
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
   };
 
   const wizardMeta = [
@@ -2337,37 +2338,54 @@ export default function AIClipper({
     </div>
   );
 
+  // Caption style used by the detached overlay: the pipeline's exact burn-in
+  // contract when available, otherwise the draft settings.
+  const selectedCaptionStyle: CaptionStyle = selected?.caption_style || {
+    font: draft.font,
+    font_size: draft.fontSize,
+    text_colour: draft.colour,
+    position: draft.position,
+    caption_x: draft.captionX,
+    caption_y: draft.captionY,
+    subtitle_style: draft.subtitleStyle,
+  };
+
+  const changeCaptionWord = (index: number, text: string) => {
+    const next = captionWords.map((word, wordIndex) => (wordIndex === index ? { ...word, word: text, text } : word));
+    setCaptionWords(next);
+    if (selected) {
+      setResults((items) => items.map((item) => (item.id === selected.id ? { ...item, words: next } : item)));
+    }
+  };
+
   const resultsView = (
-    <div data-testid="clipper-results" className="fixed inset-0 z-[10000] flex min-h-0 flex-col overflow-hidden bg-white text-slate-900">
-      {error ? <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12px] text-amber-800"><AlertCircle className="h-3.5 w-3.5" />{error}<button type="button" onClick={() => setError("")} className="ml-auto font-medium">Dismiss</button></div> : null}
-      <div className="grid min-h-0 flex-1 lg:grid-cols-[236px_minmax(0,1fr)_312px]">
-        <aside className="min-h-0 border-b border-slate-100 bg-white px-4 py-3 lg:border-b-0 lg:border-r">
-          <div className="mb-4 flex items-start justify-between"><div><p className="text-[12px] font-semibold tracking-[-.015em] text-slate-900">Clips</p><p className="mt-1 text-[10px] text-slate-500">{filteredResults.length} clip{filteredResults.length === 1 ? "" : "s"}</p></div><button type="button" onClick={() => { setView("create"); setWizardStep(2); }} className="grid h-7 w-7 place-items-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900" aria-label="Generate more"><Plus className="h-4 w-4" /></button></div>
-          <label className="mb-4 flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 shadow-[0_1px_2px_rgba(15,23,42,.02)]"><Search className="h-3.5 w-3.5 text-slate-400" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search clips" className="min-w-0 flex-1 bg-transparent text-[11px] outline-none placeholder:text-slate-400" /></label>
-          <div className="clyra-visible-scrollbar flex max-h-[210px] gap-2 overflow-x-auto lg:max-h-none lg:flex-col lg:overflow-y-auto lg:overflow-x-hidden">
-            {filteredResults.map((result) => <button key={result.id} type="button" onClick={() => setSelectedId(result.id)} className={cn("relative flex min-w-[168px] items-center gap-2.5 rounded-lg p-2 text-left transition-colors lg:min-w-0", selected?.id === result.id ? "bg-[#edf4ff] shadow-[0_2px_8px_rgba(79,124,255,.06)]" : "hover:bg-slate-50")}>
-              {selected?.id === result.id ? <span className="absolute inset-y-0 left-0 w-0.5 rounded-r bg-[#4F7CFF]" /> : null}<video muted preload="metadata" src={outputUrl(result.output)} className="h-14 w-10 rounded-[5px] bg-slate-900 object-cover" />
-              <span className="min-w-0 flex-1"><span className="block truncate text-[11px] font-semibold text-slate-800">{result.title}</span><span className="mt-1 flex items-center gap-1.5 text-[10px] text-slate-400">{result.clip_duration || "Clip"} · {draft.renderQuality === "balanced" ? "720p" : "1080p"}</span><span className="mt-1 flex items-center gap-1 text-[10px] font-medium text-[#4F7CFF]"><span className="h-1.5 w-1.5 rounded-full bg-[#4F7CFF]" />Ready</span></span>
-            </button>)}
-          </div>
-        </aside>
-
-        <main className="flex min-h-0 flex-col overflow-hidden bg-[#fbfcfd] px-4 pb-4 pt-3 sm:px-6">
-          {selected ? <>
-            <div className="mb-3 flex shrink-0 items-start justify-between"><div className="min-w-0"><div className="flex items-center gap-2">{editingClipTitle ? <input autoFocus value={selected.title} onChange={(event) => setResults((current) => current.map((item) => item.id === selected.id ? { ...item, title: event.target.value } : item))} onBlur={() => setEditingClipTitle(false)} onKeyDown={(event) => { if (event.key === "Enter") setEditingClipTitle(false); }} className="h-6 w-[260px] max-w-[45vw] rounded-md border border-blue-200 bg-white px-1.5 text-[12px] font-semibold text-slate-900 outline-none focus:ring-2 focus:ring-blue-100" aria-label="Clip title" /> : <p className="truncate text-[12px] font-semibold tracking-[-.02em] text-slate-900">{selected.title}</p>}<button type="button" onClick={() => setEditingClipTitle(true)} className="grid h-5 w-5 place-items-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Rename clip"><Pencil className="h-3 w-3" /></button></div><p className="mt-1 text-[10px] text-slate-500">{selected.clip_duration || "Ready to edit"} · {draft.renderQuality === "balanced" ? "720p" : "1080p"} · Auto-reframed</p></div><div className="flex items-center gap-2"><span className="rounded-md border border-blue-100 bg-white px-2 py-1 text-[10px] font-semibold text-[#4F7CFF]">{clipPotentialScore(selected)} /100</span><button type="button" onClick={exportSelectedClip} disabled={exportState !== "idle"} className="flex h-7 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 text-[10px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40" aria-label={captionDirty ? "Render changes" : "Export"}>{captionDirty ? <><RefreshCw className="h-3 w-3" />Render changes</> : <><Download className="h-3.5 w-3.5" />Export</>}</button></div></div>
-            <div data-testid="clipper-preview" className="relative mx-auto flex min-h-0 w-full max-w-[664px] flex-1 items-center justify-center overflow-hidden rounded-[11px] border border-slate-200 bg-[#01050f] shadow-[0_5px_16px_rgba(15,23,42,.10)]" style={{ aspectRatio: "16 / 9" }}>
-              <video key={selected.output} ref={previewVideoRef} playsInline preload="metadata" src={outputUrl(selected.output)} onPlay={(event) => { if (captionDirty) event.currentTarget.pause(); }} onTimeUpdate={(event) => setPreviewTimeMs(Math.round(event.currentTarget.currentTime * 1000))} className="h-full max-w-full object-contain" />
-              {captionDirty ? <div className="absolute inset-0 grid place-items-center bg-slate-950/68 text-center"><div><RefreshCw className="mx-auto h-5 w-5 text-white" /><p className="mt-3 text-[12px] font-semibold text-white">Render changes to preview</p><p className="mt-1 text-[10px] text-white/70">Your edited word timings are not in this video yet.</p></div></div> : null}
-            </div>
-            <EditorTimeline clipId={selected.id} output={outputUrl(selected.output)} duration={Math.max(1, parseDuration(selected.clip_duration))} currentTime={previewTimeMs / 1000} video={previewVideoRef} onSeek={(time) => setPreviewTimeMs(Math.round(time * 1000))} playbackLocked={captionDirty} words={captionWords} cropKeyframes={selected.crop_keyframes || []} />
-          </> : <div className="grid h-full place-items-center text-center text-slate-400"><div><FileVideo2 className="mx-auto h-6 w-6" /><p className="mt-3 text-[13px] text-white">Select a clip to edit</p></div></div>}
-        </main>
-
-        <aside className="min-h-0 overflow-hidden border-t border-slate-100 bg-white lg:border-l lg:border-t-0">
-          {selected ? <WordCueEditor words={captionWords} activeIndex={activeCaptionIndex} onSelect={(index) => { setActiveCaptionIndex(index); if (previewVideoRef.current) previewVideoRef.current.currentTime = captionWords[index]?.start || 0; }} onChange={(text) => { setCaptionWords((current) => current.map((word, index) => index === activeCaptionIndex ? { ...word, word: text, text } : word)); setCaptionDirty(true); }} onRegenerate={() => void rewriteSelectedCaption()} busy={rewriteBusy || refineBusy} canRegenerate={Boolean(selected.artifact_id)} /> : null}
-        </aside>
-      </div>
-    </div>
+    <ClipperEditor
+      clips={filteredResults}
+      selected={selected}
+      onSelectClip={setSelectedId}
+      onRenameClip={(id, title) => setResults((current) => current.map((item) => (item.id === id ? { ...item, title } : item)))}
+      onNewClip={() => { setView("create"); setWizardStep(2); }}
+      search={search}
+      onSearch={setSearch}
+      qualityLabel={draft.renderQuality === "balanced" ? "720p" : "1080p"}
+      scoreFor={(clip) => clipPotentialScore(results.find((item) => item.id === clip.id) || (clip as ClipResult))}
+      srcFor={(clip) => outputUrl(clip.output)}
+      words={captionWords}
+      onWordChange={changeCaptionWord}
+      activeWordIndex={activeCaptionIndex}
+      onActiveWordIndex={setActiveCaptionIndex}
+      captionStyle={selectedCaptionStyle}
+      captionsVisible={Boolean(selected && selected.captions_enabled !== false && !selected.subtitles_burned)}
+      videoRef={previewVideoRef}
+      currentTime={previewTimeMs / 1000}
+      onTimeChange={(seconds) => setPreviewTimeMs(Math.round(seconds * 1000))}
+      onRegenerate={() => void rewriteSelectedCaption()}
+      regenerateBusy={rewriteBusy}
+      onExport={() => void exportSelectedClip()}
+      exportBusy={exportState !== "idle"}
+      error={error}
+      onDismissError={() => setError("")}
+    />
   );
 
   const projectsView = (
@@ -2387,7 +2405,7 @@ export default function AIClipper({
 
   const content = (
     <div data-testid="ai-clipper-root" className={cn("overflow-hidden bg-[#f8fafc] text-slate-950", embedded ? "relative h-full w-full" : "fixed inset-0 z-[600]")}>
-      <AnimatePresence>{view === "processing" ? <ProcessingScreen progress={progress} status={status} activeStep={activeStep} activities={analysisActivities} readyCount={readyCount} elapsed={elapsed} onCancel={cancel} sourceName={sourceTitle || draft.source.name || "your YouTube video"} /> : null}{refineBusy ? <ExportScreen state="exporting" mode="subtitles" /> : exportState !== "idle" ? <ExportScreen state={exportState} /> : null}</AnimatePresence>
+      <AnimatePresence>{view === "processing" ? <ProcessingScreen progress={progress} status={status} activeStep={activeStep} activities={analysisActivities} readyCount={readyCount} elapsed={elapsed} onCancel={cancel} sourceName={sourceTitle || draft.source.name || "your YouTube video"} /> : null}{refineBusy ? <ExportScreen state="exporting" mode="subtitles" percent={refineProgress} /> : exportState !== "idle" ? <ExportScreen state={exportState} percent={exportProgress} /> : null}</AnimatePresence>
       <div className={cn("h-full", view === "create" || view === "home" || view === "projects" ? "overflow-hidden" : "overflow-y-auto")}>{view === "home" ? homeView : view === "projects" ? projectsView : view === "results" ? resultsView : createView}</div>
     </div>
   );

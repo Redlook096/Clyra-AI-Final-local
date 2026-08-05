@@ -6080,3 +6080,37 @@ body,
   .clyra-chat-page #chat-container { width: calc(100% - 28px); }
   .clyra-scroll-latest { bottom: 92px; }
 }
+
+/* AI Clipper editor: thin timeline zoom slider with a small dark-blue thumb. */
+.clipper-zoom-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 3px;
+  border-radius: 999px;
+  background: #E3E8F0;
+  outline: none;
+  cursor: pointer;
+}
+.clipper-zoom-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  background: #0F4FBF;
+  border: none;
+  transition: transform 140ms ease;
+}
+.clipper-zoom-slider::-webkit-slider-thumb:hover { transform: scale(1.12); }
+.clipper-zoom-slider::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  background: #0F4FBF;
+  border: none;
+}
+.clipper-zoom-slider::-moz-range-track {
+  height: 3px;
+  border-radius: 999px;
+  background: #E3E8F0;
+}

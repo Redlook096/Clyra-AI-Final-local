@@ -30,3 +30,4 @@ desktop-binaries/
 release-electron/
 vendor-src/
 third_party/
+__pycache__/
