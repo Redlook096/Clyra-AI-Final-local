@@ -179,6 +179,18 @@ function clipPotentialScore(result: ClipResult): number {
   return Math.max(1, Math.min(100, Math.round(Number(raw) || 0)));
 }
 
+/**
+ * True when this clip's MP4 is clean and captions live in the detached
+ * overlay. Results from before the overlay overhaul carry neither the
+ * explicit `subtitles_burned: false` flag nor a `caption_style` contract —
+ * their pixels already contain captions, so no overlay (and no second burn).
+ */
+function hasDetachedCaptions(result?: ClipResult | null): boolean {
+  if (!result) return false;
+  if (result.subtitles_burned === true) return false;
+  return result.subtitles_burned === false || Boolean(result.caption_style);
+}
+
 type ClipDraft = {
   source: ClipSource;
   /** Clyra Vision stays default because it verifies visual event evidence. */
@@ -1516,13 +1528,22 @@ export default function AIClipper({
     }
   };
 
-  // "Regenerate subtitles" is near-instant: it only rewrites the overlay's
-  // word-timing data. No FFmpeg re-encode happens until an explicit export.
+  // "Regenerate subtitles" is near-instant: it re-reads the pipeline's word
+  // timing from the artifact store (overlay JSON only) and normalises it. No
+  // FFmpeg re-encode happens until an explicit export.
   const rewriteSelectedCaption = async () => {
     if (!selected || rewriteBusy) return;
     setRewriteBusy(true);
     try {
-      const cleaned = rewriteTimedWords(captionWords);
+      let source = captionWords;
+      if (selected.artifact_id) {
+        try {
+          const response = await fetch(`/api/clipper/artifact/${encodeURIComponent(selected.artifact_id)}/words.json`);
+          const value = response.ok ? await response.json() as CaptionWord[] : null;
+          if (Array.isArray(value) && value.length) source = value;
+        } catch { /* Fall back to cleaning the in-memory words. */ }
+      }
+      const cleaned = rewriteTimedWords(source);
       setCaptionWords(cleaned);
       setResults((items) => items.map((item) => (item.id === selected.id ? { ...item, words: cleaned, caption: cleaned.map(wordText).filter(Boolean).join(" ").slice(0, 220) } : item)));
     } finally {
@@ -1554,7 +1575,7 @@ export default function AIClipper({
       anchor.download = "";
       anchor.click();
     };
-    const wantsCaptionBurn = selected.captions_enabled !== false && captionWords.length > 0 && !selected.subtitles_burned;
+    const wantsCaptionBurn = selected.captions_enabled !== false && captionWords.length > 0 && hasDetachedCaptions(selected);
     if (!selected.artifact_id || !wantsCaptionBurn) {
       // Nothing to composite (captions off, already burned, or no artifacts):
       // the rendered MP4 is already the export.
@@ -2375,7 +2396,7 @@ export default function AIClipper({
       activeWordIndex={activeCaptionIndex}
       onActiveWordIndex={setActiveCaptionIndex}
       captionStyle={selectedCaptionStyle}
-      captionsVisible={Boolean(selected && selected.captions_enabled !== false && !selected.subtitles_burned)}
+      captionsVisible={Boolean(selected && selected.captions_enabled !== false && hasDetachedCaptions(selected))}
       videoRef={previewVideoRef}
       currentTime={previewTimeMs / 1000}
       onTimeChange={(seconds) => setPreviewTimeMs(Math.round(seconds * 1000))}
