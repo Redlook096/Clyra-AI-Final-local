@@ -108,21 +108,28 @@ function EditorTimeline({
   const thumbCacheRef = useRef<Map<string, string[]>>(new Map());
 
   useEffect(() => {
-    setSections([{ id: "source", start: 0, end: duration }]);
-  }, [clipId, duration]);
+    // Track real media duration once metadata loads, but keep user splits.
+    setSections((current) => (current.length === 1 && current[0].id === "source"
+      ? [{ id: "source", start: 0, end: duration }]
+      : current));
+  }, [duration]);
   useEffect(() => {
-    setKeyframes(cropKeyframes.map((keyframe, index) => ({ id: `${keyframe.timeMs}-${index}`, time: keyframe.timeMs / 1000 })));
-    // Keyframe positions come from real crop-plan data for this clip.
-  }, [clipId, cropKeyframes]);
-  useEffect(() => {
-    const saved = localStorage.getItem(`clyra.timeline.${clipId}`);
-    if (!saved) return;
+    // A different clip starts from its real crop-plan keyframes and a single
+    // source section, then restores that clip's saved timeline edits.
+    let sectionsNext: TimelineSnapshot["sections"] = [{ id: "source", start: 0, end: duration }];
+    let keyframesNext: TimelineSnapshot["keyframes"] = cropKeyframes.map((keyframe, index) => ({ id: `${keyframe.timeMs}-${index}`, time: keyframe.timeMs / 1000 }));
     try {
-      const value = JSON.parse(saved);
-      if (Array.isArray(value.sections) && value.sections.length) setSections(value.sections);
-      if (Array.isArray(value.keyframes) && value.keyframes.length) setKeyframes(value.keyframes);
+      const saved = JSON.parse(localStorage.getItem(`clyra.timeline.${clipId}`) || "null");
+      if (Array.isArray(saved?.sections) && saved.sections.length) sectionsNext = saved.sections;
+      if (Array.isArray(saved?.keyframes) && saved.keyframes.length) keyframesNext = saved.keyframes;
     } catch { /* Ignore an older draft. */ }
-  }, [clipId]);
+    setSections(sectionsNext);
+    setKeyframes(keyframesNext);
+    setHistory([]);
+    setFuture([]);
+    setSelectedItem("source");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clipId, cropKeyframes]);
   useEffect(() => {
     localStorage.setItem(`clyra.timeline.${clipId}`, JSON.stringify({ sections, keyframes }));
   }, [clipId, sections, keyframes]);
@@ -337,7 +344,7 @@ function EditorTimeline({
   }, [duration, rulerTickSeconds]);
 
   const playheadLeft = duration > 0 ? `${(currentTime / duration) * 100}%` : "0%";
-  const trackHeights = { ruler: 30, video: 56, captions: 42, audio: 64, crop: 70 } as const;
+  const trackHeights = { ruler: 40, video: 58, captions: 42, audio: 66, crop: 72 } as const;
   const rowSeparator = { borderBottom: `1px solid ${CLIP_EDITOR.separator}` } as const;
 
   return (
@@ -432,7 +439,7 @@ function EditorTimeline({
               {rulerTicks.map((time) => (
                 <span
                   key={time}
-                  className="absolute top-[9px] -translate-x-1/2 text-[10.5px] tabular-nums"
+                  className="absolute top-[13px] -translate-x-1/2 text-[10.5px] tabular-nums"
                   style={{ left: `${duration > 0 ? (time / duration) * 100 : 0}%`, color: CLIP_EDITOR.textMuted, fontFamily: CLIP_EDITOR_MONO }}
                 >
                   {`${Math.floor(time / 60)}:${String(Math.floor(time % 60)).padStart(2, "0")}`}
@@ -542,7 +549,7 @@ function EditorTimeline({
                 );
               })}
               {!keyframes.length ? (
-                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-[calc(50%+14px)] text-[10.5px]" style={{ color: CLIP_EDITOR.textMuted }}>
+                <span className="pointer-events-none absolute left-3 top-2 text-[10.5px]" style={{ color: CLIP_EDITOR.textMuted }}>
                   Double-click to add a crop keyframe
                 </span>
               ) : null}
@@ -550,9 +557,9 @@ function EditorTimeline({
 
             {/* Playhead: ruler through crop track, above content */}
             <div className="pointer-events-none absolute bottom-0 top-0 z-30" style={{ left: playheadLeft }}>
-              <span className="absolute bottom-0 top-[22px] w-[2px] -translate-x-1/2" style={{ background: CLIP_EDITOR.blue }} />
+              <span className="absolute bottom-0 top-[30px] w-[2px] -translate-x-1/2" style={{ background: CLIP_EDITOR.blue }} />
               <span
-                className="absolute top-[13px] h-[10px] w-[10px] -translate-x-1/2 rounded-[3px]"
+                className="absolute top-[21px] h-[10px] w-[10px] -translate-x-1/2 rounded-[3px]"
                 style={{ background: CLIP_EDITOR.blue, clipPath: "polygon(0 0, 100% 0, 100% 55%, 50% 100%, 0 55%)" }}
               />
             </div>
@@ -778,12 +785,17 @@ export default function ClipperEditor({
   const duration = videoDuration || parseSeconds(selected?.clip_duration) || 1;
   const videoSrc = selected ? srcFor(selected) : "";
 
-  /* Smooth playhead: read video time each animation frame while playing. */
+  /* Smooth playhead: read video time on animation frames while playing.
+     Updates are throttled to ~30fps so state churn never lags playback. */
   useEffect(() => {
     if (!playing) return;
+    let lastPushed = -1;
     const tick = () => {
       const node = videoRef.current;
-      if (node) onTimeChange(node.currentTime);
+      if (node && Math.abs(node.currentTime - lastPushed) >= 0.033) {
+        lastPushed = node.currentTime;
+        onTimeChange(node.currentTime);
+      }
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);

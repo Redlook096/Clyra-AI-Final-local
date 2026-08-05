@@ -388,6 +388,34 @@ with tempfile.TemporaryDirectory() as temporary_dir:
     phrase_beats = module.phrase_highlight_beats(semantic_words, 0.0, 6.0)
     _, custom_position_override = module.subtitle_override("bottom", 38, 71)
 
+flag_true = module.config_flag("true")
+flag_zero = module.config_flag("0", True)
+flag_off = module.config_flag("off", True)
+flag_default = module.config_flag(None, True)
+
+module.set_overall_progress(48)
+module.set_overall_progress(21)
+module.set_overall_progress("not-a-number")
+overall_progress = module._OVERALL_PROGRESS["value"]
+
+# Randomised moment selection: non-overlapping equal-score candidates must not
+# repeat the previously recorded pick, and the durable pick log must grow.
+with tempfile.TemporaryDirectory() as picks_dir:
+    random_pool = [
+        {"id": f"moment-{index}", "start": index * 40.0, "end": index * 40.0 + 30.0, "score": 90, "transcript": f"moment {index}"}
+        for index in range(4)
+    ]
+    pick_one = module.randomise_moment_selection(list(random_pool), random_pool, 1, picks_dir)[0]
+    pick_two = module.randomise_moment_selection(list(random_pool), random_pool, 1, picks_dir)[0]
+    pick_three = module.randomise_moment_selection(list(random_pool), random_pool, 1, picks_dir)[0]
+    recorded_picks = module.read_json(os.path.join(picks_dir, "recent-picks.json"), [])
+    randomised_first = {"start": pick_one["start"], "end": pick_one["end"]}
+    randomised_second = {"start": pick_two["start"], "end": pick_two["end"]}
+    randomised_third = {"start": pick_three["start"], "end": pick_three["end"]}
+    randomised_log_length = len(recorded_picks)
+    multi_selection = module.randomise_moment_selection(list(random_pool), random_pool, 3, picks_dir)
+    multi_ids = [item["id"] for item in multi_selection]
+
 print(json.dumps({
     "candidates": candidates,
     "shortDuration": module.parse_duration(2),
@@ -473,6 +501,16 @@ print(json.dumps({
     "phraseCaptions": phrase_captions,
     "phraseBeats": phrase_beats,
     "customPositionOverride": custom_position_override,
+    "flagTrue": flag_true,
+    "flagZero": flag_zero,
+    "flagOff": flag_off,
+    "flagDefault": flag_default,
+    "overallProgress": overall_progress,
+    "randomisedFirst": randomised_first,
+    "randomisedSecond": randomised_second,
+    "randomisedThird": randomised_third,
+    "randomisedLogLength": randomised_log_length,
+    "multiSelectionIds": multi_ids,
 }))
 `;
 
@@ -585,6 +623,16 @@ const payload = JSON.parse(output.trim()) as {
   phraseCaptions: string;
   phraseBeats: Array<[number, number, string]>;
   customPositionOverride: string;
+  flagTrue: boolean;
+  flagZero: boolean;
+  flagOff: boolean;
+  flagDefault: boolean;
+  overallProgress: number;
+  randomisedFirst: { start: number; end: number };
+  randomisedSecond: { start: number; end: number };
+  randomisedThird: { start: number; end: number };
+  randomisedLogLength: number;
+  multiSelectionIds: string[];
 };
 
 assert.equal(payload.candidates.length, 5, "returns requested candidate count");
@@ -812,5 +860,16 @@ for (let index = 0; index < payload.phraseBeats.length - 1; index += 1) {
   );
 }
 assert(payload.customPositionOverride.includes("\\pos(410,1363)"), "custom caption coordinates are converted to final 1080p canvas pixels");
+
+assert.equal(payload.flagTrue, true, "config_flag parses string true");
+assert.equal(payload.flagZero, false, "config_flag treats '0' as an explicit off even with a truthy default");
+assert.equal(payload.flagOff, false, "config_flag treats 'off' as disabled");
+assert.equal(payload.flagDefault, true, "config_flag falls back to its default for missing values");
+assert.equal(payload.overallProgress, 48, "overall pipeline progress is monotonic and rejects junk values");
+assert.notDeepEqual(payload.randomisedSecond, payload.randomisedFirst, "back-to-back autonomous runs do not repeat the same moment");
+assert.notDeepEqual(payload.randomisedThird, payload.randomisedSecond, "the durable pick log keeps consecutive selections varied");
+assert.equal(payload.randomisedLogLength, 3, "each autonomous pick is recorded in the source cache");
+assert.equal(payload.multiSelectionIds.length, 3, "multi-clip selection still fills the requested count");
+assert.equal(new Set(payload.multiSelectionIds).size, 3, "multi-clip selection avoids duplicate moments");
 
 console.log("AI Clip unit tests passed (tracking, framing + timeline intelligence assertions)");
