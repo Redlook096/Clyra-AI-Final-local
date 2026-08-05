@@ -64,6 +64,15 @@ export default defineConfig(() => {
           '**/vibe-sandbox/**',
           '**/projects/**',
           '**/.agentic-browser-profile/**',
+          // Non-frontend artifacts in the repo root. Background processes
+          // rewrite these (e.g. clipper pipeline scripts), and any change to
+          // a watched file outside the module graph forces a full page
+          // reload, killing active agent sessions in the UI.
+          '**/*.py',
+          '**/output/**',
+          '**/tmp/**',
+          '**/test-results/**',
+          '**/playwright-report/**',
         ],
       },
     },

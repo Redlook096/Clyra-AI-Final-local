@@ -126,8 +126,43 @@ def check_cancelled():
         raise PipelineCancelled("Cancelled by client")
 
 
+_OVERALL_PROGRESS = {"value": 0.0}
+
+
+def set_overall_progress(value):
+    """Record monotonic overall pipeline progress (0..100) for the UI ring."""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return
+    if not math.isfinite(numeric):
+        return
+    _OVERALL_PROGRESS["value"] = max(_OVERALL_PROGRESS["value"], max(0.0, min(100.0, numeric)))
+
+
 def emit(step, status, **data):
-    print(json.dumps({"type": "progress", "step": step, "status": status, **data}), flush=True)
+    overall = data.pop("overall", None)
+    if overall is not None:
+        set_overall_progress(overall)
+    print(
+        json.dumps({
+            "type": "progress",
+            "step": step,
+            "status": status,
+            "overall": round(_OVERALL_PROGRESS["value"], 1),
+            **data,
+        }),
+        flush=True,
+    )
+
+
+def config_flag(value, default=False):
+    """Interpret JSON/string boolean config values consistently."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"", "0", "false", "off", "no", "none"}
 
 
 def fail(message):
@@ -920,6 +955,89 @@ def apply_clip_scores(candidates, moment_type, use_llm=True):
     return sorted(scored, key=lambda item: item["score"], reverse=True)
 
 
+def _window_overlap_ratio(left, right):
+    start = max(float(left.get("start", 0.0)), float(right.get("start", 0.0)))
+    end = min(float(left.get("end", 0.0)), float(right.get("end", 0.0)))
+    if end <= start:
+        return 0.0
+    shortest = max(
+        0.1,
+        min(
+            float(left.get("end", 0.0)) - float(left.get("start", 0.0)),
+            float(right.get("end", 0.0)) - float(right.get("start", 0.0)),
+        ),
+    )
+    return (end - start) / shortest
+
+
+def randomise_moment_selection(ranked, pool, clip_count, source_cache):
+    """Pick varied high-quality moments instead of a deterministic top slice.
+
+    Repeat runs on the same source must not keep returning the identical
+    moment.  The primary clip is drawn (time-seeded) from the strongest
+    scored candidates while avoiding the previously chosen segment recorded
+    in the durable analysis cache; remaining slots keep score order among
+    non-overlapping alternatives.
+    """
+    import random
+
+    candidates = []
+    seen_keys = set()
+    for item in list(ranked) + list(pool or []):
+        key = (round(float(item.get("start", 0.0)), 2), round(float(item.get("end", 0.0)), 2))
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        candidates.append(item)
+    if not candidates:
+        return ranked
+    candidates.sort(key=lambda item: float(item.get("score", 0)), reverse=True)
+
+    top_score = float(candidates[0].get("score", 50))
+    # Only genuinely strong alternatives may be selected as the lead moment.
+    primary_pool = [
+        item for item in candidates[: max(4, clip_count * 2)]
+        if float(item.get("score", 0)) >= top_score - 18
+    ] or candidates[:1]
+
+    picks_path = os.path.join(source_cache, "recent-picks.json")
+    recent = read_json(picks_path, [])
+    if not isinstance(recent, list):
+        recent = []
+    last_pick = recent[-1] if recent else None
+
+    rng = random.Random(time.time_ns())
+    selectable = primary_pool
+    if last_pick and len(primary_pool) > 1:
+        fresh = [item for item in primary_pool if _window_overlap_ratio(item, last_pick) < 0.55]
+        if fresh:
+            selectable = fresh
+    # Score-weighted draw keeps quality high while remaining varied.
+    weights = [max(1.0, float(item.get("score", 50))) ** 2 for item in selectable]
+    primary = rng.choices(selectable, weights=weights, k=1)[0]
+
+    ordered = [primary]
+    for item in candidates:
+        if len(ordered) >= clip_count:
+            break
+        if any(_window_overlap_ratio(item, chosen) > 0.42 for chosen in ordered):
+            continue
+        ordered.append(item)
+    for item in candidates:
+        if len(ordered) >= clip_count:
+            break
+        if item not in ordered:
+            ordered.append(item)
+
+    recent.append({
+        "start": round(float(primary.get("start", 0.0)), 2),
+        "end": round(float(primary.get("end", 0.0)), 2),
+        "pickedAt": int(time.time() * 1000),
+    })
+    write_json(picks_path, recent[-6:])
+    return ordered[:clip_count] if clip_count else ordered
+
+
 def detect_shot_boundaries(video_path):
     """Optional PySceneDetect adapter. Soft-fails when the package is missing."""
     if not video_path or not os.path.isfile(video_path):
@@ -1660,8 +1778,38 @@ def write_subtitles(path, words, clip_start, clip_end, font, font_size, color, p
     return len(beats)
 
 
-def run_ffmpeg(args, timeout=90):
-    subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y", *args], check=True, capture_output=True, timeout=timeout)
+def run_ffmpeg(args, timeout=90, progress_callback=None, expected_duration=None):
+    if not progress_callback or not expected_duration or expected_duration <= 0:
+        subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y", *args], check=True, capture_output=True, timeout=timeout)
+        return
+    # Stream FFmpeg's machine-readable progress so long encodes can drive a
+    # real percentage in the UI instead of an indeterminate spinner.
+    command = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-nostats", "-progress", "pipe:1", *args]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    deadline = time.time() + timeout
+    try:
+        for line in process.stdout or []:
+            if time.time() > deadline:
+                process.kill()
+                raise subprocess.TimeoutExpired(command, timeout)
+            line = line.strip()
+            # ffmpeg reports out_time_us / out_time_ms both in microseconds.
+            if line.startswith(("out_time_us=", "out_time_ms=")):
+                try:
+                    encoded_seconds = float(line.split("=", 1)[1]) / 1_000_000.0
+                except ValueError:
+                    continue
+                try:
+                    progress_callback(max(0.0, min(1.0, encoded_seconds / float(expected_duration))))
+                except Exception:
+                    pass
+        return_code = process.wait(timeout=max(1.0, deadline - time.time()))
+    finally:
+        if process.poll() is None:
+            process.kill()
+    if return_code != 0:
+        stderr_tail = (process.stderr.read() if process.stderr else "")[-4000:]
+        raise subprocess.CalledProcessError(return_code, command, output=None, stderr=stderr_tail)
 
 
 def probe_duration(path_value):
@@ -2366,6 +2514,7 @@ def render_final_from_master(
     fit_source=False,
     preserve_source=False,
     render_quality="premium",
+    progress_callback=None,
 ):
     """Create the final file directly from the source master in one encode.
 
@@ -2440,14 +2589,14 @@ def render_final_from_master(
         int(clip_duration * (30 if render_quality == "premium" else 16)),
     )
     try:
-        run_ffmpeg(base, timeout=render_timeout)
+        run_ffmpeg(base, timeout=render_timeout, progress_callback=progress_callback, expected_duration=clip_duration)
         return "source-master"
     except subprocess.CalledProcessError:
         if not local_fallback_path or local_fallback_path == input_url:
             raise
     fallback = base.copy()
     fallback[fallback.index(input_url)] = local_fallback_path
-    run_ffmpeg(fallback, timeout=render_timeout)
+    run_ffmpeg(fallback, timeout=render_timeout, progress_callback=progress_callback, expected_duration=clip_duration)
     return "downloaded-source-master"
 
 
@@ -2462,6 +2611,7 @@ def render_from_plate(
     render_quality="premium",
     subtitle_path=None,
     output_fps=None,
+    progress_callback=None,
 ):
     """Re-render a saved plate without replacing a dynamic crop by its first keyframe.
 
@@ -2473,6 +2623,12 @@ def render_from_plate(
     same final encode so captions stay fixed to the delivery canvas.
     """
     fps = max(30, min(60, int(round(float(output_fps or output_frame_rate(source_quality_report(plate_path)) or OUTPUT_FPS)))))
+    plate_seconds = None
+    if progress_callback:
+        try:
+            plate_seconds = probe_duration(plate_path)
+        except Exception:
+            plate_seconds = None
     if not fit_source and crop_keyframes and len(crop_keyframes) >= 2:
         if render_per_frame_crop_from_master(
             plate_path,
@@ -2498,7 +2654,7 @@ def render_from_plate(
             "-map", "[v]", "-map", "0:a?", "-r", str(fps),
             *render_encoding_args(render_quality),
             clip_path,
-        ], timeout=90)
+        ], timeout=180, progress_callback=progress_callback, expected_duration=plate_seconds)
         return
     if fit_source:
         filter_complex = (
@@ -2517,7 +2673,7 @@ def render_from_plate(
             # profile aligned with direct master renders.
             *render_encoding_args(render_quality),
             clip_path,
-        ], timeout=90)
+        ], timeout=180, progress_callback=progress_callback, expected_duration=plate_seconds)
         return
     crop_part = build_crop_filter(
         OUTPUT_WIDTH,
@@ -2540,7 +2696,9 @@ def render_from_plate(
             *render_encoding_args(render_quality),
             clip_path,
         ],
-        timeout=90,
+        timeout=180,
+        progress_callback=progress_callback,
+        expected_duration=plate_seconds,
     )
 
 
@@ -2717,8 +2875,8 @@ def caption_words_relative(words, clip_start, clip_end):
     ]
 
 
-def burn_subtitles(source_clip_path, output_path, subtitle_path, render_quality="premium", output_fps=OUTPUT_FPS):
-    subtitle_filter = f"ass={subtitle_path}"
+def burn_subtitles(source_clip_path, output_path, subtitle_path, render_quality="premium", output_fps=OUTPUT_FPS, progress_callback=None, expected_duration=None):
+    subtitle_filter = f"ass='{_escape_ass_path(subtitle_path)}'"
     run_ffmpeg(
         [
             "-i",
@@ -2730,21 +2888,155 @@ def burn_subtitles(source_clip_path, output_path, subtitle_path, render_quality=
             *render_encoding_args(render_quality),
             output_path,
         ],
-        timeout=90,
+        timeout=300,
+        progress_callback=progress_callback,
+        expected_duration=expected_duration,
     )
+
+
+def _resolve_artifact_dir(artifact_id):
+    artifact_dir = os.path.join(TMP_ROOT, CLIP_ARTIFACT_DIR, os.path.basename(artifact_id))
+    if not os.path.isdir(artifact_dir):
+        artifact_dir = os.path.join(TMP_ROOT, CLIP_ARTIFACT_DIR, os.path.splitext(os.path.basename(artifact_id))[0])
+    if not os.path.isdir(artifact_dir):
+        return None
+    return artifact_dir
+
+
+def export_subtitled_clip(cfg):
+    """Burn the (possibly edited) caption layer into the finished preview MP4.
+
+    The editor previews captions as a live overlay on a clean render, so an
+    export only needs one subtitle-compositing encode of the existing clip.
+    No re-download, no ASR, no re-tracking.
+    """
+    global OUTPUT_WIDTH, OUTPUT_HEIGHT
+    artifact_id = str(cfg.get("artifact_id") or cfg.get("clip_id") or "").strip()
+    if not artifact_id:
+        fail("export requires artifact_id")
+    artifact_dir = _resolve_artifact_dir(artifact_id)
+    if not artifact_dir:
+        fail(f"Clip artifacts not found for {artifact_id}")
+
+    meta = read_json(os.path.join(artifact_dir, "meta.json"), {})
+    words = read_json(os.path.join(artifact_dir, "words.json"), [])
+    edited_words = cfg.get("words")
+    if isinstance(edited_words, list) and edited_words:
+        words = [
+            {
+                "word": str(item.get("word") or item.get("text") or "").strip(),
+                "start": float(item.get("start", 0.0)),
+                "end": float(item.get("end", 0.0)),
+            }
+            for item in edited_words
+            if str(item.get("word") or item.get("text") or "").strip()
+        ]
+
+    emit("render", "running", message="Preparing subtitle export...", overall=4)
+    source_name = os.path.basename(str(meta.get("output_name") or f"{os.path.basename(artifact_dir)}.mp4"))
+    source_candidates = [
+        os.path.join(OUTPUT_DIR, source_name),
+        os.path.join(os.getcwd(), "output", source_name),
+    ]
+    source_clip = next((path for path in source_candidates if os.path.isfile(path)), None)
+    if not source_clip:
+        fail("The rendered clip is no longer available for export")
+
+    aspect = str(cfg.get("aspect_ratio") or meta.get("aspect_ratio") or "9:16")
+    render_quality = normalise_render_quality(cfg.get("render_quality") or cfg.get("renderQuality") or meta.get("render_quality") or "premium")
+    # The subtitle canvas must match the already-rendered clip exactly.
+    OUTPUT_WIDTH, OUTPUT_HEIGHT = output_dimensions(aspect, render_quality)
+    font = str(cfg.get("font") or meta.get("font") or "Impact")
+    font_size = min(92, max(44, int(cfg.get("font_size") or meta.get("font_size") or 74)))
+    text_color = str(cfg.get("text_colour") or meta.get("text_colour") or "#FFFFFF")
+    position = str(cfg.get("position") or meta.get("position") or "bottom")
+    caption_x = cfg.get("caption_x", cfg.get("captionX", meta.get("caption_x")))
+    caption_y = cfg.get("caption_y", cfg.get("captionY", meta.get("caption_y")))
+    subtitle_style = str(cfg.get("subtitle_style") or cfg.get("subtitleStyle") or meta.get("subtitle_style") or "word")
+    captions_enabled = config_flag(cfg.get("captions_enabled", meta.get("captions_enabled", True)), True)
+    clip_duration = float(meta.get("clip_duration") or probe_duration(source_clip))
+
+    output_name = str(cfg.get("output_name") or f"{os.path.basename(artifact_dir)}-export-{int(time.time() * 1000) % 1000000}.mp4")
+    if not output_name.endswith(".mp4"):
+        output_name += ".mp4"
+    output_path = os.path.join(OUTPUT_DIR, output_name)
+
+    subtitle_path = os.path.join(artifact_dir, "captions.ass")
+    subtitle_count = 0
+    if captions_enabled and words:
+        subtitle_count = write_subtitles(
+            subtitle_path,
+            words,
+            0.0,
+            clip_duration,
+            font,
+            font_size,
+            text_color,
+            position,
+            subtitle_style,
+            caption_x,
+            caption_y,
+        )
+    emit("subtitles", "complete", message=f"{subtitle_count} caption beats styled for export", word_count=subtitle_count, overall=10)
+
+    emit("render", "running", message="Burning subtitles into the export...", overall=12)
+    if subtitle_count > 0:
+        def report_export_progress(fraction):
+            emit(
+                "render",
+                "running",
+                message=f"Burning subtitles: {round(fraction * 100)}%",
+                progress=fraction,
+                overall=12 + 83 * fraction,
+            )
+
+        burn_subtitles(
+            source_clip,
+            output_path,
+            subtitle_path,
+            render_quality=render_quality,
+            output_fps=output_frame_rate(source_quality_report(source_clip)),
+            progress_callback=report_export_progress,
+            expected_duration=clip_duration,
+        )
+    else:
+        shutil.copy2(source_clip, output_path)
+    if not os.path.exists(output_path) or os.path.getsize(output_path) <= 1024:
+        fail("Subtitle export did not produce a playable MP4")
+
+    write_json(os.path.join(artifact_dir, "words.json"), words)
+    write_json(os.path.join(artifact_dir, "meta.json"), {**meta, "last_export": output_name, "words_edited": bool(edited_words)})
+
+    result = {
+        "id": meta.get("clip_id") or "candidate-1",
+        "rank": int(meta.get("rank") or 1),
+        "output": f"./output/{output_name}",
+        "title": meta.get("title") or "Exported clip",
+        "clip_duration": f"{round(clip_duration)}s",
+        "words": words,
+        "word_count": subtitle_count,
+        "captions_enabled": bool(captions_enabled and subtitle_count > 0),
+        "subtitles_burned": subtitle_count > 0,
+        "file_size": os.path.getsize(output_path),
+        "artifact_id": os.path.basename(artifact_dir),
+        "export": True,
+    }
+    emit("render", "complete", message="Subtitled export ready", overall=98)
+    emit("complete", "complete", message="Export complete", results=[result], output=result["output"], title=result["title"], clip_duration=result["clip_duration"], file_size=result["file_size"], overall=100)
+    print(json.dumps({"type": "clip_result", "step": "result", "status": "complete", "message": "Subtitled export ready", "overall": 100, "result": result}), flush=True)
 
 
 def refine_clip(cfg):
     """Re-crop + subtitle burn from persisted plate/words without re-download/ASR."""
     global OUTPUT_WIDTH, OUTPUT_HEIGHT
+    if config_flag(cfg.get("subtitles_only") or cfg.get("subtitlesOnly")):
+        export_subtitled_clip(cfg)
+        return
     artifact_id = str(cfg.get("artifact_id") or cfg.get("clip_id") or "").strip()
     if not artifact_id:
         fail("refine requires artifact_id")
-    artifact_dir = os.path.join(TMP_ROOT, CLIP_ARTIFACT_DIR, os.path.basename(artifact_id))
-    # Allow either basename of output or explicit artifact folder name.
-    if not os.path.isdir(artifact_dir):
-        artifact_dir = os.path.join(TMP_ROOT, CLIP_ARTIFACT_DIR, os.path.splitext(os.path.basename(artifact_id))[0])
-    if not os.path.isdir(artifact_dir):
+    artifact_dir = _resolve_artifact_dir(artifact_id)
+    if not artifact_dir:
         fail(f"Clip artifacts not found for {artifact_id}")
 
     meta = read_json(os.path.join(artifact_dir, "meta.json"), {})
@@ -2766,6 +3058,7 @@ def refine_clip(cfg):
     caption_y = cfg.get("caption_y", cfg.get("captionY", meta.get("caption_y", meta.get("captionY"))))
     subtitle_style = str(cfg.get("subtitle_style") or cfg.get("subtitleStyle") or meta.get("subtitle_style") or "word")
     captions_enabled = bool(cfg.get("captions_enabled", meta.get("captions_enabled", True)))
+    burn_captions = config_flag(cfg.get("burn_captions", cfg.get("burnCaptions")), bool(meta.get("subtitles_burned", True)))
     collision_mode = str(cfg.get("caption_collision_mode") or cfg.get("captionCollisionMode") or meta.get("caption_collision_mode") or "keep-existing").lower()
 
     edited_words = cfg.get("words")
@@ -2777,7 +3070,7 @@ def refine_clip(cfg):
     if not isinstance(shot_boundaries, list):
         shot_boundaries = []
 
-    emit("clip", "running", message="Planning timestamped subject framing for saved clip...")
+    emit("clip", "running", message="Planning timestamped subject framing for saved clip...", overall=6)
     frame_w, frame_h = probe_video_size(FFPROBE, FFMPEG, plate_path)
     plate_quality = source_quality_report(plate_path)
     faces_dir = os.path.join(artifact_dir, "faces")
@@ -2873,9 +3166,19 @@ def refine_clip(cfg):
     if not output_name.endswith(".mp4"):
         output_name += ".mp4"
     output_path = os.path.join(OUTPUT_DIR, output_name)
-    emit("render", "running", message="Re-encoding refined clip...")
+    emit("render", "running", message="Re-encoding refined clip...", overall=40)
     clean_clip_path = os.path.join(artifact_dir, "clean-refined.mp4")
     sendcmd_path = os.path.join(artifact_dir, "crop.sendcmd")
+
+    def report_refine_progress(fraction):
+        emit(
+            "render",
+            "running",
+            message=f"Re-encoding refined clip: {round(fraction * 100)}%",
+            progress=fraction,
+            overall=40 + 55 * fraction,
+        )
+
     render_from_plate(
         plate_path,
         clean_clip_path,
@@ -2897,8 +3200,9 @@ def refine_clip(cfg):
             and (frame_w / max(1, frame_h)) > (OUTPUT_WIDTH / max(1, OUTPUT_HEIGHT)) + 0.02
         ),
         render_quality=render_quality,
-        subtitle_path=subtitle_path if effective_captions_enabled and subtitle_count > 0 else None,
+        subtitle_path=subtitle_path if effective_captions_enabled and subtitle_count > 0 and burn_captions else None,
         output_fps=output_frame_rate(plate_quality),
+        progress_callback=report_refine_progress,
     )
     # `render_from_plate` composes captions after the crop in its only final
     # encode. Copy the finished artifact rather than adding a second lossy
@@ -2920,6 +3224,7 @@ def refine_clip(cfg):
             "caption_x": caption_x,
             "caption_y": caption_y,
             "render_quality": render_quality,
+            "subtitles_burned": bool(burn_captions and effective_captions_enabled and subtitle_count > 0),
         },
         plate_path=plate_path,
         subtitle_path=subtitle_path,
@@ -2954,6 +3259,19 @@ def refine_clip(cfg):
         "caption_collision": caption_collision,
         "captions_enabled": effective_captions_enabled,
         "caption_position": effective_caption_position,
+        "subtitles_burned": bool(burn_captions and effective_captions_enabled and subtitle_count > 0),
+        "caption_style": {
+            "font": font,
+            "font_size": font_size,
+            "text_colour": text_color,
+            "position": effective_caption_position,
+            "caption_x": caption_x,
+            "caption_y": caption_y,
+            "subtitle_style": subtitle_style,
+            "active_colour": "#FFD54A",
+            "canvas_width": OUTPUT_WIDTH,
+            "canvas_height": OUTPUT_HEIGHT,
+        },
         "output_quality": f"{OUTPUT_WIDTH}x{OUTPUT_HEIGHT} {aspect} {render_quality_label(render_quality)} legacy-plate-refine",
         "artifact_id": os.path.basename(artifact_dir),
         "face_tracking": crop_plan.get("faceTracking"),
@@ -2963,8 +3281,8 @@ def refine_clip(cfg):
         "face_scenes": crop_plan.get("scenes") or [],
         "plate_url": f"/api/clipper/artifact/{os.path.basename(artifact_dir)}/plate.mp4",
     }
-    emit("render", "complete", message="Refined clip ready")
-    emit("complete", "complete", message="Refine complete", results=[result], output=result["output"], **{k: result[k] for k in ("title", "clip_duration", "reason", "caption", "file_size")})
+    emit("render", "complete", message="Refined clip ready", overall=98)
+    emit("complete", "complete", message="Refine complete", results=[result], output=result["output"], overall=100, **{k: result[k] for k in ("title", "clip_duration", "reason", "caption", "file_size")})
     print(json.dumps({"type": "clip_result", "step": "result", "status": "complete", "message": "Refined clip ready", "result": result}), flush=True)
 
 
@@ -3088,6 +3406,9 @@ def main():
     aspect = str(cfg.get("aspect_ratio", "9:16"))
     crop_focus = str(cfg.get("crop_focus", "center"))
     captions_enabled = bool(cfg.get("captions_enabled", True))
+    # Captions are rendered as a live editor overlay by default; pixels are
+    # only burned at export time. Callers may still opt into legacy burn-in.
+    burn_captions = config_flag(cfg.get("burn_captions", cfg.get("burnCaptions")), False)
     remove_fillers = bool(cfg.get("remove_fillers", True))
     render_quality = normalise_render_quality(cfg.get("render_quality") or cfg.get("renderQuality") or "premium")
     clip_count = min(8, max(1, int(cfg.get("clip_count", 3))))
@@ -3107,16 +3428,20 @@ def main():
 
     try:
         check_cancelled()
-        emit("captions", "running", message="Reading captions and video metadata...")
+        emit("captions", "running", message="Reading captions and video metadata...", overall=2)
         local_source = os.path.isfile(source)
         imported_source_kind = "local-file" if local_source else "public-url"
         yt = None
         stream_url = source
         fallback_path = source if local_source else ""
+        # Whisper word timestamps from the full source can be reused per-clip
+        # without a second per-candidate transcription pass.
+        source_words_word_accurate = False
         if local_source:
             title = os.path.splitext(os.path.basename(source))[0].replace("-", " ").replace("_", " ").strip() or "Uploaded video"
             duration = probe_duration(source)
             words = transcribe_clip_words(source)
+            source_words_word_accurate = True
         else:
             try:
                 from pytubefix import YouTube
@@ -3163,9 +3488,10 @@ def main():
                 except Exception:
                     duration = requested_duration
                 words = transcribe_clip_words(source)
+                source_words_word_accurate = True
 
         audit_source = source if local_source and os.path.isfile(source) else (fallback_path or stream_url)
-        emit("source-audit", "running", message="Auditing master media quality before rendering...")
+        emit("source-audit", "running", message="Auditing master media quality before rendering...", overall=16)
         source_quality = source_quality_report(audit_source)
         emit(
             "source-audit", "complete",
@@ -3270,6 +3596,7 @@ def main():
             analysis_duration=duration,
             source_range=source_range,
             word_count=len(words),
+            overall=18,
         )
 
         # Analysis artifacts are durable; render intermediates remain job-local.
@@ -3329,7 +3656,7 @@ def main():
         audio_path = os.path.join(source_cache, "audio-evidence.json")
         audio_evidence = read_json(audio_path, {})
         audio_recomputed = False
-        emit("audio", "running", message="Measuring audio energy and silence...")
+        emit("audio", "running", message="Measuring audio energy and silence...", overall=19)
         if not intelligence_cache_valid(
             audio_evidence,
             INTELLIGENCE_SCHEMA_VERSION,
@@ -3357,6 +3684,7 @@ def main():
             available=bool(audio_evidence.get("available")),
             seconds=len(audio_evidence.get("seconds") or []),
             cache_hit=not audio_recomputed,
+            overall=22,
         )
 
         # Broad highlight requests (the normal "viral moment" workflow) are
@@ -3496,6 +3824,7 @@ def main():
             message=f"Mapped {intelligence_status['timeline']['segments']} seconds with {intelligence_status['timeline']['events']} evidence events",
             intelligence=intelligence_status,
             cache_hit=not timeline_recomputed,
+            overall=24,
         )
 
         shot_path = os.path.join(source_cache, "shot-boundaries.json")
@@ -3666,6 +3995,10 @@ def main():
                 ranked.append(candidate)
                 if len(ranked) >= clip_count:
                     break
+        # Autonomous "find a moment" runs deliberately vary their pick between
+        # equally strong candidates; directed requests stay deterministic.
+        if not source_range and not moment_request:
+            ranked = randomise_moment_selection(ranked, ranked_all, clip_count, source_cache)
         # When a person is already selected, prefer candidates that overlap accepted face scenes.
         if face_cfg.get("selectedPersonId") and (local_source or (fallback_path and os.path.isfile(fallback_path))):
             try:
@@ -3729,6 +4062,7 @@ def main():
             candidate_count=len(ranked),
             multimodal_candidate_count=multimodal_count,
             cache_hit=False,
+            overall=27,
         )
         write_json(os.path.join(source_cache, "ranked-clips.json"), ranked)
         initial_edit_plan = build_edit_plan(ranked, shot_boundaries, face_cfg)
@@ -3741,6 +4075,7 @@ def main():
             message=f"{len(candidates)} non-overlapping candidates ranked",
             candidate_count=len(candidates),
             face_tracking=face_capability_report(),
+            overall=28,
         )
 
         probe_source = fallback_path if fallback_path and os.path.isfile(fallback_path) else (source if local_source else stream_url)
@@ -3751,8 +4086,17 @@ def main():
 
         results = []
         crop_plans = {}
+        # Candidate work occupies the 28→97% band of the overall progress
+        # ring, split evenly per clip and weighted inside each clip by the
+        # typical duration of its sub-stages (cut, words, captions, encode).
+        candidate_span = 69.0 / max(1, len(candidates))
         for candidate_index, candidate in enumerate(candidates):
             check_cancelled()
+            span_start = 28.0 + candidate_span * candidate_index
+
+            def candidate_progress(fraction, base=span_start):
+                return base + candidate_span * max(0.0, min(1.0, fraction))
+
             clip_start = float(candidate["start"])
             clip_end = float(candidate["end"])
             candidate_duration_limit = 90.0 if candidate.get("query_directed") and candidate.get("whole_section") else requested_duration
@@ -3782,7 +4126,7 @@ def main():
             artifact_dir = artifact_dir_for(output_name)
             sendcmd_path = os.path.join(job_tmp, f"{item_name}.sendcmd")
 
-            emit("clip", "running", message=f"Cutting candidate {candidate_index + 1} of {len(candidates)}...")
+            emit("clip", "running", message=f"Cutting candidate {candidate_index + 1} of {len(candidates)}...", overall=candidate_progress(0.02))
             # Persist an uncropped plate so face-tracking changes can re-render without re-download.
             try:
                 extract_plate_clip(stream_url, fallback_path, plate_path, clip_start, clip_duration)
@@ -3908,11 +4252,20 @@ def main():
             analysis_clip_path = plate_path
             if not os.path.exists(analysis_clip_path) or os.path.getsize(analysis_clip_path) <= 1024:
                 fail(f"Candidate {candidate_index + 1} did not produce a playable analysis plate")
-            emit("clip", "complete", message=f"Candidate {candidate_index + 1} analysis plate ready; master source retained for final render")
+            emit("clip", "complete", message=f"Candidate {candidate_index + 1} analysis plate ready; master source retained for final render", overall=candidate_progress(0.18))
 
-            emit("transcribe", "running", message=f"Transcribing candidate {candidate_index + 1} for exact word timing...")
-            transcribed_words = transcribe_clip_words(analysis_clip_path)
+            emit("transcribe", "running", message=f"Aligning word timing for candidate {candidate_index + 1}...", overall=candidate_progress(0.2))
+            # The full source was already transcribed with word timestamps;
+            # slicing that transcript avoids a redundant per-clip Whisper pass.
+            transcribed_words = []
             timing_source = os.environ.get("CLIPPER_WHISPER_MODEL", "base.en")
+            if source_words_word_accurate:
+                transcribed_words = caption_words_relative(words, clip_start, clip_end)
+                if transcribed_words:
+                    timing_source = "source transcript"
+            if len(transcribed_words) < 5:
+                transcribed_words = transcribe_clip_words(analysis_clip_path)
+                timing_source = os.environ.get("CLIPPER_WHISPER_MODEL", "base.en")
             if len(transcribed_words) < 5:
                 fallback_words = caption_words_relative(words, clip_start, clip_end)
                 if len(fallback_words) >= 5:
@@ -3936,6 +4289,7 @@ def main():
                 ),
                 word_count=len(transcribed_words),
                 timing_source=timing_source,
+                overall=candidate_progress(0.3),
             )
 
             # Caption detection is advisory. A captioned Clyra clip must
@@ -3943,7 +4297,12 @@ def main():
             # silently retaining only source captions makes the editor timing
             # data disagree with the downloaded video.
             collision_mode = str(cfg.get("caption_collision_mode") or cfg.get("captionCollisionMode") or "keep-existing").lower()
-            caption_collision = detect_embedded_caption_risk(analysis_clip_path, os.path.join(artifact_dir, "caption-audit"))
+            if burn_captions:
+                caption_collision = detect_embedded_caption_risk(analysis_clip_path, os.path.join(artifact_dir, "caption-audit"))
+            else:
+                # Preview captions render as an editable overlay, so embedded
+                # caption sampling is deferred to the export-time burn.
+                caption_collision = {"detected": False, "action": "none", "skipped": "overlay-preview"}
             candidate_captions_enabled = captions_enabled and bool(transcribed_words)
             effective_caption_position = position
             custom_caption_position = has_manual_caption_placement(cfg, caption_x, caption_y)
@@ -3958,6 +4317,7 @@ def main():
                     else "Preparing clean output without a generated caption layer..."
                 ),
                 caption_collision=caption_collision,
+                overall=candidate_progress(0.32),
             )
             subtitle_path = os.path.join(job_tmp, f"{item_name}.ass")
             subtitle_count = 0
@@ -3977,9 +4337,18 @@ def main():
                     render_caption_x,
                     render_caption_y,
                 )
-            emit("subtitles", "complete", message=(f"{subtitle_count} frame-safe caption beats prepared" if candidate_captions_enabled else "Using existing source captions; no duplicate Clyra caption layer added"), word_count=subtitle_count, caption_collision=caption_collision)
+            emit("subtitles", "complete", message=(f"{subtitle_count} frame-safe caption beats prepared" if candidate_captions_enabled else "Using existing source captions; no duplicate Clyra caption layer added"), word_count=subtitle_count, caption_collision=caption_collision, overall=candidate_progress(0.35))
 
-            emit("render", "running", message=f"Encoding candidate {candidate_index + 1} of {len(candidates)}...")
+            emit("render", "running", message=f"Encoding candidate {candidate_index + 1} of {len(candidates)}...", overall=candidate_progress(0.37))
+
+            def report_encode_progress(fraction, base_progress=candidate_progress, clip_number=candidate_index + 1):
+                emit(
+                    "render",
+                    "running",
+                    message=f"Encoding candidate {clip_number}: {round(fraction * 100)}%",
+                    progress=fraction,
+                    overall=base_progress(0.37 + 0.6 * fraction),
+                )
             # `source` may point to a range/proxy used for analysis. The final
             # encode always seeks the original master when it is available.
             render_source = master_source or (source if local_source and os.path.isfile(source) else stream_url)
@@ -4002,9 +4371,10 @@ def main():
                     if face_cfg["enabled"] or (crop_plan.get("faceTracking") or {}).get("smartReframe")
                     else None
                 ),
-                subtitle_path=subtitle_path if candidate_captions_enabled else None,
+                subtitle_path=subtitle_path if candidate_captions_enabled and burn_captions else None,
                 output_fps=output_frame_rate(source_quality),
                 render_quality=render_quality,
+                progress_callback=report_encode_progress,
                 preserve_source=bool((crop_plan.get("faceTracking") or {}).get("preserveSource")),
                 fit_source=(
                     (crop_plan.get("faceTracking") or {}).get("backend") == "stable-fallback"
@@ -4056,6 +4426,7 @@ def main():
                     "caption_y": caption_y,
                     "caption_collision_mode": collision_mode,
                     "caption_collision": caption_collision,
+                    "subtitles_burned": bool(burn_captions and candidate_captions_enabled),
                     "subtitle_layer": {
                         "coordinate_space": f"{OUTPUT_WIDTH}x{OUTPUT_HEIGHT}-final-canvas",
                         "composited_after_crop": True,
@@ -4110,6 +4481,21 @@ def main():
                 "moment_verification": candidate.get("event_verification"),
                 "captions_enabled": candidate_captions_enabled,
                 "caption_position": effective_caption_position,
+                "subtitles_burned": bool(burn_captions and candidate_captions_enabled),
+                # Everything the editor overlay needs to reproduce the burn-in
+                # style exactly on top of the clean preview video.
+                "caption_style": {
+                    "font": font,
+                    "font_size": font_size,
+                    "text_colour": text_color,
+                    "position": effective_caption_position,
+                    "caption_x": caption_x,
+                    "caption_y": caption_y,
+                    "subtitle_style": subtitle_style,
+                    "active_colour": "#FFD54A",
+                    "canvas_width": OUTPUT_WIDTH,
+                    "canvas_height": OUTPUT_HEIGHT,
+                },
                 "artifact_id": os.path.basename(artifact_dir),
                 "face_tracking": crop_plan.get("faceTracking"),
                 "available_faces": available_faces,
@@ -4119,12 +4505,13 @@ def main():
                 "plate_url": f"/api/clipper/artifact/{os.path.basename(artifact_dir)}/plate.mp4",
             }
             results.append(result)
-            print(json.dumps({"type": "clip_result", "step": "result", "status": "complete", "message": f"Candidate {candidate_index + 1} ready", "result": result}), flush=True)
+            set_overall_progress(candidate_progress(1.0))
+            print(json.dumps({"type": "clip_result", "step": "result", "status": "complete", "message": f"Candidate {candidate_index + 1} ready", "overall": round(_OVERALL_PROGRESS["value"], 1), "result": result}), flush=True)
 
         final_edit_plan = build_edit_plan(ranked, shot_boundaries, face_cfg, crop_plans)
         final_edit_plan["sourceOrigin"] = source_origin
         write_json(os.path.join(source_cache, "edit-plan.json"), final_edit_plan)
-        emit("render", "complete", message=f"{len(results)} MP4 clips rendered")
+        emit("render", "complete", message=f"{len(results)} MP4 clips rendered", overall=98)
         elapsed = time.time() - started
         first = results[0]
         emit(
@@ -4152,6 +4539,7 @@ def main():
             output_quality=first["output_quality"],
             face_tracking=face_cfg,
             video_understanding_profile=video_understanding_profile,
+            overall=100,
         )
     except PipelineCancelled:
         emit(

@@ -3272,6 +3272,10 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
       captions_enabled: body.captionsEnabled ?? body.captions_enabled ?? true,
       caption_collision_mode: body.captionCollisionMode || body.caption_collision_mode || "auto",
       render_quality: body.renderQuality || body.render_quality || "premium",
+      // Detached-overlay contract: previews re-render clean; captions are
+      // only composited into pixels for an explicit export.
+      burn_captions: body.burnCaptions ?? body.burn_captions ?? false,
+      subtitles_only: body.subtitlesOnly ?? body.subtitles_only ?? false,
     };
     spawnClipperPipeline(["--refine", JSON.stringify(cfg)], res, "Refining crop and captions...");
   });
@@ -3317,6 +3321,21 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
     ];
     return candidates.find((candidate) => existsSync(candidate)) || null;
   };
+
+  // Word-timing + style metadata as JSON so the editor's detached subtitle
+  // overlay can hydrate without re-running the pipeline.
+  app.get("/api/clipper/artifact/:artifactId/:jsonFile(words|meta|crop-keyframes).json", (req, res) => {
+    const filePath = resolveClipperArtifactFile(String(req.params.artifactId || ""), `${String(req.params.jsonFile)}.json`);
+    if (!filePath) {
+      res.status(404).json({ error: "Artifact metadata not found" });
+      return;
+    }
+    res.type("application/json");
+    res.setHeader("Cache-Control", "no-store");
+    res.sendFile(filePath, (error) => {
+      if (error && !res.headersSent) res.status(404).json({ error: "Artifact metadata not found" });
+    });
+  });
 
   app.get("/api/clipper/artifact/:artifactId/plate.mp4", (req, res) => {
     const filePath = resolveClipperArtifactFile(String(req.params.artifactId || ""), "plate.mp4");

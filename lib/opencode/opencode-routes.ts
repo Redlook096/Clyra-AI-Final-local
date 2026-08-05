@@ -1,9 +1,38 @@
 import type { Application } from "express";
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
 import { clyraDataPath } from "../runtime-paths";
 import { openCodeRuntimeManager } from "./OpenCodeRuntimeManager";
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Project workspaces live inside Clyra's data dir, which the parent repo
+ * gitignores. OpenCode's snapshot/diff system needs a git worktree, so give
+ * each project its own repo with a baseline commit. Without this, session
+ * diffs are always empty and the UI cannot show real +/− statistics.
+ */
+async function ensureProjectGitRepo(root: string) {
+  const git = (...args: string[]) =>
+    execFileAsync("git", ["-C", root, ...args], { timeout: 15_000 });
+  try {
+    await fs.access(path.join(root, ".git"));
+  } catch {
+    await git("init", "--initial-branch=main").catch(() => git("init"));
+    await git("config", "user.email", "agent@clyra.local");
+    await git("config", "user.name", "Clyra Agent");
+  }
+  try {
+    await git("rev-parse", "HEAD");
+  } catch {
+    // No commits yet: snapshot whatever already exists as the baseline.
+    await git("add", "-A");
+    await git("commit", "--allow-empty", "-m", "Clyra project baseline").catch(() => undefined);
+  }
+}
 
 const MAX_PROMPT_LENGTH = 20_000;
 const subscriptions = new Map<string, () => void>();
@@ -28,7 +57,12 @@ function sendSse(res: import("express").Response, event: unknown) {
 export function registerOpenCodeRoutes(app: Application) {
   app.get("/api/opencode/status", async (_req, res) => {
     const health = await openCodeRuntimeManager.health();
-    res.json({ sdkVersion: "1.18.12", executableVersion: process.env.CLYRA_OPENCODE_VERSION || "detected at runtime", ...health });
+    res.json({
+      sdkVersion: "1.18.12",
+      executableVersion: process.env.CLYRA_OPENCODE_VERSION || "detected at runtime",
+      model: process.env.CLYRA_OPENCODE_MODEL || "deepseek-chat",
+      ...health,
+    });
   });
 
   app.post("/api/opencode/runtime/start", async (req, res) => {
@@ -37,6 +71,7 @@ export function registerOpenCodeRoutes(app: Application) {
     try {
       const root = projectPath(projectId);
       await fs.mkdir(root, { recursive: true });
+      await ensureProjectGitRepo(root).catch(() => undefined);
       res.json(await openCodeRuntimeManager.start(projectId, root));
     } catch (error) {
       res.status(503).json({ error: error instanceof Error ? error.message : "OpenCode could not start." });

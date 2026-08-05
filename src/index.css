@@ -4497,6 +4497,109 @@ body,
   .clyra-browser-agent-cursor::before { animation: none; }
 }
 
+/* ============================================================
+   Clyra Code — agent-first coding workspace theme
+   ============================================================ */
+.clyra-code-root {
+  --app-background: #f7f7f6;
+  --sidebar-background: #f1f2f6;
+  --main-background: #ffffff;
+  --preview-background: #ffffff;
+  --surface-muted: #f5f5f4;
+  --surface-hover: #ededeb;
+  --surface-selected: #e7e8ed;
+  --border-subtle: rgba(20, 20, 20, 0.075);
+  --border-medium: rgba(20, 20, 20, 0.12);
+  --text-primary: #171717;
+  --text-secondary: #656565;
+  --text-tertiary: #949494;
+  --text-disabled: #b5b5b5;
+  --accent-blue: #1769e0;
+  --addition-green: #239653;
+  --deletion-red: #d94b4b;
+  --warning-amber: #b87918;
+  --radius-row: 7px;
+  --radius-control: 8px;
+  --radius-tab: 8px;
+  --radius-input: 12px;
+  --radius-panel: 14px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+  color: var(--text-primary);
+  background: var(--app-background);
+}
+
+.clyra-code-root .cc-mono {
+  font-family: "SFMono-Regular", "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
+}
+
+/* Masked glyph shimmer for active action targets. Light passes across the
+   text itself (background-clip: text), never a surrounding rectangle. */
+.cc-shimmer {
+  --cc-shimmer-base: #404040;
+  background-image: linear-gradient(
+    100deg,
+    var(--cc-shimmer-base) 0%,
+    var(--cc-shimmer-base) 35%,
+    rgba(190, 205, 235, 0.92) 50%,
+    var(--cc-shimmer-base) 65%,
+    var(--cc-shimmer-base) 100%
+  );
+  background-size: 220% 100%;
+  background-position: 200% 0;
+  background-repeat: no-repeat;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: clyra-text-shine 1.45s linear infinite;
+  will-change: background-position;
+}
+
+.cc-shimmer--blue { --cc-shimmer-base: #1c62c9; }
+.cc-shimmer--long { animation-duration: 1.6s; background-size: 260% 100%; }
+
+.cc-counter {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+.cc-resize-handle {
+  position: relative;
+  width: 1px;
+  flex: 0 0 1px;
+  background: var(--border-subtle);
+  cursor: col-resize;
+}
+.cc-resize-handle::after {
+  content: "";
+  position: absolute;
+  inset: 0 -4px;
+}
+.cc-resize-handle:hover,
+.cc-resize-handle[data-active="true"] { background: var(--border-medium); }
+
+.cc-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(20, 20, 20, 0.14) transparent;
+}
+.cc-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.cc-scroll::-webkit-scrollbar-thumb {
+  background: rgba(20, 20, 20, 0.14);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.cc-scroll::-webkit-scrollbar-track { background: transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cc-shimmer {
+    animation: none;
+    background-image: none;
+    background-clip: border-box;
+    -webkit-background-clip: border-box;
+    color: var(--cc-shimmer-base);
+  }
+}
+
 /* Welcome screen: compact, quietly tactile controls. These rules live at the
    end of the chat cascade so the welcome screen does not inherit earlier,
    larger experimental treatments. */
