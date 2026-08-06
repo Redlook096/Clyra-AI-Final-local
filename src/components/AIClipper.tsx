@@ -184,11 +184,17 @@ function clipPotentialScore(result: ClipResult): number {
  * overlay. Results from before the overlay overhaul carry neither the
  * explicit `subtitles_burned: false` flag nor a `caption_style` contract —
  * their pixels already contain captions, so no overlay (and no second burn).
+ *
+ * Prefer showing the overlay whenever we have timed words and the clip is
+ * not explicitly marked as already burned — caption_style is optional.
  */
 function hasDetachedCaptions(result?: ClipResult | null): boolean {
   if (!result) return false;
   if (result.subtitles_burned === true) return false;
-  return result.subtitles_burned === false || Boolean(result.caption_style);
+  if (result.subtitles_burned === false) return true;
+  if (result.caption_style) return true;
+  // Untagged modern results still get an overlay when word timings exist.
+  return Array.isArray(result.words) && result.words.length > 0;
 }
 
 type ClipDraft = {
@@ -505,7 +511,7 @@ function demoClipFixture(): ClipResult {
       position: "bottom",
       caption_x: 50,
       caption_y: 82,
-      subtitle_style: "karaoke",
+      subtitle_style: "phrase-highlight",
     },
     score: 74,
     clip_potential_score: 74,
@@ -2454,7 +2460,12 @@ export default function AIClipper({
       activeWordIndex={activeCaptionIndex}
       onActiveWordIndex={setActiveCaptionIndex}
       captionStyle={selectedCaptionStyle}
-      captionsVisible={Boolean(selected && selected.captions_enabled !== false && hasDetachedCaptions(selected))}
+      captionsVisible={Boolean(
+        selected
+        && selected.captions_enabled !== false
+        && captionWords.length > 0
+        && hasDetachedCaptions(selected)
+      )}
       videoRef={previewVideoRef}
       currentTime={previewTimeMs / 1000}
       onTimeChange={(seconds) => setPreviewTimeMs(Math.round(seconds * 1000))}

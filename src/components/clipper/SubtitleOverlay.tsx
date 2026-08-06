@@ -102,10 +102,12 @@ export default function SubtitleOverlay({
   useLayoutEffect(() => {
     const node = containerRef.current;
     if (!node) return;
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (entry) setBox({ width: entry.contentRect.width, height: entry.contentRect.height });
-    });
+    const measure = () => {
+      const rect = node.getBoundingClientRect();
+      setBox({ width: rect.width, height: rect.height });
+    };
+    measure();
+    const observer = new ResizeObserver(() => measure());
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
@@ -151,14 +153,13 @@ export default function SubtitleOverlay({
     return null;
   }, [timed, currentTime, phraseMode]);
 
-  if (!display || !display.tokens.length) {
-    return <div ref={containerRef} className="pointer-events-none absolute inset-0" data-testid="subtitle-overlay" />;
-  }
-
   const { align, xRatio, yRatio } = anchorFor(resolved);
-  const scale = box.height > 0 ? box.height / resolved.canvas_height : 0;
-  const fontSize = Math.max(8, resolved.font_size * scale);
-  const outline = Math.max(1, 6 * scale);
+  // Prefer the measured overlay box; fall back to a portrait estimate so the
+  // first paint never flashes empty while ResizeObserver catches up.
+  const height = box.height > 0 ? box.height : 440;
+  const scale = height / Math.max(1, resolved.canvas_height);
+  const fontSize = Math.max(14, resolved.font_size * scale);
+  const outline = Math.max(1.5, 6 * scale);
   const shadow = Math.max(0.5, 1 * scale);
   const translateY = align === "bottom" ? "-100%" : align === "middle" ? "-50%" : "0%";
   const outlineShadow = [
@@ -175,18 +176,20 @@ export default function SubtitleOverlay({
 
   return (
     <div ref={containerRef} className="pointer-events-none absolute inset-0 overflow-hidden" data-testid="subtitle-overlay">
-      {scale > 0 ? (
+      {display && display.tokens.length ? (
         <p
-          className="absolute m-0 whitespace-pre-wrap text-center font-bold leading-[1.12]"
+          className="absolute m-0 whitespace-pre-wrap text-center font-bold uppercase leading-[1.12]"
           style={{
             left: `${xRatio * 100}%`,
             top: `${yRatio * 100}%`,
             transform: `translate(-50%, ${translateY})`,
-            width: "92%",
+            width: "88%",
+            maxWidth: "100%",
             fontFamily: `"${resolved.font}", Impact, "Arial Black", sans-serif`,
             fontSize: `${fontSize}px`,
             color: resolved.text_colour,
             textShadow: outlineShadow,
+            zIndex: 5,
           }}
         >
           {display.tokens.map((token, position) => (

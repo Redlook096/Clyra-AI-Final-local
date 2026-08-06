@@ -371,8 +371,8 @@ function EditorTimeline({
   return (
     <section
       aria-label="Video timeline"
-      className="flex shrink-0 flex-col overflow-hidden rounded-[13px] bg-white"
-      style={{ border: `1px solid #E2E8F0`, boxShadow: "0 3px 12px rgba(20,35,60,0.05)", height: 350 }}
+      className="flex h-full min-h-0 w-full shrink-0 flex-col overflow-hidden bg-white"
+      style={{ borderTop: `1px solid #E2E8F0` }}
     >
       {/* Control bar */}
       <div className="flex h-[60px] shrink-0 items-center pl-3 pr-[15px]" style={{ borderBottom: "1px solid #E8ECF2" }}>
@@ -871,7 +871,6 @@ export default function ClipperEditor({
       className="fixed inset-0 z-[10000] flex flex-col overflow-hidden bg-white"
       style={{ fontFamily: CLIP_EDITOR_FONT, color: CLIP_EDITOR.textPrimary }}
     >
-      {/* Thin active-page indicator at the very top edge. */}
       <span aria-hidden className="h-[2px] w-full shrink-0" style={{ background: CLIP_EDITOR.blue }} />
       {error ? (
         <div className="flex shrink-0 items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12px] text-amber-800">
@@ -881,208 +880,189 @@ export default function ClipperEditor({
         </div>
       ) : null}
 
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_377px] max-[1450px]:grid-cols-[minmax(0,1fr)_340px]">
-        {/* Left region: sidebar + centre on top, shared timeline strip below that spans under the sidebar. */}
-        <div className="flex min-h-0 min-w-0 flex-col">
-          <div className="grid min-h-0 flex-1 grid-cols-[286px_minmax(0,1fr)] max-[1450px]:grid-cols-[248px_minmax(0,1fr)]">
-            {/* Clips sidebar */}
-            <aside
-              className="flex min-h-0 flex-col overflow-hidden"
-              style={{ borderRight: `1px solid ${CLIP_EDITOR.border}`, paddingLeft: 24, paddingRight: 20, paddingTop: 29 }}
-              aria-label="Clips"
-            >
-              <div className="flex shrink-0 items-center justify-between pr-1">
-                <p className="text-[15px]" style={{ fontWeight: 700, color: CLIP_EDITOR.textPrimary }}>Clips</p>
-                <button type="button" onClick={onNewClip} className="grid h-7 w-7 place-items-center rounded-[8px] transition-colors duration-150 hover:bg-[#F5F8FC]" aria-label="New clip">
-                  <Plus size={18} strokeWidth={ICON_STROKE} style={{ color: CLIP_EDITOR.textPrimary }} />
+      {/* Three full-height columns. Timeline lives ONLY in the centre column, flush to the bottom. */}
+      <div className="grid min-h-0 flex-1 grid-cols-[286px_minmax(0,1fr)_377px] max-[1450px]:grid-cols-[248px_minmax(0,1fr)_340px]">
+        <aside
+          className="flex min-h-0 flex-col overflow-hidden"
+          style={{ borderRight: `1px solid ${CLIP_EDITOR.border}`, paddingLeft: 24, paddingRight: 20, paddingTop: 29 }}
+          aria-label="Clips"
+        >
+          <div className="flex shrink-0 items-center justify-between pr-1">
+            <p className="text-[15px]" style={{ fontWeight: 700, color: CLIP_EDITOR.textPrimary }}>Clips</p>
+            <button type="button" onClick={onNewClip} className="grid h-7 w-7 place-items-center rounded-[8px] transition-colors duration-150 hover:bg-[#F5F8FC]" aria-label="New clip">
+              <Plus size={18} strokeWidth={ICON_STROKE} style={{ color: CLIP_EDITOR.textPrimary }} />
+            </button>
+          </div>
+          <p className="mt-[6px] shrink-0 text-[12px]" style={{ color: CLIP_EDITOR.textMuted }}>
+            {filteredClips.length} clip{filteredClips.length === 1 ? "" : "s"}
+          </p>
+          <label className="mt-5 flex h-[42px] w-full shrink-0 items-center gap-2 rounded-[10px] bg-white pl-[13px] pr-3" style={{ border: "1px solid #E1E7F0", maxWidth: 240 }}>
+            <Search size={15} strokeWidth={ICON_STROKE} style={{ color: CLIP_EDITOR.textMuted }} />
+            <input
+              value={search}
+              onChange={(event) => onSearch(event.target.value)}
+              placeholder="Search clips"
+              className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-[#8A96AA]"
+              style={{ color: CLIP_EDITOR.textPrimary }}
+            />
+          </label>
+          <div className="scrollbar-none mt-[18px] min-h-0 flex-1 space-y-2 overflow-y-auto pb-4">
+            {filteredClips.map((clip) => {
+              const active = selected?.id === clip.id;
+              return (
+                <button
+                  key={clip.id}
+                  type="button"
+                  onClick={() => onSelectClip(clip.id)}
+                  className="relative flex h-[90px] w-full items-center text-left transition-colors duration-150"
+                  style={{
+                    background: active ? CLIP_EDITOR.selected : "transparent",
+                    maxWidth: 242,
+                    borderRadius: 10,
+                    paddingLeft: 14,
+                    paddingRight: 12,
+                    gap: 13,
+                  }}
+                  onMouseEnter={(event) => { if (!active) (event.currentTarget as HTMLElement).style.background = CLIP_EDITOR.hover; }}
+                  onMouseLeave={(event) => { if (!active) (event.currentTarget as HTMLElement).style.background = "transparent"; }}
+                >
+                  {active ? <span className="absolute bottom-[10px] left-0 top-[10px] w-[3px] rounded-full" style={{ background: CLIP_EDITOR.blue }} /> : null}
+                  <video muted preload="metadata" src={srcFor(clip)} className="h-[68px] w-[44px] shrink-0 rounded-[7px] bg-[#0B1220] object-cover" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px]" style={{ fontWeight: 650, color: CLIP_EDITOR.textPrimary }}>{clip.title}</span>
+                    <span className="mt-1 block text-[12px]" style={{ color: CLIP_EDITOR.textMuted }}>
+                      {clip.clip_duration || "Clip"} · {qualityLabel}
+                    </span>
+                    <span className="mt-1 flex items-center gap-1.5 text-[12px] font-medium" style={{ color: CLIP_EDITOR.blue }}>
+                      <span className="h-[6px] w-[6px] rounded-full" style={{ background: CLIP_EDITOR.blue }} />
+                      Ready
+                    </span>
+                  </span>
                 </button>
-              </div>
-              <p className="mt-[6px] shrink-0 text-[12px]" style={{ color: CLIP_EDITOR.textMuted }}>
-                {filteredClips.length} clip{filteredClips.length === 1 ? "" : "s"}
-              </p>
-              <label className="mt-5 flex h-[42px] w-full shrink-0 items-center gap-2 rounded-[10px] bg-white pl-[13px] pr-3" style={{ border: "1px solid #E1E7F0", maxWidth: 240 }}>
-                <Search size={15} strokeWidth={ICON_STROKE} style={{ color: CLIP_EDITOR.textMuted }} />
-                <input
-                  value={search}
-                  onChange={(event) => onSearch(event.target.value)}
-                  placeholder="Search clips"
-                  className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-[#8A96AA]"
-                  style={{ color: CLIP_EDITOR.textPrimary }}
-                />
-              </label>
-              <div className="scrollbar-none mt-[18px] min-h-0 flex-1 space-y-2 overflow-y-auto pb-4">
-                {filteredClips.map((clip) => {
-                  const active = selected?.id === clip.id;
-                  return (
-                    <button
-                      key={clip.id}
-                      type="button"
-                      onClick={() => onSelectClip(clip.id)}
-                      className="relative flex h-[90px] w-full items-center text-left transition-colors duration-150"
-                      style={{
-                        background: active ? CLIP_EDITOR.selected : "transparent",
-                        maxWidth: 242,
-                        borderRadius: 10,
-                        paddingLeft: 14,
-                        paddingRight: 12,
-                        gap: 13,
-                      }}
-                      onMouseEnter={(event) => { if (!active) (event.currentTarget as HTMLElement).style.background = CLIP_EDITOR.hover; }}
-                      onMouseLeave={(event) => { if (!active) (event.currentTarget as HTMLElement).style.background = "transparent"; }}
-                    >
-                      {active ? <span className="absolute bottom-[10px] left-0 top-[10px] w-[3px] rounded-full" style={{ background: CLIP_EDITOR.blue }} /> : null}
-                      <video muted preload="metadata" src={srcFor(clip)} className="h-[68px] w-[44px] shrink-0 rounded-[7px] bg-[#0B1220] object-cover" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px]" style={{ fontWeight: 650, color: CLIP_EDITOR.textPrimary }}>{clip.title}</span>
-                        <span className="mt-1 block text-[12px]" style={{ color: CLIP_EDITOR.textMuted }}>
-                          {clip.clip_duration || "Clip"} · {qualityLabel}
-                        </span>
-                        <span className="mt-1 flex items-center gap-1.5 text-[12px] font-medium" style={{ color: CLIP_EDITOR.blue }}>
-                          <span className="h-[6px] w-[6px] rounded-full" style={{ background: CLIP_EDITOR.blue }} />
-                          Ready
-                        </span>
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </aside>
+              );
+            })}
+          </div>
+        </aside>
 
-            {/* Centre stage */}
-            <main className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-              {selected ? (
-                <>
-                  <header className="flex h-[90px] shrink-0 items-start justify-between" style={{ paddingLeft: 30, paddingRight: 25, paddingTop: 30 }}>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        {editingTitle ? (
-                          <input
-                            autoFocus
-                            value={selected.title}
-                            onChange={(event) => onRenameClip(selected.id, event.target.value)}
-                            onBlur={() => setEditingTitle(false)}
-                            onKeyDown={(event) => { if (event.key === "Enter") setEditingTitle(false); }}
-                            className="h-7 w-[300px] max-w-[42vw] rounded-[8px] bg-white px-2 text-[15px] outline-none"
-                            style={{ border: `1px solid ${CLIP_EDITOR.blue}`, fontWeight: 700, color: CLIP_EDITOR.textPrimary }}
-                            aria-label="Clip title"
-                          />
-                        ) : (
-                          <h1 className="truncate text-[15px]" style={{ fontWeight: 700, color: CLIP_EDITOR.textPrimary }}>{selected.title}</h1>
-                        )}
-                        <button type="button" onClick={() => setEditingTitle(true)} className="grid h-6 w-6 shrink-0 place-items-center rounded-[6px] transition-colors duration-150 hover:bg-[#F5F8FC]" aria-label="Rename clip">
-                          <Pencil size={15} strokeWidth={ICON_STROKE} style={{ color: CLIP_EDITOR.textMuted }} />
-                        </button>
-                        <div className="relative" ref={menuRef}>
+        <main className="flex min-h-0 min-w-0 flex-col overflow-hidden" style={{ borderRight: `1px solid ${CLIP_EDITOR.border}` }}>
+          {selected ? (
+            <>
+              <header className="flex h-[90px] shrink-0 items-start justify-between" style={{ paddingLeft: 30, paddingRight: 25, paddingTop: 30 }}>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    {editingTitle ? (
+                      <input
+                        autoFocus
+                        value={selected.title}
+                        onChange={(event) => onRenameClip(selected.id, event.target.value)}
+                        onBlur={() => setEditingTitle(false)}
+                        onKeyDown={(event) => { if (event.key === "Enter") setEditingTitle(false); }}
+                        className="h-7 w-[300px] max-w-[42vw] rounded-[8px] bg-white px-2 text-[15px] outline-none"
+                        style={{ border: `1px solid ${CLIP_EDITOR.blue}`, fontWeight: 700, color: CLIP_EDITOR.textPrimary }}
+                        aria-label="Clip title"
+                      />
+                    ) : (
+                      <h1 className="truncate text-[15px]" style={{ fontWeight: 700, color: CLIP_EDITOR.textPrimary }}>{selected.title}</h1>
+                    )}
+                    <button type="button" onClick={() => setEditingTitle(true)} className="grid h-6 w-6 shrink-0 place-items-center rounded-[6px] transition-colors duration-150 hover:bg-[#F5F8FC]" aria-label="Rename clip">
+                      <Pencil size={15} strokeWidth={ICON_STROKE} style={{ color: CLIP_EDITOR.textMuted }} />
+                    </button>
+                    <div className="relative" ref={menuRef}>
+                      <button
+                        type="button"
+                        onClick={() => setMenuOpen((value) => !value)}
+                        className="grid h-6 w-6 shrink-0 place-items-center rounded-[6px] transition-colors duration-150 hover:bg-[#F5F8FC]"
+                        aria-label="Clip actions"
+                        aria-expanded={menuOpen}
+                      >
+                        <MoreHorizontal size={15} strokeWidth={ICON_STROKE} style={{ color: CLIP_EDITOR.textMuted }} />
+                      </button>
+                      {menuOpen ? (
+                        <div
+                          className="absolute left-0 top-[calc(100%+6px)] z-20 min-w-[148px] overflow-hidden rounded-[10px] bg-white py-1"
+                          style={{ border: `1px solid ${CLIP_EDITOR.border}`, boxShadow: "0 8px 24px rgba(20,35,60,0.10)" }}
+                        >
                           <button
                             type="button"
-                            onClick={() => setMenuOpen((value) => !value)}
-                            className="grid h-6 w-6 shrink-0 place-items-center rounded-[6px] transition-colors duration-150 hover:bg-[#F5F8FC]"
-                            aria-label="Clip actions"
-                            aria-expanded={menuOpen}
+                            disabled={exportBusy}
+                            onClick={() => { setMenuOpen(false); onExport(); }}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12.5px] transition-colors duration-150 hover:bg-[#F5F8FC] disabled:opacity-40"
+                            style={{ color: CLIP_EDITOR.textPrimary }}
                           >
-                            <MoreHorizontal size={15} strokeWidth={ICON_STROKE} style={{ color: CLIP_EDITOR.textMuted }} />
+                            <Download size={14} strokeWidth={ICON_STROKE} />
+                            {exportBusy ? "Exporting…" : "Export clip"}
                           </button>
-                          {menuOpen ? (
-                            <div
-                              className="absolute left-0 top-[calc(100%+6px)] z-20 min-w-[148px] overflow-hidden rounded-[10px] bg-white py-1"
-                              style={{ border: `1px solid ${CLIP_EDITOR.border}`, boxShadow: "0 8px 24px rgba(20,35,60,0.10)" }}
-                            >
-                              <button
-                                type="button"
-                                disabled={exportBusy}
-                                onClick={() => { setMenuOpen(false); onExport(); }}
-                                className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12.5px] transition-colors duration-150 hover:bg-[#F5F8FC] disabled:opacity-40"
-                                style={{ color: CLIP_EDITOR.textPrimary }}
-                              >
-                                <Download size={14} strokeWidth={ICON_STROKE} />
-                                {exportBusy ? "Exporting…" : "Export clip"}
-                              </button>
-                            </div>
-                          ) : null}
                         </div>
-                      </div>
-                      <p className="mt-[7px] text-[12px]" style={{ color: "#65748C" }}>
-                        {selected.clip_duration || `${Math.round(duration)}s`} · {qualityLabel} · Auto-reframed
-                      </p>
-                    </div>
-                    <div
-                      className="flex h-[38px] w-[74px] shrink-0 items-center justify-center rounded-[10px] bg-white"
-                      style={{ border: "1px solid #E7EDF5" }}
-                      aria-label={`Clip score ${scoreFor(selected)} out of 100`}
-                    >
-                      <span className="text-[15px] tabular-nums" style={{ fontWeight: 700, color: CLIP_EDITOR.blue }}>{scoreFor(selected)}</span>
-                      <span className="ml-1 text-[12px]" style={{ color: "#7FAFFF" }}>/100</span>
-                    </div>
-                  </header>
-
-                  {/* Preview: fixed reference height, centred in the remaining centre column. */}
-                  <div className="flex min-h-0 flex-1 items-start justify-center" style={{ paddingLeft: 30, paddingRight: 46, paddingBottom: 28 }}>
-                    <div
-                      data-testid="clipper-preview"
-                      className="relative w-full max-w-[812px] overflow-hidden rounded-[12px]"
-                      style={{ height: 440, boxShadow: "0 5px 16px rgba(20,35,60,0.10)", background: "#040A18" }}
-                      onClick={togglePlay}
-                    >
-                      <video
-                        key={`${videoSrc}-backdrop`}
-                        ref={backdropRef}
-                        muted
-                        playsInline
-                        preload="metadata"
-                        src={videoSrc}
-                        aria-hidden
-                        className="absolute inset-0 h-full w-full object-cover"
-                        style={{ filter: "blur(28px) brightness(0.28) saturate(0.75)", transform: "scale(1.08)" }}
-                      />
-                      <span aria-hidden className="absolute inset-0" style={{ background: "rgba(3,10,29,0.44)" }} />
-                      <div className="relative flex h-full items-center justify-center">
-                        <div className="relative h-full">
-                          <video
-                            key={videoSrc}
-                            ref={videoRef}
-                            playsInline
-                            preload="metadata"
-                            src={videoSrc}
-                            onLoadedMetadata={(event) => setVideoDuration(event.currentTarget.duration || 0)}
-                            onTimeUpdate={(event) => { if (!playing) onTimeChange(event.currentTarget.currentTime); }}
-                            className="mx-auto h-full w-auto max-w-full object-contain"
-                          />
-                          {captionsVisible ? (
-                            <SubtitleOverlay
-                              words={words}
-                              style={captionStyle}
-                              currentTime={currentTime}
-                              activeWordIndex={activeWordIndex}
-                              onWordClick={(index) => onActiveWordIndex(index)}
-                            />
-                          ) : null}
-                        </div>
-                      </div>
-                      {!playing ? (
-                        <span className="pointer-events-none absolute inset-0 grid place-items-center">
-                          <span className="grid h-12 w-12 place-items-center rounded-full bg-white/92" style={{ color: CLIP_EDITOR.textPrimary }}>
-                            <Play size={18} strokeWidth={ICON_STROKE} className="ml-0.5" />
-                          </span>
-                        </span>
                       ) : null}
                     </div>
                   </div>
-                </>
-              ) : (
-                <div className="grid flex-1 place-items-center text-center">
-                  <div>
-                    <Video size={22} strokeWidth={ICON_STROKE} className="mx-auto" style={{ color: CLIP_EDITOR.textMuted }} />
-                    <p className="mt-3 text-[13px]" style={{ color: CLIP_EDITOR.textSecondary }}>Select a clip to edit</p>
-                  </div>
+                  <p className="mt-[7px] text-[12px]" style={{ color: "#65748C" }}>
+                    {selected.clip_duration || `${Math.round(duration)}s`} · {qualityLabel} · Auto-reframed
+                  </p>
                 </div>
-              )}
-            </main>
-          </div>
+                <div
+                  className="flex h-[38px] w-[74px] shrink-0 items-center justify-center rounded-[10px] bg-white"
+                  style={{ border: "1px solid #E7EDF5" }}
+                  aria-label={`Clip score ${scoreFor(selected)} out of 100`}
+                >
+                  <span className="text-[15px] tabular-nums" style={{ fontWeight: 700, color: CLIP_EDITOR.blue }}>{scoreFor(selected)}</span>
+                  <span className="ml-1 text-[12px]" style={{ color: "#7FAFFF" }}>/100</span>
+                </div>
+              </header>
 
-          {/* Shared lower region: timeline is ~996px and right-aligned so its label column sits under the sidebar. */}
-          {selected ? (
-            <div className="shrink-0" style={{ paddingBottom: 32, paddingRight: 22, paddingLeft: 22 }}>
-              <div className="ml-auto w-full" style={{ maxWidth: 996 }}>
+              <div className="flex min-h-0 flex-1 items-center justify-center px-6 pb-4">
+                <div
+                  data-testid="clipper-preview"
+                  className="relative w-full max-w-[812px] overflow-hidden rounded-[12px]"
+                  style={{ height: "min(440px, 100%)", maxHeight: 440, aspectRatio: "16 / 9", boxShadow: "0 5px 16px rgba(20,35,60,0.10)", background: "#040A18" }}
+                  onClick={togglePlay}
+                >
+                  <video
+                    key={`${videoSrc}-backdrop`}
+                    ref={backdropRef}
+                    muted
+                    playsInline
+                    preload="metadata"
+                    src={videoSrc}
+                    aria-hidden
+                    className="absolute inset-0 h-full w-full object-cover"
+                    style={{ filter: "blur(28px) brightness(0.28) saturate(0.75)", transform: "scale(1.08)" }}
+                  />
+                  <span aria-hidden className="absolute inset-0" style={{ background: "rgba(3,10,29,0.44)" }} />
+                  <div className="absolute inset-0 z-[1] flex items-center justify-center">
+                    <div className="relative h-full max-h-full" style={{ aspectRatio: "9 / 16", maxWidth: "100%" }}>
+                      <video
+                        key={videoSrc}
+                        ref={videoRef}
+                        playsInline
+                        preload="metadata"
+                        src={videoSrc}
+                        onLoadedMetadata={(event) => setVideoDuration(event.currentTarget.duration || 0)}
+                        onTimeUpdate={(event) => { if (!playing) onTimeChange(event.currentTarget.currentTime); }}
+                        className="absolute inset-0 h-full w-full object-contain"
+                      />
+                      {captionsVisible ? (
+                        <SubtitleOverlay
+                          words={words}
+                          style={captionStyle}
+                          currentTime={currentTime}
+                          activeWordIndex={activeWordIndex}
+                          onWordClick={(index) => onActiveWordIndex(index)}
+                        />
+                      ) : null}
+                    </div>
+                  </div>
+                  {!playing ? (
+                    <span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center">
+                      <span className="grid h-12 w-12 place-items-center rounded-full bg-white/92" style={{ color: CLIP_EDITOR.textPrimary }}>
+                        <Play size={18} strokeWidth={ICON_STROKE} className="ml-0.5" />
+                      </span>
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="h-[350px] w-full shrink-0">
                 <EditorTimeline
                   clipId={selected.id}
                   videoSrc={videoSrc}
@@ -1097,9 +1077,16 @@ export default function ClipperEditor({
                   onWordSelect={onActiveWordIndex}
                 />
               </div>
+            </>
+          ) : (
+            <div className="grid flex-1 place-items-center text-center">
+              <div>
+                <Video size={22} strokeWidth={ICON_STROKE} className="mx-auto" style={{ color: CLIP_EDITOR.textMuted }} />
+                <p className="mt-3 text-[13px]" style={{ color: CLIP_EDITOR.textSecondary }}>Select a clip to edit</p>
+              </div>
             </div>
-          ) : null}
-        </div>
+          )}
+        </main>
 
         <WordTimingInspector
           words={words}
