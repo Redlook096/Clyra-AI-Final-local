@@ -3474,12 +3474,20 @@ def main():
                     stream_url = source
                     fallback_path = source
                     local_source = True
-            except Exception:
+            except Exception as primary_exc:
                 emit("captions", "running", message="Preparing the public video source...")
                 try:
                     source = download_public_source_master(source, job_tmp, max_height=source_max_height)
                 except Exception as exc:
-                    fail(f"Clyra could not retain a local source master for final rendering ({type(exc).__name__}).")
+                    detail = f"{type(primary_exc).__name__}: {primary_exc}; {type(exc).__name__}: {exc}"
+                    lowered = detail.lower()
+                    if any(token in lowered for token in ("bot", "sign in", "login_required", "confirm you’re not", "confirm you're not")):
+                        fail(
+                            "YouTube blocked this download (bot check). "
+                            "Sign in once on this machine and set CLYRA_YTDLP_COOKIES_FILE to an exported cookies.txt, "
+                            "or upload the video file instead."
+                        )
+                    fail(f"Clyra could not retain a local source master for final rendering ({detail}).")
                 stream_url = source
                 fallback_path = source
                 local_source = True

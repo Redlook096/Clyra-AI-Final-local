@@ -389,6 +389,7 @@ export function useVoiceCall(options: {
 
   const endCall = useCallback(() => {
     const sessionId = sessionIdRef.current;
+    const wasActive = activeRef.current;
     activeRef.current = false;
     pipelineModeRef.current = false;
     stopMic();
@@ -397,16 +398,21 @@ export function useVoiceCall(options: {
     sessionIdRef.current = null;
     committedSpeechRef.current = "";
     interimSpeechRef.current = "";
-    // The hang-up action must always feel immediate. Cleanup on the gateway is
-    // intentionally detached so a transient request failure cannot leave the
-    // overlay or microphone stuck on screen.
-    flushSync(() => {
+    // Hang-up must paint immediately when a call is live. Skip flushSync on
+    // idle cleanup (Strict Mode remount / unmount) — flushing during React's
+    // lifecycle throws and can leave the rest of the app feeling unresponsive.
+    const clearCallSurface = () => {
       setActive(false);
       setStatus("ended");
       setPartialTranscript("");
       setAssistantText("");
       setError(null);
-    });
+    };
+    if (wasActive) {
+      flushSync(clearCallSurface);
+    } else {
+      clearCallSurface();
+    }
     statusRef.current = "ended";
     if (sessionId) {
       void serviceUrl("/voice/end").then((url) => fetch(url, {

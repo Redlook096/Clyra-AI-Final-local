@@ -3135,7 +3135,9 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
   const spawnClipperPipeline = (args: string[], res: import("express").Response, startMessage = "Starting...") => {
     const outputDir = clipperOutputDir();
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+    let sawFatalError = false;
     const send = (type, data) => {
+      if (type === "error") sawFatalError = true;
       if (!res.writableEnded) res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
     };
     const scriptPath = clyraResourcePath("clipper-pipeline.py");
@@ -3178,7 +3180,10 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
       send("log", { message: chunk.toString().trim() });
     });
     proc.on("close", (code) => {
-      if (code !== 0 && !res.writableEnded) send("error", { message: stderr.trim().split("\n").at(-1) || `Pipeline failed code ${code}` });
+      // Prefer the pipeline's own structured error over a raw yt-dlp stderr line.
+      if (code !== 0 && !res.writableEnded && !sawFatalError) {
+        send("error", { message: stderr.trim().split("\n").at(-1) || `Pipeline failed code ${code}` });
+      }
       res.end();
     });
     proc.on("error", (err) => {

@@ -574,18 +574,26 @@ function parseDuration(value?: string) {
   return Number(String(value || "").replace(/[^0-9.]/g, "")) || 0;
 }
 
-function youtubeEmbedUrl(value: string) {
+function youtubeVideoId(value: string) {
   try {
     const url = new URL(value.trim());
     const id = url.hostname.includes("youtu.be")
       ? url.pathname.split("/").filter(Boolean)[0]
       : url.searchParams.get("v") || url.pathname.match(/\/(?:embed|shorts|live)\/([^/?#]+)/)?.[1];
-    return id && /^[\w-]{6,}$/.test(id)
-      ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0`
-      : null;
+    return id && /^[\w-]{6,}$/.test(id) ? id : null;
   } catch {
     return null;
   }
+}
+
+function youtubeEmbedUrl(value: string) {
+  const id = youtubeVideoId(value);
+  return id ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0` : null;
+}
+
+function youtubeThumbnailUrl(value: string) {
+  const id = youtubeVideoId(value);
+  return id ? `https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg` : null;
 }
 
 function uploadVideo(file: File, signal: AbortSignal, onProgress: (progress: number) => void) {
@@ -684,7 +692,7 @@ function SourcePicker({
 }) {
   const fileInput = useRef<HTMLInputElement | null>(null);
   const [dragging, setDragging] = useState(false);
-  const previewUrl = useMemo(() => source.mode === "url" ? youtubeEmbedUrl(source.url) : null, [source.mode, source.url]);
+  const previewThumb = useMemo(() => source.mode === "url" ? youtubeThumbnailUrl(source.url) : null, [source.mode, source.url]);
   const acceptFile = (file?: File) => {
     if (!file) return;
     if (!file.type.startsWith("video/") && !/\.(mp4|mov|m4v|webm|mkv)$/i.test(file.name)) return;
@@ -722,7 +730,7 @@ function SourcePicker({
             </div>
           </label>
           <AnimatePresence initial={false}>
-            {showPreview && previewUrl ? (
+            {showPreview && previewThumb ? (
               <motion.div
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: "auto" }}
@@ -730,8 +738,14 @@ function SourcePicker({
                 transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
                 className="mt-3 overflow-hidden rounded-xl border border-slate-200/90 bg-slate-950"
               >
-                <div className="aspect-video w-full">
-                  <iframe title="Source video preview" src={previewUrl} className="h-full w-full border-0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; picture-in-picture" allowFullScreen />
+                {/* Thumbnail card instead of YouTube iframe: embeds often hit
+                    bot challenges in automation / cloud environments. */}
+                <div className="relative aspect-video w-full overflow-hidden bg-slate-900">
+                  <img src={previewThumb} alt="" className="h-full w-full object-cover opacity-95" />
+                  <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-black/10" />
+                  <span className="absolute bottom-3 left-3 rounded-md bg-black/55 px-2 py-1 text-[10px] font-medium text-white/90 backdrop-blur-sm">
+                    Preview · opens on generate
+                  </span>
                 </div>
               </motion.div>
             ) : null}
@@ -2314,7 +2328,25 @@ export default function AIClipper({
                 <p className="mt-5 text-[11px] leading-4 text-slate-400">Clyra Vision automatically combines transcript, audio and visual evidence for each project.</p>
                 </div>
                 <div className="self-start overflow-hidden rounded-2xl border border-[#e7eaf0] bg-[#f7f8fa] p-3 lg:-mt-5">
-                  {youtubeEmbedUrl(draft.source.url) ? <iframe title="YouTube video preview" src={youtubeEmbedUrl(draft.source.url) || ""} className="aspect-video w-full rounded-xl border-0 bg-slate-900" allow="accelerometer; autoplay; clipboard-write; encrypted-media; picture-in-picture" allowFullScreen /> : <div className="grid aspect-video place-items-center rounded-xl border border-dashed border-slate-200 bg-white text-center"><div><Video className="mx-auto h-5 w-5 text-slate-300" /><p className="mt-3 text-[13px] font-medium text-slate-600">Your video preview will appear here</p><p className="mt-1 text-[11px] text-slate-400">Paste a supported YouTube URL to continue.</p></div></div>}
+                  {youtubeThumbnailUrl(draft.source.url) ? (
+                    <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-slate-900">
+                      <img src={youtubeThumbnailUrl(draft.source.url) || ""} alt="" className="h-full w-full object-cover" />
+                      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-black/10" />
+                      {sourceTitle ? (
+                        <p className="absolute inset-x-3 bottom-3 line-clamp-2 text-[12px] font-medium leading-4 text-white drop-shadow">{sourceTitle}</p>
+                      ) : (
+                        <span className="absolute bottom-3 left-3 rounded-md bg-black/55 px-2 py-1 text-[10px] font-medium text-white/90">YouTube source</span>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="grid aspect-video place-items-center rounded-xl border border-dashed border-slate-200 bg-white text-center">
+                      <div>
+                        <Video className="mx-auto h-5 w-5 text-slate-300" />
+                        <p className="mt-3 text-[13px] font-medium text-slate-600">Your video preview will appear here</p>
+                        <p className="mt-1 text-[11px] text-slate-400">Paste a supported YouTube URL to continue.</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : null}

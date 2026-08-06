@@ -24,6 +24,25 @@ type ProjectRuntime = {
   reconciliation: Map<string, { fingerprint: string; idleSince?: number }>;
 };
 
+function resolveCodingModel(): { providerID: string; modelID: string } {
+  const provider = String(process.env.CLYRA_OPENCODE_PROVIDER || "").trim();
+  const model = String(process.env.CLYRA_OPENCODE_MODEL || "").trim();
+  if (provider && model) return { providerID: provider, modelID: model };
+
+  const deepseekKey = String(process.env.DEEPSEEK_API_KEY || process.env.MY_LLM_API_KEY || "").trim();
+  const deepseekLooksValid =
+    deepseekKey.startsWith("sk-") &&
+    deepseekKey.length >= 32 &&
+    !/test|dummy|example|placeholder/i.test(deepseekKey);
+
+  if (deepseekLooksValid) {
+    return { providerID: "deepseek", modelID: model || "deepseek-chat" };
+  }
+
+  // Free OpenCode coding model — works without a DeepSeek credential.
+  return { providerID: "opencode", modelID: model || "north-mini-code-free" };
+}
+
 /**
  * Owns the one loopback-only OpenCode SDK runtime used by the local Clyra
  * service. OpenCode's typed client scopes every call to an explicit directory,
@@ -93,13 +112,9 @@ export class OpenCodeRuntimeManager {
 
   async prompt(projectId: string, sessionId: string, text: string, agent?: string, model?: { providerID: string; modelID: string }) {
     const project = this.requiredSession(projectId, sessionId);
-    // Clyra Code intentionally selects its configured DeepSeek coding model
-    // for every fresh prompt rather than inheriting an unrelated OpenAI model
-    // that OpenCode may have remembered from a previous local TUI session.
-    const selectedModel = model ?? {
-      providerID: "deepseek",
-      modelID: process.env.CLYRA_OPENCODE_MODEL || "deepseek-chat",
-    };
+    // Prefer an explicit override, then a usable DeepSeek key, then OpenCode's
+    // free coding models so local/cloud agents can still build without secrets.
+    const selectedModel = model ?? resolveCodingModel();
     this.publish(project, { type: "session.status", properties: { sessionID: sessionId, status: { type: "busy" } } });
     const response = await this.client(project.projectPath).session.promptAsync({
       path: { id: sessionId },

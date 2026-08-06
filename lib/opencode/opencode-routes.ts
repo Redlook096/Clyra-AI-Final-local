@@ -60,7 +60,14 @@ export function registerOpenCodeRoutes(app: Application) {
     res.json({
       sdkVersion: "1.18.12",
       executableVersion: process.env.CLYRA_OPENCODE_VERSION || "detected at runtime",
-      model: process.env.CLYRA_OPENCODE_MODEL || "deepseek-chat",
+      model: (() => {
+        const provider = String(process.env.CLYRA_OPENCODE_PROVIDER || "").trim();
+        const model = String(process.env.CLYRA_OPENCODE_MODEL || "").trim();
+        if (provider && model) return `${provider}/${model}`;
+        const key = String(process.env.DEEPSEEK_API_KEY || process.env.MY_LLM_API_KEY || "").trim();
+        const ok = key.startsWith("sk-") && key.length >= 32 && !/test|dummy|example|placeholder/i.test(key);
+        return ok ? (model || "deepseek-chat") : (model || "north-mini-code-free");
+      })(),
       ...health,
     });
   });

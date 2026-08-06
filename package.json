@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "node tools/dev-full.mjs",
     "dev:app": "npm run build && NODE_ENV=production tsx server.ts",
-    "dev:source": "tsx server.ts",
+    "dev:source": "env PATH=\"$HOME/.opencode/bin:$PATH\" tsx server.ts",
     "desktop:dev": "node tools/electron-dev.mjs",
     "desktop:build": "npm run desktop:prepare && electron-builder",
     "desktop:prepare": "npm run build && node tools/build-electron-sidecar.mjs && node tools/seed-desktop-runtime-config.mjs",
