@@ -261,16 +261,18 @@ export class OpenCodeRuntimeManager {
       const status = statuses[sessionId];
       const now = Date.now();
       const changed = previous?.fingerprint !== fingerprint;
-      const idleSince = status?.type === "idle" && !changed
-        ? (previous?.idleSince ?? now)
-        : undefined;
+      // Some free / remote models leave session status stuck on "busy" after the
+      // final assistant text lands. Treat a long-stable fingerprint as idle so
+      // Thinking collapses and the live preview can refresh.
+      const idleSince = !changed ? (previous?.idleSince ?? now) : undefined;
       project.reconciliation.set(sessionId, { fingerprint, idleSince });
 
       // The server can briefly report idle in between tool-call turns. Keep
       // reconciling through that transition and only complete after a stable
       // quiet window; this is what prevents the UI from stopping after the
       // first tool action of a multi-step DeepSeek task.
-      if ((idleSince && now - idleSince >= 5_000) || attempt >= 600) {
+      const quietMs = status?.type === "idle" ? 5_000 : 12_000;
+      if ((idleSince && now - idleSince >= quietMs) || attempt >= 600) {
         this.publish(project, { type: "session.idle", properties: { sessionID: sessionId } });
         project.reconciliation.delete(sessionId);
         return;
