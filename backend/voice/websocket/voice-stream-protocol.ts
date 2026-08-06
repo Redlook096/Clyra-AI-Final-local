@@ -18,6 +18,7 @@ export type VoiceServerMessage =
   | { type: "tts_format"; sessionId: string; responseId: string; generation: number; codec: "pcm16"; sampleRate: number }
   | { type: "tts_chunk"; sessionId: string; codec: "pcm16"; data: string; seq: number; sampleRate?: number }
   | { type: "tts_done"; sessionId: string; responseId?: string; generation?: number }
+  | { type: "tts_browser"; sessionId: string; responseId?: string; generation?: number; text: string }
   | { type: "barge_in"; sessionId: string }
   | { type: "error"; sessionId?: string; message: string }
   | { type: "pong"; sessionId: string };

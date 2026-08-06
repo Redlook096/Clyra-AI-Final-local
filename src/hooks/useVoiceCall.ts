@@ -70,7 +70,8 @@ const VAD_SPEECH_LEVEL = 0.08;
 /** Continuous user speech required before interrupting the assistant (noise immunity). */
 const BARGE_HOLD_MS = 480;
 const VITE_ENV = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
-const ALLOW_BROWSER_TTS_FALLBACK = VITE_ENV.VITE_ALLOW_BROWSER_TTS_FALLBACK === "true";
+const ALLOW_BROWSER_TTS_FALLBACK =
+  VITE_ENV.VITE_ALLOW_BROWSER_TTS_FALLBACK !== "false";
 const CHATTERBOX_WATCHDOG_MS = Math.max(
   5_000,
   Number(VITE_ENV.VITE_CHATTERBOX_WATCHDOG_MS || 30_000),
@@ -1305,6 +1306,16 @@ export function useVoiceCall(options: {
             });
             setStatus("speaking");
           }
+          if (message.type === "tts_browser" && message.text) {
+            beginAssistantHold();
+            setAssistantText(message.text);
+            pendingAssistantTextRef.current = message.text;
+            if (ALLOW_BROWSER_TTS_FALLBACK) {
+              speakProgressive(message.text, true);
+              armTtsWatchdog(message.text);
+            }
+            setStatus("speaking");
+          }
           if (message.type === "tts_done") {
             if (gotTtsChunkRef.current) {
               clearTtsWatchdog();
@@ -1323,7 +1334,6 @@ export function useVoiceCall(options: {
             } else if (pendingAssistantTextRef.current) {
               setAssistantText(pendingAssistantTextRef.current);
               clearTtsWatchdog();
-              setError("Async Voice returned no audio. Browser speech fallback is disabled to keep Max consistent.");
               finishSpeakingAndListen();
             } else {
               finishSpeakingAndListen();
