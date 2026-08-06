@@ -31,3 +31,5 @@ release-electron/
 vendor-src/
 third_party/
 __pycache__/
+references/
+xyflow/

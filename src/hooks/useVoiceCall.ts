@@ -1357,8 +1357,11 @@ export function useVoiceCall(options: {
             finishSpeakingAndListen();
           }
           if (message.type === "error") {
-            setError(message.message || "Voice stream error");
-            setStatus("error");
+            const err = String(message.message || "Voice stream error");
+            if (!/not configured/i.test(err)) {
+              setError(err);
+              setStatus("error");
+            }
             listenPausedRef.current = false;
             localTtsActiveRef.current = false;
           }
