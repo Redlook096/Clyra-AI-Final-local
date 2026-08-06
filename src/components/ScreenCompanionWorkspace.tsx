@@ -147,37 +147,39 @@ export default function ScreenCompanionWorkspace() {
       </main>
 
       {demoControl !== "off" ? (
-        <div className="pointer-events-auto absolute bottom-5 left-1/2 z-20 flex h-[30px] max-w-[min(420px,92%)] -translate-x-1/2 items-stretch overflow-hidden rounded-[8px] bg-[#171817] text-[11px] font-medium text-white shadow-[0_8px_24px_rgba(0,0,0,.28)]">
-          <div className="flex min-w-0 flex-1 items-center gap-2 px-3">
-            <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-white/80" />
-            <span className="min-w-0 truncate text-white/90">
-              {demoControl === "user" ? "You have control" : "Helping with your screen"}
-            </span>
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-5">
+          <div className="pointer-events-auto flex h-[30px] max-w-[min(420px,92%)] items-stretch overflow-hidden rounded-[8px] bg-[#171817] text-[11px] font-medium text-white shadow-[0_8px_24px_rgba(0,0,0,.28)]">
+            <div className="flex min-w-0 flex-1 items-center gap-2 px-3">
+              <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-white/80" />
+              <span className="min-w-0 truncate text-white/90">
+                {demoControl === "user" ? "You have control" : "Helping with your screen"}
+              </span>
+            </div>
+            {demoControl === "user" ? (
+              <button
+                type="button"
+                onClick={() => setDemoControl("ai")}
+                className="shrink-0 border-l border-white/15 px-3 text-[10.5px] font-semibold text-white/90 hover:bg-white/10"
+              >
+                Resume AI
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setDemoControl("user")}
+                className="shrink-0 border-l border-white/15 px-3 text-[10.5px] font-semibold text-white/90 hover:bg-white/10"
+              >
+                Take control
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setDemoControl("off")}
+              className="shrink-0 bg-[#dd5e58] px-3 text-[10.5px] font-semibold text-white hover:brightness-110"
+            >
+              Stop
+            </button>
           </div>
-          {demoControl === "user" ? (
-            <button
-              type="button"
-              onClick={() => setDemoControl("ai")}
-              className="shrink-0 border-l border-white/15 px-3 text-[10.5px] font-semibold text-white/90 hover:bg-white/10"
-            >
-              Resume AI
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setDemoControl("user")}
-              className="shrink-0 border-l border-white/15 px-3 text-[10.5px] font-semibold text-white/90 hover:bg-white/10"
-            >
-              Take control
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => setDemoControl("off")}
-            className="shrink-0 bg-[#dd5e58] px-3 text-[10.5px] font-semibold text-white hover:brightness-110"
-          >
-            Stop
-          </button>
         </div>
       ) : null}
     </div>
