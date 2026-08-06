@@ -43,6 +43,7 @@ async function loadDetector(): Promise<Detector | null> {
     try {
       const vision = await import(
         /* @vite-ignore */
+        // @ts-expect-error MediaPipe Tasks is loaded from CDN at runtime
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/+esm"
       );
       const fileset = await vision.FilesetResolver.forVisionTasks(WASM_CDN);

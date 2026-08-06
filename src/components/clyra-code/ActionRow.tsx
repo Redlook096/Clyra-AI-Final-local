@@ -100,7 +100,7 @@ export function AgentActionRow({
     >
       <div
         className={cn(
-          className="grid min-h-[26px] items-center gap-x-1.5 py-[3px] text-[13px] leading-[1.5] tracking-[-0.01em]",
+          "grid min-h-[26px] items-center gap-x-1.5 py-[3px] text-[13px] leading-[1.5] tracking-[-0.01em]",
           "grid-cols-[auto_minmax(0,1fr)_auto]",
           hasDetails && "cursor-pointer",
         )}
