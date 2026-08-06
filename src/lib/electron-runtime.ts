@@ -59,6 +59,9 @@ export type ClyraDesktopBridge = {
     onTrigger: (callback: (payload: any) => void) => () => void;
     onAction: (callback: (payload: any) => void) => () => void;
   };
+  companion?: {
+    toggle?: () => Promise<{ ok: boolean; registered?: boolean }>;
+  };
   google: {
     status: () => Promise<{ connected: boolean; email?: string }>;
     signIn: () => Promise<{ ok: boolean; pending?: boolean; error?: string }>;

@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clyra Companion</title>
+  <style>
+    :root {
+      --bg: rgba(251, 251, 250, 0.94);
+      --text: #1a1d26;
+      --muted: #8b919c;
+      --line: rgba(24, 28, 40, 0.08);
+      --blue: #2b6ef2;
+      --black: #171817;
+      --stop: #dd5e58;
+      --user: #f2f4f6;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: "Geist", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background: transparent;
+      -webkit-font-smoothing: antialiased;
+    }
+    .shell {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      margin: 8px;
+      border-radius: 16px;
+      background: var(--bg);
+      border: 1px solid var(--line);
+      box-shadow: 0 18px 48px rgba(15, 23, 42, 0.16);
+      backdrop-filter: blur(18px);
+      overflow: hidden;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 44px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line);
+      -webkit-app-region: drag;
+    }
+    header button, header .no-drag { -webkit-app-region: no-drag; }
+    .mark {
+      width: 18px; height: 18px; border-radius: 999px; background: var(--blue);
+      display: grid; place-items: center; color: #fff; font-size: 10px; font-weight: 700;
+    }
+    .title { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+    .status { margin-left: auto; font-size: 11px; color: var(--muted); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .icon-btn {
+      width: 28px; height: 28px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer;
+    }
+    .icon-btn:hover { background: rgba(0,0,0,.04); color: var(--text); }
+    .log {
+      flex: 1;
+      overflow: auto;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .user {
+      align-self: flex-end;
+      max-width: 92%;
+      background: var(--user);
+      border-radius: 14px;
+      padding: 8px 12px;
+      font-size: 13px;
+      line-height: 1.45;
+      letter-spacing: -0.01em;
+    }
+    .assistant {
+      align-self: stretch;
+      font-size: 13px;
+      line-height: 1.55;
+      letter-spacing: -0.01em;
+      color: var(--text);
+    }
+    .thinking {
+      display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--text);
+    }
+    .thinking .dot {
+      width: 6px; height: 6px; border-radius: 999px; background: var(--blue);
+      animation: pulse 1s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:.35} 50%{opacity:1} }
+    .vision {
+      font-size: 11px; color: var(--muted); line-height: 1.45;
+      border-left: 2px solid var(--line); padding-left: 8px;
+    }
+    .controls {
+      position: relative;
+      display: flex;
+      align-items: stretch;
+      height: 30px;
+      margin: 0 12px 10px;
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--black);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 500;
+      box-shadow: 0 8px 24px rgba(0,0,0,.28);
+    }
+    .controls .pill {
+      display: flex; align-items: center; gap: 8px; padding: 0 12px; flex: 1; min-width: 0;
+    }
+    .controls .live {
+      width: 6px; height: 6px; border-radius: 999px; background: rgba(255,255,255,.8);
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+    .controls button {
+      border: 0; background: transparent; color: rgba(255,255,255,.9); padding: 0 12px; cursor: pointer;
+      font: inherit; font-size: 10.5px; font-weight: 600;
+      border-left: 1px solid rgba(255,255,255,.15);
+    }
+    .controls button:hover { background: rgba(255,255,255,.1); }
+    .controls button.stop { background: var(--stop); border-left: 0; }
+    .controls button.stop:hover { filter: brightness(1.1); }
+    .controls.hidden { display: none; }
+    .controls #resumeAi.hidden, .controls #takeControl.hidden { display: none; }
+    .composer {
+      border-top: 1px solid var(--line);
+      padding: 10px 12px 12px;
+      display: grid;
+      gap: 8px;
+    }
+    .row { display: flex; gap: 6px; }
+    textarea {
+      flex: 1; resize: none; border: 0; outline: none; background: transparent;
+      font: inherit; font-size: 13px; line-height: 1.4; min-height: 40px; max-height: 90px;
+      color: var(--text);
+    }
+    .actions { display: flex; align-items: center; gap: 6px; }
+    .chip {
+      height: 28px; border-radius: 8px; border: 1px solid var(--line); background: #fff;
+      padding: 0 10px; font-size: 11.5px; font-weight: 500; color: var(--text); cursor: pointer;
+    }
+    .chip:hover { background: #f5f6f8; }
+    .chip.active { border-color: var(--blue); color: var(--blue); background: #eef4ff; }
+    .send {
+      margin-left: auto; width: 30px; height: 30px; border-radius: 999px; border: 0;
+      background: var(--blue); color: #fff; cursor: pointer; display: grid; place-items: center;
+    }
+    .send:disabled { background: #e8eaef; color: #b0b5bf; }
+    .hint { font-size: 10.5px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <span class="mark">C</span>
+      <span class="title">Companion</span>
+      <span class="status" id="status">Ready</span>
+      <button class="icon-btn no-drag" id="hide" title="Hide">✕</button>
+    </header>
+    <div class="log" id="log">
+      <div class="assistant">I can see your screen and talk with you. Ask for help while you work — or let me take control.</div>
+    </div>
+    <div class="controls hidden" id="controls">
+      <div class="pill"><span class="live"></span><span id="controlLabel">AI has control</span></div>
+      <button type="button" id="takeControl">Take control</button>
+      <button type="button" id="resumeAi" class="hidden">Resume AI</button>
+      <button type="button" class="stop" id="stopControl">Stop</button>
+    </div>
+    <div class="composer">
+      <div class="row">
+        <textarea id="input" rows="2" placeholder="Ask about what I'm doing…"></textarea>
+      </div>
+      <div class="actions">
+        <button class="chip" id="see">See screen</button>
+        <button class="chip" id="listen">Talk</button>
+        <button class="chip" id="control">Take over</button>
+        <button class="send" id="send" disabled title="Send">↑</button>
+      </div>
+      <div class="hint">⌘⇧J · Uses Clyra voice + RapidOCR vision · No stealth capture</div>
+    </div>
+  </div>
+  <script>
+    const api = window.clyraCompanion;
+    const log = document.getElementById("log");
+    const input = document.getElementById("input");
+    const send = document.getElementById("send");
+    const status = document.getElementById("status");
+    const controls = document.getElementById("controls");
+    const controlLabel = document.getElementById("controlLabel");
+    const takeControl = document.getElementById("takeControl");
+    const resumeAi = document.getElementById("resumeAi");
+    const stopControl = document.getElementById("stopControl");
+    let listening = false;
+    let recognition = null;
+    let voiceOn = true;
+
+    function speak(text) {
+      if (!voiceOn || !text || !("speechSynthesis" in window)) return;
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(String(text).replace(/[`*_#]/g, " ").slice(0, 600));
+      utter.rate = 0.94;
+      utter.pitch = 1.03;
+      utter.volume = 0.96;
+      window.speechSynthesis.speak(utter);
+    }
+
+    function append(role, text, extra) {
+      const el = document.createElement("div");
+      el.className = role === "user" ? "user" : "assistant";
+      el.textContent = text;
+      log.appendChild(el);
+      if (extra) {
+        const v = document.createElement("div");
+        v.className = "vision";
+        v.textContent = extra;
+        log.appendChild(v);
+      }
+      log.scrollTop = log.scrollHeight;
+      if (role === "assistant") speak(text);
+    }
+
+    function setThinking(on) {
+      document.querySelectorAll(".thinking").forEach((n) => n.remove());
+      if (!on) return;
+      const el = document.createElement("div");
+      el.className = "thinking";
+      el.innerHTML = '<span class="dot"></span><span>Thinking</span>';
+      log.appendChild(el);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function syncSend() {
+      send.disabled = !input.value.trim();
+    }
+
+    input.addEventListener("input", syncSend);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        void submit();
+      }
+    });
+
+    async function submit() {
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = "";
+      syncSend();
+      append("user", text);
+      setThinking(true);
+      const result = await api.ask(text);
+      setThinking(false);
+      if (result?.reply?.text) append("assistant", result.reply.text, result.vision?.summary);
+      else append("assistant", result?.error || "I could not answer that.");
+    }
+
+    send.addEventListener("click", () => void submit());
+    document.getElementById("hide").addEventListener("click", () => api.hide());
+    document.getElementById("see").addEventListener("click", async () => {
+      setThinking(true);
+      const result = await api.seeScreen(input.value.trim() || "What is on my screen?");
+      setThinking(false);
+      append("assistant", result?.vision?.summary || result?.error || "Captured your screen.");
+    });
+    document.getElementById("control").addEventListener("click", async () => {
+      await api.startControl();
+      controls.classList.remove("hidden");
+      document.getElementById("control").classList.add("active");
+    });
+    takeControl.addEventListener("click", async () => {
+      await api.takeManualControl();
+      takeControl.classList.add("hidden");
+      resumeAi.classList.remove("hidden");
+      controlLabel.textContent = "You have control";
+    });
+    resumeAi.addEventListener("click", async () => {
+      await api.resumeAi();
+      resumeAi.classList.add("hidden");
+      takeControl.classList.remove("hidden");
+      controlLabel.textContent = "AI has control";
+    });
+    stopControl.addEventListener("click", async () => {
+      await api.stopControl();
+      controls.classList.add("hidden");
+      document.getElementById("control").classList.remove("active");
+    });
+
+    document.getElementById("listen").addEventListener("click", async () => {
+      // Prefer Clyra's Web Speech STT (same path as voice call / dictation overlay).
+      // Transcripts are cleaned via /api/dictation/cleanup when the service is up.
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        append("assistant", "Speech recognition is unavailable here. Type your question, or use Clyra voice call in the main window.");
+        return;
+      }
+      if (listening && recognition) {
+        recognition.stop();
+        listening = false;
+        document.getElementById("listen").classList.remove("active");
+        return;
+      }
+      recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+      recognition.onresult = async (event) => {
+        let text = "";
+        for (let i = 0; i < event.results.length; i++) text += event.results[i][0].transcript;
+        input.value = text.trim();
+        syncSend();
+        if (event.results[event.results.length - 1].isFinal) {
+          try {
+            const state = await api.getState();
+            const base = state?.serviceUrl || "";
+            if (base && input.value) {
+              const cleaned = await fetch(`${base}/api/dictation/cleanup`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ transcript: input.value, level: "light" }),
+              }).then((r) => r.json()).catch(() => null);
+              if (cleaned?.text) input.value = String(cleaned.text).trim();
+              syncSend();
+            }
+          } catch { /* keep raw transcript */ }
+          void submit();
+        }
+      };
+      recognition.onend = () => {
+        listening = false;
+        document.getElementById("listen").classList.remove("active");
+      };
+      recognition.start();
+      listening = true;
+      document.getElementById("listen").classList.add("active");
+    });
+
+    api.onState((state) => {
+      status.textContent = state.status || "Ready";
+      if (state.controlling) controls.classList.remove("hidden");
+      if (state.manualControl) {
+        takeControl.classList.add("hidden");
+        resumeAi.classList.remove("hidden");
+        controlLabel.textContent = "You have control";
+      } else if (state.controlling) {
+        resumeAi.classList.add("hidden");
+        takeControl.classList.remove("hidden");
+        controlLabel.textContent = "AI has control";
+      }
+    });
+  </script>
+</body>
+</html>

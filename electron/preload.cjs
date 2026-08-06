@@ -45,6 +45,9 @@ contextBridge.exposeInMainWorld("clyraDesktop", {
     onTrigger: (callback) => subscribe("dictation:trigger", callback),
     onAction: (callback) => subscribe("dictation:action", callback),
   },
+  companion: {
+    toggle: () => ipcRenderer.invoke("companion:toggle"),
+  },
   google: {
     status: () => ipcRenderer.invoke("google:status"),
     signIn: () => ipcRenderer.invoke("google:sign-in"),

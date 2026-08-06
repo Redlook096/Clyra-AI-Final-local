@@ -220,6 +220,15 @@ const loadWebBrowserWorkspace = () =>
     default: () => <WorkspaceImportFailure name="Web Browser" />,
   }));
 const WebBrowserWorkspace = lazy(loadWebBrowserWorkspace);
+const loadScreenCompanionWorkspace = () =>
+  import("./components/ScreenCompanionWorkspace").catch(() => ({
+    default: () => (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+        <p className="text-sm text-slate-600">Loading Screen Companion…</p>
+      </div>
+    ),
+  }));
+const ScreenCompanionWorkspace = lazy(loadScreenCompanionWorkspace);
 
 const loadCreatorStudioWorkspace = () =>
   import("./components/CreatorStudioWorkspace").catch(() => ({
@@ -282,7 +291,7 @@ function prepareVibeForBoot(
   return vibeBootPreparation;
 }
 
-type WorkspaceTabId = "chat" | "vibe" | "clip" | "browser" | "study" | CreatorMode;
+type WorkspaceTabId = "chat" | "vibe" | "clip" | "browser" | "study" | "companion" | CreatorMode;
 type AppAgentId = "vibe" | "browse" | "clip" | "study" | "fake-text" | "would-rather";
 type GoogleToolId = "gmail" | "calendar" | "docs" | "sheets" | "slides" | "drive";
 type AppAgentStatus = "queued" | "running" | "ready" | "needs_input" | "failed";
@@ -323,7 +332,7 @@ function readEmbeddedWorkspace(): WorkspaceTabId {
   const tool = params.get("embedTool");
   if (tool === "browse" || tool === "browser") return "browser";
   if (tool === "fake-text" || tool === "would-rather") return tool;
-  if (tool === "vibe" || tool === "clip" || tool === "study") return tool;
+  if (tool === "vibe" || tool === "clip" || tool === "study" || tool === "companion") return tool;
   return "chat";
 }
 const WORKSPACE_TAB_WIDTH = 105;
@@ -5536,6 +5545,7 @@ Please analyze the code you just wrote and fix this error.`;
   const isClipWorkspace =
     activeWorkspaceTab === "clip" || selectedCommand?.id === "clip";
   const isBrowserWorkspace = activeWorkspaceTab === "browser";
+  const isCompanionWorkspace = activeWorkspaceTab === "companion";
   const isStudyWorkspace = activeWorkspaceTab === "study";
   const creatorMode: CreatorMode | null =
     activeWorkspaceTab === "would-rather" ||
@@ -5544,9 +5554,9 @@ Please analyze the code you just wrote and fix this error.`;
       ? activeWorkspaceTab
       : null;
   const isCreatorWorkspace = creatorMode !== null;
-  const isVibeWorkspace = activeWorkspaceTab === "vibe" && !isClipWorkspace;
+  const isVibeWorkspace = activeWorkspaceTab === "vibe" && !isClipWorkspace && !isCompanionWorkspace;
   const showSidebarControls =
-    activeWorkspaceTab === "chat" && !isClipWorkspace && !isBrowserWorkspace;
+    activeWorkspaceTab === "chat" && !isClipWorkspace && !isBrowserWorkspace && !isCompanionWorkspace;
   const rawShowWorkspaceLivePreview = isVibeWorkspace && showVibeLivePreview;
   const [workspacePreviewLayoutVisible, setWorkspacePreviewLayoutVisible] =
     useState(rawShowWorkspaceLivePreview);
@@ -6755,6 +6765,10 @@ Please analyze the code you just wrote and fix this error.`;
                       ) : isBrowserWorkspace ? (
                         <Suspense fallback={null}>
                           <WebBrowserWorkspace />
+                        </Suspense>
+                      ) : isCompanionWorkspace ? (
+                        <Suspense fallback={null}>
+                          <ScreenCompanionWorkspace />
                         </Suspense>
                       ) : isStudyWorkspace ? (
                         <Suspense fallback={null}>

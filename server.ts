@@ -2140,6 +2140,128 @@ async function startServer() {
     res.json({ ok: true });
   });
 
+  // Screen Companion — OpenCluely-inspired helper that talks + sees the screen.
+  // Vision uses RapidOCR ONNX (8GB-safe). Desktop takeover stays in Electron.
+  app.post("/api/companion/vision", async (req, res) => {
+    try {
+      const imagePath = String(req.body?.path || "").trim();
+      const question = String(req.body?.question || "").trim();
+      if (!imagePath || imagePath.includes("..")) {
+        res.status(400).json({ ok: false, error: "A valid capture path is required." });
+        return;
+      }
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      const execFileAsync = promisify(execFile);
+      const script = path.join(process.cwd(), "tools", "companion-vision.py");
+      const { stdout } = await execFileAsync("python3", [script, imagePath, "--question", question], {
+        timeout: 45_000,
+        maxBuffer: 4 * 1024 * 1024,
+        env: process.env,
+      });
+      res.json(JSON.parse(String(stdout || "{}")));
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "Companion vision failed",
+      });
+    }
+  });
+
+  app.post("/api/companion/ask", async (req, res) => {
+    try {
+      const question = String(req.body?.question || req.body?.text || "").trim();
+      const visionSummary = String(req.body?.visionSummary || "").trim();
+      const ocrText = String(req.body?.ocrText || "").trim();
+      if (!question) {
+        res.status(400).json({ ok: false, error: "A question is required." });
+        return;
+      }
+      const system = [
+        "You are Clyra Screen Companion — a calm desktop helper.",
+        "You can see the user's screen via RapidOCR vision evidence and talk with them.",
+        "Help with whatever they are doing. Be concise and practical.",
+        "Never claim stealth or hidden overlays.",
+      ].join(" ");
+      const user = [
+        `User: ${question}`,
+        visionSummary ? `\nScreen vision:\n${visionSummary}` : "",
+        ocrText ? `\nOCR text:\n${ocrText.slice(0, 2500)}` : "",
+      ].join("");
+
+      const visionLocalReply = () => {
+        const ocrPreview = ocrText
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .slice(0, 6)
+          .join(" · ");
+        const bits = [
+          visionSummary || (ocrPreview ? `I can read: ${ocrPreview}` : "I am ready to help with what is on your screen."),
+          "Talk to me while you work — or open the Electron overlay (⌘⇧J) so I can take control with the Atlas cursor.",
+        ];
+        return bits.join(" ");
+      };
+
+      // Prefer the shared Clyra chat API (same provider stack as voice / chat).
+      // When the key is missing or upstream fails, answer from screen vision so
+      // Companion stays useful offline of the LLM.
+      const apiKey = process.env.DEEPSEEK_API_KEY;
+      if (!apiKey) {
+        res.json({
+          ok: true,
+          text: visionLocalReply(),
+          source: "vision-local",
+          choices: [{ message: { role: "assistant", content: visionLocalReply() } }],
+        });
+        return;
+      }
+
+      const baseUrl = String(process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com").replace(/\/$/, "");
+      try {
+        const upstream = await fetch(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            messages: [
+              { role: "system", content: system },
+              { role: "user", content: user },
+            ],
+            temperature: 0.3,
+            max_tokens: 700,
+          }),
+          signal: AbortSignal.timeout(25_000),
+        });
+        if (upstream.ok) {
+          const payload = await upstream.json();
+          const text = String(payload?.choices?.[0]?.message?.content || "").trim();
+          if (text) {
+            res.json({ ...payload, ok: true, text, source: "clyra-api" });
+            return;
+          }
+        }
+      } catch (error) {
+        console.warn("[companion/ask] upstream failed, using vision-local:", error);
+      }
+
+      const text = visionLocalReply();
+      res.json({
+        ok: true,
+        text,
+        source: "vision-local",
+        choices: [{ message: { role: "assistant", content: text } }],
+      });
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "Companion ask failed",
+      });
+    }
+  });
+
   app.post("/api/openbrowser/control", (req, res) => {
     const command = String(req.body?.command || "") as Parameters<typeof setManagedBrowserAgentControl>[0];
     if (!["pause", "resume", "take_control", "return_control", "stop"].includes(command)) {

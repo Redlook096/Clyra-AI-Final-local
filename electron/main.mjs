@@ -1,9 +1,10 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import { existsSync, promises as fs, statSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import dotenv from "dotenv";
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell, WebContentsView } from "electron";
 import { ChromiumBrowserManager } from "./browser-manager.mjs";
@@ -13,6 +14,11 @@ import { SmartToolbarManager } from "./smart-toolbar-manager.mjs";
 import { GoogleWorkspaceManager } from "./google-workspace-manager.mjs";
 import { DeepResearchManager } from "./deep-research-manager.mjs";
 import { LocalMemoryManager } from "./local-memory-manager.mjs";
+import { ScreenCaptureService } from "./screen-capture.mjs";
+import { DesktopControlService } from "./desktop-control.mjs";
+import { CompanionManager } from "./companion-manager.mjs";
+
+const execFileAsync = promisify(execFile);
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(here, "..");
@@ -48,6 +54,9 @@ let smartToolbarManager = null;
 let googleWorkspaceManager = null;
 let deepResearchManager = null;
 let localMemoryManager = null;
+let companionManager = null;
+let screenCaptureService = null;
+let desktopControlService = null;
 let serviceProcess = null;
 let serviceLaunchError = null;
 let serviceFallbackStarted = false;
@@ -65,8 +74,10 @@ function destroyNativeManagers() {
   try { surfaceManager?.destroy(); } catch (error) { console.warn("[surface] teardown failed:", error); }
   try { dictationManager?.destroy(); } catch (error) { console.warn("[dictation] teardown failed:", error); }
   try { smartToolbarManager?.destroy(); } catch (error) { console.warn("[smart-toolbar] teardown failed:", error); }
+  try { companionManager?.destroy(); } catch (error) { console.warn("[companion] teardown failed:", error); }
   dictationManager = null;
   smartToolbarManager = null;
+  companionManager = null;
   googleWorkspaceManager?.finishAuth?.();
   googleWorkspaceManager = null;
   deepResearchManager = null;
@@ -369,6 +380,85 @@ function authorizeDictation(event) {
   if (!dictationManager?.isSender(event.sender)) throw new Error("Untrusted dictation IPC sender.");
 }
 
+function authorizeCompanion(event) {
+  if (!companionManager?.isSender(event.sender)) throw new Error("Untrusted companion IPC sender.");
+}
+
+async function analyseCompanionVision(imagePath, question = "") {
+  const script = path.join(projectRoot, "tools", "companion-vision.py");
+  const { stdout } = await execFileAsync("python3", [script, imagePath, "--question", String(question || "")], {
+    timeout: 45_000,
+    maxBuffer: 4 * 1024 * 1024,
+    env: process.env,
+  });
+  return JSON.parse(String(stdout || "{}"));
+}
+
+function companionVisionFallback({ question, visionSummary, ocrText, controlling }) {
+  const seen = String(visionSummary || "").trim();
+  const ocr = String(ocrText || "").trim().split("\n").filter(Boolean).slice(0, 6).join(" · ");
+  const bits = [];
+  if (seen) bits.push(seen);
+  else if (ocr) bits.push(`I can read: ${ocr}`);
+  else bits.push("I captured your screen but could not read much text yet.");
+  bits.push(
+    controlling
+      ? "I have desktop control ready — say what to click or type."
+      : "Ask me about what you're doing, or tap Take over if you want me to drive the cursor.",
+  );
+  if (question) bits.push(`For “${question}”: use the visible text and layout above as the source of truth.`);
+  return bits.join(" ");
+}
+
+async function askCompanionModel({ question, visionSummary, ocrText, controlling }) {
+  const system = [
+    "You are Clyra Screen Companion — a calm desktop helper.",
+    "You can see the user's screen via RapidOCR vision evidence and talk with them.",
+    "Help with whatever they are doing. Be concise and practical.",
+    controlling
+      ? "You currently may control the desktop. Propose concrete next clicks/keys when useful."
+      : "You are observing only unless the user asks you to take control.",
+    "Never claim stealth or hidden overlays. Capture is user-visible.",
+  ].join(" ");
+  const user = [
+    `User: ${question}`,
+    visionSummary ? `\nScreen vision:\n${visionSummary}` : "",
+    ocrText ? `\nOCR text:\n${String(ocrText).slice(0, 2500)}` : "",
+  ].join("");
+  try {
+    const response = await fetch(`http://127.0.0.1:${appPort}/api/companion/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question,
+        visionSummary,
+        ocrText,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        temperature: 0.3,
+        max_tokens: 700,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    const text =
+      payload?.choices?.[0]?.message?.content ||
+      payload?.message?.content ||
+      payload?.reply ||
+      payload?.text ||
+      payload?.content ||
+      "";
+    if (response.ok && String(text).trim()) return { text: String(text), source: payload?.source || "clyra-api" };
+  } catch {
+    /* fall through to vision-local reply */
+  }
+  return {
+    text: companionVisionFallback({ question, visionSummary, ocrText, controlling }),
+    source: "vision-local",
+  };
+}
+
 function registerIpc() {
   if (ipcRegistered) return;
   ipcRegistered = true;
@@ -445,6 +535,46 @@ function registerIpc() {
     return { ok: true };
   });
   ipcMain.on("dictation:pill-action", (event, action) => { authorizeDictation(event); void dictationManager?.action(String(action || "cancel")); });
+  ipcMain.handle("companion:get-state", (event) => {
+    authorizeCompanion(event);
+    return companionManager?.getState() || { phase: "idle" };
+  });
+  ipcMain.handle("companion:show", async (event) => { authorizeCompanion(event); await companionManager?.show(); return { ok: true }; });
+  ipcMain.handle("companion:hide", (event) => { authorizeCompanion(event); companionManager?.hide(); return { ok: true }; });
+  ipcMain.handle("companion:ask", async (event, payload) => {
+    authorizeCompanion(event);
+    return companionManager?.ask(String(payload?.text || ""));
+  });
+  ipcMain.handle("companion:see", async (event, payload) => {
+    authorizeCompanion(event);
+    return companionManager?.seeScreen(String(payload?.question || ""));
+  });
+  ipcMain.handle("companion:start-control", async (event) => {
+    authorizeCompanion(event);
+    return companionManager?.startControl();
+  });
+  ipcMain.handle("companion:take-control", async (event) => {
+    authorizeCompanion(event);
+    return companionManager?.takeManualControl();
+  });
+  ipcMain.handle("companion:resume", async (event) => {
+    authorizeCompanion(event);
+    return companionManager?.resumeAi();
+  });
+  ipcMain.handle("companion:stop", async (event) => {
+    authorizeCompanion(event);
+    return companionManager?.stopControl();
+  });
+  ipcMain.handle("companion:action", async (event, payload) => {
+    authorizeCompanion(event);
+    return companionManager?.runDesktopAction(payload?.action || {});
+  });
+  // Main renderer may open the companion overlay.
+  ipcMain.handle("companion:toggle", async (event) => {
+    authorize(event);
+    await companionManager?.toggle();
+    return { ok: true, registered: Boolean(companionManager?.shortcutRegistered) };
+  });
   ipcMain.on("smart-toolbar:action", (event, payload) => {
     if (!smartToolbarManager?.isSender(event.sender)) throw new Error("Untrusted smart toolbar IPC sender.");
     void smartToolbarManager.action(payload || {});
@@ -547,10 +677,34 @@ async function createWindow() {
     serviceUrl: () => `http://127.0.0.1:${appPort}`,
   });
   localMemoryManager = new LocalMemoryManager({ filePath:path.join(app.getPath("userData"), "clyra-memory.dat"), development:isDevelopment });
+  screenCaptureService = new ScreenCaptureService();
+  desktopControlService = new DesktopControlService();
+  companionManager = new CompanionManager({
+    preloadPath: path.join(here, "companion-preload.cjs"),
+    htmlPath: path.join(here, "companion.html"),
+    getServiceUrl: () => `http://127.0.0.1:${appPort}`,
+    capture: screenCaptureService,
+    desktop: desktopControlService,
+    analyseVision: analyseCompanionVision,
+    askModel: askCompanionModel,
+  });
   await browserManager.initialize();
   await dictationManager.initialize();
   await smartToolbarManager.initialize();
+  await companionManager.initialize();
   registerIpc();
+
+  if (process.env.CLYRA_COMPANION_SMOKE === "1") {
+    setTimeout(() => {
+      void companionManager?.runSmoke().then((report) => {
+        console.log("[companion-smoke]", JSON.stringify(report));
+        if (process.env.CLYRA_COMPANION_SMOKE_EXIT === "1") {
+          destroyNativeManagers();
+          app.exit(report?.ok ? 0 : 1);
+        }
+      });
+    }, 2500);
+  }
 
   mainWindow.on("resize", resizeUi);
   // The window close control is an application exit, not a hide-to-tray
