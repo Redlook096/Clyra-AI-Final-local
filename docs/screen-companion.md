@@ -30,6 +30,12 @@ Clyra ports the useful parts of [OpenCluely](https://github.com/TechyCSR/OpenClu
 
 `/?embedTool=companion` opens the React shell. Real screen capture and OS control require the Electron app.
 
+## Voice + screenshare
+
+During a voice call, **Share screen** opens Screen Companion (Electron) or a browser display picker. Shared frames can be analysed via `/api/companion/vision-frame` (RapidOCR). Talk or Message modes both work; message mode skips TTS.
+
+Voice turn timing is tuned for snappier STT (`VOICE_TRAILING_SILENCE_MS≈820`, barge ≈480ms) with `base.en` Whisper for accuracy on 8GB machines.
+
 ## Tests
 
 ```bash

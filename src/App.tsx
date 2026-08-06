@@ -107,6 +107,7 @@ import type { CreatorMode } from "./components/CreatorStudioWorkspace";
 import { VoiceCallOverlay } from "./components/voice/VoiceCallOverlay";
 import { DictationController } from "./components/DictationController";
 import { VoiceWaveIcon } from "./components/voice/VoiceWaveIcon";
+import { VoiceWaveform } from "./components/voice/VoiceWaveform";
 import { VoicePcmCapturer } from "./lib/voicePcmCapture";
 import { useVoiceCall } from "./hooks/useVoiceCall";
 import { AiOrb, type OrbColorTheme } from "./components/AiOrb";
@@ -495,51 +496,6 @@ function BootIntroOverlay({
 }
 
 type ComposerVoicePhase = "idle" | "listening" | "transcribing" | "error";
-
-function ComposerVoiceWaveform({ level }: { level: number }) {
-  const [phase, setPhase] = useState(0);
-  const targetVolumeRef = useRef(0.1);
-  const smoothVolumeRef = useRef(0.1);
-  const [targetVolume, setTargetVolume] = useState(0.1);
-
-  useEffect(() => {
-    const phaseTimer = window.setInterval(() => setPhase((value) => value + 0.22), 60);
-    const volumeTimer = window.setInterval(() => {
-      const next = 0.05 + Math.random() * 0.16;
-      targetVolumeRef.current = next;
-      setTargetVolume(next);
-    }, 360);
-    return () => {
-      window.clearInterval(phaseTimer);
-      window.clearInterval(volumeTimer);
-    };
-  }, []);
-
-  // The actual microphone level leads the motion. A low rolling floor keeps
-  // the pill alive during natural pauses without inventing a fake signal.
-  const desired = Math.max(Math.min(1, level) * 1.25, targetVolumeRef.current);
-  smoothVolumeRef.current += (desired - smoothVolumeRef.current) * 0.18;
-  const volume = Math.max(0.04, Math.min(1, smoothVolumeRef.current || targetVolume));
-
-  return (
-    <div className="flex h-8 min-w-0 flex-1 items-center justify-center gap-[2px]" aria-label="Microphone level">
-      {Array.from({ length: 27 }, (_, index) => {
-        const distance = (index - 13) / 13;
-        const bell = Math.exp(-(distance * distance) * 2.6);
-        const waves = (Math.sin(phase + index * 0.4) + Math.sin(phase * 0.7 - index * 0.2) + 2) / 4;
-        const height = 4 + bell * (4 + waves * (8 + volume * 25));
-        return (
-          <motion.span
-            key={index}
-            animate={{ height, opacity: 0.32 + bell * (0.34 + Math.min(0.34, volume * 0.5)) }}
-            transition={{ type: "spring", stiffness: 300, damping: 25, mass: 0.5 }}
-            className="w-[3px] shrink-0 rounded-full bg-gradient-to-b from-blue-300 to-blue-600 shadow-[0_0_7px_rgba(59,130,246,.14)]"
-          />
-        );
-      })}
-    </div>
-  );
-}
 
 function useComposerVoiceCapture(onComplete: (text: string) => void) {
   const [phase, setPhase] = useState<ComposerVoicePhase>("idle");
@@ -5992,6 +5948,7 @@ Please analyze the code you just wrote and fix this error.`;
             vibe: { label: "Vibe Coder", icon: <Code2 className="h-3.5 w-3.5" /> },
             clip: { label: "AI Clipper", icon: <Scissors className="h-3.5 w-3.5" /> },
             browser: { label: "Browser", icon: <Globe className="h-3.5 w-3.5" /> },
+            companion: { label: "Companion", icon: <AppWindow className="h-3.5 w-3.5" /> },
             study: { label: "Study Pal", icon: <GraduationCap className="h-3.5 w-3.5" /> },
             "fake-text": { label: "Text Story", icon: <MessagesSquare className="h-3.5 w-3.5" /> },
             "would-rather": { label: "Would You Rather", icon: <Heart className="h-3.5 w-3.5" /> },
@@ -6729,6 +6686,7 @@ Please analyze the code you just wrote and fix this error.`;
                       messages.length === 0 &&
                         !isClipWorkspace &&
                         !isBrowserWorkspace &&
+                        !isCompanionWorkspace &&
                         !isStudyWorkspace &&
                         !isCreatorWorkspace &&
                         "justify-center",
@@ -7041,6 +6999,7 @@ Please analyze the code you just wrote and fix this error.`;
                         {!isFullscreen &&
                           !isClipWorkspace &&
                           !isBrowserWorkspace &&
+                          !isCompanionWorkspace &&
                           !isStudyWorkspace &&
                           !isCreatorWorkspace &&
                           !isVibeWorkspace && (
@@ -7494,7 +7453,7 @@ Please analyze the code you just wrote and fix this error.`;
                                         <X className="h-4 w-4" />
                                       </button>
                                       {composerDictation.phase === "listening" ? (
-                                        <ComposerVoiceWaveform level={composerDictation.level} />
+                                        <VoiceWaveform level={composerDictation.level} active muted={false} compact className="h-8" />
                                       ) : (
                                         <div className="flex min-w-0 flex-1 items-center justify-center gap-2 text-[13px] font-medium text-slate-500">
                                           {composerDictation.phase === "error" ? <CircleAlert className="h-4 w-4 text-rose-500" /> : <Loader2 className="h-4 w-4 animate-spin text-blue-500" />}

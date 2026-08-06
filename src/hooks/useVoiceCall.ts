@@ -68,7 +68,7 @@ const ENDPOINT_SILENCE_DEFAULT_MS = 620;
 const VAD_SILENCE_LEVEL = 0.045;
 const VAD_SPEECH_LEVEL = 0.08;
 /** Continuous user speech required before interrupting the assistant (noise immunity). */
-const BARGE_HOLD_MS = 700;
+const BARGE_HOLD_MS = 480;
 const VITE_ENV = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
 const ALLOW_BROWSER_TTS_FALLBACK = VITE_ENV.VITE_ALLOW_BROWSER_TTS_FALLBACK === "true";
 const CHATTERBOX_WATCHDOG_MS = Math.max(

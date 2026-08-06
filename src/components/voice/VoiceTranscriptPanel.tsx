@@ -97,25 +97,25 @@ function MessageBubble({
     >
       <div
         className={cn(
-          "max-w-[88%] rounded-2xl px-3.5 py-2.5 shadow-sm",
+          "max-w-[88%] px-3.5 py-2.5",
           isYou
-            ? "rounded-br-md bg-slate-900 text-white"
-            : "rounded-bl-md border border-slate-200/80 bg-white text-slate-800",
+            ? "rounded-[14px] rounded-br-md bg-[#aec7f1] text-[#18212f]"
+            : "text-[#18212f]",
         )}
       >
         <div className="mb-1 flex items-center justify-between gap-3">
           <span
             className={cn(
               "text-[10px] font-semibold uppercase tracking-[0.14em]",
-              isYou ? "text-white/55" : "text-slate-400",
+              isYou ? "text-[#18212f]/55" : "text-[#8b939e]",
             )}
           >
-            {isYou ? "You" : "AI"}
+            {isYou ? "You" : "Clyra"}
           </span>
           <span
             className={cn(
               "text-[10px] tabular-nums",
-              isYou ? "text-white/45" : "text-slate-400",
+              isYou ? "text-[#18212f]/45" : "text-[#8b939e]",
             )}
           >
             {formatTime(turn.at)}
@@ -126,8 +126,8 @@ function MessageBubble({
           type="button"
           onClick={onToggle}
           className={cn(
-            "w-full text-left text-[13.5px] leading-relaxed",
-            isYou ? "text-white" : "text-slate-700",
+            "w-full text-left text-[14px] leading-[1.55] tracking-[-0.01em]",
+            isYou ? "text-[#18212f]" : "text-[#18212f]",
           )}
         >
           {highlighted}
@@ -135,7 +135,7 @@ function MessageBubble({
             <span
               className={cn(
                 "mt-1 block text-[11px] font-medium",
-                isYou ? "text-white/55" : "text-slate-400",
+                isYou ? "text-[#18212f]/55" : "text-[#8b939e]",
               )}
             >
               {expanded ? "Show less" : "Tap to expand"}
@@ -157,7 +157,7 @@ function MessageBubble({
                 setCopied(true);
                 window.setTimeout(() => setCopied(false), 1200);
               }}
-              className="inline-flex h-7 items-center gap-1 rounded-full px-2 text-[11px] font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
+              className="inline-flex h-7 items-center gap-1 rounded-full px-2 text-[11px] font-medium text-[#697386] transition-colors hover:bg-[#f1f3f7] hover:text-[#18212f]"
               aria-label="Copy response"
             >
               {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
@@ -168,7 +168,7 @@ function MessageBubble({
               <button
                 type="button"
                 onClick={onEdit}
-                className="inline-flex h-7 items-center gap-1 rounded-full px-2 text-[11px] font-medium text-white/65 transition-colors hover:bg-white/10 hover:text-white"
+                className="inline-flex h-7 items-center gap-1 rounded-full px-2 text-[11px] font-medium text-[#18212f]/65 transition-colors hover:bg-black/5 hover:text-[#18212f]"
                 aria-label="Edit message"
               >
                 <Pencil className="h-3 w-3" />
@@ -177,7 +177,7 @@ function MessageBubble({
               <button
                 type="button"
                 onClick={onResend}
-                className="inline-flex h-7 items-center gap-1 rounded-full px-2 text-[11px] font-medium text-white/65 transition-colors hover:bg-white/10 hover:text-white"
+                className="inline-flex h-7 items-center gap-1 rounded-full px-2 text-[11px] font-medium text-[#18212f]/65 transition-colors hover:bg-black/5 hover:text-[#18212f]"
                 aria-label="Resend message"
               >
                 <RefreshCw className="h-3 w-3" />
@@ -276,15 +276,15 @@ export function VoiceTranscriptPanel({
           exit={{ y: "108%" }}
           transition={{ duration: 0.42, ease: [0.16, 1, 0.3, 1] }}
         >
-          <div className="clyra-voice-transcript-sheet mx-auto flex w-full max-w-lg flex-col overflow-hidden rounded-t-[28px] border border-slate-200/80 bg-white/95 shadow-[0_-18px_50px_rgba(15,23,42,0.12)] backdrop-blur-xl">
+          <div className="clyra-voice-transcript-sheet mx-auto flex w-full max-w-lg flex-col overflow-hidden rounded-t-[28px] border border-[#e7e7e4] bg-[#fbfbfa]/98 shadow-[0_-18px_50px_rgba(15,23,42,0.08)] backdrop-blur-xl">
             <div className="flex items-center justify-between px-5 pb-2 pt-3">
               <div className="flex items-center gap-2">
-                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-700">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#eef4ff] text-[#0052fb]">
                   <MessageSquareText className="h-4 w-4" />
                 </span>
                 <div>
-                  <p className="text-[13px] font-semibold text-slate-900">Conversation</p>
-                  <p className="text-[11px] text-slate-400">
+                  <p className="text-[13px] font-semibold text-[#18212f]">Messages</p>
+                  <p className="text-[11px] text-[#8b939e]">
                     Live transcript · type anytime
                   </p>
                 </div>
@@ -292,7 +292,7 @@ export function VoiceTranscriptPanel({
               <button
                 type="button"
                 onClick={onClose}
-                className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50"
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-[#e7e7e4] bg-white text-[#697386] transition-colors hover:bg-[#f1f3f7]"
                 aria-label="Close conversation"
               >
                 <X className="h-4 w-4" />
@@ -300,29 +300,29 @@ export function VoiceTranscriptPanel({
             </div>
 
             <div className="px-4 pb-2">
-              <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50/80 px-3 py-2">
-                <Search className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+              <div className="flex items-center gap-2 rounded-full border border-[#dfe7f1] bg-white px-3 py-2">
+                <Search className="h-3.5 w-3.5 shrink-0 text-[#8b939e]" />
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Search this call…"
-                  className="w-full bg-transparent text-[13px] text-slate-700 outline-none placeholder:text-slate-400"
+                  className="w-full bg-transparent text-[13px] text-[#18212f] outline-none placeholder:text-[#8b939e]"
                 />
               </div>
             </div>
 
             <div className="px-4 pb-2">
-              <div className="overflow-hidden rounded-2xl border border-slate-200/90 bg-gradient-to-br from-slate-50 to-white">
+              <div className="overflow-hidden rounded-2xl border border-[#e7e7e4] bg-white">
                 <div className="flex items-center justify-between gap-2 px-3.5 py-2.5">
-                  <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                    <Sparkles className="h-3.5 w-3.5" />
+                  <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b939e]">
+                    <Sparkles className="h-3.5 w-3.5 text-[#0052fb]" />
                     Summary
                   </div>
                   <button
                     type="button"
                     onClick={refreshSummary}
                     disabled={summaryBusy}
-                    className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50"
+                    className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium text-[#697386] transition-colors hover:bg-[#f1f3f7] disabled:opacity-50"
                   >
                     <RefreshCw
                       className={cn("h-3 w-3", summaryBusy && "animate-spin")}
@@ -338,7 +338,7 @@ export function VoiceTranscriptPanel({
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -4 }}
                       transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-                      className="px-3.5 pb-3 text-[12.5px] leading-relaxed text-slate-600"
+                      className="px-3.5 pb-3 text-[12.5px] leading-relaxed text-[#697386]"
                     >
                       {summary}
                     </motion.p>
@@ -347,9 +347,9 @@ export function VoiceTranscriptPanel({
                       key="empty-summary"
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
-                      className="px-3.5 pb-3 text-[12px] text-slate-400"
+                      className="px-3.5 pb-3 text-[12px] text-[#8b939e]"
                     >
-                      Generate a short AI-style overview of this call.
+                      Generate a short overview of this call.
                     </motion.p>
                   )}
                 </AnimatePresence>
@@ -361,7 +361,7 @@ export function VoiceTranscriptPanel({
               className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 pb-3 pt-1 scrollbar-thin"
             >
               {filtered.length === 0 && !liveUser && !liveAssistant ? (
-                <p className="px-2 py-8 text-center text-[13px] text-slate-400">
+                <p className="px-2 py-8 text-center text-[13px] text-[#8b939e]">
                   {query
                     ? "No matches in this conversation."
                     : "Your words and Clyra’s replies will appear here."}
@@ -436,8 +436,8 @@ export function VoiceTranscriptPanel({
                   animate={{ opacity: 1, y: 0 }}
                   className="flex justify-end"
                 >
-                  <div className="max-w-[88%] rounded-2xl rounded-br-md bg-slate-900/90 px-3.5 py-2.5 text-[13.5px] leading-relaxed text-white">
-                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/50">
+                  <div className="max-w-[88%] rounded-[14px] rounded-br-md bg-[#aec7f1] px-3.5 py-2.5 text-[14px] leading-[1.55] text-[#18212f]">
+                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#18212f]/55">
                       You · live
                     </p>
                     {liveUser}
@@ -451,9 +451,9 @@ export function VoiceTranscriptPanel({
                   animate={{ opacity: 1, y: 0 }}
                   className="flex justify-start"
                 >
-                  <div className="max-w-[88%] rounded-2xl rounded-bl-md border border-slate-200 bg-white px-3.5 py-2.5 text-[13.5px] leading-relaxed text-slate-700 shadow-sm">
-                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                      AI · live
+                  <div className="max-w-[88%] px-1 py-1 text-[14px] leading-[1.55] text-[#18212f]">
+                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8b939e]">
+                      Clyra · live
                     </p>
                     {liveAssistant}
                   </div>
@@ -463,22 +463,22 @@ export function VoiceTranscriptPanel({
 
             <form
               onSubmit={submit}
-              className="border-t border-slate-200/80 bg-white/90 px-4 pb-[max(0.9rem,env(safe-area-inset-bottom))] pt-3"
+              className="border-t border-[#e7e7e4] bg-[#fbfbfa] px-4 pb-[max(0.9rem,env(safe-area-inset-bottom))] pt-3"
             >
-              <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-slate-50/90 p-2 pl-3 shadow-inner">
+              <div className="flex items-end gap-2 rounded-[18px] border border-[#dfe7f1] bg-white p-2 pl-3">
                 <textarea
                   ref={inputRef}
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={onComposerKey}
                   rows={1}
-                  placeholder="Continue typing instead of speaking…"
-                  className="max-h-28 min-h-[40px] w-full resize-none bg-transparent py-2 text-[13.5px] text-slate-800 outline-none placeholder:text-slate-400"
+                  placeholder="Message Clyra…"
+                  className="max-h-28 min-h-[40px] w-full resize-none bg-transparent py-2 text-[14px] text-[#18212f] outline-none placeholder:text-[#8b939e]"
                 />
                 <button
                   type="submit"
                   disabled={!draft.trim()}
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-900 text-white transition-transform enabled:hover:scale-[1.03] enabled:active:scale-95 disabled:bg-slate-300"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#0052fb] text-white transition-transform enabled:hover:scale-[1.03] enabled:active:scale-95 disabled:bg-[#e8eaef] disabled:text-[#b0b5bf]"
                   aria-label="Send typed message"
                 >
                   <Send className="h-4 w-4" />

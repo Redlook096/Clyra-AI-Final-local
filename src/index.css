@@ -397,14 +397,24 @@
   will-change: height, opacity;
 }
 
+.clyra-voice-reply-card {
+  border-radius: 16px;
+  border: 1px solid #e7e7e4;
+  background: #fbfbfa;
+  padding: 0.85rem 1rem;
+  box-shadow: none;
+  backdrop-filter: none;
+  text-align: left;
+}
+
 .clyra-voice-call-btn {
   -webkit-tap-highlight-color: transparent;
   position: relative;
   z-index: 1;
   pointer-events: auto;
   will-change: transform;
-  backdrop-filter: blur(8px);
-  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
   transition:
     background-color 180ms ease,
     border-color 180ms ease,
@@ -412,14 +422,16 @@
     box-shadow 180ms ease;
 }
 
-.clyra-voice-reply-card {
-  border-radius: 18px;
-  border: 1px solid rgba(226, 232, 240, 0.95);
-  background: rgba(255, 255, 255, 0.92);
-  padding: 0.85rem 1rem;
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
-  backdrop-filter: blur(10px);
-  text-align: left;
+.clyra-voice-call-btn--accent {
+  border-color: rgba(0, 82, 251, 0.22) !important;
+  background: rgba(0, 82, 251, 0.08) !important;
+  color: #0052fb !important;
+}
+
+.clyra-voice-type-composer {
+  box-shadow: none !important;
+  border-color: #dfe7f1 !important;
+  background: rgba(255, 255, 255, 0.96) !important;
 }
 
 .clyra-voice-chooser,
@@ -5720,21 +5732,39 @@ body,
   min-height: 42px;
   align-items: center;
   justify-content: center;
-  gap: 3px;
+  gap: 2.5px;
+}
+
+.clyra-voice-waveform--compact {
+  min-height: 32px;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
 }
 
 .clyra-voice-waveform__bar {
   width: 3px;
   min-height: 4px;
   border-radius: 999px;
-  background: #64748b;
+  background: linear-gradient(180deg, #7eb0ff 0%, #0052fb 58%, #0040c8 100%);
+  box-shadow: 0 0 8px rgba(0, 82, 251, 0.18);
   transform: translateZ(0);
   will-change: height, opacity;
 }
 
+.clyra-voice-waveform--compact .clyra-voice-waveform__bar {
+  width: 2.5px;
+  box-shadow: 0 0 6px rgba(0, 82, 251, 0.14);
+}
+
+.clyra-voice-waveform--muted .clyra-voice-waveform__bar {
+  background: linear-gradient(180deg, #c5ccd6 0%, #94a3b8 100%);
+  box-shadow: none;
+}
+
 .clyra-voice-call-waveform {
-  width: min(340px, 72vw);
-  margin-top: 16px;
+  width: min(360px, 78vw);
+  margin-top: 18px;
 }
 
 @media (prefers-reduced-motion: reduce) {

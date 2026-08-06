@@ -1,12 +1,13 @@
 /**
  * Web preview of Screen Companion (Electron owns real capture + desktop control).
- * OpenCluely-inspired: talk about what you're doing; AI can see screen evidence.
+ * Matches chat tool light theme: #fbfbfa, #0052fb, soft user bubbles.
  */
 import { useCallback, useState } from "react";
-import { Eye, MonitorSmartphone, Sparkles } from "lucide-react";
+import { Eye, MessageSquareText, MonitorSmartphone, Sparkles } from "lucide-react";
 import { cn } from "../lib/utils";
 import { ShiningBrainIcon, ShiningText, ThinkingDots } from "./ShiningText";
 import { getElectronDesktop } from "../lib/electron-runtime";
+import { VoiceWaveform } from "./voice/VoiceWaveform";
 
 type Message = { id: string; role: "user" | "assistant"; text: string; vision?: string };
 
@@ -14,8 +15,8 @@ function speakReply(text: string) {
   if (typeof window === "undefined" || !("speechSynthesis" in window) || !text) return;
   window.speechSynthesis.cancel();
   const utter = new SpeechSynthesisUtterance(text.replace(/[`*_#]/g, " ").slice(0, 600));
-  utter.rate = 0.94;
-  utter.pitch = 1.03;
+  utter.rate = 1.02;
+  utter.pitch = 1;
   utter.volume = 0.96;
   window.speechSynthesis.speak(utter);
 }
@@ -25,12 +26,14 @@ export default function ScreenCompanionWorkspace() {
     {
       id: "welcome",
       role: "assistant",
-      text: "I'm Clyra Companion. Talk to me while you work — in Electron I can see your screen and take control with the same cursor UI as AI Browser.",
+      text: "I'm Clyra Companion. Talk or message while you work — share your screen from a voice call, or open the Electron overlay so I can see your desktop.",
     },
   ]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState<"talk" | "message">("talk");
   const [demoControl, setDemoControl] = useState<"off" | "ai" | "user">("off");
+  const [listeningDemo, setListeningDemo] = useState(false);
   const desktop = getElectronDesktop();
 
   const ask = useCallback(async () => {
@@ -50,7 +53,7 @@ export default function ScreenCompanionWorkspace() {
         payload.text || payload?.choices?.[0]?.message?.content || payload.error || "No reply",
       );
       setMessages((prev) => [...prev, { id: `a-${Date.now()}`, role: "assistant", text }]);
-      speakReply(text);
+      if (mode === "talk") speakReply(text);
     } catch (error) {
       setMessages((prev) => [
         ...prev,
@@ -63,20 +66,48 @@ export default function ScreenCompanionWorkspace() {
     } finally {
       setBusy(false);
     }
-  }, [busy, input]);
+  }, [busy, input, mode]);
 
   return (
-    <div className="relative flex h-full min-h-0 bg-[#f4f5f8] text-[#1a1d26]" style={{ fontFamily: "Geist, ui-sans-serif, system-ui, sans-serif" }}>
-      <aside className="flex w-[280px] shrink-0 flex-col border-r border-black/[0.07] bg-[#eef0f5] px-4 py-4">
-        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[#2b6ef2] text-[11px] font-bold text-white">C</div>
+    <div
+      className="relative flex h-full min-h-0 bg-[#fbfbfa] text-[#18212f]"
+      style={{ fontFamily: "Geist, ui-sans-serif, system-ui, sans-serif" }}
+    >
+      <aside className="flex w-[280px] shrink-0 flex-col border-r border-[#e7e7e4] bg-white px-4 py-4">
+        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[#0052fb] text-[11px] font-bold text-white">C</div>
         <h1 className="mt-4 text-[15px] font-semibold tracking-[-0.02em]">Screen Companion</h1>
-        <p className="mt-1 text-[12px] leading-5 text-[#8b919c]">
-          OpenCluely-style helper for everyday work — talk, see your screen, optionally take control.
+        <p className="mt-1 text-[12px] leading-5 text-[#8b939e]">
+          OpenCluely-style helper — talk, message, see your screen, optionally take control.
         </p>
+        <div className="mt-4 flex gap-2">
+          <button
+            type="button"
+            onClick={() => setMode("talk")}
+            className={cn(
+              "h-8 flex-1 rounded-full border text-[12px] font-medium",
+              mode === "talk" ? "border-[#0052fb] bg-[#eef4ff] text-[#0052fb]" : "border-[#e7e7e4] bg-white text-[#697386]",
+            )}
+          >
+            Talk
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMode("message");
+              if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+            }}
+            className={cn(
+              "h-8 flex-1 rounded-full border text-[12px] font-medium",
+              mode === "message" ? "border-[#0052fb] bg-[#eef4ff] text-[#0052fb]" : "border-[#e7e7e4] bg-white text-[#697386]",
+            )}
+          >
+            Message
+          </button>
+        </div>
         <button
           type="button"
           onClick={() => void desktop?.companion?.toggle?.()}
-          className="mt-5 flex h-9 items-center justify-center gap-2 rounded-[9px] border border-black/10 bg-white text-[12.5px] font-medium transition-colors hover:bg-white/90"
+          className="mt-3 flex h-9 items-center justify-center gap-2 rounded-[12px] border border-[#e7e7e4] bg-white text-[12.5px] font-medium transition-colors hover:bg-[#f7f8fa]"
         >
           <MonitorSmartphone className="h-4 w-4" />
           {desktop ? "Open Electron overlay (⌘⇧J)" : "Electron required for overlay"}
@@ -84,14 +115,14 @@ export default function ScreenCompanionWorkspace() {
         <button
           type="button"
           onClick={() => setDemoControl((c) => (c === "off" ? "ai" : "off"))}
-          className="mt-2 flex h-9 items-center justify-center gap-2 rounded-[9px] bg-[#171817] text-[12.5px] font-medium text-white"
+          className="mt-2 flex h-9 items-center justify-center gap-2 rounded-[12px] bg-[#171817] text-[12.5px] font-medium text-white"
         >
           {demoControl === "off" ? "Preview Take control bar" : "Hide control bar"}
         </button>
-        <ul className="mt-6 space-y-2 text-[12px] text-[#5c6370]">
-          <li className="flex gap-2"><Sparkles className="mt-0.5 h-3.5 w-3.5 text-[#2b6ef2]" /> Uses Clyra chat / STT / TTS</li>
-          <li className="flex gap-2"><Eye className="mt-0.5 h-3.5 w-3.5 text-[#2b6ef2]" /> RapidOCR ONNX vision (8GB-safe)</li>
-          <li className="flex gap-2"><MonitorSmartphone className="mt-0.5 h-3.5 w-3.5 text-[#2b6ef2]" /> Atlas Take control / Stop cursor UI</li>
+        <ul className="mt-6 space-y-2 text-[12px] text-[#697386]">
+          <li className="flex gap-2"><Sparkles className="mt-0.5 h-3.5 w-3.5 text-[#0052fb]" /> Clyra chat / STT / TTS</li>
+          <li className="flex gap-2"><Eye className="mt-0.5 h-3.5 w-3.5 text-[#0052fb]" /> RapidOCR ONNX vision (8GB-safe)</li>
+          <li className="flex gap-2"><MessageSquareText className="mt-0.5 h-3.5 w-3.5 text-[#0052fb]" /> Message mode + voice call screenshare</li>
         </ul>
       </aside>
 
@@ -103,8 +134,8 @@ export default function ScreenCompanionWorkspace() {
                 className={cn(
                   "max-w-[720px] text-[14px] leading-[1.55] tracking-[-0.01em]",
                   message.role === "user"
-                    ? "rounded-[14px] bg-[#eef0f4] px-3.5 py-2.5"
-                    : "text-[#1a1d26]",
+                    ? "rounded-[14px] bg-[#aec7f1] px-3.5 py-2.5 text-[#18212f]"
+                    : "text-[#18212f]",
                 )}
               >
                 {message.text}
@@ -119,12 +150,27 @@ export default function ScreenCompanionWorkspace() {
             </div>
           ) : null}
         </div>
-        <div className="border-t border-black/[0.07] px-6 py-3">
-          <div className="mx-auto flex max-w-[720px] items-end gap-2 rounded-[16px] border border-black/[0.08] bg-white px-3 py-2">
+        <div className="border-t border-[#e7e7e4] px-6 py-3">
+          {listeningDemo ? (
+            <div className="mx-auto mb-2 max-w-[720px]">
+              <VoiceWaveform level={0.35} active compact />
+            </div>
+          ) : null}
+          <div className="mx-auto flex max-w-[720px] items-end gap-2 rounded-[18px] border border-[#dfe7f1] bg-white px-3 py-2">
+            <button
+              type="button"
+              onClick={() => setListeningDemo((v) => !v)}
+              className={cn(
+                "mb-0.5 flex h-[30px] items-center rounded-full px-2.5 text-[11px] font-medium",
+                listeningDemo ? "bg-[#eef4ff] text-[#0052fb]" : "text-[#697386] hover:bg-[#f1f3f7]",
+              )}
+            >
+              Mic
+            </button>
             <textarea
               value={input}
               rows={2}
-              placeholder="Ask about what I'm doing…"
+              placeholder={mode === "message" ? "Message about your screen…" : "Ask about what I'm doing…"}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
@@ -132,13 +178,13 @@ export default function ScreenCompanionWorkspace() {
                   void ask();
                 }
               }}
-              className="min-h-[44px] flex-1 resize-none bg-transparent text-[14px] outline-none"
+              className="min-h-[44px] flex-1 resize-none bg-transparent text-[14px] outline-none placeholder:text-[#8b939e]"
             />
             <button
               type="button"
               disabled={!input.trim() || busy}
               onClick={() => void ask()}
-              className="mb-0.5 flex h-[30px] w-[30px] items-center justify-center rounded-full bg-[#2b6ef2] text-white disabled:bg-[#e8eaef] disabled:text-[#b0b5bf]"
+              className="mb-0.5 flex h-[30px] w-[30px] items-center justify-center rounded-full bg-[#0052fb] text-white disabled:bg-[#e8eaef] disabled:text-[#b0b5bf]"
             >
               ↑
             </button>

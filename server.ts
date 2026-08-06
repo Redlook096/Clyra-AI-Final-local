@@ -2168,6 +2168,50 @@ async function startServer() {
     }
   });
 
+  // Browser voice-call screenshare frames (data URLs) → same RapidOCR path.
+  app.post("/api/companion/vision-frame", async (req, res) => {
+    try {
+      const image = String(req.body?.image || "").trim();
+      const question = String(req.body?.question || "").trim();
+      const match = /^data:image\/(png|jpeg|jpg|webp);base64,(.+)$/i.exec(image);
+      if (!match) {
+        res.status(400).json({ ok: false, error: "A data-URL image is required." });
+        return;
+      }
+      const ext = match[1]!.toLowerCase() === "png" ? "png" : "jpg";
+      const buffer = Buffer.from(match[2]!, "base64");
+      if (buffer.byteLength > 8 * 1024 * 1024) {
+        res.status(413).json({ ok: false, error: "Frame too large." });
+        return;
+      }
+      const os = await import("node:os");
+      const fs = await import("node:fs/promises");
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clyra-vision-frame-"));
+      const filePath = path.join(dir, `frame.${ext}`);
+      await fs.writeFile(filePath, buffer);
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      const execFileAsync = promisify(execFile);
+      const script = path.join(process.cwd(), "tools", "companion-vision.py");
+      const { stdout } = await execFileAsync("python3", [script, filePath, "--question", question], {
+        timeout: 45_000,
+        maxBuffer: 4 * 1024 * 1024,
+        env: process.env,
+      });
+      try {
+        await fs.rm(dir, { recursive: true, force: true });
+      } catch {
+        /* ephemeral */
+      }
+      res.json(JSON.parse(String(stdout || "{}")));
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "Companion vision frame failed",
+      });
+    }
+  });
+
   app.post("/api/companion/ask", async (req, res) => {
     try {
       const question = String(req.body?.question || req.body?.text || "").trim();

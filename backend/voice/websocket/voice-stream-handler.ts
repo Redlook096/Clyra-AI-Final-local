@@ -52,8 +52,9 @@ type ActiveSocket = {
 const sockets = new Map<string, ActiveSocket>();
 
 /** User must talk continuously this long before interrupting the assistant. */
-const BARGE_HOLD_MS = Number(process.env.VOICE_BARGE_HOLD_MS ?? 700);
-const TTS_FLUSH_MS = Number(process.env.VOICE_TTS_FLUSH_MS ?? 120);
+const BARGE_HOLD_MS = Number(process.env.VOICE_BARGE_HOLD_MS ?? 480);
+/** Flush TTS sooner so first audio arrives faster. */
+const TTS_FLUSH_MS = Number(process.env.VOICE_TTS_FLUSH_MS ?? 72);
 
 let pipelineHealthCache: { ok: boolean; at: number } = { ok: false, at: 0 };
 
@@ -65,9 +66,9 @@ function send(ws: WebSocket, message: VoiceServerMessage) {
 
 function nextSpeakable(full: string, from: number) {
   return nextSemanticPhrase(full, from, {
-    minWords: 8,
-    preferredWords: 14,
-    maxWords: 28,
+    minWords: 5,
+    preferredWords: 11,
+    maxWords: 22,
   });
 }
 
