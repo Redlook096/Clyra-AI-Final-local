@@ -3,7 +3,6 @@ import {
   ArrowRight,
   ArrowUp,
   Bookmark,
-  Bot,
   Check,
   ChevronDown,
   ChevronsDown,
@@ -18,10 +17,8 @@ import {
   Ellipsis,
   ExternalLink,
   Eye,
-  EyeOff,
   FileDown,
   Globe2,
-  Hand,
   History,
   Keyboard,
   Loader2,
@@ -29,8 +26,6 @@ import {
   Minus,
   MousePointer2,
   MousePointerClick,
-  PanelRightClose,
-  PanelRightOpen,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -38,14 +33,11 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
-  Square,
   Star,
   Trash2,
   TriangleAlert,
   UserRound,
   X,
-  ZoomIn,
-  ZoomOut,
   type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -667,6 +659,7 @@ export default function WebBrowserWorkspace() {
   const [isAgentBusy, setIsAgentBusy] = useState(false);
   const [sideView, setSideView] = useState<SideView>("agent");
   const [sideOpen, setSideOpen] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1024);
+  const [omniboxFocused, setOmniboxFocused] = useState(false);
   const [agentStatus, setAgentStatus] = useState("Ready");
   const [agentPhase, setAgentPhase] = useState<AgentStatus>("idle");
   const [liveSteps, setLiveSteps] = useState<string[]>([]);
@@ -674,7 +667,9 @@ export default function WebBrowserWorkspace() {
   const [criteriaProgress, setCriteriaProgress] = useState({ complete: 0, total: 0 });
   const [factCount, setFactCount] = useState(0);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [planDisclosureOpen, setPlanDisclosureOpen] = useState(false);
   const [browserMenuOpen, setBrowserMenuOpen] = useState(false);
+  const [askMenuOpen, setAskMenuOpen] = useState(false);
   const [cursor, setCursor] = useState<AgentCursor | null>(null);
   const [frameTick, setFrameTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -1214,8 +1209,9 @@ export default function WebBrowserWorkspace() {
   const frameUrl = browserState
     ? `/api/openbrowser/frame?${isAgentBusy ? "fresh=1&" : ""}v=${browserState.frameVersion}&t=${frameTick}`
     : "";
-  const progress = criteriaProgress.total ? Math.min(100, Math.round((criteriaProgress.complete / criteriaProgress.total) * 100)) : 0;
   const aiInControl = ["planning", "observing", "executing", "verifying", "recovering"].includes(agentPhase) && !browserState?.agent.manualControl;
+  const agentTaskTitle = runTask || browserState?.agent.task || agentStatus || "Working";
+  const restingHost = pageHost || "Search or enter address";
 
   const openSideView = (view: SideView) => {
     setSideView(view);
@@ -1224,17 +1220,18 @@ export default function WebBrowserWorkspace() {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 bg-[#f6f8fa] p-[2px]">
+    <div className="flex min-h-0 flex-1 bg-[var(--atlas-window-bg)]">
       <motion.div
-        initial={{ opacity: 0, y: 8 }}
+        initial={{ opacity: 0, y: 6 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-        className="relative mx-auto flex h-full min-h-0 w-full max-w-none flex-col overflow-hidden rounded-[10px] border border-slate-200/90 bg-white shadow-[0_2px_12px_rgba(36,55,78,0.05)]"
+        transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+        className="relative mx-auto flex h-full min-h-0 w-full max-w-none flex-col overflow-hidden bg-[var(--atlas-window-bg)]"
       >
-        <div className={cn(
-          "flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-slate-200/80 bg-white px-4 [scrollbar-width:none]",
-          sideOpen && "lg:mr-[clamp(310px,27vw,430px)]",
-        )}>
+        {/* Tab strip — full width */}
+        <div
+          className="flex shrink-0 items-end gap-0.5 overflow-x-auto px-2 pt-0.5 [scrollbar-width:none]"
+          style={{ height: "var(--atlas-titlebar-height)", background: "var(--atlas-titlebar-bg)" }}
+        >
           <AnimatePresence initial={false} mode="popLayout">
             {browserState?.tabs.map((tab) => {
               const agentOwnsTab = Boolean(
@@ -1247,30 +1244,33 @@ export default function WebBrowserWorkspace() {
               <motion.button
                 key={tab.id}
                 layout="position"
-                initial={{ opacity: 0, scale: 0.96, x: -6 }}
+                initial={{ opacity: 0, scale: 0.96, x: -4 }}
                 animate={{ opacity: 1, scale: 1, x: 0 }}
-                exit={{ opacity: 0, scale: 0.96, x: 6 }}
-                transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                exit={{ opacity: 0, scale: 0.96, x: 4 }}
+                transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
                 type="button"
                 onClick={() => void performAction({ type: "switch_tab", tabId: tab.id })}
                 onAuxClick={(event) => {
                   if (event.button === 1 && browserState.tabs.length > 1) void performAction({ type: "close_tab", tabId: tab.id });
                 }}
                 className={cn(
-                  "group/tab relative flex h-8 min-w-[142px] max-w-[250px] items-center gap-2 overflow-hidden rounded-[15px] px-3 text-left text-[12px] font-medium transition-[background-color,color,box-shadow] duration-200 ease-out",
-                  tab.active ? "bg-[#f1f1f1] text-slate-800" : "text-slate-500 hover:bg-[#f1f1f1] hover:text-slate-800",
-                  agentOwnsTab && "clyra-browser-agent-tab ring-1 ring-slate-300/80",
+                  "group/tab relative mb-0 flex min-w-[132px] max-w-[180px] items-center gap-1.5 overflow-hidden px-2.5 text-left font-medium transition-[background-color,color] duration-150 ease-out",
+                  tab.active
+                    ? "h-[27px] rounded-t-[8px] bg-[var(--atlas-tab-active)] text-[var(--atlas-text-primary)]"
+                    : "mb-px h-[26px] rounded-[8px] text-[var(--atlas-text-secondary)] hover:bg-black/[0.04]",
+                  agentOwnsTab && "clyra-browser-agent-tab",
                 )}
+                style={{ fontSize: "11px" }}
                 title={agentOwnsTab ? "Clyra is controlling this tab" : undefined}
               >
                 {tab.loading ? (
-                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-slate-500" />
+                  <Loader2 className="h-[13px] w-[13px] shrink-0 animate-spin text-[var(--atlas-text-tertiary)]" />
                 ) : tab.favicon ? (
-                  <img src={tab.favicon} alt="" className="h-3.5 w-3.5 shrink-0 rounded-sm" />
+                  <img src={tab.favicon} alt="" className="h-[13px] w-[13px] shrink-0 rounded-sm" />
                 ) : (
-                  <Globe2 className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                  <Globe2 className="h-[13px] w-[13px] shrink-0 text-[var(--atlas-text-tertiary)]" />
                 )}
-                <span className={cn("min-w-0 flex-1 truncate", agentOwnsTab && "clyra-thinking-shimmer [--clyra-thinking-base:#64748b] [--clyra-thinking-highlight:#0f172a]")}>
+                <span className={cn("min-w-0 flex-1 truncate", agentOwnsTab && "clyra-thinking-shimmer [--clyra-thinking-base:#676b70] [--clyra-thinking-highlight:#202124]")}>
                   {tab.title || "New tab"}
                 </span>
                 <span
@@ -1281,112 +1281,158 @@ export default function WebBrowserWorkspace() {
                     event.stopPropagation();
                     if ((browserState?.tabs.length || 0) > 1) void performAction({ type: "close_tab", tabId: tab.id });
                   }}
-                  className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-slate-400 opacity-0 transition-[opacity,background-color,color] hover:bg-white hover:text-slate-700 group-hover/tab:opacity-100"
+                  className="grid h-4 w-4 shrink-0 place-items-center rounded-full text-[var(--atlas-text-tertiary)] opacity-0 transition-[opacity,background-color,color] hover:bg-black/[0.06] hover:text-[var(--atlas-text-primary)] group-hover/tab:opacity-100"
                 >
-                  <X className="h-3 w-3" />
+                  <X className="h-2.5 w-2.5" />
                 </span>
               </motion.button>
               );
             })}
           </AnimatePresence>
-            <IconButton label="New tab" onClick={() => void performAction({ type: "open_tab" })} className="h-7 w-7 rounded-full text-slate-500 hover:bg-slate-100 hover:text-slate-800">
-              <Plus className="h-4 w-4" />
-            </IconButton>
+          <IconButton label="New tab" onClick={() => void performAction({ type: "open_tab" })} className="mb-0.5 h-6 w-6 rounded-md text-[var(--atlas-text-secondary)] hover:bg-black/[0.05] hover:text-[var(--atlas-text-primary)]">
+            <Plus className="h-3.5 w-3.5" />
+          </IconButton>
         </div>
 
-        <div className={cn(
-          "grid min-h-0 flex-1 [transition:grid-template-columns_560ms_cubic-bezier(.16,1,.3,1)]",
-          sideOpen ? "lg:grid-cols-[minmax(0,1fr)_clamp(310px,27vw,430px)]" : "grid-cols-1 lg:grid-cols-[minmax(0,1fr)_0px]",
-        )}>
-        <section className="flex min-h-0 min-w-0 flex-col bg-white">
-
-          <div className="relative flex h-9 shrink-0 items-center gap-0.5 border-b border-slate-200/80 bg-white px-2 [&_button]:text-slate-500 [&_button:hover]:bg-slate-100 [&_button:hover]:text-slate-800">
-            <IconButton label="Back" disabled={!browserState?.canGoBack} onClick={() => void performAction({ type: "back" })}>
-              <ArrowLeft className="h-4 w-4" />
-            </IconButton>
-            <IconButton label="Forward" disabled={!browserState?.canGoForward} onClick={() => void performAction({ type: "forward" })}>
-              <ArrowRight className="h-4 w-4" />
-            </IconButton>
-            <IconButton label={browserState?.loading ? "Stop loading" : "Reload"} onClick={() => void performAction({ type: browserState?.loading ? "stop_loading" : "reload" })}>
-              {browserState?.loading ? <X className="h-4 w-4" /> : <RefreshCw className={cn("h-4 w-4", isBrowserBusy && "animate-spin")} />}
-            </IconButton>
-            <form onSubmit={(event) => void navigate(event)} className="min-w-0 flex-1">
-              <div className="group/omnibox flex h-8 items-center gap-2 rounded-[10px] border border-transparent bg-white px-3 transition-[background-color,border-color,box-shadow] duration-200 hover:bg-slate-100/85 focus-within:border-slate-300 focus-within:bg-slate-100/85 focus-within:shadow-[0_0_0_3px_rgba(148,163,184,0.14)]">
-                {browserState?.secure ? <LockKeyhole className="h-3.5 w-3.5 shrink-0 text-[#7c8798]" strokeWidth={1.8} /> : <Search className="h-3.5 w-3.5 shrink-0 text-[#7c8798]" />}
-                <input
-                  data-browser-omnibox
-                  value={address}
-                  onChange={(event) => setAddress(event.target.value)}
-                  onFocus={(event) => event.currentTarget.select()}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter") return;
-                    event.preventDefault();
-                    void navigate(undefined, event.currentTarget.value);
-                  }}
-                  className="min-w-0 flex-1 bg-transparent text-[12px] font-medium text-slate-700 outline-none placeholder:text-slate-400"
-                  placeholder="Search or enter address"
-                  aria-label="Address and search bar"
-                />
-              </div>
-            </form>
-            <IconButton label="Open history" onClick={() => {
-              setSideView((view) => view === "history" ? "agent" : "history");
-              setSideOpen(true);
-            }} active={sideOpen && sideView === "history"}>
-              <History className="h-4 w-4" />
-            </IconButton>
-            <div className="relative z-50">
-              <IconButton label="Browser menu" onClick={() => setBrowserMenuOpen((value) => !value)} active={browserMenuOpen}>
-                <Ellipsis className="h-[17px] w-[17px]" />
-              </IconButton>
-              <AnimatePresence>
-                {browserMenuOpen ? (
-                  <motion.div
-                    initial={{ opacity: 0, y: -4, scale: 0.98 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: -4, scale: 0.98 }}
-                    transition={{ duration: 0.14 }}
-                    className="absolute right-0 top-10 z-[70] w-56 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_16px_42px_rgba(15,23,42,0.16)]"
-                  >
-                    {[
-                      { view: "bookmarks" as const, label: "Bookmarks", icon: Bookmark },
-                      { view: "downloads" as const, label: "Downloads", icon: Download },
-                      { view: "settings" as const, label: "Browser settings", icon: Settings2 },
-                    ].map((item) => (
-                      <button key={item.view} type="button" onClick={() => openSideView(item.view)} className="flex h-9 w-full items-center gap-3 rounded-lg px-2.5 text-[12px] font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900">
-                        <item.icon className="h-4 w-4" /> {item.label}
-                      </button>
-                    ))}
-                    <div className="my-1 h-px bg-slate-100" />
-                    <div className="flex items-center justify-between px-2.5 py-1.5 text-[11px] font-medium text-slate-500">
-                      <span>Zoom</span>
-                      <div className="flex items-center gap-0.5">
-                        <IconButton label="Zoom out" onClick={() => void zoom(-0.1)} className="h-7 w-7"><Minus className="h-3.5 w-3.5" /></IconButton>
-                        <button type="button" onClick={() => void zoom("reset")} className="min-w-10 text-center text-[10px] font-semibold text-slate-600">{Math.round((browserState?.zoom || 1) * 100)}%</button>
-                        <IconButton label="Zoom in" onClick={() => void zoom(0.1)} className="h-7 w-7"><Plus className="h-3.5 w-3.5" /></IconButton>
-                      </div>
-                    </div>
-                  </motion.div>
-                ) : null}
-              </AnimatePresence>
+        {/* Toolbar — full width */}
+        <div
+          className="relative flex shrink-0 items-center gap-0.5 border-b px-1.5 [&_button]:text-[var(--atlas-text-secondary)] [&_button:hover]:bg-black/[0.05] [&_button:hover]:text-[var(--atlas-text-primary)]"
+          style={{
+            height: "var(--atlas-toolbar-height)",
+            background: "var(--atlas-toolbar-bg)",
+            borderColor: "var(--atlas-divider)",
+          }}
+        >
+          <IconButton label="Back" disabled={!browserState?.canGoBack} onClick={() => void performAction({ type: "back" })} className="h-7 w-7">
+            <ArrowLeft className="h-3.5 w-3.5" />
+          </IconButton>
+          <IconButton label="Forward" disabled={!browserState?.canGoForward} onClick={() => void performAction({ type: "forward" })} className="h-7 w-7">
+            <ArrowRight className="h-3.5 w-3.5" />
+          </IconButton>
+          <IconButton label={browserState?.loading ? "Stop loading" : "Reload"} onClick={() => void performAction({ type: browserState?.loading ? "stop_loading" : "reload" })} className="h-7 w-7">
+            {browserState?.loading ? <X className="h-3.5 w-3.5" /> : <RefreshCw className={cn("h-3.5 w-3.5", isBrowserBusy && "animate-spin")} />}
+          </IconButton>
+          <form onSubmit={(event) => void navigate(event)} className="min-w-0 flex-1 px-1">
+            <div
+              className={cn(
+                "group/omnibox flex h-7 items-center transition-[background-color,box-shadow,border-radius] duration-150",
+                omniboxFocused
+                  ? "gap-1.5 rounded-md bg-white px-2 shadow-[inset_0_0_0_1px_var(--atlas-divider)]"
+                  : "justify-center gap-0 rounded-none bg-transparent px-2",
+              )}
+            >
+              {omniboxFocused ? (
+                browserState?.secure
+                  ? <LockKeyhole className="h-3 w-3 shrink-0 text-[var(--atlas-text-tertiary)]" strokeWidth={1.8} />
+                  : <Search className="h-3 w-3 shrink-0 text-[var(--atlas-text-tertiary)]" />
+              ) : null}
+              <input
+                data-browser-omnibox
+                value={omniboxFocused ? address : restingHost}
+                onChange={(event) => setAddress(event.target.value)}
+                onFocus={(event) => {
+                  setOmniboxFocused(true);
+                  setAddress(browserState?.url || address);
+                  event.currentTarget.select();
+                }}
+                onBlur={() => setOmniboxFocused(false)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.currentTarget.blur();
+                    return;
+                  }
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  void navigate(undefined, event.currentTarget.value);
+                  event.currentTarget.blur();
+                }}
+                className={cn(
+                  "min-w-0 flex-1 bg-transparent outline-none",
+                  omniboxFocused
+                    ? "text-left text-[12px] font-medium text-[var(--atlas-text-primary)]"
+                    : "cursor-text text-center text-[11px] font-medium text-[var(--atlas-text-tertiary)]",
+                )}
+                placeholder="Search or enter address"
+                aria-label="Address and search bar"
+                readOnly={!omniboxFocused}
+                onClick={() => {
+                  if (!omniboxFocused) {
+                    setOmniboxFocused(true);
+                    setAddress(browserState?.url || address);
+                  }
+                }}
+              />
             </div>
-            <IconButton label={sideOpen ? "Hide assistant" : "Show assistant"} onClick={() => setSideOpen((value) => !value)} active={sideOpen && sideView === "agent"}>
-              {sideOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
+          </form>
+          <div className="relative z-50">
+            <IconButton label="Browser menu" onClick={() => setBrowserMenuOpen((value) => !value)} active={browserMenuOpen} className="h-7 w-7">
+              <Ellipsis className="h-4 w-4" />
             </IconButton>
+            <AnimatePresence>
+              {browserMenuOpen ? (
+                <motion.div
+                  initial={{ opacity: 0, y: -4, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -4, scale: 0.98 }}
+                  transition={{ duration: 0.14 }}
+                  className="absolute right-0 top-8 z-[70] w-56 overflow-hidden rounded-xl border border-[var(--atlas-divider)] bg-white p-1.5 shadow-[0_16px_42px_rgba(15,23,42,0.14)]"
+                >
+                  {[
+                    { view: "history" as const, label: "History", icon: History },
+                    { view: "bookmarks" as const, label: "Bookmarks", icon: Bookmark },
+                    { view: "downloads" as const, label: "Downloads", icon: Download },
+                    { view: "settings" as const, label: "Browser settings", icon: Settings2 },
+                  ].map((item) => (
+                    <button key={item.view} type="button" onClick={() => openSideView(item.view)} className="flex h-9 w-full items-center gap-3 rounded-lg px-2.5 text-[12px] font-medium text-[var(--atlas-text-secondary)] transition-colors hover:bg-black/[0.04] hover:text-[var(--atlas-text-primary)]">
+                      <item.icon className="h-4 w-4" /> {item.label}
+                    </button>
+                  ))}
+                  <div className="my-1 h-px bg-[var(--atlas-divider)]" />
+                  <div className="flex items-center justify-between px-2.5 py-1.5 text-[11px] font-medium text-[var(--atlas-text-secondary)]">
+                    <span>Zoom</span>
+                    <div className="flex items-center gap-0.5">
+                      <IconButton label="Zoom out" onClick={() => void zoom(-0.1)} className="h-7 w-7"><Minus className="h-3.5 w-3.5" /></IconButton>
+                      <button type="button" onClick={() => void zoom("reset")} className="min-w-10 text-center text-[10px] font-semibold text-[var(--atlas-text-secondary)]">{Math.round((browserState?.zoom || 1) * 100)}%</button>
+                      <IconButton label="Zoom in" onClick={() => void zoom(0.1)} className="h-7 w-7"><Plus className="h-3.5 w-3.5" /></IconButton>
+                    </div>
+                  </div>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
           </div>
+          <button
+            type="button"
+            onClick={() => {
+              setSideView("agent");
+              setSideOpen((value) => (sideView === "agent" ? !value : true));
+            }}
+            className={cn(
+              "ml-0.5 flex h-[25px] shrink-0 items-center gap-1 rounded-[7px] px-2.5 text-[11px] font-semibold transition-[background-color,color] duration-150",
+              sideOpen && sideView === "agent"
+                ? "bg-[color-mix(in_srgb,var(--atlas-clyra-blue)_22%,white)] text-[#3d6fb8]"
+                : "bg-[color-mix(in_srgb,var(--atlas-clyra-blue)_14%,white)] text-[#4a7ec4] hover:bg-[color-mix(in_srgb,var(--atlas-clyra-blue)_22%,white)]",
+            )}
+            aria-label={sideOpen ? "Hide Ask Clyra" : "Ask Clyra"}
+          >
+            Ask Clyra
+          </button>
+        </div>
 
-          <AnimatePresence initial={false}>
-            {settings.showBookmarksBar && browserState?.bookmarks.length ? (
-              <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 34, opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-slate-200 bg-white px-2 [scrollbar-width:none]">
-                {browserState.bookmarks.slice(0, 14).map((bookmark) => (
-                  <button key={bookmark.id} type="button" onClick={() => void navigate(undefined, bookmark.url)} className="flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[10px] font-semibold text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900">
-                    <Globe2 className="h-3 w-3" /> <span className="max-w-28 truncate">{bookmark.title}</span>
-                  </button>
-                ))}
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
+        <AnimatePresence initial={false}>
+          {settings.showBookmarksBar && browserState?.bookmarks.length ? (
+            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 28, opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--atlas-divider)] bg-[var(--atlas-toolbar-bg)] px-2 [scrollbar-width:none]">
+              {browserState.bookmarks.slice(0, 14).map((bookmark) => (
+                <button key={bookmark.id} type="button" onClick={() => void navigate(undefined, bookmark.url)} className="flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-[10px] font-medium text-[var(--atlas-text-secondary)] transition-colors hover:bg-black/[0.04] hover:text-[var(--atlas-text-primary)]">
+                  <Globe2 className="h-3 w-3" /> <span className="max-w-28 truncate">{bookmark.title}</span>
+                </button>
+              ))}
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
 
+        {/* Page | divider | sidebar */}
+        <div className="flex min-h-0 flex-1">
+        <section className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-white">
           <div
             ref={previewRef}
             tabIndex={0}
@@ -1438,83 +1484,44 @@ export default function WebBrowserWorkspace() {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-                  className="clyra-browser-ai-control pointer-events-none absolute inset-0 z-[18]"
+                  className="pointer-events-none absolute inset-0 z-[18]"
                 >
-                  <motion.div
-                    aria-hidden
-                    className="absolute inset-0 ring-1 ring-inset ring-slate-400/40"
-                    animate={settings.reducedMotion ? { boxShadow: "inset 0 0 28px rgba(15,23,42,0.10)" } : {
-                      boxShadow: [
-                        "inset 0 0 22px rgba(15,23,42,0.06)",
-                        "inset 0 0 42px rgba(15,23,42,0.14)",
-                        "inset 0 0 22px rgba(15,23,42,0.06)",
-                      ],
-                    }}
-                    transition={{ duration: 2.6, repeat: Infinity, ease: "easeInOut" }}
-                  />
-                  <div className="absolute left-3 top-3 flex items-center gap-2 rounded-full bg-slate-950/90 px-2.5 py-1.5 text-[9px] font-semibold text-white shadow-[0_8px_24px_rgba(15,23,42,.18)] backdrop-blur-xl">
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-slate-300" />
-                    <ShiningText text={agentStatus} play={!settings.reducedMotion} className="!text-[9px] !text-white [--clyra-thinking-base:#cbd5e1] [--clyra-thinking-highlight:#ffffff]" />
-                  </div>
+                  <div className="absolute inset-0 ring-1 ring-inset ring-black/[0.04]" />
                 </motion.div>
               ) : null}
             </AnimatePresence>
 
             <AnimatePresence>
-              {cursor && isAgentBusy && settings.showAiCursor && !browserState?.agent.manualControl ? [
-                <motion.div
-                  key="browser-ai-cursor-trail"
-                  initial={settings.reducedMotion ? false : { opacity: 0 }}
-                  animate={{
-                    opacity: settings.reducedMotion ? 0 : 0.5,
-                    left: `${(cursor.x / (browserState?.viewport.width || 1440)) * 100}%`,
-                    top: `${(cursor.y / (browserState?.viewport.height || 900)) * 100}%`,
-                  }}
-                  exit={{ opacity: 0 }}
-                  transition={{
-                    left: { type: "spring", stiffness: 120, damping: 26, mass: 0.85 },
-                    top: { type: "spring", stiffness: 120, damping: 26, mass: 0.85 },
-                    opacity: { duration: 0.18 },
-                  }}
-                  className="pointer-events-none absolute z-[19] -translate-x-1/2 -translate-y-1/2"
-                  aria-hidden
-                >
-                  <span className="block h-5 w-5 rounded-full bg-slate-400/35 blur-[8px]" />
-                </motion.div>,
+              {cursor && isAgentBusy && settings.showAiCursor && !browserState?.agent.manualControl ? (
                 <motion.div
                   key="browser-ai-cursor"
-                  initial={settings.reducedMotion ? false : { opacity: 0, scale: 0.86 }}
+                  initial={settings.reducedMotion ? false : { opacity: 0, scale: 0.9 }}
                   animate={{
                     opacity: 1,
-                    scale: cursor.kind === "click" || cursor.kind === "double_click" ? [1, 0.84, 1] : 1,
+                    scale: cursor.kind === "click" || cursor.kind === "double_click" ? [1, 0.88, 1] : 1,
                     left: `${(cursor.x / (browserState?.viewport.width || 1440)) * 100}%`,
                     top: `${(cursor.y / (browserState?.viewport.height || 900)) * 100}%`,
                   }}
-                  exit={{ opacity: 0, scale: 0.9 }}
+                  exit={{ opacity: 0, scale: 0.92 }}
                   transition={{
                     left: settings.aiCursorSpeed === "instant" ? { duration: 0.035 } : { type: "spring", stiffness: settings.aiCursorSpeed === "fast" ? 520 : 310, damping: settings.aiCursorSpeed === "fast" ? 38 : 31, mass: 0.46 },
                     top: settings.aiCursorSpeed === "instant" ? { duration: 0.035 } : { type: "spring", stiffness: settings.aiCursorSpeed === "fast" ? 520 : 310, damping: settings.aiCursorSpeed === "fast" ? 38 : 31, mass: 0.46 },
-                    scale: { duration: 0.2 },
-                    opacity: { duration: 0.12 },
+                    scale: { duration: 0.16 },
+                    opacity: { duration: 0.1 },
                   }}
-                  className="clyra-browser-agent-cursor pointer-events-none absolute z-20 -translate-x-[4px] -translate-y-[3px]"
+                  className="clyra-browser-agent-cursor pointer-events-none absolute z-20 -translate-x-[3px] -translate-y-[2px]"
                 >
-                  <span
-                    aria-hidden
-                    className="absolute -left-3 -top-3 h-12 w-12 rounded-full bg-[radial-gradient(circle,rgba(15,23,42,0.22)_0%,rgba(100,116,139,0.12)_50%,transparent_75%)] blur-[10px]"
-                  />
-                  <MousePointer2 className="relative h-6 w-6 fill-slate-800 text-white [filter:drop-shadow(0_0_8px_rgba(15,23,42,.28))_drop-shadow(0_3px_6px_rgba(15,23,42,.28))]" />
+                  <MousePointer2 className="relative h-[17px] w-[17px] fill-[#2a2b2a] text-[#2a2b2a] [filter:drop-shadow(0_1px_2px_rgba(0,0,0,.28))]" />
                   {settings.showAiActionLabels && cursor.label ? (
-                    <span className="absolute left-5 top-5 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[9px] font-semibold text-white shadow-[0_4px_14px_rgba(15,23,42,.35)]">{cursor.label}</span>
+                    <span className="absolute left-4 top-4 whitespace-nowrap rounded-[5px] bg-[var(--atlas-agent-black)] px-1.5 py-0.5 text-[10px] font-medium leading-none text-white">{cursor.label}</span>
                   ) : null}
                   {(cursor.kind === "click" || cursor.kind === "double_click") ? (
-                    <span key={cursor.id} className="absolute left-[3px] top-[2px]" aria-hidden>
-                      <span className="absolute h-5 w-5 animate-ping rounded-full border-2 border-slate-500/70" />
-                      <span className="absolute h-5 w-5 animate-ping rounded-full bg-slate-400/30 [animation-duration:1.2s]" />
+                    <span key={cursor.id} className="absolute left-[2px] top-[1px]" aria-hidden>
+                      <span className="absolute h-2.5 w-2.5 animate-ping rounded-full bg-black/25 [animation-duration:0.55s]" />
                     </span>
                   ) : null}
-                </motion.div>,
-              ] : null}
+                </motion.div>
+              ) : null}
             </AnimatePresence>
 
             <AnimatePresence>
@@ -1524,10 +1531,10 @@ export default function WebBrowserWorkspace() {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-                  className="pointer-events-none absolute inset-x-0 top-0 z-30 h-[2px] overflow-hidden bg-slate-100/90"
+                  className="pointer-events-none absolute inset-x-0 top-0 z-30 h-[1.5px] overflow-hidden bg-transparent"
                 >
                   <motion.div
-                    className="h-full w-[38%] rounded-full bg-gradient-to-r from-transparent via-slate-700 to-transparent"
+                    className="h-full w-[38%] rounded-full bg-gradient-to-r from-transparent via-[var(--atlas-text-secondary)] to-transparent"
                     animate={{ x: ["-120%", "320%"] }}
                     transition={{ duration: 1.15, repeat: Infinity, ease: [0.16, 1, 0.3, 1] }}
                   />
@@ -1535,30 +1542,65 @@ export default function WebBrowserWorkspace() {
               ) : null}
             </AnimatePresence>
 
-            {browserState?.agent.manualControl ? (
-              <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-1.5 rounded-md border border-slate-200 bg-white/94 px-2 py-1 text-[9px] font-semibold text-slate-600 shadow-sm backdrop-blur-md">
-                <UserRound className="h-3 w-3 text-slate-700" /> Manual control
-              </div>
-            ) : null}
-
+            {/* Floating Atlas agent bar over webpage */}
             <AnimatePresence>
               {isAgentBusy ? (
                 <motion.div
-                  initial={{ opacity: 0, y: 10, scale: 0.97 }}
+                  initial={{ opacity: 0, y: 8, scale: 0.98 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 8, scale: 0.97 }}
-                  transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-                  className="absolute bottom-4 left-1/2 z-30 flex h-9 -translate-x-1/2 items-center gap-1.5 rounded-full border border-slate-200/90 bg-white/95 px-1.5 text-[9px] font-semibold text-slate-700 shadow-[0_10px_28px_rgba(15,23,42,.12)] backdrop-blur-xl"
+                  exit={{ opacity: 0, y: 6, scale: 0.98 }}
+                  transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                  className="absolute bottom-4 left-1/2 z-30 flex h-[30px] max-w-[min(420px,92%)] -translate-x-1/2 items-stretch overflow-hidden rounded-[8px] bg-[var(--atlas-agent-black)] text-[11px] font-medium text-white shadow-[0_8px_24px_rgba(0,0,0,.28)]"
                 >
-                  <span className="grid h-6 w-6 place-items-center rounded-full bg-slate-100 text-slate-500"><Globe2 className="h-3 w-3" /></span>
-                  <span className="max-w-32 truncate px-1 text-slate-600">{agentStatus}</span>
-                  <button type="button" onClick={() => void controlAgent(agentPhase === "paused" && !browserState?.agent.manualControl ? "resume" : "pause")} className="flex h-7 items-center gap-1 rounded-full bg-slate-100 px-2 text-[9px] text-slate-600 transition-[background-color,transform] duration-200 hover:-translate-y-px hover:bg-slate-200">
-                    {agentPhase === "paused" && !browserState?.agent.manualControl ? <><CirclePlay className="h-3 w-3" /> Resume</> : <><CirclePause className="h-3 w-3" /> Pause</>}
+                  <div className="flex min-w-0 flex-1 items-center gap-2 px-3">
+                    {browserState?.agent.manualControl ? (
+                      <UserRound className="h-3 w-3 shrink-0 text-white/70" />
+                    ) : agentPhase === "paused" ? (
+                      <CirclePause className="h-3 w-3 shrink-0 text-white/70" />
+                    ) : (
+                      <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-white/80" />
+                    )}
+                    <span className="min-w-0 truncate text-white/90">
+                      {browserState?.agent.manualControl
+                        ? "You have control"
+                        : agentPhase === "paused"
+                          ? "Paused"
+                          : truncateLabel(agentTaskTitle, 42)}
+                    </span>
+                  </div>
+                  {browserState?.agent.manualControl ? (
+                    <button
+                      type="button"
+                      onClick={() => void controlAgent("return_control")}
+                      className="flex shrink-0 items-center gap-1 border-l border-white/15 px-3 text-[10.5px] font-semibold text-white/90 transition-colors hover:bg-white/10"
+                    >
+                      <Sparkles className="h-3 w-3" /> Resume AI
+                    </button>
+                  ) : agentPhase === "paused" ? (
+                    <button
+                      type="button"
+                      onClick={() => void controlAgent("resume")}
+                      className="flex shrink-0 items-center gap-1 border-l border-white/15 px-3 text-[10.5px] font-semibold text-white/90 transition-colors hover:bg-white/10"
+                    >
+                      <CirclePlay className="h-3 w-3" /> Resume
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void controlAgent("take_control")}
+                      className="flex shrink-0 items-center gap-1 border-l border-white/15 px-3 text-[10.5px] font-semibold text-white/90 transition-colors hover:bg-white/10"
+                    >
+                      Take control
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void controlAgent("stop")}
+                    className="flex shrink-0 items-center gap-1 bg-[var(--atlas-stop-red)] px-3 text-[10.5px] font-semibold text-white transition-colors hover:brightness-110"
+                    aria-label="Stop browser task"
+                  >
+                    Stop
                   </button>
-                  <button type="button" onClick={() => void controlAgent(browserState?.agent.manualControl ? "return_control" : "take_control")} className="flex h-7 items-center gap-1 rounded-full bg-slate-100 px-2 text-[9px] text-slate-600 transition-[background-color,transform] duration-200 hover:-translate-y-px hover:bg-slate-200">
-                    {browserState?.agent.manualControl ? <><Sparkles className="h-3 w-3" /> Resume AI</> : <><MousePointer2 className="h-3 w-3" /> Take control</>}
-                  </button>
-                  <button type="button" onClick={() => void controlAgent("stop")} className="grid h-7 w-7 place-items-center rounded-full bg-rose-500 text-white transition-[background-color,transform] duration-200 hover:-translate-y-px hover:bg-rose-600" aria-label="Stop browser task"><Square className="h-2.5 w-2.5 fill-current" /></button>
                 </motion.div>
               ) : null}
             </AnimatePresence>
@@ -1566,82 +1608,138 @@ export default function WebBrowserWorkspace() {
             {error ? (
               <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="absolute inset-x-4 bottom-4 z-30 flex items-center gap-3 rounded-lg border border-red-200 bg-white px-3 py-2.5 text-[11px] font-medium text-red-600 shadow-lg">
                 <span className="min-w-0 flex-1">{error}</span>
-                <button type="button" onClick={() => void loadState()} className="font-semibold text-slate-900">Retry</button>
+                <button type="button" onClick={() => void loadState()} className="font-semibold text-[var(--atlas-text-primary)]">Retry</button>
               </motion.div>
             ) : null}
           </div>
-
-          <div className="flex h-7 shrink-0 items-center justify-between border-t border-slate-200 bg-white px-3 text-[9px] font-medium text-slate-400">
-            <span className="flex min-w-0 items-center gap-1.5"><ShieldCheck className="h-3 w-3 text-slate-400" /><span className="truncate">{compactUrl(browserState?.url || "")}</span></span>
-            <span>{Math.round((browserState?.zoom || 1) * 100)}%</span>
-          </div>
         </section>
+
+        {sideOpen ? (
+          <div className="hidden w-px shrink-0 bg-[var(--atlas-divider)] lg:block" aria-hidden />
+        ) : null}
 
         <AnimatePresence initial={false}>
           {sideOpen ? (
             <motion.aside
-              initial={{ opacity: 0, x: 28 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 18 }}
-              transition={{ duration: 0.56, ease: [0.16, 1, 0.3, 1] }}
-              className="absolute inset-x-0 bottom-0 top-10 z-40 flex min-h-0 flex-col border-l border-slate-200 bg-white text-slate-800 lg:static lg:rounded-none"
+              initial={{ opacity: 0, width: 0 }}
+              animate={{ opacity: 1, width: "var(--atlas-sidebar-width)" }}
+              exit={{ opacity: 0, width: 0 }}
+              transition={{ duration: 0.36, ease: [0.16, 1, 0.3, 1] }}
+              className="absolute inset-x-0 bottom-0 top-[calc(var(--atlas-titlebar-height)+var(--atlas-toolbar-height))] z-40 flex min-h-0 w-full flex-col overflow-hidden bg-[var(--atlas-sidebar-bg)] text-[var(--atlas-text-primary)] lg:static lg:w-[var(--atlas-sidebar-width)] lg:max-w-[var(--atlas-sidebar-width)] lg:shrink-0"
             >
-              <header className="relative flex shrink-0 flex-col gap-2 border-b border-slate-200/80 px-4 py-3">
-                <div className="flex h-4 items-center justify-center">
-                  {sideView !== "agent" ? (
-                    <button type="button" onClick={() => setSideView("agent")} className="absolute left-3 grid h-7 w-7 place-items-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700" aria-label="Back to Clyra">
-                      <ArrowLeft className="h-3.5 w-3.5" />
-                    </button>
-                  ) : null}
-                  <span className="text-[12px] font-semibold tracking-[-0.01em] text-slate-700">Clyra</span>
-                </div>
-                <button type="button" title={activeTab?.url || browserState?.url || "New tab"} className="flex min-w-0 items-center gap-2 rounded-xl border border-slate-200/90 bg-slate-50/75 px-2.5 py-2 text-left transition-[border-color,background-color,box-shadow] duration-200 hover:border-slate-300 hover:bg-white hover:shadow-[0_4px_12px_rgba(35,54,76,0.06)]">
-                  <span className="grid h-6 w-6 shrink-0 place-items-center overflow-hidden rounded-lg border border-slate-200 bg-white text-slate-400">
-                    {activeTab?.favicon ? <img src={activeTab.favicon} alt="" className="h-3.5 w-3.5" /> : <Globe2 className="h-3.5 w-3.5" />}
-                  </span>
-                  <span className="min-w-0 flex-1"><span className="block truncate text-[10.5px] font-semibold text-slate-700">{pageName}</span><span className="block truncate text-[9px] font-medium text-slate-400">{pageContextReady ? "Current page" : "Ready to assist"}</span></span>
-                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+              <header className="relative flex h-[34px] shrink-0 items-center justify-between border-b border-[var(--atlas-divider)] px-2">
+                <button
+                  type="button"
+                  onClick={() => (sideView !== "agent" ? setSideView("agent") : setSideOpen(false))}
+                  className="grid h-7 w-7 place-items-center rounded-md text-[var(--atlas-text-secondary)] transition-colors hover:bg-black/[0.04] hover:text-[var(--atlas-text-primary)]"
+                  aria-label={sideView !== "agent" ? "Back" : "Collapse Ask Clyra"}
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" />
                 </button>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setAskMenuOpen((value) => !value)}
+                    className="grid h-7 w-7 place-items-center rounded-md text-[var(--atlas-text-secondary)] transition-colors hover:bg-black/[0.04] hover:text-[var(--atlas-text-primary)]"
+                    aria-label="Ask panel menu"
+                  >
+                    <Ellipsis className="h-4 w-4" />
+                  </button>
+                  <AnimatePresence>
+                    {askMenuOpen ? (
+                      <motion.div
+                        initial={{ opacity: 0, y: -4, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -4, scale: 0.98 }}
+                        transition={{ duration: 0.12 }}
+                        className="absolute right-0 top-8 z-[60] w-44 overflow-hidden rounded-lg border border-[var(--atlas-divider)] bg-white p-1 shadow-[0_12px_28px_rgba(15,23,42,0.12)]"
+                      >
+                        {[
+                          { view: "history" as const, label: "History" },
+                          { view: "bookmarks" as const, label: "Bookmarks" },
+                          { view: "downloads" as const, label: "Downloads" },
+                          { view: "settings" as const, label: "Settings" },
+                        ].map((item) => (
+                          <button
+                            key={item.view}
+                            type="button"
+                            onClick={() => { setAskMenuOpen(false); openSideView(item.view); }}
+                            className="flex h-8 w-full items-center rounded-md px-2.5 text-[11px] font-medium text-[var(--atlas-text-secondary)] hover:bg-black/[0.04] hover:text-[var(--atlas-text-primary)]"
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </motion.div>
+                    ) : null}
+                  </AnimatePresence>
+                </div>
               </header>
 
               {sideView === "agent" ? (
                 <>
-                  <div ref={chatScrollRef} className="clyra-visible-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-3.5">
-                    <div className="space-y-5">
+                  <div ref={chatScrollRef} className="clyra-visible-scrollbar min-h-0 flex-1 overflow-y-auto px-3.5 py-3">
+                    <div className="space-y-3.5">
                       <AnimatePresence initial={false} mode="wait">
                         {messages.length === 0 && !isAgentBusy ? (
-                          <motion.section key="browser-welcome" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8, height: 0 }} transition={{ duration: settings.reducedMotion ? 0.01 : 0.22, ease: [0.16, 1, 0.3, 1] }} className="mx-auto flex min-h-[calc(100vh-330px)] max-w-[300px] flex-col justify-center pb-8 pt-4 text-center">
-                            <span className="mx-auto mb-4 grid h-10 w-10 place-items-center rounded-2xl border border-slate-200 bg-slate-50 text-slate-600 shadow-[0_6px_18px_rgba(15,23,42,0.06)]"><Sparkles className="h-4 w-4" /></span>
-                            <h2 className="text-[17px] font-semibold tracking-[-0.02em] text-slate-800">Browse with Clyra</h2>
-                            <p className="mx-auto mt-2 max-w-[270px] text-[11px] font-medium leading-5 text-slate-500">Ask about this page, find information, compare options, or let Clyra complete a browser task.</p>
-                            <div className="mt-5 grid gap-2 text-left">
+                          <motion.section
+                            key="browser-welcome"
+                            initial={{ opacity: 0, y: 6 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -6, height: 0 }}
+                            transition={{ duration: settings.reducedMotion ? 0.01 : 0.2, ease: [0.16, 1, 0.3, 1] }}
+                            className="mx-auto flex min-h-[calc(100vh-360px)] max-w-[280px] flex-col justify-center pb-10 pt-6 text-center"
+                          >
+                            <p className="text-[12px] font-medium leading-5 text-[var(--atlas-text-secondary)]">
+                              Ask about this page, or describe a browser task.
+                            </p>
+                            <div className="mt-5 space-y-1 text-left">
                               {[
-                                { label: "Summarise this page", detail: "Extract the useful points", icon: Sparkles, prompt: "Summarise the current page and cite the most important details." },
-                                { label: "Find something on this page", detail: "Search the visible content", icon: Search, prompt: "Find the most relevant information on the current page." },
-                                { label: "Complete a task", detail: "Plan and act in this browser", icon: MousePointer2, prompt: "Help me complete a task on the current page." },
+                                { label: "Summarise this page", prompt: "Summarise the current page and cite the most important details." },
+                                { label: "Find something on this page", prompt: "Find the most relevant information on the current page." },
+                                { label: "Complete a task here", prompt: "Help me complete a task on the current page." },
                               ].map((action) => (
-                                <button key={action.label} type="button" onClick={() => void runAgentTask(action.prompt)} className="group flex min-h-14 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 text-left shadow-[0_4px_14px_rgba(35,54,76,0.035)] transition-[transform,border-color,background-color,box-shadow] duration-200 hover:-translate-y-px hover:border-slate-300 hover:bg-slate-50 hover:shadow-[0_8px_20px_rgba(15,23,42,0.06)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300">
-                                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-slate-100 bg-slate-50 text-slate-500 transition-colors group-hover:border-slate-200 group-hover:bg-white group-hover:text-slate-800"><action.icon className="h-3.5 w-3.5" /></span>
-                                  <span className="min-w-0"><span className="block text-[10.5px] font-semibold text-slate-700">{action.label}</span><span className="mt-0.5 block text-[9px] font-medium text-slate-400">{action.detail}</span></span>
+                                <button
+                                  key={action.label}
+                                  type="button"
+                                  onClick={() => void runAgentTask(action.prompt)}
+                                  className="block w-full rounded-md px-2 py-1.5 text-left text-[11.5px] font-medium text-[var(--atlas-text-secondary)] transition-colors hover:bg-black/[0.04] hover:text-[var(--atlas-text-primary)]"
+                                >
+                                  {action.label}
                                 </button>
                               ))}
                             </div>
-                            {pageContextReady ? <span className="mt-4 flex items-center justify-center gap-1.5 text-[9px] font-semibold text-emerald-600"><Check className="h-3 w-3" /> Page context ready</span> : null}
                           </motion.section>
                         ) : null}
                       </AnimatePresence>
+
+                      {messages.length > 0 && pageContextReady ? (
+                        <div className="flex items-center gap-1.5 px-0.5">
+                          <span className="grid h-4 w-4 shrink-0 place-items-center overflow-hidden rounded-[3px] border border-[var(--atlas-divider)] bg-white">
+                            {activeTab?.favicon ? <img src={activeTab.favicon} alt="" className="h-2.5 w-2.5" /> : <Globe2 className="h-2.5 w-2.5 text-[var(--atlas-text-tertiary)]" />}
+                          </span>
+                          <span className="truncate text-[10px] font-medium text-[var(--atlas-text-tertiary)]">{pageName}</span>
+                        </div>
+                      ) : null}
+
                       {messages.map((message) => {
                         const animateTypewriter = message.role === "assistant"
                           && !settings.reducedMotion
                           && !hydratedMessageIdsRef.current.has(message.id)
                           && !message.id.startsWith("welcome");
                         return (
-                        <motion.div key={message.id} layout="position" initial={message.role === "user" ? { opacity: 0, y: 28, scale: 0.94 } : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: message.role === "user" ? 0.72 : 0.22, ease: [0.16, 1, 0.3, 1] }} className={cn("flex gap-2.5", message.role === "user" && "clyra-browser-user-message-entry origin-bottom-right justify-end")}>
+                        <motion.div
+                          key={message.id}
+                          layout="position"
+                          initial={message.role === "user" ? { opacity: 0, y: 16, scale: 0.97 } : { opacity: 0, y: 4 }}
+                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          transition={{ duration: message.role === "user" ? 0.42 : 0.18, ease: [0.16, 1, 0.3, 1] }}
+                          className={cn("flex", message.role === "user" && "clyra-browser-user-message-entry origin-bottom-right justify-end")}
+                        >
                           <div className={cn(
-                            "max-w-[300px] text-[12.5px] font-medium leading-[1.65]",
+                            "max-w-[92%] text-[11.5px] font-medium leading-[1.55]",
                             message.role === "user"
-                              ? "clyra-chat-user-bubble rounded-[18px] rounded-br-md border border-slate-200/70 bg-[#f4f4f4] px-3.5 py-3 text-slate-800"
-                              : "max-w-full pr-1 text-slate-700",
+                              ? "rounded-[10px] bg-[var(--atlas-user-bubble)] px-2.5 py-1.5 text-[var(--atlas-text-primary)]"
+                              : "max-w-full pr-1 text-[var(--atlas-text-primary)]",
                           )}>
                             <p className="whitespace-pre-wrap">
                               {message.role === "assistant" ? (
@@ -1656,16 +1754,16 @@ export default function WebBrowserWorkspace() {
                               )}
                             </p>
                             {message.facts?.length ? (
-                              <div className="mt-2.5 flex flex-wrap gap-1.5">
+                              <div className="mt-2 flex flex-wrap gap-1">
                                 {message.facts.slice(0, 5).map((fact, index) => (
-                                  <a key={`${fact.sourceUrl}-${index}`} href={fact.sourceUrl} target="_blank" rel="noreferrer" title={fact.claim} className="flex h-6 max-w-full items-center gap-1 rounded-full bg-slate-50 px-2 text-[8px] font-semibold text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800">
+                                  <a key={`${fact.sourceUrl}-${index}`} href={fact.sourceUrl} target="_blank" rel="noreferrer" title={fact.claim} className="flex h-5 max-w-full items-center gap-1 rounded px-1.5 text-[9px] font-medium text-[var(--atlas-text-tertiary)] transition-colors hover:bg-black/[0.04] hover:text-[var(--atlas-text-primary)]">
                                     <ExternalLink className="h-2.5 w-2.5" /><span className="truncate">{displayHost(fact.sourceUrl)}</span>
                                   </a>
                                 ))}
                               </div>
                             ) : null}
                             {message.steps?.length ? (
-                              <button type="button" onClick={() => setActivityOpen((value) => !value)} className="mt-2.5 flex items-center gap-1.5 text-[9px] font-semibold text-slate-400 hover:text-slate-700">
+                              <button type="button" onClick={() => setActivityOpen((value) => !value)} className="mt-2 flex items-center gap-1.5 text-[10px] font-medium text-[var(--atlas-text-tertiary)] hover:text-[var(--atlas-text-secondary)]">
                                 <Check className="h-3 w-3 text-emerald-500" /> {message.steps.length} verified actions <ChevronDown className={cn("h-3 w-3 transition-transform", activityOpen && "rotate-180")} />
                               </button>
                             ) : null}
@@ -1686,16 +1784,18 @@ export default function WebBrowserWorkspace() {
                           manualControl={Boolean(browserState?.agent.manualControl)}
                           reducedMotion={settings.reducedMotion}
                           factCount={factCount}
+                          criteriaProgress={criteriaProgress}
+                          planOpen={planDisclosureOpen}
+                          onTogglePlan={() => setPlanDisclosureOpen((value) => !value)}
                           completedStepsOpen={completedStepsOpen}
                           onToggleCompletedSteps={() => setCompletedStepsOpen((value) => !value)}
-                          onControl={(command) => void controlAgent(command)}
                         />
                       ) : null}
 
                       <AnimatePresence>
                         {activityOpen && latestSteps.length ? (
-                          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden border-l border-slate-200/80 pl-3.5">
-                            {latestSteps.map((step, index) => <p key={`${step}-${index}`} className="mb-2 text-[10px] font-medium leading-4 text-slate-400">{step.replace(/ -> .*/, "")}</p>)}
+                          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden pl-1">
+                            {latestSteps.map((step, index) => <p key={`${step}-${index}`} className="mb-1.5 text-[10px] font-medium leading-4 text-[var(--atlas-text-tertiary)]">{step.replace(/ -> .*/, "")}</p>)}
                           </motion.div>
                         ) : null}
                       </AnimatePresence>
@@ -1703,22 +1803,30 @@ export default function WebBrowserWorkspace() {
                     </div>
                   </div>
 
-                  <div className="shrink-0 border-t border-slate-200/80 px-3 pb-3 pt-2.5">
+                  <div className="shrink-0 border-t border-[var(--atlas-divider)] px-3 pb-3 pt-2">
+                    {messages.length === 0 && pageContextReady ? (
+                      <div className="mb-2 flex items-center gap-1.5">
+                        <span className="grid h-4 w-4 shrink-0 place-items-center overflow-hidden rounded-[3px] border border-[var(--atlas-divider)] bg-white">
+                          {activeTab?.favicon ? <img src={activeTab.favicon} alt="" className="h-2.5 w-2.5" /> : <Globe2 className="h-2.5 w-2.5 text-[var(--atlas-text-tertiary)]" />}
+                        </span>
+                        <span className="truncate text-[10px] font-medium text-[var(--atlas-text-tertiary)]">{pageName}</span>
+                      </div>
+                    ) : null}
                     <form
                       onSubmit={(event) => { event.preventDefault(); void runAgentTask(); }}
-                      className="rounded-2xl border border-slate-200 bg-white p-3.5 shadow-[0_12px_30px_rgba(35,54,76,0.08)] transition-[border-color,box-shadow] duration-200 focus-within:border-slate-400 focus-within:shadow-[0_0_0_3px_rgba(148,163,184,0.18),0_12px_34px_rgba(35,54,76,0.10)]"
+                      className="flex min-h-[76px] flex-col rounded-none bg-transparent"
                     >
                       <textarea
                         value={task}
                         onChange={(event) => setTask(event.target.value)}
                         onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void runAgentTask(); } }}
                         rows={2}
-                        placeholder="Ask Clyra about this page..."
-                        className="w-full resize-none bg-transparent px-1 py-0.5 text-[13px] font-medium leading-5 text-slate-800 outline-none placeholder:text-slate-400"
+                        placeholder="Describe a task"
+                        className="w-full flex-1 resize-none bg-transparent px-0.5 py-1 text-[12.5px] font-medium leading-5 text-[var(--atlas-text-primary)] outline-none placeholder:text-[var(--atlas-text-tertiary)]"
                       />
-                      <div className="flex items-center justify-between pt-1.5">
-                        <span title={activeTab?.url || browserState?.url || "New tab"} className="flex min-w-0 items-center gap-1.5 text-[9px] font-medium text-slate-400"><span className="grid h-4 w-4 shrink-0 place-items-center overflow-hidden rounded border border-slate-200 bg-white">{activeTab?.favicon ? <img src={activeTab.favicon} alt="" className="h-2.5 w-2.5" /> : <Eye className="h-2.5 w-2.5" />}</span><span className="max-w-40 truncate">{pageName}</span></span>
-                        <button type="submit" disabled={isAgentBusy || !task.trim()} className="grid h-9 w-9 place-items-center rounded-full bg-slate-900 text-white transition-[background-color,transform] hover:bg-slate-700 active:scale-95 disabled:bg-slate-100 disabled:text-slate-400" aria-label="Run browser task"><ArrowUp className="h-3.5 w-3.5" /></button>
+                      <div className="flex items-center justify-between pt-1">
+                        <span className="text-[10px] font-medium text-[var(--atlas-text-tertiary)]">Agent · Sources</span>
+                        <button type="submit" disabled={isAgentBusy || !task.trim()} className="grid h-6 w-6 place-items-center rounded-full bg-[var(--atlas-agent-black)] text-white transition-[opacity,transform] hover:opacity-90 active:scale-95 disabled:bg-black/[0.08] disabled:text-[var(--atlas-text-tertiary)]" aria-label="Run browser task"><ArrowUp className="h-3 w-3" /></button>
                       </div>
                     </form>
                   </div>
@@ -1727,12 +1835,12 @@ export default function WebBrowserWorkspace() {
 
               {sideView === "history" ? (
                 <div className="min-h-0 flex-1 overflow-y-auto p-2">
-                  <div className="mb-2 flex items-center justify-between px-2 py-1"><span className="text-[9px] font-semibold uppercase text-slate-400">Recent</span><button type="button" onClick={() => void requestBrowser("/api/openbrowser/history", { method: "DELETE", body: {}, quiet: true })} className="text-[9px] font-semibold text-slate-500 hover:text-red-600">Clear</button></div>
+                  <div className="mb-2 flex items-center justify-between px-2 py-1"><span className="text-[9px] font-semibold uppercase text-[var(--atlas-text-tertiary)]">Recent</span><button type="button" onClick={() => void requestBrowser("/api/openbrowser/history", { method: "DELETE", body: {}, quiet: true })} className="text-[9px] font-semibold text-[var(--atlas-text-secondary)] hover:text-red-600">Clear</button></div>
                   {browserState?.history.length ? browserState.history.map((entry) => (
-                    <button key={entry.id} type="button" onClick={() => void navigate(undefined, entry.url)} className="group flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-white">
-                      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-slate-200 bg-white"><Clock3 className="h-3.5 w-3.5 text-slate-400" /></span>
-                      <span className="min-w-0 flex-1"><span className="block truncate text-[10px] font-semibold text-slate-700">{entry.title}</span><span className="block truncate text-[8px] font-medium text-slate-400">{compactUrl(entry.url)}</span></span>
-                      <span className="text-[8px] font-medium text-slate-400">{formatWhen(entry.visitedAt)}</span>
+                    <button key={entry.id} type="button" onClick={() => void navigate(undefined, entry.url)} className="group flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-black/[0.03]">
+                      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-[var(--atlas-divider)] bg-white"><Clock3 className="h-3.5 w-3.5 text-[var(--atlas-text-tertiary)]" /></span>
+                      <span className="min-w-0 flex-1"><span className="block truncate text-[10px] font-semibold text-[var(--atlas-text-primary)]">{entry.title}</span><span className="block truncate text-[8px] font-medium text-[var(--atlas-text-tertiary)]">{compactUrl(entry.url)}</span></span>
+                      <span className="text-[8px] font-medium text-[var(--atlas-text-tertiary)]">{formatWhen(entry.visitedAt)}</span>
                     </button>
                   )) : <EmptyPanel icon={History} label="No browsing history" />}
                 </div>
@@ -1740,12 +1848,12 @@ export default function WebBrowserWorkspace() {
 
               {sideView === "bookmarks" ? (
                 <div className="min-h-0 flex-1 overflow-y-auto p-2">
-                  <button type="button" onClick={() => void saveBookmark()} className="mb-2 flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 text-[10px] font-semibold text-slate-600 transition-colors hover:border-slate-400 hover:bg-white"><Plus className="h-3.5 w-3.5" /> Bookmark current page</button>
+                  <button type="button" onClick={() => void saveBookmark()} className="mb-2 flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[var(--atlas-divider)] text-[10px] font-semibold text-[var(--atlas-text-secondary)] transition-colors hover:bg-black/[0.03]"><Plus className="h-3.5 w-3.5" /> Bookmark current page</button>
                   {browserState?.bookmarks.length ? browserState.bookmarks.map((bookmark) => (
-                    <div key={bookmark.id} className="group flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-white">
+                    <div key={bookmark.id} className="group flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-black/[0.03]">
                       <button type="button" onClick={() => void navigate(undefined, bookmark.url)} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
-                        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-slate-200 bg-white"><Star className="h-3.5 w-3.5 fill-amber-400 text-amber-500" /></span>
-                        <span className="min-w-0"><span className="block truncate text-[10px] font-semibold text-slate-700">{bookmark.title}</span><span className="block truncate text-[8px] font-medium text-slate-400">{compactUrl(bookmark.url)}</span></span>
+                        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-[var(--atlas-divider)] bg-white"><Star className="h-3.5 w-3.5 fill-amber-400 text-amber-500" /></span>
+                        <span className="min-w-0"><span className="block truncate text-[10px] font-semibold text-[var(--atlas-text-primary)]">{bookmark.title}</span><span className="block truncate text-[8px] font-medium text-[var(--atlas-text-tertiary)]">{compactUrl(bookmark.url)}</span></span>
                       </button>
                       <IconButton label="Remove bookmark" onClick={() => void requestBrowser(`/api/openbrowser/bookmarks/${bookmark.id}`, { method: "DELETE", quiet: true })} className="opacity-0 group-hover:opacity-100"><Trash2 className="h-3.5 w-3.5" /></IconButton>
                     </div>
@@ -1756,9 +1864,9 @@ export default function WebBrowserWorkspace() {
               {sideView === "downloads" ? (
                 <div className="min-h-0 flex-1 overflow-y-auto p-2">
                   {browserState?.downloads.length ? browserState.downloads.map((download) => (
-                    <div key={download.id} className="flex items-center gap-2.5 rounded-lg px-2 py-2 hover:bg-white">
-                      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-slate-200 bg-white"><FileDown className="h-4 w-4 text-slate-500" /></span>
-                      <span className="min-w-0 flex-1"><span className="block truncate text-[10px] font-semibold text-slate-700">{download.filename}</span><span className={cn("block text-[8px] font-medium", download.status === "failed" ? "text-red-500" : download.status === "complete" ? "text-emerald-600" : "text-slate-600")}>{download.status}</span></span>
+                    <div key={download.id} className="flex items-center gap-2.5 rounded-lg px-2 py-2 hover:bg-black/[0.03]">
+                      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-[var(--atlas-divider)] bg-white"><FileDown className="h-4 w-4 text-[var(--atlas-text-secondary)]" /></span>
+                      <span className="min-w-0 flex-1"><span className="block truncate text-[10px] font-semibold text-[var(--atlas-text-primary)]">{download.filename}</span><span className={cn("block text-[8px] font-medium", download.status === "failed" ? "text-red-500" : download.status === "complete" ? "text-emerald-600" : "text-[var(--atlas-text-secondary)]")}>{download.status}</span></span>
                     </div>
                   )) : <EmptyPanel icon={Download} label="No downloads" />}
                 </div>
@@ -1768,7 +1876,7 @@ export default function WebBrowserWorkspace() {
                 <div className="min-h-0 flex-1 overflow-y-auto p-4">
                   <SettingSelect label="Search engine" value={settings.defaultSearchEngine} options={["bing", "google", "duckduckgo"]} onChange={(value) => void updateSettings({ defaultSearchEngine: value as BrowserSettings["defaultSearchEngine"] })} />
                   <SettingSelect label="Performance" value={settings.performanceMode} options={["quality", "balanced", "efficient"]} onChange={(value) => void updateSettings({ performanceMode: value as BrowserSettings["performanceMode"] })} />
-                  <div className="mt-3 divide-y divide-slate-100 border-y border-slate-100">
+                  <div className="mt-3 divide-y divide-[var(--atlas-divider)] border-y border-[var(--atlas-divider)]">
                     <SettingToggle label="Restore tabs" checked={settings.restoreTabs} onChange={(value) => void updateSettings({ restoreTabs: value })} />
                     <SettingToggle label="Save history" checked={settings.saveHistory} onChange={(value) => void updateSettings({ saveHistory: value })} />
                     <SettingToggle label="Bookmarks bar" checked={settings.showBookmarksBar} onChange={(value) => void updateSettings({ showBookmarksBar: value })} />
@@ -1776,7 +1884,7 @@ export default function WebBrowserWorkspace() {
                     <SettingToggle label="Action labels" checked={settings.showAiActionLabels} onChange={(value) => void updateSettings({ showAiActionLabels: value })} />
                     <SettingToggle label="Private session" checked={settings.privateMode} onChange={(value) => void updateSettings({ privateMode: value })} />
                   </div>
-                  <div className="mt-4 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[9px] font-medium text-slate-500"><ShieldCheck className="h-4 w-4 shrink-0 text-emerald-600" /> Browser data stays in the local Clyra profile.</div>
+                  <div className="mt-4 flex items-center gap-2 rounded-lg border border-[var(--atlas-divider)] bg-white px-3 py-2 text-[9px] font-medium text-[var(--atlas-text-secondary)]"><ShieldCheck className="h-4 w-4 shrink-0 text-emerald-600" /> Browser data stays in the local Clyra profile.</div>
                 </div>
               ) : null}
             </motion.aside>
@@ -1790,120 +1898,140 @@ export default function WebBrowserWorkspace() {
 
 function statusPillMeta(phase: AgentStatus, manualControl: boolean): { label: string; className: string; live?: boolean } {
   switch (phase) {
-    case "planning": return { label: "Planning", className: "bg-slate-100 text-slate-600 border-slate-200", live: true };
-    case "observing": return { label: "Observing", className: "bg-slate-100 text-slate-600 border-slate-200", live: true };
-    case "executing": return { label: "Acting", className: "bg-slate-100 text-slate-600 border-slate-200", live: true };
-    case "verifying": return { label: "Verifying", className: "bg-slate-100 text-slate-600 border-slate-200", live: true };
-    case "recovering": return { label: "Recovering", className: "bg-amber-50 text-amber-600 border-amber-200", live: true };
-    case "waiting_for_user": return { label: "Needs you", className: "bg-amber-50 text-amber-600 border-amber-200" };
-    case "paused": return { label: manualControl ? "You have control" : "Paused", className: "bg-slate-100 text-slate-500 border-slate-200" };
-    case "completed": return { label: "Done", className: "bg-emerald-50 text-emerald-600 border-emerald-200" };
-    case "failed": return { label: "Failed", className: "bg-rose-50 text-rose-600 border-rose-200" };
-    case "cancelled": return { label: "Stopped", className: "bg-slate-100 text-slate-500 border-slate-200" };
-    default: return { label: "Idle", className: "bg-slate-100 text-slate-500 border-slate-200" };
+    case "planning": return { label: "Planning", className: "text-[var(--atlas-text-secondary)]", live: true };
+    case "observing": return { label: "Observing", className: "text-[var(--atlas-text-secondary)]", live: true };
+    case "executing": return { label: "Acting", className: "text-[var(--atlas-text-secondary)]", live: true };
+    case "verifying": return { label: "Verifying", className: "text-[var(--atlas-text-secondary)]", live: true };
+    case "recovering": return { label: "Recovering", className: "text-amber-600", live: true };
+    case "waiting_for_user": return { label: "Needs you", className: "text-amber-600" };
+    case "paused": return { label: manualControl ? "You have control" : "Paused", className: "text-[var(--atlas-text-tertiary)]" };
+    case "completed": return { label: "Done", className: "text-emerald-600" };
+    case "failed": return { label: "Failed", className: "text-rose-600" };
+    case "cancelled": return { label: "Stopped", className: "text-[var(--atlas-text-tertiary)]" };
+    default: return { label: "Idle", className: "text-[var(--atlas-text-tertiary)]" };
   }
 }
 
-function StatusPill({ phase, manualControl }: { phase: AgentStatus; manualControl: boolean }) {
-  const meta = statusPillMeta(phase, manualControl);
-  return (
-    <span className={cn("flex h-5 shrink-0 items-center gap-1 rounded-full border px-1.5 text-[8.5px] font-semibold", meta.className)}>
-      {meta.live ? <span className="h-1 w-1 animate-pulse rounded-full bg-current" /> : null}
-      {meta.label}
-    </span>
-  );
-}
-
 function VerdictIcon({ verdict }: { verdict?: StepEvaluation["verdict"] }) {
-  if (verdict === "Success") return <CircleCheck className="h-3.5 w-3.5 shrink-0 text-emerald-500" />;
-  if (verdict === "Failure") return <CircleX className="h-3.5 w-3.5 shrink-0 text-rose-500" />;
-  return <CircleHelp className="h-3.5 w-3.5 shrink-0 text-amber-500" />;
+  if (verdict === "Success") return <CircleCheck className="h-3 w-3 shrink-0 text-emerald-500" />;
+  if (verdict === "Failure") return <CircleX className="h-3 w-3 shrink-0 text-rose-500" />;
+  return <CircleHelp className="h-3 w-3 shrink-0 text-amber-500" />;
 }
 
-function RunControlButton({ label, onClick, tone = "slate", children }: { label: string; onClick: () => void; tone?: "slate" | "rose"; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      onClick={onClick}
-      className={cn(
-        "grid h-6 w-6 shrink-0 place-items-center rounded-md transition-[background-color,color,transform] duration-150 active:scale-[0.92]",
-        tone === "rose" ? "text-rose-500 hover:bg-rose-50 hover:text-rose-600" : "text-slate-400 hover:bg-slate-100 hover:text-slate-700",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
+function PlanDisclosure({
+  plan,
+  task,
+  phase,
+  open,
+  onToggle,
+  completedOpen,
+  onToggleCompleted,
+  reducedMotion,
+  criteriaProgress,
+}: {
+  plan: TaskPlan | null;
+  task: string;
+  phase: AgentStatus;
+  open: boolean;
+  onToggle: () => void;
+  completedOpen: boolean;
+  onToggleCompleted: () => void;
+  reducedMotion: boolean;
+  criteriaProgress: { complete: number; total: number };
+}) {
+  const meta = statusPillMeta(phase, false);
+  const title = plan?.goal || task || meta.label;
+  const steps = plan?.steps || [];
+  const completed = steps.filter((step) => step.status === "complete");
+  const remaining = steps.filter((step) => step.status !== "complete");
+  const progressHint = criteriaProgress.total
+    ? `${criteriaProgress.complete}/${criteriaProgress.total}`
+    : steps.length
+      ? `${completed.length}/${steps.length}`
+      : null;
 
-function PlanChecklistCard({ plan, completedOpen, onToggleCompleted, reducedMotion }: { plan: TaskPlan; completedOpen: boolean; onToggleCompleted: () => void; reducedMotion: boolean }) {
-  const completed = plan.steps.filter((step) => step.status === "complete");
-  const remaining = plan.steps.filter((step) => step.status !== "complete");
-  const collapseCompleted = completed.length > 1;
   const renderStep = (step: TaskPlan["steps"][number]) => (
-    <li key={step.id} className="flex items-start gap-2 py-[3px]">
+    <li key={step.id} className="flex items-start gap-2 py-[2px]">
       <span className="mt-[3px] grid h-3 w-3 shrink-0 place-items-center" aria-hidden>
         {step.status === "complete" ? (
           <CircleCheck className="h-3 w-3 text-emerald-500" />
         ) : step.status === "active" ? (
           <motion.span
-            className="h-2 w-2 rounded-full bg-slate-700"
+            className="h-1.5 w-1.5 rounded-full bg-[var(--atlas-text-primary)]"
             animate={reducedMotion ? undefined : { scale: [1, 1.35, 1], opacity: [1, 0.55, 1] }}
             transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
           />
         ) : step.status === "blocked" ? (
           <TriangleAlert className="h-3 w-3 text-amber-500" />
         ) : (
-          <span className="h-2 w-2 rounded-full border border-slate-300" />
+          <span className="h-1.5 w-1.5 rounded-full border border-[var(--atlas-divider)]" />
         )}
       </span>
       <span className={cn(
-        "min-w-0 flex-1 text-[10px] font-medium leading-4",
-        step.status === "complete" ? "text-slate-400 line-through decoration-slate-300" : step.status === "active" ? "text-slate-800" : "text-slate-500",
+        "min-w-0 flex-1 text-[10.5px] font-medium leading-4",
+        step.status === "complete" ? "text-[var(--atlas-text-tertiary)] line-through decoration-[var(--atlas-divider)]" : step.status === "active" ? "text-[var(--atlas-text-primary)]" : "text-[var(--atlas-text-secondary)]",
       )}>
         {step.label}
       </span>
     </li>
   );
+
   return (
-    <motion.section initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.2, ease: [0.16, 1, 0.3, 1] }} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-[0_2px_8px_rgba(35,54,76,0.04)]">
-      <div className="mb-1 flex items-center justify-between text-[9px] font-semibold uppercase tracking-wide text-slate-400">
-        <span>Plan</span>
-        <span>{completed.length}/{plan.steps.length}</span>
-      </div>
-      <ol>
-        {collapseCompleted ? (
-          <li>
-            <button type="button" onClick={onToggleCompleted} className="flex w-full items-center gap-2 py-[3px] text-left text-[10px] font-medium text-slate-400 transition-colors hover:text-slate-600">
-              <CircleCheck className="h-3 w-3 shrink-0 text-emerald-500" />
-              <span className="min-w-0 flex-1">{completed.length} steps completed</span>
-              <ChevronDown className={cn("h-3 w-3 shrink-0 transition-transform duration-150", completedOpen && "rotate-180")} />
-            </button>
-            <AnimatePresence initial={false}>
-              {completedOpen ? (
-                <motion.ol initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.18 }} className="overflow-hidden pl-1">
-                  {completed.map(renderStep)}
-                </motion.ol>
-              ) : null}
-            </AnimatePresence>
-          </li>
-        ) : completed.map(renderStep)}
-        {remaining.map(renderStep)}
-      </ol>
+    <motion.section initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.18 }} className="space-y-1">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex h-6 w-full items-center gap-1.5 rounded-md px-1 text-left transition-colors hover:bg-black/[0.03]"
+      >
+        <ChevronDown className={cn("h-3 w-3 shrink-0 text-[var(--atlas-text-tertiary)] transition-transform duration-150", open && "rotate-180")} />
+        <span className={cn("min-w-0 flex-1 truncate text-[11px] font-medium", meta.className)}>
+          {phase === "planning" || !plan ? `Planning for ${truncateLabel(title, 36)}` : truncateLabel(title, 42)}
+        </span>
+        {progressHint ? <span className="shrink-0 text-[10px] font-medium text-[var(--atlas-text-tertiary)]">{progressHint}</span> : null}
+        {meta.live ? <span className="h-1 w-1 shrink-0 animate-pulse rounded-full bg-[var(--atlas-text-tertiary)]" /> : null}
+      </button>
+      <AnimatePresence initial={false}>
+        {open && steps.length ? (
+          <motion.ol
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.16 }}
+            className="overflow-hidden pl-4"
+          >
+            {completed.length > 1 ? (
+              <li>
+                <button type="button" onClick={onToggleCompleted} className="flex w-full items-center gap-2 py-[2px] text-left text-[10.5px] font-medium text-[var(--atlas-text-tertiary)] hover:text-[var(--atlas-text-secondary)]">
+                  <CircleCheck className="h-3 w-3 shrink-0 text-emerald-500" />
+                  <span className="min-w-0 flex-1">{completed.length} steps completed</span>
+                  <ChevronDown className={cn("h-3 w-3 shrink-0 transition-transform", completedOpen && "rotate-180")} />
+                </button>
+                <AnimatePresence initial={false}>
+                  {completedOpen ? (
+                    <motion.ol initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden pl-1">
+                      {completed.map(renderStep)}
+                    </motion.ol>
+                  ) : null}
+                </AnimatePresence>
+              </li>
+            ) : completed.map(renderStep)}
+            {remaining.map(renderStep)}
+          </motion.ol>
+        ) : null}
+      </AnimatePresence>
     </motion.section>
   );
 }
 
 function ReasoningCard({ item, reducedMotion }: { item: Extract<RunItem, { kind: "reasoning" }>; reducedMotion: boolean }) {
   return (
-    <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.18, ease: [0.16, 1, 0.3, 1] }} className="rounded-lg border border-slate-200 bg-slate-50/60 px-2.5 py-2">
+    <motion.div initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.16 }} className="px-1 py-0.5">
       <div className="flex items-start gap-2">
-        <span className="mt-[1px]"><VerdictIcon verdict={item.evaluation?.verdict} /></span>
+        <span className="mt-[2px]"><VerdictIcon verdict={item.evaluation?.verdict} /></span>
         <div className="min-w-0 flex-1">
-          <p className="text-[10.5px] font-semibold leading-4 text-slate-700">{item.nextGoal}</p>
-          {item.evaluation?.reason ? <p className="mt-0.5 text-[9px] font-medium leading-3.5 text-slate-400">{item.evaluation.reason}</p> : null}
-          {item.memory ? <p className="mt-1 text-[9px] font-medium leading-3.5 text-slate-400/90">{item.memory}</p> : null}
+          <p className="text-[11px] font-medium leading-4 text-[var(--atlas-text-primary)]">{item.nextGoal}</p>
+          {item.evaluation?.reason ? <p className="mt-0.5 text-[10px] font-medium leading-3.5 text-[var(--atlas-text-tertiary)]">{item.evaluation.reason}</p> : null}
+          {item.memory ? <p className="mt-1 text-[10px] font-medium leading-3.5 text-[var(--atlas-text-tertiary)]">{item.memory}</p> : null}
         </div>
       </div>
     </motion.div>
@@ -1914,26 +2042,26 @@ function ActionRow({ item, reducedMotion }: { item: Extract<RunItem, { kind: "ac
   const [detailsOpen, setDetailsOpen] = useState(false);
   const Icon = ACTION_ICONS[item.icon] || Sparkles;
   return (
-    <motion.div initial={{ opacity: 0, x: -4 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.16, ease: [0.16, 1, 0.3, 1] }} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
+    <motion.div initial={{ opacity: 0, x: -3 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.14 }} className="px-1 py-0.5">
       <div className="flex items-center gap-2">
-        <span className="grid h-5 w-5 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-600"><Icon className="h-3 w-3" /></span>
-        <span className="min-w-0 flex-1 truncate text-[10.5px] font-medium text-slate-700">{item.label}</span>
+        <Icon className="h-3 w-3 shrink-0 text-[var(--atlas-text-tertiary)]" />
+        <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[var(--atlas-text-primary)]">{item.label}</span>
         {item.status === "running" ? (
-          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-slate-500" />
+          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-[var(--atlas-text-tertiary)]" />
         ) : item.status === "success" ? (
           <CircleCheck className="h-3 w-3 shrink-0 text-emerald-500" />
         ) : (
           <CircleX className="h-3 w-3 shrink-0 text-rose-500" />
         )}
-        <button type="button" onClick={() => setDetailsOpen((value) => !value)} aria-label="Toggle action details" className="grid h-4 w-4 shrink-0 place-items-center rounded text-slate-300 transition-colors hover:text-slate-500">
+        <button type="button" onClick={() => setDetailsOpen((value) => !value)} aria-label="Toggle action details" className="grid h-4 w-4 shrink-0 place-items-center rounded text-[var(--atlas-text-tertiary)] hover:text-[var(--atlas-text-secondary)]">
           <ChevronDown className={cn("h-3 w-3 transition-transform duration-150", detailsOpen && "rotate-180")} />
         </button>
       </div>
       <AnimatePresence initial={false}>
         {detailsOpen ? (
-          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.16 }} className="overflow-hidden">
-            {item.result ? <p className="mt-1.5 text-[9px] font-medium leading-3.5 text-slate-500">{item.result}</p> : null}
-            <pre className="mt-1.5 max-h-32 overflow-auto rounded-md bg-slate-50 p-2 text-[8.5px] leading-3.5 text-slate-500">{item.detail}</pre>
+          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.14 }} className="overflow-hidden">
+            {item.result ? <p className="mt-1 text-[10px] font-medium leading-3.5 text-[var(--atlas-text-secondary)]">{item.result}</p> : null}
+            <pre className="mt-1 max-h-28 overflow-auto rounded-md bg-black/[0.03] p-2 text-[9px] leading-3.5 text-[var(--atlas-text-tertiary)]">{item.detail}</pre>
           </motion.div>
         ) : null}
       </AnimatePresence>
@@ -1944,10 +2072,10 @@ function ActionRow({ item, reducedMotion }: { item: Extract<RunItem, { kind: "ac
 function RecoveryCard({ item, reducedMotion }: { item: Extract<RunItem, { kind: "recovery" | "strategy" }>; reducedMotion: boolean }) {
   const Icon = item.kind === "strategy" ? RotateCcw : TriangleAlert;
   return (
-    <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.18, ease: [0.16, 1, 0.3, 1] }} className="flex items-start gap-2 rounded-lg border border-amber-200/80 bg-amber-50/70 px-2.5 py-2">
-      <Icon className="mt-[1px] h-3.5 w-3.5 shrink-0 text-amber-500" />
-      <p className="min-w-0 flex-1 text-[10px] font-medium leading-4 text-amber-800">
-        {item.kind === "strategy" ? <span className="mr-1 font-semibold">Changing strategy —</span> : null}
+    <motion.div initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.16 }} className="flex items-start gap-2 px-1 py-0.5">
+      <Icon className="mt-[2px] h-3 w-3 shrink-0 text-amber-500" />
+      <p className="min-w-0 flex-1 text-[11px] font-medium leading-4 text-[var(--atlas-text-secondary)]">
+        {item.kind === "strategy" ? <span className="mr-1 font-semibold text-[var(--atlas-text-primary)]">Changing strategy —</span> : null}
         {item.message}
       </p>
     </motion.div>
@@ -1956,15 +2084,10 @@ function RecoveryCard({ item, reducedMotion }: { item: Extract<RunItem, { kind: 
 
 function AskUserCard({ question, reducedMotion }: { question: string; reducedMotion: boolean }) {
   return (
-    <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.2, ease: [0.16, 1, 0.3, 1] }} className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5">
-      <div className="flex items-start gap-2">
-        <CircleHelp className="mt-[1px] h-3.5 w-3.5 shrink-0 text-slate-500" />
-        <div className="min-w-0 flex-1">
-          <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-500">Clyra needs your input</p>
-          <p className="mt-1 text-[11px] font-medium leading-4.5 text-slate-700">{question}</p>
-          <p className="mt-1.5 text-[9px] font-medium text-slate-400">Reply in the box below to continue.</p>
-        </div>
-      </div>
+    <motion.div initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.18 }} className="px-1 py-1">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--atlas-text-tertiary)]">Needs your input</p>
+      <p className="mt-1 text-[11.5px] font-medium leading-4.5 text-[var(--atlas-text-primary)]">{question}</p>
+      <p className="mt-1 text-[10px] font-medium text-[var(--atlas-text-tertiary)]">Reply below to continue.</p>
     </motion.div>
   );
 }
@@ -1972,33 +2095,29 @@ function AskUserCard({ question, reducedMotion }: { question: string; reducedMot
 function CompletionCard({ item, reducedMotion }: { item: Extract<RunItem, { kind: "complete" }>; reducedMotion: boolean }) {
   return (
     <motion.div
-      initial={{ opacity: 0, y: 5 }}
+      initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: reducedMotion ? 0.01 : 0.22, ease: [0.16, 1, 0.3, 1] }}
-      className={cn(
-        "rounded-xl border px-3 py-2.5",
-        item.success ? "border-emerald-200 bg-emerald-50/70" : "border-rose-200 bg-rose-50/60",
-      )}
+      transition={{ duration: reducedMotion ? 0.01 : 0.18 }}
+      className="px-1 py-1"
     >
       <div className="flex items-start gap-2">
-        {item.success ? <CircleCheck className="mt-[1px] h-4 w-4 shrink-0 text-emerald-500" /> : <CircleX className="mt-[1px] h-4 w-4 shrink-0 text-rose-500" />}
+        {item.success ? <CircleCheck className="mt-[1px] h-3.5 w-3.5 shrink-0 text-emerald-500" /> : <CircleX className="mt-[1px] h-3.5 w-3.5 shrink-0 text-rose-500" />}
         <div className="min-w-0 flex-1">
-          <p className={cn("text-[9px] font-semibold uppercase tracking-wide", item.success ? "text-emerald-600" : "text-rose-500")}>
+          <p className={cn("text-[10px] font-semibold", item.success ? "text-emerald-600" : "text-rose-500")}>
             {item.success ? "Task completed" : "Task not completed"}
           </p>
-          {item.message ? <p className="mt-1 whitespace-pre-wrap text-[10.5px] font-medium leading-4.5 text-slate-700">{item.message}</p> : null}
+          {item.message ? <p className="mt-1 whitespace-pre-wrap text-[11px] font-medium leading-4.5 text-[var(--atlas-text-primary)]">{item.message}</p> : null}
           {item.evidence?.url ? (
-            <a href={item.evidence.url} target="_blank" rel="noreferrer" className="mt-2 flex h-6 max-w-full items-center gap-1.5 rounded-md border border-slate-200/80 bg-white/80 px-2 text-[9px] font-semibold text-slate-600 transition-colors hover:text-slate-900">
+            <a href={item.evidence.url} target="_blank" rel="noreferrer" className="mt-1.5 flex max-w-full items-center gap-1.5 text-[10px] font-medium text-[var(--atlas-text-secondary)] hover:text-[var(--atlas-text-primary)]">
               <ExternalLink className="h-2.5 w-2.5 shrink-0" />
               <span className="min-w-0 truncate">{item.evidence.title || displayHost(item.evidence.url)}</span>
-              <span className="shrink-0 text-slate-400">{displayHost(item.evidence.url)}</span>
             </a>
           ) : null}
           {item.evidence?.checks?.length ? (
-            <ul className="mt-1.5 space-y-0.5">
+            <ul className="mt-1 space-y-0.5">
               {item.evidence.checks.slice(0, 6).map((check, index) => (
-                <li key={`${check}-${index}`} className="flex items-start gap-1.5 text-[9px] font-medium leading-3.5 text-slate-500">
-                  <Check className={cn("mt-[1px] h-2.5 w-2.5 shrink-0", item.success ? "text-emerald-500" : "text-slate-400")} />
+                <li key={`${check}-${index}`} className="flex items-start gap-1.5 text-[10px] font-medium leading-3.5 text-[var(--atlas-text-tertiary)]">
+                  <Check className={cn("mt-[1px] h-2.5 w-2.5 shrink-0", item.success ? "text-emerald-500" : "text-[var(--atlas-text-tertiary)]")} />
                   <span className="min-w-0">{check}</span>
                 </li>
               ))}
@@ -2017,13 +2136,14 @@ function AgentRunSection({
   statusText,
   plan,
   items,
-  paused,
   manualControl,
   reducedMotion,
   factCount,
+  criteriaProgress,
+  planOpen,
+  onTogglePlan,
   completedStepsOpen,
   onToggleCompletedSteps,
-  onControl,
 }: {
   task: string;
   active: boolean;
@@ -2031,49 +2151,38 @@ function AgentRunSection({
   statusText: string;
   plan: TaskPlan | null;
   items: RunItem[];
-  paused: boolean;
+  paused?: boolean;
   manualControl: boolean;
   reducedMotion: boolean;
   factCount: number;
+  criteriaProgress: { complete: number; total: number };
+  planOpen: boolean;
+  onTogglePlan: () => void;
   completedStepsOpen: boolean;
   onToggleCompletedSteps: () => void;
-  onControl: (command: "pause" | "resume" | "take_control" | "return_control" | "stop") => void;
 }) {
   const completeItem = [...items].reverse().find((item): item is Extract<RunItem, { kind: "complete" }> => item.kind === "complete");
   const askItem = [...items].reverse().find((item): item is Extract<RunItem, { kind: "ask" }> => item.kind === "ask");
-  const displayPhase: AgentStatus = active ? phase : completeItem ? (completeItem.success ? "completed" : "failed") : askItem ? "waiting_for_user" : phase;
   const feedItems = active ? items.slice(-24) : [];
   const thinking = active && ["planning", "observing"].includes(phase) && !manualControl;
   return (
-    <motion.section initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.22, ease: [0.16, 1, 0.3, 1] }} className="space-y-2">
-      <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2.5">
-        <div className="flex items-center gap-2">
-          <span className="grid h-5 w-5 shrink-0 place-items-center rounded-md bg-slate-100 text-slate-600"><Bot className="h-3 w-3" /></span>
-          <span className="min-w-0 flex-1 truncate text-[9px] font-semibold uppercase tracking-wide text-slate-400">Browser task</span>
-          <StatusPill phase={displayPhase} manualControl={manualControl} />
-          {active ? (
-            <span className="flex shrink-0 items-center gap-0.5">
-              <RunControlButton label={paused && !manualControl ? "Resume" : "Pause"} onClick={() => onControl(paused && !manualControl ? "resume" : "pause")}>
-                {paused && !manualControl ? <CirclePlay className="h-3.5 w-3.5" /> : <CirclePause className="h-3.5 w-3.5" />}
-              </RunControlButton>
-              <RunControlButton label={manualControl ? "Hand control back to Clyra" : "Take control"} onClick={() => onControl(manualControl ? "return_control" : "take_control")}>
-                {manualControl ? <Sparkles className="h-3.5 w-3.5" /> : <Hand className="h-3.5 w-3.5" />}
-              </RunControlButton>
-              <RunControlButton label="Stop task" tone="rose" onClick={() => onControl("stop")}>
-                <Square className="h-2.5 w-2.5 fill-current" />
-              </RunControlButton>
-            </span>
-          ) : null}
-        </div>
-        {task ? <p className="mt-1.5 line-clamp-3 text-[11px] font-medium leading-4.5 text-slate-700">{task}</p> : null}
-      </div>
-
-      {plan && active ? (
-        <PlanChecklistCard plan={plan} completedOpen={completedStepsOpen} onToggleCompleted={onToggleCompletedSteps} reducedMotion={reducedMotion} />
+    <motion.section initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.18 }} className="space-y-2">
+      {active ? (
+        <PlanDisclosure
+          plan={plan}
+          task={task}
+          phase={phase}
+          open={planOpen}
+          onToggle={onTogglePlan}
+          completedOpen={completedStepsOpen}
+          onToggleCompleted={onToggleCompletedSteps}
+          reducedMotion={reducedMotion}
+          criteriaProgress={criteriaProgress}
+        />
       ) : null}
 
       {feedItems.length ? (
-        <div className="space-y-1.5">
+        <div className="space-y-0.5">
           {feedItems.map((item) => {
             if (item.kind === "reasoning") return <ReasoningCard key={item.id} item={item} reducedMotion={reducedMotion} />;
             if (item.kind === "action") return <ActionRow key={item.id} item={item} reducedMotion={reducedMotion} />;
@@ -2088,11 +2197,11 @@ function AgentRunSection({
       {!active && completeItem ? <CompletionCard item={completeItem} reducedMotion={reducedMotion} /> : null}
 
       {thinking ? (
-        <div className="flex items-center gap-2 px-0.5 py-0.5">
-          <ShiningBrainIcon className="h-4 w-4 shrink-0" />
-          <ShiningText text={statusText || "Thinking"} preset="thinkingChat" play={!reducedMotion} className="min-w-0 flex-1 truncate !text-[11.5px]" />
+        <div className="flex items-center gap-2 px-1 py-0.5">
+          <ShiningBrainIcon className="h-3.5 w-3.5 shrink-0" />
+          <ShiningText text={statusText || "Thinking"} preset="thinkingChat" play={!reducedMotion} className="min-w-0 flex-1 truncate !text-[11px]" />
           <ThinkingDots />
-          {factCount > 0 ? <span className="shrink-0 text-[9px] font-medium text-slate-400">{factCount} facts</span> : null}
+          {factCount > 0 ? <span className="shrink-0 text-[9px] font-medium text-[var(--atlas-text-tertiary)]">{factCount} facts</span> : null}
         </div>
       ) : null}
     </motion.section>
@@ -2100,18 +2209,18 @@ function AgentRunSection({
 }
 
 function EmptyPanel({ icon: Icon, label }: { icon: typeof History; label: string }) {
-  return <div className="grid min-h-56 place-items-center text-center"><div><Icon className="mx-auto mb-2 h-5 w-5 text-slate-300" /><p className="text-[10px] font-semibold text-slate-400">{label}</p></div></div>;
+  return <div className="grid min-h-56 place-items-center text-center"><div><Icon className="mx-auto mb-2 h-5 w-5 text-[var(--atlas-text-tertiary)]" /><p className="text-[10px] font-semibold text-[var(--atlas-text-tertiary)]">{label}</p></div></div>;
 }
 
 function SettingToggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
-  return <div className="flex h-11 items-center justify-between text-[10px] font-semibold text-slate-600"><span>{label}</span><Toggle label={label} checked={checked} onChange={onChange} /></div>;
+  return <div className="flex h-11 items-center justify-between text-[10px] font-semibold text-[var(--atlas-text-secondary)]"><span>{label}</span><Toggle label={label} checked={checked} onChange={onChange} /></div>;
 }
 
 function SettingSelect({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
   return (
     <label className="mb-3 block">
-      <span className="mb-1.5 block text-[9px] font-semibold uppercase text-slate-400">{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)} className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-[10px] font-semibold capitalize text-slate-700 outline-none transition-colors focus:border-slate-400">
+      <span className="mb-1.5 block text-[9px] font-semibold uppercase text-[var(--atlas-text-tertiary)]">{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)} className="h-9 w-full rounded-lg border border-[var(--atlas-divider)] bg-white px-2.5 text-[10px] font-semibold capitalize text-[var(--atlas-text-primary)] outline-none transition-colors focus:border-[var(--atlas-text-tertiary)]">
         {options.map((option) => <option key={option} value={option}>{option.replace(/_/g, " ")}</option>)}
       </select>
     </label>

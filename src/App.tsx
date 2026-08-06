@@ -321,9 +321,7 @@ function readEmbeddedWorkspace(): WorkspaceTabId {
   // Visual-QA shortcut for the desktop clip editor fixture.
   if (params.get("clipDemo") === "1") return "clip";
   const tool = params.get("embedTool");
-  // Keep the existing browser implementation available in source, but do not
-  // expose it while the replacement integration is awaiting a compatible licence.
-  if (tool === "browse" || tool === "browser") return "chat";
+  if (tool === "browse" || tool === "browser") return "browser";
   if (tool === "fake-text" || tool === "would-rather") return tool;
   if (tool === "vibe" || tool === "clip" || tool === "study") return tool;
   return "chat";

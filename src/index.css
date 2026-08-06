@@ -5381,40 +5381,44 @@ body,
   font-weight: 650;
 }
 
+:root {
+  --atlas-window-bg: #f6f7f7;
+  --atlas-titlebar-bg: #f2f4f4;
+  --atlas-toolbar-bg: #fafbfb;
+  --atlas-tab-active: #ffffff;
+  --atlas-sidebar-bg: #fbfbfa;
+  --atlas-user-bubble: #f1f1ef;
+  --atlas-text-primary: #202124;
+  --atlas-text-secondary: #676b70;
+  --atlas-text-tertiary: #96999d;
+  --atlas-divider: rgba(20, 24, 28, 0.10);
+  --atlas-clyra-blue: #6799df;
+  --atlas-agent-black: #171817;
+  --atlas-stop-red: #dd5e58;
+  --atlas-titlebar-height: 30px;
+  --atlas-toolbar-height: 32px;
+  --atlas-sidebar-width: clamp(300px, 27.2vw, 410px);
+}
+
 .clyra-browser-ai-control {
-  box-shadow: inset 0 0 0 1px rgba(15,23,42,.28), inset 0 0 22px rgba(15,23,42,.06);
+  box-shadow: none;
 }
 
 .clyra-browser-ai-control::after {
-  position: absolute;
-  inset: 1px;
-  border-radius: inherit;
-  content: "";
-  background: linear-gradient(105deg, transparent 10%, rgba(148,163,184,.55) 48%, transparent 72%);
-  background-size: 210% 100%;
-  animation: clyra-browser-control-glow 1.85s linear infinite;
-  opacity: .55;
+  content: none;
+  display: none;
 }
 
 .clyra-browser-agent-cursor::before {
-  position: absolute;
-  left: -7px;
-  top: -7px;
-  width: 25px;
-  height: 25px;
-  border-radius: 999px;
-  content: "";
-  background: rgba(15,23,42,.12);
-  box-shadow: 0 0 18px rgba(15,23,42,.22), 0 0 28px rgba(100,116,139,.18);
-  animation: clyra-browser-cursor-halo 1.35s ease-in-out infinite;
+  content: none;
+  display: none;
 }
 
 .clyra-browser-agent-cursor > * { position: relative; }
 
 .clyra-browser-agent-tab {
-  background-image: linear-gradient(110deg, transparent 20%, rgba(148,163,184,.22) 48%, transparent 72%);
-  background-size: 220% 100%;
-  animation: clyra-browser-tab-shimmer 2.1s linear infinite;
+  background-image: none;
+  animation: none;
 }
 
 .clyra-browser-user-message-entry {
