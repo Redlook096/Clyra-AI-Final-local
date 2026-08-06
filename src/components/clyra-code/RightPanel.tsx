@@ -66,11 +66,33 @@ export function usePreview(projectId: string | null, buildVersion: number) {
       startedForRef.current = projectId;
       void start();
     }
+    let retryingMissingEntry = false;
     const interval = window.setInterval(async () => {
       const status = await api.previewStatus(projectId).catch(() => null);
       if (status) setSession(status);
       const lines = await api.previewLogs(projectId).catch(() => null);
       if (lines) setLogs(lines);
+
+      // Agent often creates index.html after the first preview probe. Retry
+      // start while the failure is "entry missing" so the browser comes up
+      // mid-run instead of waiting for session.idle / a manual Retry click.
+      const missingEntry =
+        status?.status === "build_failed" &&
+        /index\.html entry point/i.test(status.lastError?.message ?? "");
+      if (missingEntry && !retryingMissingEntry) {
+        retryingMissingEntry = true;
+        try {
+          const next = await api.previewStart(projectId);
+          setSession(next);
+          if (next.url && (next.status === "ready" || next.status === "running")) {
+            setFrameVersion((v) => v + 1);
+          }
+        } catch {
+          /* status poll retries next tick */
+        } finally {
+          retryingMissingEntry = false;
+        }
+      }
     }, 2000);
     return () => window.clearInterval(interval);
   }, [projectId, start]);

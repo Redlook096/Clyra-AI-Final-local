@@ -124,6 +124,9 @@ export async function startDevServer({
   const hasPackageJson = existsSync(path.join(projectPath, "package.json"));
   const hasHtmlEntry = existsSync(path.join(projectPath, "index.html"));
   if (!hasHtmlEntry) {
+    // Preserve prior log lines when we re-probe during an agent run so the
+    // terminal panel does not flash empty between missing-entry checks.
+    const priorLogs = existing?.logs ?? [];
     const session: PreviewSession = {
       projectId,
       projectPath,
@@ -135,8 +138,10 @@ export async function startDevServer({
         message: "The agent has not yet created an index.html entry point, so Clyra cannot start a preview.",
       },
     };
-    const state = { session, logs: [] };
-    addLog(state, "error", session.lastError!.message);
+    const state = { session, logs: priorLogs };
+    if (!priorLogs.some((line) => /index\.html entry point/i.test(line.message))) {
+      addLog(state, "error", session.lastError!.message);
+    }
     sessions.set(projectId, state);
     return session;
   }

@@ -129,8 +129,24 @@ export function AgentActionRow({
           />
           {isFileAction ? (
             <DiffCounters
-              additions={action.kind === "delete" ? undefined : action.additions ?? 0}
-              deletions={action.kind === "create" ? undefined : action.deletions ?? 0}
+              additions={
+                action.kind === "delete"
+                  ? undefined
+                  : action.additions !== undefined
+                    ? action.additions
+                    : action.kind === "create"
+                      ? undefined
+                      : 0
+              }
+              deletions={
+                action.kind === "create"
+                  ? undefined
+                  : action.deletions !== undefined
+                    ? action.deletions
+                    : action.kind === "delete"
+                      ? undefined
+                      : 0
+              }
               showZero={action.kind !== "create" && action.kind !== "delete"}
             />
           ) : null}
