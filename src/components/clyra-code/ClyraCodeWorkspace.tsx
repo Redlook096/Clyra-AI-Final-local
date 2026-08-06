@@ -97,8 +97,8 @@ export default function ClyraCodeWorkspace() {
 
   /* -------------------- project creation -------------------- */
   const createProject = useCallback(async () => {
-    const name = newProjectName.trim();
-    if (!name || creating) return;
+    const name = newProjectName.trim() || `Project ${new Date().toLocaleString()}`;
+    if (creating) return;
     setCreating(true);
     try {
       const project = await api.createProject(name);
@@ -166,7 +166,16 @@ export default function ClyraCodeWorkspace() {
           setRightTab("browser");
           setFocusFile(null);
         }}
-        onNewProject={() => setShowNewProject(true)}
+        onNewProject={() => {
+          setNewProjectName("");
+          setShowNewProject(true);
+          // One-click create when the modal opens empty is awkward; create
+          // immediately with a default name so the empty state is never a dead end.
+          window.setTimeout(() => {
+            const input = document.querySelector<HTMLInputElement>('[data-testid="clyra-code-new-project-name"]');
+            input?.focus();
+          }, 0);
+        }}
       />
       <div className="cc-resize-handle" aria-hidden />
 
@@ -354,6 +363,7 @@ export default function ClyraCodeWorkspace() {
               </h2>
               <input
                 autoFocus
+                data-testid="clyra-code-new-project-name"
                 value={newProjectName}
                 onChange={(event) => setNewProjectName(event.target.value)}
                 onKeyDown={(event) => {
@@ -373,11 +383,11 @@ export default function ClyraCodeWorkspace() {
                 </button>
                 <button
                   type="button"
-                  disabled={!newProjectName.trim() || creating}
+                  disabled={creating}
                   onClick={() => void createProject()}
                   className={cn(
                     "rounded-[8px] px-3 py-[6px] text-[12.5px] font-medium text-white transition-colors",
-                    newProjectName.trim() && !creating
+                    !creating
                       ? "bg-[color:var(--accent-blue)]"
                       : "bg-[color:var(--text-disabled)]",
                   )}
