@@ -22,6 +22,7 @@ import {
   Trash2,
   Type,
   Undo2,
+  ScanFace,
   Video,
 } from "lucide-react";
 import {
@@ -37,6 +38,7 @@ import { createPortal } from "react-dom";
 import { cn } from "../../lib/utils";
 import SubtitleOverlay, { type CaptionStyle, type OverlayWord } from "./SubtitleOverlay";
 import { CLIP_EDITOR, CLIP_EDITOR_FONT, CLIP_EDITOR_MONO, formatEditorTime } from "./tokens";
+import { useLiveFaceTrack } from "./useLiveFaceTrack";
 
 /** Structural clip shape the editor needs; AIClipper's ClipResult satisfies it. */
 export type EditorClip = {
@@ -754,6 +756,8 @@ export default function ClipperEditor({
   exportBusy,
   error,
   onDismissError,
+  faceTrackingEnabled = false,
+  onFaceTrackingChange,
 }: {
   clips: EditorClip[];
   selected: EditorClip | undefined;
@@ -780,14 +784,19 @@ export default function ClipperEditor({
   exportBusy: boolean;
   error: string;
   onDismissError: () => void;
+  /** Live MediaPipe face follow in the preview + render preference. */
+  faceTrackingEnabled?: boolean;
+  onFaceTrackingChange?: (enabled: boolean) => void;
 }) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [videoDuration, setVideoDuration] = useState(0);
+  const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
   const backdropRef = useRef<HTMLVideoElement | null>(null);
   const rafRef = useRef(0);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const faceTrack = useLiveFaceTrack(videoEl, faceTrackingEnabled && Boolean(selected));
 
   useEffect(() => {
     // Cover the Clyra shell chrome while the desktop editor is open.
@@ -997,16 +1006,45 @@ export default function ClipperEditor({
                     </div>
                   </div>
                   <p className="mt-[7px] text-[12px]" style={{ color: "#65748C" }}>
-                    {selected.clip_duration || `${Math.round(duration)}s`} · {qualityLabel} · Auto-reframed
+                    {selected.clip_duration || `${Math.round(duration)}s`} · {qualityLabel}
+                    {faceTrackingEnabled ? " · Face tracking" : " · Auto-reframed"}
                   </p>
                 </div>
-                <div
-                  className="flex h-[38px] w-[74px] shrink-0 items-center justify-center rounded-[10px] bg-white"
-                  style={{ border: "1px solid #E7EDF5" }}
-                  aria-label={`Clip score ${scoreFor(selected)} out of 100`}
-                >
-                  <span className="text-[15px] tabular-nums" style={{ fontWeight: 700, color: CLIP_EDITOR.blue }}>{scoreFor(selected)}</span>
-                  <span className="ml-1 text-[12px]" style={{ color: "#7FAFFF" }}>/100</span>
+                <div className="flex shrink-0 items-center gap-2.5">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={faceTrackingEnabled}
+                    aria-label="Face tracking"
+                    onClick={() => onFaceTrackingChange?.(!faceTrackingEnabled)}
+                    className="flex h-[34px] items-center gap-2 rounded-[9px] px-2.5 text-[12px] font-medium transition-colors duration-150"
+                    style={{
+                      border: `1px solid ${faceTrackingEnabled ? CLIP_EDITOR.blue : "#E7EDF5"}`,
+                      background: faceTrackingEnabled ? CLIP_EDITOR.selected : "#fff",
+                      color: faceTrackingEnabled ? CLIP_EDITOR.blue : CLIP_EDITOR.textSecondary,
+                    }}
+                    title="Centre the frame on the face and follow smoothly with MediaPipe (no lag)"
+                  >
+                    <ScanFace size={15} strokeWidth={ICON_STROKE} />
+                    Face tracking
+                    <span
+                      className="relative ml-0.5 h-[16px] w-[28px] rounded-full transition-colors duration-150"
+                      style={{ background: faceTrackingEnabled ? CLIP_EDITOR.blue : "#D5DCE8" }}
+                    >
+                      <span
+                        className="absolute top-[2px] h-[12px] w-[12px] rounded-full bg-white transition-[left] duration-150"
+                        style={{ left: faceTrackingEnabled ? 14 : 2 }}
+                      />
+                    </span>
+                  </button>
+                  <div
+                    className="flex h-[38px] w-[74px] shrink-0 items-center justify-center rounded-[10px] bg-white"
+                    style={{ border: "1px solid #E7EDF5" }}
+                    aria-label={`Clip score ${scoreFor(selected)} out of 100`}
+                  >
+                    <span className="text-[15px] tabular-nums" style={{ fontWeight: 700, color: CLIP_EDITOR.blue }}>{scoreFor(selected)}</span>
+                    <span className="ml-1 text-[12px]" style={{ color: "#7FAFFF" }}>/100</span>
+                  </div>
                 </div>
               </header>
 
@@ -1030,16 +1068,30 @@ export default function ClipperEditor({
                   />
                   <span aria-hidden className="absolute inset-0" style={{ background: "rgba(3,10,29,0.44)" }} />
                   <div className="absolute inset-0 z-[1] flex items-center justify-center">
-                    <div className="relative h-full max-h-full" style={{ aspectRatio: "9 / 16", maxWidth: "100%" }}>
+                    <div className="relative h-full max-h-full overflow-hidden" style={{ aspectRatio: "9 / 16", maxWidth: "100%" }}>
                       <video
                         key={videoSrc}
-                        ref={videoRef}
+                        ref={(node) => {
+                          videoRef.current = node;
+                          setVideoEl(node);
+                        }}
                         playsInline
                         preload="metadata"
+                        crossOrigin="anonymous"
                         src={videoSrc}
                         onLoadedMetadata={(event) => setVideoDuration(event.currentTarget.duration || 0)}
                         onTimeUpdate={(event) => { if (!playing) onTimeChange(event.currentTarget.currentTime); }}
-                        className="absolute inset-0 h-full w-full object-contain"
+                        className="absolute inset-0 h-full w-full will-change-transform"
+                        style={
+                          faceTrackingEnabled && faceTrack
+                            ? {
+                                objectFit: "cover",
+                                objectPosition: `${faceTrack.x}% ${faceTrack.y}%`,
+                                transform: `scale(${faceTrack.zoom})`,
+                                transformOrigin: `${faceTrack.x}% ${faceTrack.y}%`,
+                              }
+                            : { objectFit: "contain" }
+                        }
                       />
                       {captionsVisible ? (
                         <SubtitleOverlay
@@ -1049,6 +1101,12 @@ export default function ClipperEditor({
                           activeWordIndex={activeWordIndex}
                           onWordClick={(index) => onActiveWordIndex(index)}
                         />
+                      ) : null}
+                      {faceTrackingEnabled ? (
+                        <span className="pointer-events-none absolute left-2 top-2 z-[3] flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                          <ScanFace size={11} strokeWidth={2} />
+                          {faceTrack ? "Tracking" : "Finding face…"}
+                        </span>
                       ) : null}
                     </div>
                   </div>

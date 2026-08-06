@@ -4501,31 +4501,36 @@ body,
    Clyra Code — agent-first coding workspace theme
    ============================================================ */
 .clyra-code-root {
-  --app-background: #f7f7f6;
-  --sidebar-background: #f1f2f6;
-  --main-background: #ffffff;
+  --app-background: #f4f5f8;
+  --sidebar-background: #eef0f5;
+  --main-background: #fbfbfc;
   --preview-background: #ffffff;
-  --surface-muted: #f5f5f4;
-  --surface-hover: #ededeb;
-  --surface-selected: #e7e8ed;
-  --border-subtle: rgba(20, 20, 20, 0.075);
-  --border-medium: rgba(20, 20, 20, 0.12);
-  --text-primary: #171717;
-  --text-secondary: #656565;
-  --text-tertiary: #949494;
-  --text-disabled: #b5b5b5;
-  --accent-blue: #1769e0;
+  --composer-surface: #ffffff;
+  --surface-muted: #eef0f4;
+  --surface-hover: #e8eaef;
+  --surface-selected: #e2e6ef;
+  --border-subtle: rgba(24, 28, 40, 0.07);
+  --border-medium: rgba(24, 28, 40, 0.12);
+  --text-primary: #1a1d26;
+  --text-secondary: #5c6370;
+  --text-tertiary: #8b919c;
+  --text-disabled: #b0b5bf;
+  --accent-blue: #2b6ef2;
   --addition-green: #239653;
   --deletion-red: #d94b4b;
   --warning-amber: #b87918;
   --radius-row: 7px;
   --radius-control: 8px;
   --radius-tab: 8px;
-  --radius-input: 12px;
+  --radius-input: 14px;
   --radius-panel: 14px;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+  font-family: "Geist", "Geist Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-feature-settings: "ss01" on, "cv11" on;
+  letter-spacing: -0.011em;
   color: var(--text-primary);
   background: var(--app-background);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 .clyra-code-root .cc-mono {
@@ -5387,7 +5392,7 @@ body,
   --atlas-toolbar-bg: #fafbfb;
   --atlas-tab-active: #ffffff;
   --atlas-sidebar-bg: #fbfbfa;
-  --atlas-user-bubble: #f1f1ef;
+  --atlas-user-bubble: #f2f4f6;
   --atlas-text-primary: #202124;
   --atlas-text-secondary: #676b70;
   --atlas-text-tertiary: #96999d;

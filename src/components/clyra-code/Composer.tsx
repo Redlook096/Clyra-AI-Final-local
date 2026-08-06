@@ -15,7 +15,7 @@ export function Composer({
   onRemoveContext,
   onSubmit,
   onStop,
-  placeholder = "Ask for follow-up changes",
+  placeholder = "Ask me anything…",
 }: {
   running: boolean;
   model: string | null;
@@ -41,14 +41,14 @@ export function Composer({
   }, [value, contexts, onSubmit, onRemoveContext]);
 
   return (
-    <div className="px-4 pb-2 pt-1">
-      <div className="mx-auto max-w-[720px] rounded-[12px] border border-[color:var(--border-medium)] bg-white shadow-[0_2px_10px_rgba(15,23,42,0.04)]">
+    <div className="px-5 pb-3 pt-1">
+      <div className="mx-auto max-w-[680px] rounded-[16px] border border-[color:var(--border-subtle)] bg-[color:var(--composer-surface)] transition-[border-color,box-shadow] duration-150 focus-within:border-[color:var(--border-medium)] focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
         {contexts.length > 0 ? (
-          <div className="flex flex-wrap gap-1.5 px-3 pt-2.5">
+          <div className="flex flex-wrap gap-1.5 px-3.5 pt-2.5">
             {contexts.map((context) => (
               <span
                 key={context.id}
-                className="flex items-center gap-1 rounded-[6px] bg-[color:var(--surface-muted)] px-2 py-[3px] text-[11px] text-[color:var(--text-secondary)]"
+                className="flex items-center gap-1 rounded-[7px] bg-[color:var(--surface-muted)] px-2 py-[3px] text-[11.5px] text-[color:var(--text-secondary)]"
                 title={context.detail}
               >
                 {context.label}
@@ -67,13 +67,13 @@ export function Composer({
         <textarea
           ref={textareaRef}
           value={value}
-          rows={2}
+          rows={1}
           placeholder={placeholder}
           onChange={(event) => {
             setValue(event.target.value);
             const node = event.target;
             node.style.height = "auto";
-            node.style.height = `${Math.min(180, node.scrollHeight)}px`;
+            node.style.height = `${Math.min(160, node.scrollHeight)}px`;
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
@@ -81,15 +81,15 @@ export function Composer({
               submit();
             }
           }}
-          className="w-full resize-none bg-transparent px-3.5 pt-3 text-[13px] leading-[1.5] text-[color:var(--text-primary)] outline-none placeholder:text-[color:var(--text-tertiary)]"
+          className="w-full resize-none bg-transparent px-3.5 pt-3.5 text-[14px] leading-[1.5] tracking-[-0.01em] text-[color:var(--text-primary)] outline-none placeholder:text-[color:var(--text-tertiary)]"
         />
         <div className="flex items-center gap-2 px-2.5 pb-2.5 pt-1">
           <button
             type="button"
             aria-label="Add attachment"
-            className="rounded-[7px] p-1.5 text-[color:var(--text-tertiary)] transition-colors hover:bg-[color:var(--surface-hover)]"
+            className="rounded-[8px] p-1.5 text-[color:var(--text-tertiary)] transition-colors hover:bg-[color:var(--surface-hover)]"
           >
-            <Paperclip className="h-[15px] w-[15px]" strokeWidth={1.7} />
+            <Paperclip className="h-4 w-4" strokeWidth={1.7} />
           </button>
           {model ? (
             <span className="cc-mono text-[11px] text-[color:var(--text-tertiary)]">{model}</span>
@@ -100,7 +100,7 @@ export function Composer({
               type="button"
               onClick={onStop}
               aria-label="Stop"
-              className="flex h-[28px] w-[28px] items-center justify-center rounded-full bg-[color:var(--text-primary)] text-white transition-transform active:scale-[0.96]"
+              className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-[color:var(--text-primary)] text-white transition-transform active:scale-[0.96]"
             >
               <Square className="h-[11px] w-[11px]" fill="currentColor" />
             </button>
@@ -111,13 +111,13 @@ export function Composer({
               disabled={!value.trim()}
               aria-label="Send"
               className={cn(
-                "flex h-[28px] w-[28px] items-center justify-center rounded-full transition-all active:scale-[0.96]",
+                "flex h-[30px] w-[30px] items-center justify-center rounded-full transition-all active:scale-[0.96]",
                 value.trim()
                   ? "bg-[color:var(--accent-blue)] text-white"
                   : "bg-[color:var(--surface-muted)] text-[color:var(--text-disabled)]",
               )}
             >
-              <ArrowUp className="h-[14px] w-[14px]" strokeWidth={2.2} />
+              <ArrowUp className="h-[15px] w-[15px]" strokeWidth={2.2} />
             </button>
           )}
         </div>

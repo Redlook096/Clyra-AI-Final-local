@@ -27,15 +27,15 @@ export function ThinkingIndicator({
   onStop: () => void;
 }) {
   return (
-    <div className="flex items-center gap-2 py-1.5">
-      <ShiningBrainIcon />
-      <ShiningText text="Thinking" play className="text-[13px] font-medium" />
+    <div className="flex items-center gap-2 py-2">
+      <ShiningBrainIcon className="h-4 w-4" />
+      <ShiningText text="Thinking" play className="text-[14px] font-medium tracking-[-0.01em]" />
       <ThinkingDots />
       <ElapsedSeconds since={startedAt} />
       <button
         type="button"
         onClick={onStop}
-        className="ml-1 rounded-[7px] border border-[color:var(--border-medium)] px-2 py-[2px] text-[11px] font-medium text-[color:var(--text-secondary)] transition-colors hover:bg-[color:var(--surface-hover)]"
+        className="ml-1 rounded-[8px] border border-[color:var(--border-medium)] px-2.5 py-[3px] text-[11.5px] font-medium text-[color:var(--text-secondary)] transition-colors hover:bg-[color:var(--surface-hover)]"
       >
         Stop
       </button>
@@ -153,13 +153,13 @@ export function Conversation({
   const showCompletion = state.runState === "complete" && state.diffs.length > 0;
 
   return (
-    <div ref={scrollRef} className="cc-scroll min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-3">
-      <div className="mx-auto flex max-w-[720px] flex-col">
+    <div ref={scrollRef} className="cc-scroll min-h-0 flex-1 overflow-y-auto px-6 pb-5 pt-4">
+      <div className="mx-auto flex max-w-[680px] flex-col">
         {state.log.map((entry) => {
           if (entry.type === "user") {
             return (
-              <div key={entry.id} className="my-2.5 flex justify-end">
-                <div className="max-w-[85%] rounded-[12px] bg-[color:var(--surface-muted)] px-3.5 py-2 text-[13px] leading-[1.55] text-[color:var(--text-primary)]">
+              <div key={entry.id} className="my-3 flex justify-end">
+                <div className="max-w-[82%] rounded-[14px] bg-[color:var(--surface-muted)] px-3.5 py-2.5 text-[14px] leading-[1.55] tracking-[-0.01em] text-[color:var(--text-primary)]">
                   {entry.text}
                 </div>
               </div>
@@ -170,8 +170,8 @@ export function Conversation({
               <div
                 key={entry.id}
                 className={cn(
-                  "my-1.5 text-[13px] leading-[1.6] text-[color:var(--text-primary)]",
-                  "[&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_pre]:my-2 [&_code]:text-[12px]",
+                  "my-2 text-[14px] leading-[1.65] tracking-[-0.011em] text-[color:var(--text-primary)]",
+                  "[&_p]:my-2 [&_ul]:my-2 [&_ol]:my-2 [&_pre]:my-2.5 [&_code]:text-[12.5px]",
                 )}
               >
                 <MarkdownMessageContent content={entry.text} />

@@ -660,9 +660,17 @@ export default function WebBrowserWorkspace() {
   const [sideView, setSideView] = useState<SideView>("agent");
   const [sideOpen, setSideOpen] = useState(true);
   const [omniboxFocused, setOmniboxFocused] = useState(false);
-  const [agentDemo] = useState(
-    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("browserDemo") === "agent",
-  );
+  const [agentDemo] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const mode = new URLSearchParams(window.location.search).get("browserDemo");
+    return mode === "agent" || mode === "ebay";
+  });
+  const [agentDemoKind] = useState(() => {
+    if (typeof window === "undefined") return "agent" as const;
+    return new URLSearchParams(window.location.search).get("browserDemo") === "ebay"
+      ? ("ebay" as const)
+      : ("agent" as const);
+  });
   const [agentStatus, setAgentStatus] = useState("Ready");
   const [agentPhase, setAgentPhase] = useState<AgentStatus>("idle");
   const [liveSteps, setLiveSteps] = useState<string[]>([]);
@@ -848,6 +856,25 @@ export default function WebBrowserWorkspace() {
 
   useEffect(() => {
     if (!agentDemo) return;
+    if (agentDemoKind === "ebay") {
+      setMessagesState((current) => current.length ? current : [{
+        id: "demo-user",
+        role: "user",
+        content: "Look at MacBook M2 on eBay and compare the best listings.",
+      }, {
+        id: "demo-assistant",
+        role: "assistant",
+        content: "I'll open eBay, search for MacBook M2 laptops, and compare condition, price, and seller ratings.",
+      }]);
+      setRunTask("Searching MacBook M2 on eBay");
+      setAgentPhase("executing");
+      setAgentStatus("Opening eBay listings");
+      void requestBrowser("/api/openbrowser/navigate", {
+        body: { target: "https://www.ebay.com/sch/i.html?_nkw=MacBook+M2&_sacat=0" },
+        quiet: true,
+      }).catch(() => undefined);
+      return;
+    }
     setMessagesState((current) => current.length ? current : [{
       id: "demo-user",
       role: "user",
@@ -860,7 +887,7 @@ export default function WebBrowserWorkspace() {
     setRunTask("Fulfilling beach essentials request");
     setAgentPhase("executing");
     setAgentStatus("Comparing sunscreen");
-  }, [agentDemo]);
+  }, [agentDemo, agentDemoKind, requestBrowser]);
 
   useEffect(() => {
     const timer = window.setInterval(() => void syncAgentSession(), isAgentBusy ? 650 : 2_400);
@@ -1232,11 +1259,17 @@ export default function WebBrowserWorkspace() {
   const aiInControl = agentDemo
     || (["planning", "observing", "executing", "verifying", "recovering"].includes(agentPhase) && !browserState?.agent.manualControl);
   const agentTaskTitle = agentDemo
-    ? "Fulfilling beach essentials request"
+    ? (agentDemoKind === "ebay" ? "Searching MacBook M2 on eBay" : "Fulfilling beach essentials request")
     : (runTask || browserState?.agent.task || agentStatus || "Working");
   const restingHost = pageHost || "Search or enter address";
   const demoCursor = agentDemo
-    ? { x: Math.round((browserState?.viewport.width || 1440) * 0.42), y: Math.round((browserState?.viewport.height || 900) * 0.38), kind: "move" as const, label: "Searching for sunscreen", id: 1 }
+    ? {
+        x: Math.round((browserState?.viewport.width || 1440) * (agentDemoKind === "ebay" ? 0.48 : 0.42)),
+        y: Math.round((browserState?.viewport.height || 900) * (agentDemoKind === "ebay" ? 0.44 : 0.38)),
+        kind: "move" as const,
+        label: agentDemoKind === "ebay" ? "Opening MacBook M2 listing" : "Searching for sunscreen",
+        id: 1,
+      }
     : null;
   const liveCursor = cursor && isAgentBusy ? cursor : demoCursor;
 
@@ -1768,10 +1801,10 @@ export default function WebBrowserWorkspace() {
                           className={cn("flex", message.role === "user" && "clyra-browser-user-message-entry origin-bottom-right justify-end")}
                         >
                           <div className={cn(
-                            "max-w-[92%] text-[11.5px] font-medium leading-[1.55]",
+                            "max-w-[92%] text-[13.5px] leading-[1.55] tracking-[-0.01em]",
                             message.role === "user"
-                              ? "rounded-[10px] bg-[var(--atlas-user-bubble)] px-2.5 py-1.5 text-[var(--atlas-text-primary)]"
-                              : "max-w-full pr-1 text-[var(--atlas-text-primary)]",
+                              ? "rounded-[14px] bg-[var(--atlas-user-bubble)] px-3.5 py-2.5 font-normal text-[var(--atlas-text-primary)]"
+                              : "max-w-full pr-1 font-normal text-[var(--atlas-text-primary)]",
                           )}>
                             <p className="whitespace-pre-wrap">
                               {message.role === "assistant" ? (
@@ -1806,11 +1839,26 @@ export default function WebBrowserWorkspace() {
 
                       {showAgentChrome ? (
                         <AgentRunSection
-                          task={agentDemo ? "Find well-rated sunscreen, beach towels and a bucket hat" : (runTask || browserState?.agent.task || "")}
+                          task={agentDemo
+                            ? (agentDemoKind === "ebay"
+                              ? "Look at MacBook M2 on eBay and compare the best listings"
+                              : "Find well-rated sunscreen, beach towels and a bucket hat")
+                            : (runTask || browserState?.agent.task || "")}
                           active={showAgentChrome}
-                          phase={agentDemo ? "executing" : agentPhase}
-                          statusText={agentDemo ? "Comparing sunscreen" : agentStatus}
-                          plan={agentDemo ? {
+                          phase={agentDemo ? (agentDemoKind === "ebay" ? "observing" : "executing") : agentPhase}
+                          statusText={agentDemo
+                            ? (agentDemoKind === "ebay" ? "Thinking" : "Comparing sunscreen")
+                            : agentStatus}
+                          plan={agentDemo ? (agentDemoKind === "ebay" ? {
+                            goal: "MacBook M2 on eBay",
+                            successCriteria: ["Search results open", "Listings compared", "Best pick noted"],
+                            steps: [
+                              { id: "1", label: "Opened eBay search", status: "complete" },
+                              { id: "2", label: "Filtering MacBook M2", status: "complete" },
+                              { id: "3", label: "Comparing top listings", status: "active" },
+                              { id: "4", label: "Summarise best options", status: "pending" },
+                            ],
+                          } : {
                             goal: "Beach essentials",
                             successCriteria: ["Sunscreen added", "Towels added", "Hat added"],
                             steps: [
@@ -1819,7 +1867,7 @@ export default function WebBrowserWorkspace() {
                               { id: "3", label: "Comparing sunscreen", status: "active" },
                               { id: "4", label: "Adding beach towels", status: "pending" },
                             ],
-                          } : plan}
+                          }) : plan}
                           items={runItems}
                           paused={agentPhase === "paused"}
                           manualControl={Boolean(browserState?.agent.manualControl)}
@@ -2083,16 +2131,19 @@ function ActionRow({ item, reducedMotion }: { item: Extract<RunItem, { kind: "ac
   const [detailsOpen, setDetailsOpen] = useState(false);
   const Icon = ACTION_ICONS[item.icon] || Sparkles;
   return (
-    <motion.div initial={{ opacity: 0, x: -3 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.14 }} className="px-1 py-0.5">
+    <motion.div initial={{ opacity: 0, x: -3 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.14 }} className="px-0.5 py-0.5">
       <div className="flex items-center gap-2">
-        <Icon className="h-3 w-3 shrink-0 text-[var(--atlas-text-tertiary)]" />
-        <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[var(--atlas-text-primary)]">{item.label}</span>
+        <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--atlas-text-tertiary)]" />
+        <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium tracking-[-0.01em] text-[var(--atlas-text-primary)]">
+          <span className="text-[color:var(--atlas-clyra-blue,#2b6ef2)]">{item.label.split(" ")[0]}</span>
+          {item.label.includes(" ") ? ` ${item.label.slice(item.label.indexOf(" ") + 1)}` : ""}
+        </span>
         {item.status === "running" ? (
-          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-[var(--atlas-text-tertiary)]" />
+          <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--atlas-clyra-blue)]" />
         ) : item.status === "success" ? (
-          <CircleCheck className="h-3 w-3 shrink-0 text-emerald-500" />
+          <CircleCheck className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
         ) : (
-          <CircleX className="h-3 w-3 shrink-0 text-rose-500" />
+          <CircleX className="h-3.5 w-3.5 shrink-0 text-rose-500" />
         )}
         <button type="button" onClick={() => setDetailsOpen((value) => !value)} aria-label="Toggle action details" className="grid h-4 w-4 shrink-0 place-items-center rounded text-[var(--atlas-text-tertiary)] hover:text-[var(--atlas-text-secondary)]">
           <ChevronDown className={cn("h-3 w-3 transition-transform duration-150", detailsOpen && "rotate-180")} />
@@ -2238,11 +2289,11 @@ function AgentRunSection({
       {!active && completeItem ? <CompletionCard item={completeItem} reducedMotion={reducedMotion} /> : null}
 
       {thinking ? (
-        <div className="flex items-center gap-2 px-1 py-0.5">
-          <ShiningBrainIcon className="h-3.5 w-3.5 shrink-0" />
-          <ShiningText text={statusText || "Thinking"} preset="thinkingChat" play={!reducedMotion} className="min-w-0 flex-1 truncate !text-[11px]" />
+        <div className="flex items-center gap-2 px-0.5 py-1.5">
+          <ShiningBrainIcon className="h-4 w-4 shrink-0" />
+          <ShiningText text={statusText || "Thinking"} preset="thinkingChat" play={!reducedMotion} className="min-w-0 flex-1 truncate text-[14px] font-medium tracking-[-0.01em]" />
           <ThinkingDots />
-          {factCount > 0 ? <span className="shrink-0 text-[9px] font-medium text-[var(--atlas-text-tertiary)]">{factCount} facts</span> : null}
+          {factCount > 0 ? <span className="shrink-0 text-[11px] font-medium text-[var(--atlas-text-tertiary)]">{factCount} facts</span> : null}
         </div>
       ) : null}
     </motion.section>

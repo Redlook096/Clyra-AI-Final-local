@@ -100,7 +100,7 @@ export function AgentActionRow({
     >
       <div
         className={cn(
-          "grid min-h-[24px] items-center gap-x-1.5 py-[2px] text-[12.5px] leading-[1.45]",
+          className="grid min-h-[26px] items-center gap-x-1.5 py-[3px] text-[13px] leading-[1.5] tracking-[-0.01em]",
           "grid-cols-[auto_minmax(0,1fr)_auto]",
           hasDetails && "cursor-pointer",
         )}
@@ -125,7 +125,7 @@ export function AgentActionRow({
             active={isActive}
             tone={isFileAction ? "blue" : "neutral"}
             mono={isMonoTarget}
-            className={cn("text-[12.5px]", isFileAction && !isActive && "text-[#3a5b96]")}
+            className={cn("text-[12.5px] tracking-[-0.01em]", isFileAction && !isActive && "text-[#3a5b96]")}
           />
           {isFileAction ? (
             <DiffCounters

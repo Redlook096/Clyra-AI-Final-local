@@ -330,8 +330,8 @@ const DEFAULT_DRAFT: ClipDraft = {
   // Transcript-first clipping should remain fast by default. Continuous
   // person tracking is optional and can be selected in Look when a moving
   // subject crop is worth the extra local analysis time.
-  faceTracking: "off",
-  trackingPreset: "none",
+  faceTracking: "responsive",
+  trackingPreset: "auto",
   sceneMode: "flexible",
   selectedPersonId: "",
   captionsEnabled: true,
@@ -1885,10 +1885,31 @@ export default function AIClipper({
                   ) : null}
                   <Toggle label="Remove filler words" detail="Hide common fillers without cutting the audio." checked={draft.removeFillers} onChange={(value) => updateDraft("removeFillers", value)} />
                   <div className="border-b border-slate-100 pb-5">
-                    <p className="text-[12px] font-medium text-slate-800">Subject tracking</p>
-                    <p className="mt-0.5 text-[10px] leading-4 text-slate-400">Clyra plans a timestamped crop path from the detected subject. If confidence drops, it holds or widens the composition rather than jumping to another face.</p>
-                    <div className="mt-3"><FaceTrackingPresetControl value={trackingPreset} onChange={setFaceTrackingPreset} /></div>
-                    {trackingPreset === "select" && draft.source.mode === "upload" ? (
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[12px] font-medium text-slate-800">Face tracking</p>
+                        <p className="mt-0.5 text-[10px] leading-4 text-slate-400">
+                          Centres the vertical frame on the subject and follows nods and pans smoothly with MediaPipe (open source). No lag in preview.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={draft.faceTracking !== "off"}
+                        aria-label="Face tracking"
+                        onClick={() => setFaceTrackingPreset(draft.faceTracking === "off" ? "auto" : "none")}
+                        className={cn(
+                          "relative mt-0.5 h-[22px] w-[40px] shrink-0 rounded-full transition-colors duration-150",
+                          draft.faceTracking !== "off" ? "bg-[#1677FF]" : "bg-slate-200",
+                        )}
+                      >
+                        <span
+                          className="absolute top-[3px] h-[16px] w-[16px] rounded-full bg-white shadow-sm transition-[left] duration-150"
+                          style={{ left: draft.faceTracking !== "off" ? 21 : 3 }}
+                        />
+                      </button>
+                    </div>
+                    {draft.faceTracking !== "off" && draft.source.mode === "upload" ? (
                       <button
                         type="button"
                         disabled={!draft.source.uploadId || peopleScanning}
@@ -1898,7 +1919,7 @@ export default function AIClipper({
                         {peopleScanning ? "Scanning people…" : "Scan people in upload"}
                       </button>
                     ) : null}
-                    {trackingPreset === "select" && wizardPeople.length ? (
+                    {draft.faceTracking !== "off" && wizardPeople.length ? (
                       <div className="mt-3 flex flex-wrap gap-2" aria-label="Detected people">
                         {wizardPeople.map((person) => {
                           const id = person.personId || person.id;
@@ -2507,6 +2528,8 @@ export default function AIClipper({
       exportBusy={exportState !== "idle"}
       error={error}
       onDismissError={() => setError("")}
+      faceTrackingEnabled={draft.faceTracking !== "off"}
+      onFaceTrackingChange={(enabled) => setFaceTrackingPreset(enabled ? "auto" : "none")}
     />
   );
 
