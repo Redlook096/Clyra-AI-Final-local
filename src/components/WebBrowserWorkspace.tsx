@@ -658,8 +658,11 @@ export default function WebBrowserWorkspace() {
   const [isBrowserBusy, setIsBrowserBusy] = useState(false);
   const [isAgentBusy, setIsAgentBusy] = useState(false);
   const [sideView, setSideView] = useState<SideView>("agent");
-  const [sideOpen, setSideOpen] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1024);
+  const [sideOpen, setSideOpen] = useState(true);
   const [omniboxFocused, setOmniboxFocused] = useState(false);
+  const [agentDemo] = useState(
+    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("browserDemo") === "agent",
+  );
   const [agentStatus, setAgentStatus] = useState("Ready");
   const [agentPhase, setAgentPhase] = useState<AgentStatus>("idle");
   const [liveSteps, setLiveSteps] = useState<string[]>([]);
@@ -842,6 +845,22 @@ export default function WebBrowserWorkspace() {
   useEffect(() => {
     window.localStorage.setItem(BROWSER_CHAT_STORAGE, JSON.stringify(messages));
   }, [messages]);
+
+  useEffect(() => {
+    if (!agentDemo) return;
+    setMessagesState((current) => current.length ? current : [{
+      id: "demo-user",
+      role: "user",
+      content: "Find well-rated sunscreen, beach towels and a bucket hat for a beach day.",
+    }, {
+      id: "demo-assistant",
+      role: "assistant",
+      content: "The usual. I’ll grab well-rated SPF 50 sunscreen, towels they love, and a sturdy bucket hat so you can enjoy the day.",
+    }]);
+    setRunTask("Fulfilling beach essentials request");
+    setAgentPhase("executing");
+    setAgentStatus("Comparing sunscreen");
+  }, [agentDemo]);
 
   useEffect(() => {
     const timer = window.setInterval(() => void syncAgentSession(), isAgentBusy ? 650 : 2_400);
@@ -1207,11 +1226,19 @@ export default function WebBrowserWorkspace() {
   const pageContextReady = Boolean((activeTab?.url || browserState?.url) && (activeTab?.title || browserState?.title));
   const latestSteps = liveSteps.length ? liveSteps : [...messages].reverse().find((message) => message.steps?.length)?.steps || [];
   const frameUrl = browserState
-    ? `/api/openbrowser/frame?${isAgentBusy ? "fresh=1&" : ""}v=${browserState.frameVersion}&t=${frameTick}`
+    ? `/api/openbrowser/frame?${isAgentBusy || agentDemo ? "fresh=1&" : ""}v=${browserState.frameVersion}&t=${frameTick}`
     : "";
-  const aiInControl = ["planning", "observing", "executing", "verifying", "recovering"].includes(agentPhase) && !browserState?.agent.manualControl;
-  const agentTaskTitle = runTask || browserState?.agent.task || agentStatus || "Working";
+  const showAgentChrome = isAgentBusy || agentDemo;
+  const aiInControl = agentDemo
+    || (["planning", "observing", "executing", "verifying", "recovering"].includes(agentPhase) && !browserState?.agent.manualControl);
+  const agentTaskTitle = agentDemo
+    ? "Fulfilling beach essentials request"
+    : (runTask || browserState?.agent.task || agentStatus || "Working");
   const restingHost = pageHost || "Search or enter address";
+  const demoCursor = agentDemo
+    ? { x: Math.round((browserState?.viewport.width || 1440) * 0.42), y: Math.round((browserState?.viewport.height || 900) * 0.38), kind: "move" as const, label: "Searching for sunscreen", id: 1 }
+    : null;
+  const liveCursor = cursor && isAgentBusy ? cursor : demoCursor;
 
   const openSideView = (view: SideView) => {
     setSideView(view);
@@ -1312,13 +1339,13 @@ export default function WebBrowserWorkspace() {
           <IconButton label={browserState?.loading ? "Stop loading" : "Reload"} onClick={() => void performAction({ type: browserState?.loading ? "stop_loading" : "reload" })} className="h-7 w-7">
             {browserState?.loading ? <X className="h-3.5 w-3.5" /> : <RefreshCw className={cn("h-3.5 w-3.5", isBrowserBusy && "animate-spin")} />}
           </IconButton>
-          <form onSubmit={(event) => void navigate(event)} className="min-w-0 flex-1 px-1">
+          <form onSubmit={(event) => void navigate(event)} className="relative min-w-0 flex-1 px-1">
             <div
               className={cn(
-                "group/omnibox flex h-7 items-center transition-[background-color,box-shadow,border-radius] duration-150",
+                "group/omnibox flex h-7 items-center transition-[background-color,box-shadow,border-radius,width] duration-150",
                 omniboxFocused
-                  ? "gap-1.5 rounded-md bg-white px-2 shadow-[inset_0_0_0_1px_var(--atlas-divider)]"
-                  : "justify-center gap-0 rounded-none bg-transparent px-2",
+                  ? "w-full gap-1.5 rounded-md bg-white px-2 shadow-[inset_0_0_0_1px_var(--atlas-divider)]"
+                  : "mx-auto w-fit max-w-[240px] justify-center gap-0 rounded-none bg-transparent px-1",
               )}
             >
               {omniboxFocused ? (
@@ -1407,13 +1434,14 @@ export default function WebBrowserWorkspace() {
               setSideOpen((value) => (sideView === "agent" ? !value : true));
             }}
             className={cn(
-              "ml-0.5 flex h-[25px] shrink-0 items-center gap-1 rounded-[7px] px-2.5 text-[11px] font-semibold transition-[background-color,color] duration-150",
+              "ml-0.5 flex h-[25px] shrink-0 items-center gap-1 rounded-[7px] px-2 text-[10.5px] font-medium transition-[background-color,color] duration-150",
               sideOpen && sideView === "agent"
-                ? "bg-[color-mix(in_srgb,var(--atlas-clyra-blue)_22%,white)] text-[#3d6fb8]"
-                : "bg-[color-mix(in_srgb,var(--atlas-clyra-blue)_14%,white)] text-[#4a7ec4] hover:bg-[color-mix(in_srgb,var(--atlas-clyra-blue)_22%,white)]",
+                ? "bg-black/[0.04] text-[var(--atlas-clyra-blue)]"
+                : "bg-transparent text-[var(--atlas-clyra-blue)] hover:bg-black/[0.035]",
             )}
             aria-label={sideOpen ? "Hide Ask Clyra" : "Ask Clyra"}
           >
+            <Sparkles className="h-3 w-3 opacity-80" />
             Ask Clyra
           </button>
         </div>
@@ -1492,15 +1520,15 @@ export default function WebBrowserWorkspace() {
             </AnimatePresence>
 
             <AnimatePresence>
-              {cursor && isAgentBusy && settings.showAiCursor && !browserState?.agent.manualControl ? (
+              {liveCursor && showAgentChrome && settings.showAiCursor && !browserState?.agent.manualControl ? (
                 <motion.div
                   key="browser-ai-cursor"
                   initial={settings.reducedMotion ? false : { opacity: 0, scale: 0.9 }}
                   animate={{
                     opacity: 1,
-                    scale: cursor.kind === "click" || cursor.kind === "double_click" ? [1, 0.88, 1] : 1,
-                    left: `${(cursor.x / (browserState?.viewport.width || 1440)) * 100}%`,
-                    top: `${(cursor.y / (browserState?.viewport.height || 900)) * 100}%`,
+                    scale: liveCursor.kind === "click" || liveCursor.kind === "double_click" ? [1, 0.88, 1] : 1,
+                    left: `${(liveCursor.x / (browserState?.viewport.width || 1440)) * 100}%`,
+                    top: `${(liveCursor.y / (browserState?.viewport.height || 900)) * 100}%`,
                   }}
                   exit={{ opacity: 0, scale: 0.92 }}
                   transition={{
@@ -1512,11 +1540,11 @@ export default function WebBrowserWorkspace() {
                   className="clyra-browser-agent-cursor pointer-events-none absolute z-20 -translate-x-[3px] -translate-y-[2px]"
                 >
                   <MousePointer2 className="relative h-[17px] w-[17px] fill-[#2a2b2a] text-[#2a2b2a] [filter:drop-shadow(0_1px_2px_rgba(0,0,0,.28))]" />
-                  {settings.showAiActionLabels && cursor.label ? (
-                    <span className="absolute left-4 top-4 whitespace-nowrap rounded-[5px] bg-[var(--atlas-agent-black)] px-1.5 py-0.5 text-[10px] font-medium leading-none text-white">{cursor.label}</span>
+                  {settings.showAiActionLabels && liveCursor.label ? (
+                    <span className="absolute left-4 top-4 whitespace-nowrap rounded-[5px] bg-[var(--atlas-agent-black)] px-1.5 py-0.5 text-[10px] font-medium leading-none text-white">{liveCursor.label}</span>
                   ) : null}
-                  {(cursor.kind === "click" || cursor.kind === "double_click") ? (
-                    <span key={cursor.id} className="absolute left-[2px] top-[1px]" aria-hidden>
+                  {(liveCursor.kind === "click" || liveCursor.kind === "double_click") ? (
+                    <span key={liveCursor.id} className="absolute left-[2px] top-[1px]" aria-hidden>
                       <span className="absolute h-2.5 w-2.5 animate-ping rounded-full bg-black/25 [animation-duration:0.55s]" />
                     </span>
                   ) : null}
@@ -1544,7 +1572,7 @@ export default function WebBrowserWorkspace() {
 
             {/* Floating Atlas agent bar over webpage */}
             <AnimatePresence>
-              {isAgentBusy ? (
+              {showAgentChrome ? (
                 <motion.div
                   initial={{ opacity: 0, y: 8, scale: 0.98 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -1606,9 +1634,13 @@ export default function WebBrowserWorkspace() {
             </AnimatePresence>
 
             {error ? (
-              <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="absolute inset-x-4 bottom-4 z-30 flex items-center gap-3 rounded-lg border border-red-200 bg-white px-3 py-2.5 text-[11px] font-medium text-red-600 shadow-lg">
-                <span className="min-w-0 flex-1">{error}</span>
-                <button type="button" onClick={() => void loadState()} className="font-semibold text-[var(--atlas-text-primary)]">Retry</button>
+              <motion.div
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="absolute inset-x-4 bottom-4 z-30 flex max-w-xl items-start gap-3 rounded-lg border border-red-200/90 bg-white/95 px-3 py-2 text-[11px] font-medium text-red-600 shadow-[0_8px_24px_rgba(15,23,42,.12)] backdrop-blur-sm"
+              >
+                <span className="min-w-0 flex-1 line-clamp-3">{error.split("╔")[0]?.trim() || error}</span>
+                <button type="button" onClick={() => void loadState()} className="shrink-0 font-semibold text-[var(--atlas-text-primary)]">Retry</button>
               </motion.div>
             ) : null}
           </div>
@@ -1772,13 +1804,22 @@ export default function WebBrowserWorkspace() {
                         );
                       })}
 
-                      {isAgentBusy ? (
+                      {showAgentChrome ? (
                         <AgentRunSection
-                          task={runTask || browserState?.agent.task || ""}
-                          active={isAgentBusy}
-                          phase={agentPhase}
-                          statusText={agentStatus}
-                          plan={plan}
+                          task={agentDemo ? "Find well-rated sunscreen, beach towels and a bucket hat" : (runTask || browserState?.agent.task || "")}
+                          active={showAgentChrome}
+                          phase={agentDemo ? "executing" : agentPhase}
+                          statusText={agentDemo ? "Comparing sunscreen" : agentStatus}
+                          plan={agentDemo ? {
+                            goal: "Beach essentials",
+                            successCriteria: ["Sunscreen added", "Towels added", "Hat added"],
+                            steps: [
+                              { id: "1", label: "Opened shopping site", status: "complete" },
+                              { id: "2", label: "Set delivery location", status: "complete" },
+                              { id: "3", label: "Comparing sunscreen", status: "active" },
+                              { id: "4", label: "Adding beach towels", status: "pending" },
+                            ],
+                          } : plan}
                           items={runItems}
                           paused={agentPhase === "paused"}
                           manualControl={Boolean(browserState?.agent.manualControl)}

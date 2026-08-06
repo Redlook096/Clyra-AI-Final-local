@@ -5397,7 +5397,7 @@ body,
   --atlas-stop-red: #dd5e58;
   --atlas-titlebar-height: 30px;
   --atlas-toolbar-height: 32px;
-  --atlas-sidebar-width: clamp(300px, 27.2vw, 410px);
+  --atlas-sidebar-width: clamp(286px, 26.5vw, 380px);
 }
 
 .clyra-browser-ai-control {
