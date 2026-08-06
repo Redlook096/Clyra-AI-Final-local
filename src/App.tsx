@@ -5579,6 +5579,8 @@ Please analyze the code you just wrote and fix this error.`;
       ? "clip"
       : isBrowserWorkspace
         ? "browser"
+        : isCompanionWorkspace
+          ? "companion"
         : isStudyWorkspace
           ? "study"
         : creatorMode ??
@@ -5614,6 +5616,7 @@ Please analyze the code you just wrote and fix this error.`;
   const workflowTabsRestingVisible =
     !isCreatorWorkspace &&
     !isBrowserWorkspace &&
+    !isCompanionWorkspace &&
     !isStudyWorkspace &&
     !isClipWorkspace;
   const showWorkflowTabs =
@@ -5633,7 +5636,7 @@ Please analyze the code you just wrote and fix this error.`;
       ? Math.max(420, viewportWidth - sidebarClearancePx)
       : viewportWidth;
   const centeredContentWidth =
-    isBrowserWorkspace || isStudyWorkspace
+    isBrowserWorkspace || isCompanionWorkspace || isStudyWorkspace
       ? Math.min(1280, Math.max(0, effectiveWorkspaceViewport - 32))
       : isClipWorkspace
         ? Math.min(820, Math.max(0, effectiveWorkspaceViewport - 32))
