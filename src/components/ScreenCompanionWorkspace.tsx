@@ -1,9 +1,17 @@
 /**
- * Screen Companion web preview — OpenCluely glass UI language,
- * wired to Clyra RapidOCR + optional Electron overlay / guide pointer / control.
+ * Screen Companion — light, minimal OpenCluely-style workspace.
+ * Wired to Clyra RapidOCR + optional Electron overlay / guide / control.
  */
 import { useCallback, useState } from "react";
-import { Eye, MousePointer2, MonitorSmartphone, Sparkles } from "lucide-react";
+import {
+  ArrowUp,
+  Eye,
+  Mic,
+  MonitorSmartphone,
+  MousePointer2,
+  Sparkles,
+  Target,
+} from "lucide-react";
 import { cn } from "../lib/utils";
 import { getElectronDesktop } from "../lib/electron-runtime";
 import { VoiceWaveform } from "./voice/VoiceWaveform";
@@ -23,19 +31,14 @@ function speakReply(text: string) {
 export default function ScreenCompanionWorkspace() {
   const [messages, setMessages] = useState<Message[]>([
     {
-      id: "welcome",
-      role: "system",
-      text: "OpenCluely-style overlay · Clyra RapidOCR vision. Guide points without clicking; Control drives the OS cursor. No stealth.",
-    },
-    {
       id: "hello",
       role: "assistant",
-      text: "Ask what you’re looking at, or say “show me where to click” and I’ll point with a visible cursor.",
+      text: "Hello — ask what’s on your screen, or say “show me where to click” and I’ll point.",
     },
   ]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [mode, setMode] = useState<"talk" | "message">("talk");
+  const [mode, setMode] = useState<"talk" | "message">("message");
   const [demoMode, setDemoMode] = useState<"off" | "guide" | "ai" | "user">("off");
   const [pointer, setPointer] = useState<{ x: number; y: number; label: string } | null>(null);
   const [listeningDemo, setListeningDemo] = useState(false);
@@ -58,7 +61,7 @@ export default function ScreenCompanionWorkspace() {
         payload.text || payload?.choices?.[0]?.message?.content || payload.error || "No reply",
       );
       setMessages((prev) => [...prev, { id: `a-${Date.now()}`, role: "assistant", text }]);
-      if (/\b(where|point|show me|click|press|tap|guide)\b/i.test(question)) {
+      if (/\b(where|point|show me|click|press|tap|guide|screen)\b/i.test(question)) {
         setDemoMode("guide");
         setPointer({ x: 58, y: 42, label: "Look here" });
       }
@@ -79,90 +82,107 @@ export default function ScreenCompanionWorkspace() {
 
   return (
     <div
-      className="relative flex h-full min-h-0 overflow-hidden"
+      className="companion-shell relative flex h-full min-h-0 overflow-hidden bg-[color:var(--clyra-canvas,#f4f5f7)]"
       style={{
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-        background:
-          "radial-gradient(1200px 600px at 20% 0%, rgba(59,130,246,0.14), transparent 55%), radial-gradient(900px 500px at 90% 20%, rgba(16,185,129,0.1), transparent 50%), #0b0c10",
+        fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        backgroundImage:
+          "radial-gradient(900px 420px at 50% 0%, rgba(0,82,251,0.06), transparent 55%), radial-gradient(700px 360px at 100% 100%, rgba(15,23,42,0.03), transparent 50%)",
       }}
     >
-      {/* OpenCluely-style floating command tab */}
+      {/* Floating command pill — light glass */}
       <div className="pointer-events-none absolute inset-x-0 top-4 z-30 flex justify-center">
-        <div className="pointer-events-auto flex h-[34px] items-center gap-1 rounded-[10px] border border-white/15 bg-black/45 px-2 text-[11px] font-semibold text-white/90 shadow-[0_8px_28px_rgba(0,0,0,0.35)] backdrop-blur-xl">
+        <div className="pointer-events-auto flex h-9 items-center gap-0.5 rounded-full border border-[color:var(--clyra-border,#e5e7eb)] bg-white/90 px-1.5 text-[11.5px] font-medium text-[color:var(--clyra-text,#111827)] shadow-[0_8px_28px_rgba(15,23,42,0.08)] backdrop-blur-xl">
           <button
             type="button"
-            className="rounded-[7px] px-2.5 py-1 hover:bg-white/10"
+            className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[color:var(--clyra-text-secondary,#6b7280)] transition-colors hover:bg-[color:var(--clyra-hover,#f3f4f6)] hover:text-[color:var(--clyra-text,#111827)]"
             onClick={() => {
               setMessages((prev) => [
                 ...prev,
-                { id: `s-${Date.now()}`, role: "system", text: "See screen uses RapidOCR in Electron. Web preview shows the same UI." },
+                {
+                  id: `s-${Date.now()}`,
+                  role: "system",
+                  text: "See screen uses RapidOCR in Electron. This web preview uses the same light UI.",
+                },
               ]);
             }}
           >
-            📷 <span className="text-white/55">See</span>
+            <Eye className="h-3.5 w-3.5" strokeWidth={1.75} />
+            See
           </button>
-          <span className="h-3.5 w-px bg-gradient-to-b from-transparent via-white/30 to-transparent" />
-          <button
-            type="button"
-            className={cn("rounded-[7px] px-2.5 py-1 hover:bg-white/10", listeningDemo && "text-[#ff4757]")}
-            onClick={() => setListeningDemo((v) => !v)}
-          >
-            🎙
-          </button>
-          <span className="h-3.5 w-px bg-gradient-to-b from-transparent via-white/30 to-transparent" />
+          <span className="h-3.5 w-px bg-[color:var(--clyra-border,#e5e7eb)]" />
           <button
             type="button"
             className={cn(
-              "rounded-[7px] px-2.5 py-1 hover:bg-white/10",
-              demoMode === "guide" && "bg-emerald-500/15 text-emerald-300",
+              "flex items-center gap-1.5 rounded-full px-3 py-1.5 transition-colors hover:bg-[color:var(--clyra-hover,#f3f4f6)]",
+              listeningDemo
+                ? "text-[color:var(--clyra-accent,#0052fb)]"
+                : "text-[color:var(--clyra-text-secondary,#6b7280)] hover:text-[color:var(--clyra-text,#111827)]",
+            )}
+            onClick={() => setListeningDemo((v) => !v)}
+            aria-label="Toggle listening"
+          >
+            <Mic className="h-3.5 w-3.5" strokeWidth={1.75} />
+          </button>
+          <span className="h-3.5 w-px bg-[color:var(--clyra-border,#e5e7eb)]" />
+          <button
+            type="button"
+            className={cn(
+              "flex items-center gap-1.5 rounded-full px-3 py-1.5 transition-colors",
+              demoMode === "guide"
+                ? "bg-[color:var(--clyra-accent,#0052fb)]/10 text-[color:var(--clyra-accent,#0052fb)]"
+                : "text-[color:var(--clyra-text-secondary,#6b7280)] hover:bg-[color:var(--clyra-hover,#f3f4f6)] hover:text-[color:var(--clyra-text,#111827)]",
             )}
             onClick={() => {
               setDemoMode("guide");
-              setPointer({ x: 62, y: 48, label: "Click Apply filters" });
+              setPointer({ x: 62, y: 48, label: "Click here" });
               setMessages((prev) => [
                 ...prev,
                 {
                   id: `g-${Date.now()}`,
                   role: "assistant",
-                  text: "Guide mode — I'm pointing at where to click. The blue ring is visual only; I have not taken control.",
+                  text: "Guide mode — I’m pointing at where to click. The ring is visual only; I have not taken control.",
                 },
               ]);
             }}
           >
-            ◎ <span className="text-white/55">Guide</span>
+            <Target className="h-3.5 w-3.5" strokeWidth={1.75} />
+            Guide
           </button>
-          <span className="h-3.5 w-px bg-gradient-to-b from-transparent via-white/30 to-transparent" />
+          <span className="h-3.5 w-px bg-[color:var(--clyra-border,#e5e7eb)]" />
           <button
             type="button"
             className={cn(
-              "rounded-[7px] px-2.5 py-1 hover:bg-white/10",
-              (demoMode === "ai" || demoMode === "user") && "bg-emerald-500/15 text-emerald-300",
+              "flex items-center gap-1.5 rounded-full px-3 py-1.5 transition-colors",
+              demoMode === "ai" || demoMode === "user"
+                ? "bg-[color:var(--clyra-accent,#0052fb)]/10 text-[color:var(--clyra-accent,#0052fb)]"
+                : "text-[color:var(--clyra-text-secondary,#6b7280)] hover:bg-[color:var(--clyra-hover,#f3f4f6)] hover:text-[color:var(--clyra-text,#111827)]",
             )}
             onClick={() => {
               setDemoMode("ai");
               setPointer({ x: 40, y: 55, label: "Working" });
             }}
           >
-            ◉ <span className="text-white/55">Control</span>
+            <MousePointer2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+            Control
           </button>
-          <span className="ml-1 h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.55)]" />
+          <span className="mx-1.5 h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.15)]" />
         </div>
       </div>
 
-      <aside className="relative z-10 m-4 mt-16 flex w-[280px] shrink-0 flex-col rounded-[12px] border border-white/10 bg-black/45 p-4 text-white shadow-[0_10px_36px_rgba(0,0,0,0.28)] backdrop-blur-2xl">
-        <div className="text-[13px] font-semibold tracking-[-0.01em]">Clyra Companion</div>
-        <p className="mt-1 text-[11.5px] leading-5 text-white/55">
-          OpenCluely UI · RapidOCR ONNX · Guide pointer · optional desktop control
+      <aside className="relative z-10 m-5 mt-[4.25rem] flex w-[260px] shrink-0 flex-col rounded-[18px] border border-[color:var(--clyra-border,#e5e7eb)] bg-white/95 p-5 text-[color:var(--clyra-text,#111827)] shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_32px_rgba(15,23,42,0.05)]">
+        <div className="text-[15px] font-semibold tracking-[-0.03em]">Clyra Companion</div>
+        <p className="mt-1.5 text-[12px] leading-5 text-[color:var(--clyra-text-tertiary,#9ca3af)]">
+          See your screen · Guide · optional Control
         </p>
-        <div className="mt-4 flex gap-2">
+        <div className="mt-5 flex gap-1 rounded-[12px] bg-[color:var(--clyra-surface-muted,#f3f4f6)] p-1">
           <button
             type="button"
             onClick={() => setMode("talk")}
             className={cn(
-              "h-8 flex-1 rounded-[7px] border text-[12px] font-semibold",
+              "h-8 flex-1 rounded-[9px] text-[12px] font-medium transition-colors",
               mode === "talk"
-                ? "border-sky-300/40 bg-sky-500/20 text-sky-100"
-                : "border-white/15 bg-white/5 text-white/70",
+                ? "bg-white text-[color:var(--clyra-text,#111827)] shadow-[0_1px_2px_rgba(15,23,42,0.06)]"
+                : "text-[color:var(--clyra-text-secondary,#6b7280)]",
             )}
           >
             Talk
@@ -174,10 +194,10 @@ export default function ScreenCompanionWorkspace() {
               if ("speechSynthesis" in window) window.speechSynthesis.cancel();
             }}
             className={cn(
-              "h-8 flex-1 rounded-[7px] border text-[12px] font-semibold",
+              "h-8 flex-1 rounded-[9px] text-[12px] font-medium transition-colors",
               mode === "message"
-                ? "border-sky-300/40 bg-sky-500/20 text-sky-100"
-                : "border-white/15 bg-white/5 text-white/70",
+                ? "bg-white text-[color:var(--clyra-text,#111827)] shadow-[0_1px_2px_rgba(15,23,42,0.06)]"
+                : "text-[color:var(--clyra-text-secondary,#6b7280)]",
             )}
           >
             Message
@@ -186,55 +206,93 @@ export default function ScreenCompanionWorkspace() {
         <button
           type="button"
           onClick={() => void desktop?.companion?.toggle?.()}
-          className="mt-3 flex h-9 items-center justify-center gap-2 rounded-[8px] border border-white/15 bg-white/10 text-[12.5px] font-semibold text-white/90 hover:bg-white/15"
+          className="mt-3 flex h-10 items-center justify-center gap-2 rounded-[12px] border border-[color:var(--clyra-border,#e5e7eb)] bg-white text-[12.5px] font-medium text-[color:var(--clyra-text-secondary,#6b7280)] transition-colors hover:bg-[color:var(--clyra-hover,#f3f4f6)] hover:text-[color:var(--clyra-text,#111827)]"
         >
-          <MonitorSmartphone className="h-4 w-4" />
-          {desktop ? "Open Electron overlay (⌘⇧J)" : "Electron required for overlay"}
+          <MonitorSmartphone className="h-4 w-4" strokeWidth={1.75} />
+          {desktop ? "Open overlay" : "Desktop overlay"}
         </button>
-        <ul className="mt-6 space-y-2.5 text-[12px] text-white/65">
-          <li className="flex gap-2"><Sparkles className="mt-0.5 h-3.5 w-3.5 text-sky-300" /> Clyra chat / STT / TTS</li>
-          <li className="flex gap-2"><Eye className="mt-0.5 h-3.5 w-3.5 text-sky-300" /> RapidOCR open-source vision</li>
-          <li className="flex gap-2"><MousePointer2 className="mt-0.5 h-3.5 w-3.5 text-sky-300" /> Guide points · Control clicks</li>
+        <ul className="mt-8 space-y-3 text-[12px] text-[color:var(--clyra-text-secondary,#6b7280)]">
+          <li className="flex gap-2.5">
+            <Sparkles className="mt-0.5 h-3.5 w-3.5 text-[color:var(--clyra-accent,#0052fb)]" strokeWidth={1.75} />
+            Chat with screen context
+          </li>
+          <li className="flex gap-2.5">
+            <Eye className="mt-0.5 h-3.5 w-3.5 text-[color:var(--clyra-accent,#0052fb)]" strokeWidth={1.75} />
+            RapidOCR vision
+          </li>
+          <li className="flex gap-2.5">
+            <MousePointer2 className="mt-0.5 h-3.5 w-3.5 text-[color:var(--clyra-accent,#0052fb)]" strokeWidth={1.75} />
+            Guide points · Control clicks
+          </li>
         </ul>
       </aside>
 
-      <main className="relative z-10 m-4 mt-16 mr-4 flex min-w-0 flex-1 flex-col rounded-[12px] border border-white/10 bg-black/50 text-white shadow-[0_10px_36px_rgba(0,0,0,0.28)] backdrop-blur-2xl">
-        <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
-          <span className="text-[13px] font-semibold">Chat</span>
-          <span className="text-[10.5px] text-white/45">RapidOCR · no stealth</span>
+      <main className="relative z-10 m-5 mt-[4.25rem] mr-5 flex min-w-0 flex-1 flex-col overflow-hidden rounded-[18px] border border-[color:var(--clyra-border,#e5e7eb)] bg-white/95 text-[color:var(--clyra-text,#111827)] shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_32px_rgba(15,23,42,0.05)]">
+        <div className="flex items-center justify-between border-b border-[color:var(--clyra-border,#e5e7eb)] px-5 py-3.5">
+          <div>
+            <span className="text-[13.5px] font-semibold tracking-[-0.02em]">Chat</span>
+            <span className="ml-2 text-[11px] text-[color:var(--clyra-text-tertiary,#9ca3af)]">Screen companion</span>
+          </div>
         </div>
-        <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto px-4 py-4">
+
+        <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto px-5 py-5">
+          {messages.length <= 1 ? (
+            <div className="mx-auto flex min-h-[220px] max-w-[300px] flex-col items-center justify-center text-center">
+              <div className="mb-4 grid h-11 w-11 place-items-center rounded-[14px] border border-[color:var(--clyra-border,#e5e7eb)] bg-[color:var(--clyra-surface-muted,#f8f9fb)]">
+                <Eye className="h-5 w-5 text-[color:var(--clyra-accent,#0052fb)]" strokeWidth={1.75} />
+              </div>
+              <p className="text-[15px] font-semibold tracking-[-0.03em]">What’s on your screen?</p>
+              <p className="mt-1.5 text-[12.5px] leading-5 text-[color:var(--clyra-text-tertiary,#9ca3af)]">
+                Ask about anything you’re looking at. Guide can point without taking control.
+              </p>
+            </div>
+          ) : null}
           {messages.map((message) => (
             <div
               key={message.id}
               className={cn(
-                "rounded-[8px] border-l-[3px] px-3 py-2.5 text-[13px] leading-[1.5]",
-                message.role === "user" && "border-amber-400/70 bg-amber-500/10",
-                message.role === "assistant" && "border-sky-300/70 bg-sky-500/10",
-                message.role === "system" && "border-sky-400/50 bg-sky-500/10 text-white/75 text-[12px]",
+                "flex",
+                message.role === "user" && "justify-end",
+                message.role === "system" && "justify-center",
               )}
             >
-              {message.text}
+              <div
+                className={cn(
+                  "max-w-[92%] text-[13px] leading-[1.55] tracking-[-0.01em]",
+                  message.role === "user" &&
+                    "rounded-[14px] bg-[color:var(--clyra-selected,#eef1f6)] px-3.5 py-2.5 text-[color:var(--clyra-text,#111827)]",
+                  message.role === "assistant" && "pr-2 text-[color:var(--clyra-text,#111827)]",
+                  message.role === "system" &&
+                    "rounded-[10px] bg-[color:var(--clyra-surface-muted,#f3f4f6)] px-3 py-1.5 text-[11.5px] text-[color:var(--clyra-text-secondary,#6b7280)]",
+                )}
+              >
+                {message.text}
+              </div>
             </div>
           ))}
           {busy ? (
-            <div className="flex items-center gap-2 text-[12px] text-white/55">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-300" />
-              Thinking
+            <div className="flex items-center gap-2 text-[12.5px] text-[color:var(--clyra-text-tertiary,#9ca3af)]">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[color:var(--clyra-accent,#0052fb)]" />
+              Looking at your screen…
             </div>
           ) : null}
         </div>
-        <div className="border-t border-white/10 bg-black/25 px-4 py-3">
+
+        <div className="border-t border-[color:var(--clyra-border,#e5e7eb)] px-4 py-3">
           {listeningDemo ? (
             <div className="mb-2">
               <VoiceWaveform level={0.35} active compact />
             </div>
           ) : null}
-          <div className="flex items-end gap-2">
+          <div className="flex items-end gap-2 rounded-[14px] border border-[color:var(--clyra-border,#e5e7eb)] bg-[color:var(--clyra-surface-muted,#f8f9fb)] px-3 py-2">
             <textarea
               value={input}
               rows={2}
-              placeholder={mode === "message" ? "Message about your screen…" : "Ask about your screen, or how to click something…"}
+              placeholder={
+                mode === "message"
+                  ? "Ask what’s on your screen…"
+                  : "Ask about your screen, or how to click something…"
+              }
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
@@ -242,22 +300,21 @@ export default function ScreenCompanionWorkspace() {
                   void ask();
                 }
               }}
-              className="min-h-[44px] flex-1 resize-none bg-transparent text-[13.5px] text-white outline-none placeholder:text-white/35"
+              className="min-h-[40px] flex-1 resize-none bg-transparent text-[13.5px] text-[color:var(--clyra-text,#111827)] outline-none placeholder:text-[color:var(--clyra-text-tertiary,#9ca3af)]"
             />
             <button
               type="button"
               disabled={!input.trim() || busy}
               onClick={() => void ask()}
-              className="mb-0.5 flex h-[30px] w-[30px] items-center justify-center rounded-full bg-sky-500 text-white disabled:bg-white/10 disabled:text-white/30"
+              aria-label="Send"
+              className="mb-0.5 grid h-8 w-8 place-items-center rounded-full bg-[color:var(--clyra-accent,#0052fb)] text-white transition-opacity hover:opacity-95 disabled:bg-[color:var(--clyra-border,#e5e7eb)] disabled:text-[color:var(--clyra-text-tertiary,#9ca3af)]"
             >
-              ↑
+              <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.25} />
             </button>
           </div>
-          <p className="mt-2 text-[10px] text-white/40">⌘⇧J · Guide points without clicking · Control drives the OS cursor</p>
         </div>
       </main>
 
-      {/* Guide / control cursor preview */}
       {pointer && demoMode !== "off" ? (
         <div
           className="pointer-events-none absolute z-40"
@@ -267,16 +324,14 @@ export default function ScreenCompanionWorkspace() {
           <div
             className={cn(
               "absolute -left-3.5 -top-3.5 h-9 w-9 rounded-full border-2",
-              demoMode === "guide"
-                ? "animate-ping border-sky-400/80"
-                : "border-white/40",
+              demoMode === "guide" ? "animate-ping border-[color:var(--clyra-accent,#0052fb)]/70" : "border-slate-300",
             )}
           />
-          <div className="h-3.5 w-3.5 rounded-full border-2 border-white bg-[#111] shadow-[0_2px_8px_rgba(0,0,0,.35)]" />
+          <div className="h-3.5 w-3.5 rounded-full border-2 border-white bg-[color:var(--clyra-accent,#0052fb)] shadow-[0_2px_8px_rgba(0,82,251,.35)]" />
           <div
             className={cn(
-              "mt-2 ml-2 inline-block max-w-[220px] truncate rounded-[7px] px-2.5 py-1 text-[11px] font-semibold text-white shadow-[0_6px_18px_rgba(0,0,0,.28)]",
-              demoMode === "guide" ? "bg-[#1d4ed8]" : "bg-[#171817]",
+              "ml-2 mt-2 inline-block max-w-[220px] truncate rounded-[8px] px-2.5 py-1 text-[11px] font-semibold text-white shadow-[0_6px_18px_rgba(15,23,42,.12)]",
+              demoMode === "guide" ? "bg-[color:var(--clyra-accent,#0052fb)]" : "bg-slate-800",
             )}
           >
             {pointer.label}
@@ -286,10 +341,10 @@ export default function ScreenCompanionWorkspace() {
 
       {demoMode === "ai" || demoMode === "user" ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-5 z-40 flex justify-center">
-          <div className="pointer-events-auto flex h-[30px] max-w-[min(420px,92%)] items-stretch overflow-hidden rounded-[8px] bg-[#171817] text-[11px] font-medium text-white shadow-[0_8px_24px_rgba(0,0,0,.28)]">
-            <div className="flex min-w-0 flex-1 items-center gap-2 px-3">
-              <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-white/80" />
-              <span className="min-w-0 truncate text-white/90">
+          <div className="pointer-events-auto flex h-9 max-w-[min(420px,92%)] items-stretch overflow-hidden rounded-full border border-[color:var(--clyra-border,#e5e7eb)] bg-white text-[11.5px] font-medium text-[color:var(--clyra-text,#111827)] shadow-[0_10px_28px_rgba(15,23,42,0.12)]">
+            <div className="flex min-w-0 flex-1 items-center gap-2 px-3.5">
+              <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[color:var(--clyra-accent,#0052fb)]" />
+              <span className="min-w-0 truncate">
                 {demoMode === "user" ? "You have control" : "AI has control"}
               </span>
             </div>
@@ -297,7 +352,7 @@ export default function ScreenCompanionWorkspace() {
               <button
                 type="button"
                 onClick={() => setDemoMode("ai")}
-                className="shrink-0 border-l border-white/15 px-3 text-[10.5px] font-semibold text-white/90 hover:bg-white/10"
+                className="shrink-0 border-l border-[color:var(--clyra-border,#e5e7eb)] px-3.5 text-[11px] font-semibold hover:bg-[color:var(--clyra-hover,#f3f4f6)]"
               >
                 Resume AI
               </button>
@@ -305,7 +360,7 @@ export default function ScreenCompanionWorkspace() {
               <button
                 type="button"
                 onClick={() => setDemoMode("user")}
-                className="shrink-0 border-l border-white/15 px-3 text-[10.5px] font-semibold text-white/90 hover:bg-white/10"
+                className="shrink-0 border-l border-[color:var(--clyra-border,#e5e7eb)] px-3.5 text-[11px] font-semibold hover:bg-[color:var(--clyra-hover,#f3f4f6)]"
               >
                 Take control
               </button>
@@ -316,7 +371,7 @@ export default function ScreenCompanionWorkspace() {
                 setDemoMode("off");
                 setPointer(null);
               }}
-              className="shrink-0 bg-[#dd5e58] px-3 text-[10.5px] font-semibold text-white hover:brightness-110"
+              className="shrink-0 bg-rose-500 px-3.5 text-[11px] font-semibold text-white hover:brightness-105"
             >
               Stop
             </button>
