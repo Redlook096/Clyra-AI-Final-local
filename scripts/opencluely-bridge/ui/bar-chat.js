@@ -174,21 +174,20 @@
     if (window.electronAPI?.resizeWindow) {
       window.electronAPI.resizeWindow(56, COLLAPSED_H);
     }
-    await wait(40);
-    // 2) Fade in while still thin
+    await wait(60);
+    // 2) Fade in while still thin / compressed
     shell.classList.add('is-boot-fade');
-    await wait(280);
+    await wait(360);
     // 3) Expand horizontally into full pill
     shell.classList.remove('is-boot-squish');
     shell.classList.add('is-boot-expand');
-    await wait(40);
+    await wait(50);
     measureAndResize();
-    await wait(420);
-    // 4) Reveal buttons / stealth / drag
+    await wait(520);
+    // 4) Reveal buttons / stealth / drag with stagger
     shell.classList.add('is-boot-reveal');
-    await wait(420);
+    await wait(520);
     shell.classList.remove('is-boot-fade', 'is-boot-expand');
-    // Keep reveal class so opacity stays; clear boot-hide transforms via CSS
     measureAndResize();
   }
 
