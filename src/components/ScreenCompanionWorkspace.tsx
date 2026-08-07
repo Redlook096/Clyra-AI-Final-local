@@ -48,12 +48,17 @@ export default function ScreenCompanionWorkspace() {
     setMessages((prev) => [...prev, { id: `u-${Date.now()}`, role: "user", text: question }]);
     setBusy(true);
     try {
+      const screenCtx =
+        typeof window !== "undefined" && (window as Window & { __companionScreenContext?: { visionSummary?: string; ocrText?: string } }).__companionScreenContext;
       const response = await fetch("/api/companion/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           question,
-          visionSummary: "User is asking about their current screen via Clyra Companion (OpenCluely UI, no stealth).",
+          visionSummary:
+            screenCtx?.visionSummary ||
+            "User is asking about their current screen via Clyra Companion (OpenCluely UI, no stealth).",
+          ocrText: screenCtx?.ocrText || "",
         }),
       });
       const payload = await response.json();

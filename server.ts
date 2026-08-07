@@ -2285,6 +2285,7 @@ async function startServer() {
             Authorization: `Bearer ${apiKey}`,
           },
           body: JSON.stringify({
+            model: process.env.DEEPSEEK_MODEL || process.env.MY_LLM_MODEL || "deepseek-chat",
             messages: [
               { role: "system", content: system },
               { role: "user", content: user },
@@ -2301,6 +2302,9 @@ async function startServer() {
             res.json({ ...payload, ok: true, text, source: "clyra-api" });
             return;
           }
+        } else {
+          const errBody = await upstream.text().catch(() => "");
+          console.warn("[companion/ask] upstream status", upstream.status, errBody.slice(0, 240));
         }
       } catch (error) {
         console.warn("[companion/ask] upstream failed, using vision-local:", error);
