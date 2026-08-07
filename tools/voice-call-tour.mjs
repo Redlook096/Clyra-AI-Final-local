@@ -108,15 +108,21 @@ async function main() {
     await take(page, "08-voice-mid-active");
 
     // Try type message into call if dock exists
-    const typeBtn = page.getByRole("button", { name: /Type|message/i }).first();
+    const typeBtn = page.getByRole("button", { name: /Type a message/i });
     if (await typeBtn.count()) {
-      await typeBtn.click().catch(() => {});
-      await wait(400);
+      await typeBtn.first().click().catch(() => {});
+      await wait(500);
     }
-    const callInput = page.locator(".clyra-voice-call-overlay textarea, [aria-label*='Type' i], input[placeholder*='Type' i]").first();
-    if (await callInput.count()) {
+    const callInput = page.locator("textarea").filter({ hasText: "" }).or(page.locator('.clyra-voice-call-overlay textarea, textarea[placeholder*="Type" i]')).first();
+    if (await callInput.count() && await callInput.evaluate((el) => el.tagName === "TEXTAREA" || el.tagName === "INPUT").catch(() => false)) {
       await callInput.fill("Hello — what's on my screen?");
       await wait(300);
+      await take(page, "09-voice-mid-typed");
+      const sendType = page.getByRole("button", { name: /Send/i }).first();
+      if (await sendType.count()) await sendType.click().catch(() => {});
+      await wait(2000);
+      await take(page, "09b-voice-mid-sent");
+    } else {
       await take(page, "09-voice-mid-typed");
     }
 
