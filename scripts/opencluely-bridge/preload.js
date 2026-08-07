@@ -32,6 +32,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   formatSessionHistory: () => ipcRenderer.invoke('format-session-history'),
   sendChatMessage: (text) => ipcRenderer.invoke('send-chat-message', text),
   getSkillPrompt: (skillName) => ipcRenderer.invoke('get-skill-prompt', skillName),
+  startDesktopControl: (task) => ipcRenderer.invoke('start-desktop-control', { task }),
+  stopDesktopControl: () => ipcRenderer.invoke('stop-desktop-control'),
+  onControlStatus: (callback) => ipcRenderer.on('control-status', callback),
   
   // Gemini LLM configuration
   setGeminiApiKey: (apiKey) => ipcRenderer.invoke('set-gemini-api-key', apiKey),

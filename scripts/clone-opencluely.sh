@@ -17,6 +17,7 @@ if [[ -d "${BRIDGE}" ]]; then
   echo "==> Applying Clyra + vision bridge (centered expandable bar, no stealth)"
   cp "${BRIDGE}/llm.service.js" "${DEST}/src/services/llm.service.js"
   cp "${BRIDGE}/capture.service.js" "${DEST}/src/services/capture.service.js"
+  cp "${BRIDGE}/desktop-control.service.js" "${DEST}/src/services/desktop-control.service.js"
   cp "${BRIDGE}/config.js" "${DEST}/src/core/config.js"
   cp "${BRIDGE}/main.js" "${DEST}/main.js"
   cp "${BRIDGE}/window.manager.js" "${DEST}/src/managers/window.manager.js"

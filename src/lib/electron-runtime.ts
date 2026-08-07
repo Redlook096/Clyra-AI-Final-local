@@ -66,7 +66,18 @@ export type ClyraDesktopBridge = {
   };
   companion?: {
     toggle?: () => Promise<{ ok: boolean; registered?: boolean }>;
+    seeScreen?: (question?: string) => Promise<{
+      ok: boolean;
+      vision?: { summary?: string; text?: string; ocrText?: string; model?: string; source?: string };
+      error?: string;
+    }>;
+    ask?: (text: string) => Promise<{ ok: boolean; reply?: { text?: string }; vision?: { summary?: string }; error?: string }>;
   };
+  seeScreen?: (question?: string) => Promise<{
+    ok: boolean;
+    vision?: { summary?: string; text?: string; ocrText?: string; model?: string; source?: string };
+    error?: string;
+  }>;
   google: {
     status: () => Promise<{ connected: boolean; email?: string }>;
     signIn: () => Promise<{ ok: boolean; pending?: boolean; error?: string }>;

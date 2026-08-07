@@ -47,7 +47,10 @@ contextBridge.exposeInMainWorld("clyraDesktop", {
   },
   companion: {
     toggle: () => ipcRenderer.invoke("companion:toggle"),
+    seeScreen: (question) => ipcRenderer.invoke("companion:see", { question }),
+    ask: (text) => ipcRenderer.invoke("companion:ask", { text }),
   },
+  seeScreen: (question) => ipcRenderer.invoke("desktop:see-screen", { question }),
   google: {
     status: () => ipcRenderer.invoke("google:status"),
     signIn: () => ipcRenderer.invoke("google:sign-in"),

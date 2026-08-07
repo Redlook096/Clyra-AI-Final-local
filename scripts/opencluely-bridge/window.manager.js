@@ -35,8 +35,8 @@ class WindowManager {
     this.bindWindows = false; // Disabled on Linux-friendly Clyra bridge to avoid resize recursion
     this.chatDrawerOpen = false; // Chat expands under the centered main bar (no separate panel)
     this.mainExpandedWidth = 420; // Max width while chat drawer is open
-    this.mainCollapsedMaxWidth = 360; // Compact frosted pill
-    this.mainExpandedWidth = 420; // Ask / Auto Answer expanded shell
+    this.mainCollapsedMaxWidth = 520; // Compact frosted pill (+ Take Control)
+    this.mainExpandedWidth = 440; // Ask / Auto Answer expanded shell
     this.windowGap = 10; // Small gap between windows
     this.boundWindowsPosition = { x: 0, y: 0 }; // Track position of bound windows
     

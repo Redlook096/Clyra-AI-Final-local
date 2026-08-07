@@ -103,6 +103,7 @@ process.on("unhandledRejection", (reason) => {
 const captureService = require("./src/services/capture.service");
 const speechService = require("./src/services/speech.service");
 const llmService = require("./src/services/llm.service");
+const desktopControl = require("./src/services/desktop-control.service");
 
 // Managers
 const windowManager = require("./src/managers/window.manager");
@@ -253,6 +254,11 @@ class ApplicationController {
 
       await windowManager.initializeWindows({ showMainWindow: !isFirstRun });
       this.setupGlobalShortcuts();
+      try {
+        await desktopControl.initialize();
+      } catch (error) {
+        logger.warn("Desktop control init failed", { error: error.message });
+      }
 
       // Keep OpenCluely identity (no stealth icon swap)
       try {
@@ -630,6 +636,10 @@ class ApplicationController {
 
       (async () => {
         try {
+          if (this._isPointQuestion(text)) {
+            await this.triggerPointGuide(text);
+            return;
+          }
           // If the user asks about the screen/page, run the real screenshot vision path
           // so chat uses the same capture pipeline as ⌘⇧S (not text-only Clyra).
           if (this._isScreenQuestion(text)) {
@@ -647,6 +657,35 @@ class ApplicationController {
       })();
 
       return { success: true };
+    });
+
+    ipcMain.handle("start-desktop-control", async (event, payload) => {
+      const task = String(payload?.task || "").trim();
+      if (!task) return { ok: false, error: "A task is required." };
+      this.runDesktopControlAgent(task).catch((error) => {
+        logger.error("Desktop control agent failed", { error: error.message });
+        windowManager.broadcastToAllWindows("control-status", {
+          status: "error",
+          message: error.message,
+        });
+      });
+      return { ok: true, started: true };
+    });
+
+    ipcMain.handle("stop-desktop-control", async () => {
+      this._controlAbort = true;
+      try {
+        await desktopControl.stopControl();
+      } catch (_) {
+        /* ignore */
+      }
+      windowManager.broadcastToAllWindows("control-status", {
+        status: "stopped",
+        message: "Control stopped.",
+      });
+      windowManager.showAllWindows();
+      windowManager.centerMainWindowAtTop?.();
+      return { ok: true };
     });
 
     ipcMain.handle("get-skill-prompt", (event, skillName) => {
@@ -1090,6 +1129,212 @@ class ApplicationController {
     return /\b(what('?s| is) on (my )?screen|see (my )?screen|look at (my )?screen|on my screen|what (page|site|app|website|article) (am i|is) (on|open|this)|what (am i|is) (looking at|viewing)|main (heading|title|article)|read (the )?(page|screen|heading|title)|quote the (main |page )?(heading|title|article)|interview coding|coding (interview|page)|visible on (the )?screen|describe (the |my )?(screen|page|window)|screenshot)\b/i.test(
       t
     );
+  }
+
+  _isPointQuestion(text) {
+    const t = String(text || "");
+    return /\b(where (is|do i|should i|to) (click|press|tap|find)|where('?s| is) (the )?(button|link|icon|menu|tab|field|input)|show me where|point (to|at)|help (me )?(find|click|locate)|click (on )?where)\b/i.test(
+      t
+    );
+  }
+
+  async #captureForAgent() {
+    const hiddenForCapture = [];
+    try {
+      for (const [type, win] of windowManager.windows.entries()) {
+        if (!win || win.isDestroyed()) continue;
+        if (type === "main" || type === "chat" || type === "llmResponse" || type === "settings") {
+          if (win.isVisible()) {
+            hiddenForCapture.push(win);
+            win.hide();
+          }
+        }
+      }
+      await new Promise((r) => setTimeout(r, 100));
+      return await captureService.captureAndProcess();
+    } finally {
+      for (const win of hiddenForCapture) {
+        try {
+          if (!win.isDestroyed()) windowManager.showOnCurrentDesktop(win);
+        } catch (_) {
+          /* ignore */
+        }
+      }
+    }
+  }
+
+  async triggerPointGuide(text) {
+    windowManager.openChatDrawer();
+    windowManager.broadcastToAllWindows("transcription-llm-response-start", {
+      messageId: `point-${Date.now()}`,
+      skill: "guide",
+    });
+    try {
+      await desktopControl.initialize();
+      const capture = await this.#captureForAgent();
+      if (!capture?.imageBuffer?.length) throw new Error("Could not capture screen for guide");
+      const { screen } = require("electron");
+      const display = screen.getPrimaryDisplay();
+      const bounds = display.bounds;
+      const vision = await llmService.callVision(
+        capture.imageBuffer,
+        [
+          `The user asked: "${text}".`,
+          "Look at the screenshot and estimate where they should look/click.",
+          `Screen size is ${bounds.width}x${bounds.height} pixels (origin top-left).`,
+          'Reply with ONLY JSON: {"x":number,"y":number,"label":"short label","answer":"one sentence"}',
+        ].join(" "),
+      );
+      const match = String(vision || "").match(/\{[\s\S]*\}/);
+      let point = null;
+      if (match) {
+        try {
+          point = JSON.parse(match[0]);
+        } catch (_) {
+          point = null;
+        }
+      }
+      const x = Math.max(8, Math.min(bounds.width - 8, Math.round(Number(point?.x) || bounds.width / 2)));
+      const y = Math.max(8, Math.min(bounds.height - 8, Math.round(Number(point?.y) || bounds.height / 3)));
+      const label = String(point?.label || "Look here").slice(0, 60);
+      await desktopControl.point(x, y, label);
+      const answer =
+        String(point?.answer || "").trim() ||
+        `I'm pointing at “${label}” with the AI cursor — follow the black pointer.`;
+      windowManager.broadcastToAllWindows("transcription-llm-response", {
+        response: answer,
+        metadata: { source: "ai-cursor-guide", x, y, label },
+      });
+    } catch (error) {
+      windowManager.broadcastToAllWindows("transcription-llm-response", {
+        response: `Could not point on screen: ${error.message}`,
+        metadata: { error: true },
+      });
+    }
+  }
+
+  async runDesktopControlAgent(task) {
+    this._controlAbort = false;
+    await desktopControl.initialize();
+    await desktopControl.startControl();
+    windowManager.broadcastToAllWindows("control-status", {
+      status: "running",
+      message: `Working on: ${task}`,
+    });
+
+    // Keep the bar visible but small while controlling so Stop stays reachable
+    try {
+      windowManager.showAllWindows();
+      windowManager.centerMainWindowAtTop?.();
+    } catch (_) {
+      /* ignore */
+    }
+
+    const { screen } = require("electron");
+    const bounds = screen.getPrimaryDisplay().bounds;
+    let lastSummary = "";
+
+    for (let step = 0; step < 8; step++) {
+      if (this._controlAbort) break;
+      const capture = await this.#captureForAgent();
+      if (!capture?.imageBuffer?.length) break;
+
+      const vision = await llmService.callVision(
+        capture.imageBuffer,
+        [
+          `You are OpenCluely controlling the user's desktop to complete this task: "${task}".`,
+          `Display is ${bounds.width}x${bounds.height} (origin top-left).`,
+          lastSummary ? `Previous step result: ${lastSummary}` : "",
+          "Choose the next ONE action only.",
+          'Reply with ONLY JSON like:',
+          '{"done":false,"action":{"type":"click"|"move"|"type"|"key"|"wait"|"point","x":0,"y":0,"text":"","key":"Return","ms":400,"label":"..."},"note":"short status"}',
+          'When the task is finished: {"done":true,"note":"Completed ..."}',
+          "Prefer click/type/key. Coordinates must be on-screen. Do not invent invisible UI.",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+
+      const match = String(vision || "").match(/\{[\s\S]*\}/);
+      let plan = null;
+      if (match) {
+        try {
+          plan = JSON.parse(match[0]);
+        } catch (_) {
+          plan = null;
+        }
+      }
+      if (!plan) {
+        lastSummary = "Planner returned invalid JSON";
+        windowManager.broadcastToAllWindows("control-status", {
+          status: "step",
+          message: lastSummary,
+        });
+        continue;
+      }
+
+      if (plan.done) {
+        windowManager.broadcastToAllWindows("control-status", {
+          status: "done",
+          message: String(plan.note || "Task complete."),
+        });
+        await desktopControl.stopControl();
+        return { ok: true, done: true };
+      }
+
+      const action = plan.action || {};
+      if (action.type === "click" || action.type === "move" || action.type === "point") {
+        action.x = Math.max(4, Math.min(bounds.width - 4, Math.round(Number(action.x) || bounds.width / 2)));
+        action.y = Math.max(4, Math.min(bounds.height - 4, Math.round(Number(action.y) || bounds.height / 2)));
+      }
+
+      // Hide overlays while acting so clicks hit the real app
+      const hidden = [];
+      try {
+        for (const [type, win] of windowManager.windows.entries()) {
+          if (!win || win.isDestroyed()) continue;
+          if (["main", "chat", "llmResponse", "settings"].includes(type) && win.isVisible()) {
+            hidden.push(win);
+            win.hide();
+          }
+        }
+        await new Promise((r) => setTimeout(r, 80));
+        const result = await desktopControl.runAction(action);
+        lastSummary = String(plan.note || action.label || action.type || "step");
+        windowManager.broadcastToAllWindows("control-status", {
+          status: "step",
+          message: lastSummary,
+          action,
+          result,
+        });
+      } finally {
+        for (const win of hidden) {
+          try {
+            if (!win.isDestroyed()) windowManager.showOnCurrentDesktop(win);
+          } catch (_) {
+            /* ignore */
+          }
+        }
+        windowManager.centerMainWindowAtTop?.();
+      }
+      await new Promise((r) => setTimeout(r, 450));
+    }
+
+    if (this._controlAbort) {
+      await desktopControl.stopControl();
+      windowManager.broadcastToAllWindows("control-status", {
+        status: "stopped",
+        message: "Control stopped.",
+      });
+      return { ok: true, stopped: true };
+    }
+
+    await desktopControl.stopControl();
+    windowManager.broadcastToAllWindows("control-status", {
+      status: "done",
+      message: lastSummary || "Finished control loop.",
+    });
+    return { ok: true };
   }
 
   async triggerScreenshotOCR() {
@@ -2086,11 +2331,45 @@ class ApplicationController {
             send(200, { ok: true, action: "auto-answer" });
             return;
           }
+          if (req.method === "POST" && req.url === "/control/start") {
+            const body = await readBody();
+            const task = String(body.task || body.text || "").trim();
+            if (!task) {
+              send(400, { ok: false, error: "task required" });
+              return;
+            }
+            this.runDesktopControlAgent(task).catch((error) => {
+              logger.error("HTTP control agent failed", { error: error.message });
+            });
+            send(200, { ok: true, action: "control-start", task });
+            return;
+          }
+          if (req.method === "POST" && req.url === "/control/stop") {
+            this._controlAbort = true;
+            await desktopControl.stopControl();
+            windowManager.broadcastToAllWindows("control-status", {
+              status: "stopped",
+              message: "Control stopped.",
+            });
+            send(200, { ok: true, action: "control-stop" });
+            return;
+          }
+          if (req.method === "POST" && req.url === "/control/point") {
+            const body = await readBody();
+            await this.triggerPointGuide(String(body.text || body.question || "Where should I click?"));
+            send(200, { ok: true, action: "point" });
+            return;
+          }
           if (req.method === "POST" && req.url === "/chat") {
             const body = await readBody();
             const text = String(body.text || body.message || "").trim();
             if (!text) {
               send(400, { ok: false, error: "text required" });
+              return;
+            }
+            if (this._isPointQuestion(text)) {
+              await this.triggerPointGuide(text);
+              send(200, { ok: true, action: "chat-via-point", text });
               return;
             }
             // Mirror IPC: screen questions use capture vision path

@@ -385,13 +385,22 @@ function authorizeCompanion(event) {
 }
 
 async function analyseCompanionVision(imagePath, question = "") {
-  const script = path.join(projectRoot, "tools", "companion-vision.py");
-  const { stdout } = await execFileAsync("python3", [script, imagePath, "--question", String(question || "")], {
-    timeout: 45_000,
-    maxBuffer: 4 * 1024 * 1024,
-    env: process.env,
-  });
-  return JSON.parse(String(stdout || "{}"));
+  try {
+    const { analyseVisionFrame } = await import("../tools/ollama-vision.mjs");
+    const buffer = await fs.readFile(imagePath);
+    const ext = path.extname(imagePath).toLowerCase() === ".png" ? "png" : "jpeg";
+    const dataUrl = `data:image/${ext};base64,${buffer.toString("base64")}`;
+    return await analyseVisionFrame(dataUrl, String(question || ""));
+  } catch (error) {
+    // Fallback RapidOCR
+    const script = path.join(projectRoot, "tools", "companion-vision.py");
+    const { stdout } = await execFileAsync("python3", [script, imagePath, "--question", String(question || "")], {
+      timeout: 45_000,
+      maxBuffer: 4 * 1024 * 1024,
+      env: process.env,
+    });
+    return JSON.parse(String(stdout || "{}"));
+  }
 }
 
 function companionVisionFallback({ question, visionSummary, ocrText, controlling, guiding, pointer }) {
@@ -569,7 +578,16 @@ function registerIpc() {
     return companionManager?.ask(String(payload?.text || ""));
   });
   ipcMain.handle("companion:see", async (event, payload) => {
-    authorizeCompanion(event);
+    // Allow Companion overlay OR main Clyra window (voice call camera/screen vision)
+    try {
+      authorizeCompanion(event);
+    } catch {
+      authorize(event);
+    }
+    return companionManager?.seeScreen(String(payload?.question || ""));
+  });
+  ipcMain.handle("desktop:see-screen", async (event, payload) => {
+    authorize(event);
     return companionManager?.seeScreen(String(payload?.question || ""));
   });
   ipcMain.handle("companion:start-guide", async (event, payload) => {

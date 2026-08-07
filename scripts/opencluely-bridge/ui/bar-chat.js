@@ -20,6 +20,7 @@
   const closeBtn = document.getElementById('ocCloseBtn');
   const askBtn = document.getElementById('ocAskBtn');
   const autoBtn = document.getElementById('ocAutoBtn');
+  const controlBtn = document.getElementById('ocControlBtn');
   const modeLabel = document.getElementById('chatModeLabel');
   const modeHint = document.getElementById('chatModeHint');
 
@@ -30,9 +31,11 @@
 
   let open = false;
   let wide = false;
-  let mode = 'ask'; // 'ask' | 'auto'
+  let mode = 'ask'; // 'ask' | 'auto' | 'control'
   let history = [];
   let animating = false;
+  let controlling = false;
+  let taskPromptMode = false;
 
   const AUTO_PROMPT =
     "Look at what's on my screen right now. Use your initiative: if there is a question, quiz, problem, coding prompt, form field, or anything the user likely needs answered or solved, answer it directly and helpfully. If there is no clear question, briefly say what you see and the most useful next step. Read text literally; do not invent content that is not visible.";
@@ -121,13 +124,106 @@
 
   function setModeUI(next) {
     mode = next;
-    askBtn?.classList.toggle('is-active', mode === 'ask' && open);
-    autoBtn?.classList.toggle('is-active', mode === 'auto' && open);
-    if (modeLabel) modeLabel.textContent = mode === 'auto' ? 'Auto Answer' : 'Ask';
+    askBtn?.classList.toggle('is-active', mode === 'ask' && open && !controlling);
+    autoBtn?.classList.toggle('is-active', mode === 'auto' && open && !controlling);
+    if (modeLabel) {
+      modeLabel.textContent =
+        mode === 'auto' ? 'Auto Answer' : mode === 'control' ? 'Take Control' : 'Ask';
+    }
     if (modeHint) {
       modeHint.textContent =
-        mode === 'auto' ? 'Reading your screen…' : 'Type a question…';
+        mode === 'auto'
+          ? 'Reading your screen…'
+          : mode === 'control'
+            ? 'Describe the task for the AI…'
+            : 'Type a question…';
     }
+  }
+
+  function setControlButtonState(isControlling) {
+    controlling = Boolean(isControlling);
+    if (!controlBtn) return;
+    if (controlling) {
+      controlBtn.textContent = 'Stop';
+      controlBtn.classList.add('oc-stop');
+      controlBtn.classList.remove('oc-control');
+      controlBtn.title = 'Stop AI control';
+    } else {
+      controlBtn.textContent = 'Take Control';
+      controlBtn.classList.add('oc-control');
+      controlBtn.classList.remove('oc-stop');
+      controlBtn.title = 'Let OpenCluely control your machine';
+    }
+  }
+
+  async function enterTaskPrompt() {
+    if (animating || controlling) return;
+    animating = true;
+    setModeUI('control');
+    shell.classList.add('is-shaking');
+    await wait(480);
+    shell.classList.remove('is-shaking');
+    shell.classList.add('is-fading-out');
+    await wait(300);
+    // Compact task prompt bar
+    taskPromptMode = true;
+    open = true;
+    wide = true;
+    shell.classList.remove('is-chat-open');
+    shell.classList.add('is-wide', 'is-task-prompt', 'is-fading-in');
+    shell.classList.remove('is-fading-out');
+    drawer.setAttribute('aria-hidden', 'false');
+    if (modeLabel) modeLabel.textContent = 'Take Control';
+    if (modeHint) modeHint.textContent = 'What should the AI do on your computer?';
+    if (inputEl) {
+      inputEl.value = '';
+      inputEl.placeholder = 'e.g. Open Chrome and go to example.com…';
+      inputEl.focus();
+    }
+    notifyDrawer(true);
+    measureAndResize();
+    await wait(280);
+    animating = false;
+  }
+
+  async function exitTaskPromptToControl(task) {
+    animating = true;
+    shell.classList.add('is-fading-out');
+    await wait(280);
+    taskPromptMode = false;
+    shell.classList.remove('is-task-prompt', 'is-fading-out');
+    shell.classList.add('is-wide', 'is-chat-open', 'is-fading-in');
+    open = true;
+    wide = true;
+    setControlButtonState(true);
+    setModeUI('control');
+    if (inputEl) inputEl.placeholder = 'Type a message… (Shift+Enter for newline)';
+    drawer.setAttribute('aria-hidden', 'false');
+    measureAndResize();
+    addMessage(`Take Control: ${task}`, 'user');
+    addMessage('AI is controlling your machine… blue glow means control is active. Press Stop anytime.', 'system');
+    showThinking();
+    try {
+      await window.electronAPI?.startDesktopControl?.(task);
+    } catch (error) {
+      hideThinking();
+      addMessage(`Control failed: ${error.message}`, 'error');
+      setControlButtonState(false);
+    }
+    await wait(260);
+    animating = false;
+  }
+
+  async function stopControlFromBar() {
+    hideThinking();
+    try {
+      await window.electronAPI?.stopDesktopControl?.();
+    } catch (_) {
+      /* ignore */
+    }
+    setControlButtonState(false);
+    addMessage('Control stopped.', 'system');
+    if (modeHint) modeHint.textContent = 'Control ended';
   }
 
   async function expandToChat(nextMode) {
@@ -205,6 +301,11 @@
   async function sendCurrent() {
     const text = (inputEl?.value || '').trim();
     if (!text) return;
+    if (taskPromptMode) {
+      inputEl.value = '';
+      await exitTaskPromptToControl(text);
+      return;
+    }
     if (!open) await expandToChat('ask');
     addMessage(text, 'user');
     inputEl.value = '';
@@ -264,8 +365,28 @@
     await runAutoAnswer();
   });
 
+  controlBtn?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (controlling) {
+      await stopControlFromBar();
+      return;
+    }
+    await enterTaskPrompt();
+  });
+
   closeBtn?.addEventListener('click', async (e) => {
     e.stopPropagation();
+    if (taskPromptMode) {
+      taskPromptMode = false;
+      shell.classList.remove('is-task-prompt', 'is-wide', 'is-fading-in', 'is-fading-out');
+      open = false;
+      wide = false;
+      if (inputEl) inputEl.placeholder = 'Type a message… (Shift+Enter for newline)';
+      notifyDrawer(false);
+      measureAndResize();
+      return;
+    }
+    if (controlling) await stopControlFromBar();
     await collapse({ hideIfAlreadyCollapsed: true });
   });
 
@@ -324,10 +445,29 @@
       saveHistory();
       messagesEl.innerHTML = '';
     });
+    api.onControlStatus?.((_e, data) => {
+      hideThinking();
+      if (data?.status === 'running') {
+        setControlButtonState(true);
+        if (data.message) addMessage(data.message, 'system');
+      } else if (data?.status === 'step' && data.message) {
+        addMessage(data.message, 'assistant');
+      } else if (data?.status === 'done') {
+        setControlButtonState(false);
+        addMessage(data.message || 'Task complete.', 'assistant');
+      } else if (data?.status === 'stopped') {
+        setControlButtonState(false);
+        addMessage(data.message || 'Control stopped.', 'system');
+      } else if (data?.status === 'error') {
+        setControlButtonState(false);
+        addMessage(data.message || 'Control error', 'error');
+      }
+    });
   }
 
   // Fit collapsed pill on load + tell main process we're ready for centering
   loadHistory();
+  setControlButtonState(false);
   setTimeout(() => {
     if (tab && window.electronAPI?.resizeWindow) {
       const rect = tab.getBoundingClientRect();
@@ -343,5 +483,7 @@
     collapse,
     runAutoAnswer,
     measureAndResize,
+    enterTaskPrompt,
+    stopControlFromBar,
   };
 })();
