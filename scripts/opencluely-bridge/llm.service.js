@@ -1,6 +1,6 @@
 /**
  * Clyra-bridged LLM service for OpenCluely.
- * - Vision: local open VLM via Ollama (default llava-phi3, 8GB-safe)
+ * - Vision: local open VLM via Ollama (default qwen2.5vl:3b — fast + sharp on UI)
  * - Text / chat: Clyra /api/companion/ask (project DeepSeek stack)
  * Uses Node http (not Electron fetch) so localhost calls stay reliable.
  * Stealth / Gemini are intentionally not used.
@@ -61,7 +61,7 @@ function httpJson(url, { method = 'GET', headers = {}, body, timeoutMs = 60000 }
 
 class LLMService {
   constructor() {
-    this.client = { provider: 'clyra+llava-phi3' };
+    this.client = { provider: 'clyra+qwen2.5vl' };
     this.model = null;
     this.isInitialized = false;
     this.requestCount = 0;
@@ -70,7 +70,7 @@ class LLMService {
   }
 
   initializeClient() {
-    this.model = config.get('llm.vision.model') || process.env.OPENCLUELY_VISION_MODEL || 'llava-phi3';
+    this.model = config.get('llm.vision.model') || process.env.OPENCLUELY_VISION_MODEL || 'qwen2.5vl:3b';
     this.clyraBase = String(
       process.env.CLYRA_API_BASE || config.get('llm.clyra.baseUrl') || 'http://127.0.0.1:31415',
     ).replace(/\/$/, '');

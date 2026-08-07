@@ -5,6 +5,7 @@
  * Can click / type / key / scroll freely. Destructive file ops are blocked
  * unless the user's task explicitly asks (see control-safety.js).
  */
+const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const { BrowserWindow, screen } = require('electron');
@@ -13,6 +14,7 @@ const { checkActionSafety } = require('./control-safety');
 
 const execFileAsync = promisify(execFile);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const MACOS_INPUT = path.join(__dirname, 'macos-input.py');
 
 async function which(bin) {
   try {
@@ -23,6 +25,21 @@ async function which(bin) {
   } catch {
     return null;
   }
+}
+
+async function darwinInput(args, timeout = 8000) {
+  // Prefer python3 Quartz CGEvent helper; falls back to /usr/bin/python3.
+  const pythons = ['python3', '/usr/bin/python3', '/opt/homebrew/bin/python3'];
+  let lastError = null;
+  for (const py of pythons) {
+    try {
+      await execFileAsync(py, [MACOS_INPUT, ...args], { timeout });
+      return true;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('macOS input helper failed');
 }
 
 const CURSOR_HTML = `<!doctype html>
@@ -104,8 +121,20 @@ class DesktopControlService {
     this.xdotool = await which('xdotool');
     this.cliclick = await which('cliclick');
     if (this.xdotool) this.driver = 'xdotool';
-    else if (process.platform === 'darwin') this.driver = this.cliclick ? 'cliclick' : 'applescript';
-    else if (process.platform === 'win32') this.driver = 'powershell';
+    else if (process.platform === 'darwin') {
+      // Prefer cliclick when present, otherwise Quartz CGEvent via macos-input.py
+      this.driver = this.cliclick ? 'cliclick' : 'quartz';
+      // Probe Quartz once so we can warn early about Accessibility.
+      if (!this.cliclick) {
+        try {
+          await darwinInput(['move', '0', '0'], 3000);
+        } catch (error) {
+          logger.warn('macOS Quartz input probe failed — enable Accessibility for OpenCluely', {
+            error: error.message,
+          });
+        }
+      }
+    } else if (process.platform === 'win32') this.driver = 'powershell';
     logger.info('Desktop control ready', { driver: this.driver });
     return { ok: true, driver: this.driver };
   }
@@ -205,13 +234,7 @@ class DesktopControlService {
       } else if (this.cliclick) {
         await execFileAsync(this.cliclick, [`m:${point.x},${point.y}`], { timeout: 4000 });
       } else if (process.platform === 'darwin') {
-        await execFileAsync(
-          'osascript',
-          ['-e', `do shell script "cliclick m:${point.x},${point.y}"`],
-          { timeout: 4000 },
-        ).catch(async () => {
-          // Best-effort CGEvent via AppleScript is limited; keep visual cursor.
-        });
+        await darwinInput(['move', String(point.x), String(point.y)], 4000);
       } else if (process.platform === 'win32') {
         const ps = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${point.x},${point.y})`;
         await execFileAsync('powershell', ['-NoProfile', '-Command', ps], { timeout: 4000 });
@@ -240,6 +263,11 @@ class DesktopControlService {
       } else if (this.cliclick) {
         const cmd = count >= 2 ? `dc:${point.x},${point.y}` : `c:${point.x},${point.y}`;
         await execFileAsync(this.cliclick, [cmd], { timeout: 4000 });
+      } else if (process.platform === 'darwin') {
+        await darwinInput(
+          ['click', String(point.x), String(point.y), button === 'right' ? 'right' : 'left', String(count)],
+          8000,
+        );
       } else if (process.platform === 'win32') {
         const downUp = `[M]::mouse_event(0x0002,0,0,0,0); [M]::mouse_event(0x0004,0,0,0,0);`;
         const ps = `
@@ -279,6 +307,14 @@ for ($i=0; $i -lt ${count}; $i++) { ${downUp} Start-Sleep -Milliseconds 80 }
         await execFileAsync(this.xdotool, ['click', '--repeat', String(reps), '--delay', '30', btn], {
           timeout: 6000,
         });
+      } else if (this.cliclick && process.platform === 'darwin') {
+        // cliclick: positive = up
+        const wheel = amount >= 0 ? `kd:ctrl` : '';
+        void wheel;
+        await execFileAsync(this.cliclick, [`m:${this.lastPoint.x},${this.lastPoint.y}`], { timeout: 4000 }).catch(() => {});
+        await darwinInput(['scroll', '0', String(amount)], 6000);
+      } else if (process.platform === 'darwin') {
+        await darwinInput(['scroll', '0', String(amount)], 6000);
       } else if (process.platform === 'win32') {
         const ps = `
 Add-Type -AssemblyName System.Windows.Forms;
@@ -315,6 +351,8 @@ for ($i=0; $i -lt ${Math.abs(amount)}; $i++) {
         });
       } else if (this.cliclick) {
         await execFileAsync(this.cliclick, [`t:${value}`], { timeout: 30000 });
+      } else if (process.platform === 'darwin') {
+        await darwinInput(['type', value], 30000);
       } else if (process.platform === 'win32') {
         const escaped = value.replace(/'/g, "''");
         const ps = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${escaped}')`;
@@ -337,6 +375,8 @@ for ($i=0; $i -lt ${Math.abs(amount)}; $i++) {
         await execFileAsync(this.xdotool, ['key', '--clearmodifiers', String(keyName)], { timeout: 4000 });
       } else if (this.cliclick) {
         await execFileAsync(this.cliclick, [`kp:${keyName}`], { timeout: 4000 });
+      } else if (process.platform === 'darwin') {
+        await darwinInput(['key', String(keyName)], 8000);
       } else if (process.platform === 'win32') {
         const map = { Return: '{ENTER}', Enter: '{ENTER}', Tab: '{TAB}', Escape: '{ESC}' };
         const send = map[keyName] || `{${keyName}}`;

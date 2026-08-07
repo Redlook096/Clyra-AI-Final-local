@@ -162,7 +162,13 @@
         border-color: rgba(148, 163, 184, 0.22);
       }
 
-      .oc-shell.is-wide .command-tab,
+      .oc-shell.is-wide:not(.is-chat-open) .command-tab {
+        /* Width expands first — keep the rounded pill until chat drops down */
+        width: 100%;
+        min-width: 0;
+        border-radius: 999px;
+      }
+      .oc-shell.is-wide.is-chat-open .command-tab,
       .oc-shell.is-chat-open .command-tab {
         width: 100%;
         min-width: 0;
@@ -208,12 +214,14 @@
       .oc-shell.is-chat-open .oc-close .oc-icon-x,
       .oc-shell.is-wide.is-chat-open .oc-close .oc-icon-x,
       .oc-shell.is-task-prompt .oc-close .oc-icon-x,
+      .oc-shell.is-control-compose .oc-close .oc-icon-x,
       .oc-close.is-collapse .oc-icon-x {
         opacity: 0; transform: rotate(90deg) scale(0.7);
       }
       .oc-shell.is-chat-open .oc-close .oc-icon-chevron,
       .oc-shell.is-wide.is-chat-open .oc-close .oc-icon-chevron,
       .oc-shell.is-task-prompt .oc-close .oc-icon-chevron,
+      .oc-shell.is-control-compose .oc-close .oc-icon-chevron,
       .oc-close.is-collapse .oc-icon-chevron {
         opacity: 1; transform: rotate(0deg) scale(1);
       }
@@ -554,22 +562,65 @@
       #barChatSend svg { width: 15px; height: 15px; }
 
       .oc-shell.is-task-prompt {
-        width: min(560px, 94vw);
-        border-radius: 22px;
-        background: var(--oc-glass-open);
-        border: 1px solid var(--oc-border);
-        box-shadow: var(--oc-shadow);
-        backdrop-filter: blur(28px) saturate(1.2);
-        -webkit-backdrop-filter: blur(28px) saturate(1.2);
+        /* Legacy class kept for chevron; compose uses is-control-compose */
       }
-      .oc-shell.is-task-prompt .command-tab { display: none; }
-      .oc-shell.is-task-prompt .chat-drawer {
-        max-height: 120px;
-        opacity: 1;
-        pointer-events: auto;
+      .oc-shell.is-control-compose .oc-actions,
+      .oc-shell.is-control-compose .oc-stealth-wrap,
+      .oc-shell.is-control-compose .oc-drag {
+        display: none !important;
       }
-      .oc-shell.is-task-prompt .chat-drawer-header .hint,
-      .oc-shell.is-task-prompt .chat-messages { display: none; }
+      .oc-shell.is-control-compose .oc-inline-control {
+        display: flex;
+      }
+      .oc-inline-control {
+        display: none;
+        flex: 1;
+        min-width: 0;
+        align-items: center;
+        gap: 8px;
+        -webkit-app-region: no-drag;
+      }
+      .oc-inline-control input {
+        flex: 1;
+        min-width: 0;
+        height: 36px;
+        border: none;
+        outline: none;
+        background: transparent;
+        color: var(--oc-text-strong);
+        font-size: 14px;
+        font-weight: 500;
+        letter-spacing: -0.01em;
+        padding: 0 4px;
+      }
+      .oc-inline-control input::placeholder {
+        color: #8b95a5;
+        font-weight: 450;
+      }
+      .oc-control-status {
+        display: none;
+        flex: 1;
+        min-width: 0;
+        color: var(--oc-text);
+        font-size: 13px;
+        font-weight: 550;
+        letter-spacing: -0.01em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        padding: 0 6px;
+        -webkit-app-region: no-drag;
+      }
+      .oc-shell.is-controlling .oc-control-status { display: block; }
+      .oc-shell.is-controlling .oc-actions .oc-pill-btn:not(#ocControlBtn) { display: none !important; }
+      .oc-shell.is-controlling .oc-stealth-wrap,
+      .oc-shell.is-controlling .oc-drag,
+      .oc-shell.is-controlling .oc-inline-control {
+        display: none !important;
+      }
+      .oc-shell.is-controlling .oc-actions {
+        margin-left: auto;
+      }
       .oc-shell.is-shaking { animation: oc-shake 480ms var(--oc-ease); }
       @keyframes oc-shake {
         0%, 100% { transform: translateX(0); }
@@ -589,7 +640,7 @@
         transition: opacity 360ms var(--oc-ease-soft), transform 360ms var(--oc-ease);
       }
       .oc-shell.is-animating {
-        will-change: width, transform, opacity;
+        will-change: width, transform, opacity, height;
       }
     </style>
   </head>
@@ -604,6 +655,11 @@
             <path d="M2 4 L6 8.2 L10 4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </button>
+
+        <div class="oc-inline-control" id="ocInlineControl">
+          <input id="ocInlineControlInput" type="text" autocomplete="off" spellcheck="true" placeholder="What should the AI do on your computer?" />
+        </div>
+        <div class="oc-control-status" id="ocControlStatus" aria-live="polite"></div>
 
         <div class="oc-actions">
           <button type="button" class="oc-pill-btn oc-boot-hide" id="ocAskBtn">

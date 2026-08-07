@@ -35,7 +35,7 @@ class WindowManager {
     this.bindWindows = false; // Disabled on Linux-friendly Clyra bridge to avoid resize recursion
     this.chatDrawerOpen = false; // Chat expands under the centered main bar (no separate panel)
     this.mainCollapsedMaxWidth = 720; // Compact frosted pill (+ icons + Stealth + drag)
-    this.mainExpandedWidth = 580; // Ask / Auto Answer expanded shell
+    this.mainExpandedWidth = 620; // Ask / Auto Answer expanded shell (matches EXPANDED_W)
     this.windowGap = 10; // Small gap between windows
     this.boundWindowsPosition = { x: 0, y: 0 }; // Track position of bound windows
     this.stealthEnabled = false;
@@ -780,16 +780,22 @@ class WindowManager {
     });
   }
 
-  showOnCurrentDesktop(win) {
+  showOnCurrentDesktop(win, options = {}) {
     if (!win || win.isDestroyed()) return;
+    const focus = options.focus !== false;
+    const inactive = options.inactive === true || focus === false;
 
     const llmWin = this.windows.get('llmResponse');
     const isLLM = llmWin && !llmWin.isDestroyed() && win.id === llmWin.id;
 
     if (process.platform === 'darwin') {
-      // macOS: prevent space switching and keep visibility stable
-      win.hide();
-      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      // macOS: keep overlay visible without stealing focus from the user's app
+      // (and without bouncing/activating the Clyra desktop host).
+      try {
+        win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      } catch {
+        /* ignore */
+      }
 
       const setMacOSAlwaysOnTop = () => {
         if (win.isDestroyed()) return;
@@ -806,25 +812,39 @@ class WindowManager {
 
       setTimeout(() => {
         if (win.isDestroyed()) return;
-        win.show();
-        win.focus();
+        if (inactive || !focus) {
+          try {
+            win.showInactive();
+          } catch {
+            win.show();
+          }
+        } else {
+          win.show();
+          try { win.focus(); } catch { /* ignore */ }
+        }
         setMacOSAlwaysOnTop();
-        setTimeout(() => { if (!win.isDestroyed()) setMacOSAlwaysOnTop(); }, 100);
-        // Keep LLM window visible across workspaces; others revert
         setTimeout(() => {
           if (win.isDestroyed()) return;
           if (!isLLM) {
-            win.setVisibleOnAllWorkspaces(false);
+            try { win.setVisibleOnAllWorkspaces(false); } catch { /* ignore */ }
           }
           setMacOSAlwaysOnTop();
         }, 300);
-      }, 50);
+      }, 30);
     } else {
-      // Linux/Windows
+      // Linux/Windows — prefer showInactive for chat updates so we don't yank focus
       win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
       win.setAlwaysOnTop(true);
-      win.show();
-      win.focus();
+      if (inactive || !focus) {
+        try {
+          win.showInactive();
+        } catch {
+          win.show();
+        }
+      } else {
+        win.show();
+        try { win.focus(); } catch { /* ignore */ }
+      }
       setTimeout(() => {
         if (win.isDestroyed()) return;
         if (!isLLM) {
@@ -837,6 +857,8 @@ class WindowManager {
     logger.debug('Showing window on current desktop with enhanced always-on-top', {
       platform: process.platform,
       windowId: win.id,
+      focus,
+      inactive,
       isDestroyed: win.isDestroyed()
     });
   }
@@ -1780,7 +1802,9 @@ class WindowManager {
   openChatDrawer() {
     const mainWindow = this.windows.get('main');
     if (!mainWindow || mainWindow.isDestroyed()) return false;
-    this.showOnCurrentDesktop(mainWindow);
+    // Never steal focus when chat/LLM updates arrive — that was yanking the
+    // user into Clyra/OpenCluely and interrupting their work.
+    this.showOnCurrentDesktop(mainWindow, { focus: false, inactive: true });
     this.centerMainWindowAtTop();
     this.setChatDrawerOpen(true);
     try {

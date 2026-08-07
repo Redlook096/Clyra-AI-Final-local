@@ -19,6 +19,10 @@ if [[ -d "${BRIDGE}" ]]; then
   cp "${BRIDGE}/capture.service.js" "${DEST}/src/services/capture.service.js"
   cp "${BRIDGE}/desktop-control.service.js" "${DEST}/src/services/desktop-control.service.js"
   cp "${BRIDGE}/control-safety.js" "${DEST}/src/services/control-safety.js"
+  if [[ -f "${BRIDGE}/macos-input.py" ]]; then
+    cp "${BRIDGE}/macos-input.py" "${DEST}/src/services/macos-input.py"
+    chmod +x "${DEST}/src/services/macos-input.py"
+  fi
   cp "${BRIDGE}/config.js" "${DEST}/src/core/config.js"
   cp "${BRIDGE}/main.js" "${DEST}/main.js"
   cp "${BRIDGE}/window.manager.js" "${DEST}/src/managers/window.manager.js"
@@ -42,5 +46,5 @@ echo "==> npm install"
 cd "${DEST}"
 npm install --omit=optional
 
-echo "Ready. Vision=llava-phi3 (Ollama, 8GB-safe)  Text=Clyra /api/companion/ask  Stealth=OFF"
+echo "Ready. Vision=qwen2.5vl:3b (fast UI vision)  Text=Clyra /api/companion/ask  Stealth=OFF"
 echo "Start: bash scripts/start-opencluely-electron.sh"

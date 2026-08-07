@@ -150,27 +150,41 @@
     });
   }
 
+  /** Keep Electron window bounds in lockstep with CSS transitions. */
+  function animateWindowWithShell(durationMs) {
+    return new Promise((resolve) => {
+      const start = performance.now();
+      const tick = () => {
+        measureAndResize();
+        if (performance.now() - start < durationMs) {
+          requestAnimationFrame(tick);
+        } else {
+          measureAndResize();
+          resolve();
+        }
+      };
+      requestAnimationFrame(tick);
+    });
+  }
+
   async function expandToChat(nextMode) {
     if (animating) return;
     animating = true;
     shell.classList.add('is-animating');
     setModeUI(nextMode);
 
-    // 1) Expand width outwards first
+    // 1) Expand width outwards first — keep pill chrome until chat opens
     wide = true;
     shell.classList.add('is-wide');
     notifyDrawer(true);
-    measureAndResize();
-    await wait(520);
+    await animateWindowWithShell(520);
 
-    // 2) Then expand chat downward
+    // 2) Then expand chat smoothly downward (Electron height tracks CSS max-height)
     open = true;
     shell.classList.add('is-chat-open');
     drawer.setAttribute('aria-hidden', 'false');
     updateCloseIcon();
-    measureAndResize();
-    await wait(500);
-    measureAndResize();
+    await animateWindowWithShell(500);
     shell.classList.remove('is-animating');
     animating = false;
 
@@ -182,7 +196,7 @@
   async function collapse(opts = {}) {
     const hideIfAlreadyCollapsed = Boolean(opts.hideIfAlreadyCollapsed);
     if (animating) return;
-    if (!open && !wide) {
+    if (!open && !wide && !taskPromptMode && !controlling) {
       if (hideIfAlreadyCollapsed) {
         try {
           await window.electronAPI?.hideAllWindows?.();
@@ -197,20 +211,26 @@
     askBtn?.classList.remove('is-active');
     autoBtn?.classList.remove('is-active');
 
+    // Exit control compose without leaving a half-open shell
+    if (taskPromptMode) {
+      taskPromptMode = false;
+      shell.classList.remove('is-control-compose', 'is-task-prompt');
+      clearInlineControlInput();
+      updateCloseIcon();
+    }
+
     // 1) Collapse height first
     open = false;
     shell.classList.remove('is-chat-open');
     drawer.setAttribute('aria-hidden', 'true');
     updateCloseIcon();
-    measureAndResize();
-    await wait(480);
+    await animateWindowWithShell(480);
 
     // 2) Then shrink width back to pill
     wide = false;
     shell.classList.remove('is-wide');
     notifyDrawer(false);
-    measureAndResize();
-    await wait(520);
+    await animateWindowWithShell(520);
     if (tab && window.electronAPI?.resizeWindow) {
       const rect = tab.getBoundingClientRect();
       window.electronAPI.resizeWindow(Math.ceil(rect.width), Math.ceil(rect.height));
@@ -297,12 +317,15 @@
 
   function setControlButtonState(isControlling) {
     controlling = Boolean(isControlling);
+    shell.classList.toggle('is-controlling', controlling);
     if (!controlBtn) return;
     if (controlling) {
       controlBtn.classList.add('oc-stop');
       controlBtn.classList.remove('oc-control');
       controlBtn.title = 'Stop AI control';
       controlBtn.setAttribute('aria-label', 'Stop AI control');
+      // Keep Stop visible inside the collapsed pill; hide other actions via CSS
+      controlBtn.style.display = '';
     } else {
       controlBtn.classList.add('oc-control');
       controlBtn.classList.remove('oc-stop');
@@ -311,63 +334,69 @@
     }
   }
 
+  function inlineControlInput() {
+    return document.getElementById('ocInlineControlInput');
+  }
+
+  function clearInlineControlInput() {
+    const el = inlineControlInput();
+    if (el) el.value = '';
+  }
+
   async function enterTaskPrompt() {
     if (animating || controlling) return;
     animating = true;
     setModeUI('control');
-    shell.classList.add('is-shaking');
-    await wait(480);
-    shell.classList.remove('is-shaking');
-    shell.classList.add('is-fading-out');
-    await wait(300);
-    // Compact task prompt bar
+    // Stay on the original collapsed pill — hide buttons, reveal type space.
     taskPromptMode = true;
-    open = true;
-    wide = true;
-    shell.classList.remove('is-chat-open');
-    shell.classList.add('is-wide', 'is-task-prompt', 'is-fading-in');
-    shell.classList.remove('is-fading-out');
-    drawer.setAttribute('aria-hidden', 'false');
+    open = false;
+    wide = false;
+    shell.classList.remove('is-chat-open', 'is-wide', 'is-task-prompt', 'is-fading-out', 'is-fading-in', 'is-shaking');
+    shell.classList.add('is-control-compose');
+    drawer.setAttribute('aria-hidden', 'true');
     updateCloseIcon();
-    if (modeLabel) modeLabel.textContent = 'Take Control';
-    if (modeHint) modeHint.textContent = 'What should the AI do on your computer?';
-    if (inputEl) {
-      inputEl.value = '';
-      inputEl.placeholder = 'e.g. Open Chrome and go to example.com…';
-      inputEl.focus();
+    const el = inlineControlInput();
+    if (el) {
+      el.value = '';
+      el.placeholder = 'What should the AI do on your computer?';
+      setTimeout(() => el.focus(), 30);
     }
-    notifyDrawer(true);
+    notifyDrawer(false);
     measureAndResize();
-    await wait(280);
+    await wait(120);
     animating = false;
   }
 
   async function exitTaskPromptToControl(task) {
     animating = true;
-    shell.classList.add('is-fading-out');
-    await wait(280);
     taskPromptMode = false;
-    shell.classList.remove('is-task-prompt', 'is-fading-out');
-    shell.classList.add('is-wide', 'is-chat-open', 'is-fading-in');
-    open = true;
-    wide = true;
+    shell.classList.remove('is-control-compose', 'is-task-prompt', 'is-fading-out', 'is-fading-in');
+    // Stay collapsed — only Stop remains visible via is-controlling
+    open = false;
+    wide = false;
+    shell.classList.remove('is-chat-open', 'is-wide');
+    drawer.setAttribute('aria-hidden', 'true');
     setControlButtonState(true);
     setModeUI('control');
     updateCloseIcon();
-    if (inputEl) inputEl.placeholder = 'Type a message… (Shift+Enter for newline)';
-    drawer.setAttribute('aria-hidden', 'false');
+    clearInlineControlInput();
+    const status = document.getElementById('ocControlStatus');
+    if (status) status.textContent = 'AI controlling…';
     measureAndResize();
-    addMessage(`Take Control: ${task}`, 'user');
-    addMessage('AI is controlling your machine… blue glow means control is active. Press Stop anytime.', 'system');
-    showThinking();
     try {
       await window.electronAPI?.startDesktopControl?.(task);
     } catch (error) {
-      hideThinking();
-      addMessage(`Control failed: ${error.message}`, 'error');
       setControlButtonState(false);
+      if (status) status.textContent = '';
+      shell.classList.add('is-control-compose');
+      taskPromptMode = true;
+      const el = inlineControlInput();
+      if (el) {
+        el.value = '';
+        el.placeholder = `Failed: ${error.message}`;
+      }
     }
-    await wait(260);
+    await wait(80);
     animating = false;
   }
 
@@ -379,7 +408,12 @@
       /* ignore */
     }
     setControlButtonState(false);
-    addMessage('Control stopped.', 'system');
+    const status = document.getElementById('ocControlStatus');
+    if (status) status.textContent = '';
+    shell.classList.remove('is-control-compose', 'is-task-prompt');
+    taskPromptMode = false;
+    updateCloseIcon();
+    measureAndResize();
     if (modeHint) modeHint.textContent = 'Control ended';
   }
 
@@ -389,12 +423,16 @@
 
   async function sendCurrent() {
     const text = (inputEl?.value || '').trim();
-    if (!text) return;
+    const inlineText = (inlineControlInput()?.value || '').trim();
     if (taskPromptMode) {
-      inputEl.value = '';
-      await exitTaskPromptToControl(text);
+      const task = inlineText || text;
+      if (!task) return;
+      clearInlineControlInput();
+      if (inputEl) inputEl.value = '';
+      await exitTaskPromptToControl(task);
       return;
     }
+    if (!text) return;
     if (!open) await expandToChat('ask');
     addMessage(text, 'user');
     inputEl.value = '';
@@ -481,9 +519,10 @@
     e.stopPropagation();
     if (taskPromptMode) {
       taskPromptMode = false;
-      shell.classList.remove('is-task-prompt', 'is-wide', 'is-fading-in', 'is-fading-out');
+      shell.classList.remove('is-control-compose', 'is-task-prompt', 'is-wide', 'is-fading-in', 'is-fading-out');
       open = false;
       wide = false;
+      clearInlineControlInput();
       if (inputEl) inputEl.placeholder = 'Type a message… (Shift+Enter for newline)';
       notifyDrawer(false);
       updateCloseIcon();
@@ -494,6 +533,10 @@
     if (open || wide) {
       if (controlling) await stopControlFromBar();
       await collapse({ hideIfAlreadyCollapsed: false });
+      return;
+    }
+    if (controlling) {
+      await stopControlFromBar();
       return;
     }
     // Fully collapsed X → hide overlay
@@ -508,6 +551,19 @@
       sendCurrent();
     }
   });
+
+  const inlineEl = inlineControlInput();
+  inlineEl?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      sendCurrent();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeBtn?.click();
+    }
+  });
+  inlineEl?.addEventListener('mousedown', (e) => e.stopPropagation());
+  inlineEl?.addEventListener('pointerdown', (e) => e.stopPropagation());
 
   // Main-process open/close (single listener — avoid double collapse/hide)
   function onDrawerToggle(_event, payload) {
@@ -563,20 +619,21 @@
     });
     api.onControlStatus?.((_e, data) => {
       hideThinking();
+      const status = document.getElementById('ocControlStatus');
       if (data?.status === 'running') {
         setControlButtonState(true);
-        if (data.message) addMessage(data.message, 'system');
+        if (status) status.textContent = data.message || 'AI controlling…';
       } else if (data?.status === 'step' && data.message) {
-        addMessage(data.message, 'assistant');
+        if (status) status.textContent = String(data.message).slice(0, 72);
       } else if (data?.status === 'done') {
         setControlButtonState(false);
-        addMessage(data.message || 'Task complete.', 'assistant');
+        if (status) status.textContent = '';
       } else if (data?.status === 'stopped') {
         setControlButtonState(false);
-        addMessage(data.message || 'Control stopped.', 'system');
+        if (status) status.textContent = '';
       } else if (data?.status === 'error') {
         setControlButtonState(false);
-        addMessage(data.message || 'Control error', 'error');
+        if (status) status.textContent = String(data.message || 'Control error').slice(0, 72);
       }
     });
     api.onResearchStatus?.((_e, data) => {

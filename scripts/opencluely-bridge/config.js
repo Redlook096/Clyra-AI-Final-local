@@ -47,7 +47,7 @@ class ConfigManager {
         // Free lightweight open-source vision model for ~8GB RAM
         vision: {
           provider: 'ollama',
-          model: process.env.OPENCLUELY_VISION_MODEL || 'llava-phi3',
+          model: process.env.OPENCLUELY_VISION_MODEL || 'qwen2.5vl:3b',
           ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
         },
         // Legacy Gemini block kept empty — not used (stealth interview path rejected)

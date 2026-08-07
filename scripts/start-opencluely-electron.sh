@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Start OpenCluely Electron with Clyra API + Moondream vision.
+# Start OpenCluely Electron with Clyra API + fast local vision (qwen2.5vl:3b).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="${ROOT}/apps/opencluely"
 export CLYRA_API_BASE="${CLYRA_API_BASE:-http://127.0.0.1:31415}"
 export OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
-export OPENCLUELY_VISION_MODEL="${OPENCLUELY_VISION_MODEL:-llava-phi3}"
+export OPENCLUELY_VISION_MODEL="${OPENCLUELY_VISION_MODEL:-qwen2.5vl:3b}"
 export CLYRA_CONTROL_PORT="${CLYRA_CONTROL_PORT:-3847}"
 export ELECTRON_DISABLE_SECURITY_WARNINGS=1
 
@@ -16,10 +16,11 @@ if ! curl -sf "${OLLAMA_BASE_URL}/api/tags" >/dev/null; then
   sleep 2
 fi
 
-# Ensure llava-phi3 is present
-if ! ollama list 2>/dev/null | grep -qi llava-phi3; then
-  echo "Pulling llava-phi3 (lightweight open vision model for ~8GB RAM)..."
-  ollama pull llava-phi3
+# Ensure vision model is present
+VISION_MODEL="${OPENCLUELY_VISION_MODEL}"
+if ! ollama list 2>/dev/null | grep -qi "$(echo "$VISION_MODEL" | cut -d: -f1)"; then
+  echo "Pulling ${VISION_MODEL} (fast UI/screen vision model)..."
+  ollama pull "${VISION_MODEL}"
 fi
 
 # Ensure Clyra API is up
