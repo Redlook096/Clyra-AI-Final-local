@@ -903,6 +903,7 @@ function ChatThinkingLabel({
 
 /** Source favicons sit to the right of message actions; hover expands the site name. */
 function SourceFaviconChips({ urls }: { urls?: string[] }) {
+  const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
   if (!urls?.length) return null;
   const items = [...new Map(urls.map((url) => [hostnameFromUrl(url), url])).entries()]
     .filter(([host]) => host)
@@ -913,15 +914,20 @@ function SourceFaviconChips({ urls }: { urls?: string[] }) {
     <div className="clyra-message-source-chips" aria-label="Sources">
       {items.map(([host, url]) => {
         const label = host.replace(/^www\./i, "");
+        const expanded = hoveredUrl === url;
         return (
           <a
             key={url}
-            className="clyra-message-source-chip"
+            className={cn("clyra-message-source-chip", expanded && "is-expanded")}
             href={url}
             target="_blank"
             rel="noopener noreferrer"
             aria-label={`Open ${label} in your browser`}
             title={label}
+            onMouseEnter={() => setHoveredUrl(url)}
+            onMouseLeave={() => setHoveredUrl((current) => (current === url ? null : current))}
+            onFocus={() => setHoveredUrl(url)}
+            onBlur={() => setHoveredUrl((current) => (current === url ? null : current))}
           >
             <span className="clyra-message-source-chip__icon">
               <img
@@ -929,7 +935,7 @@ function SourceFaviconChips({ urls }: { urls?: string[] }) {
                 alt=""
               />
             </span>
-            <span className="clyra-message-source-chip__bullet">
+            <span className="clyra-message-source-chip__bullet" aria-hidden={!expanded}>
               <span className="clyra-message-source-chip__dot" />
               <span className="clyra-message-source-chip__label">{label}</span>
             </span>

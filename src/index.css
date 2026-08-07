@@ -5427,13 +5427,14 @@ body,
 .clyra-message-source-chips {
   display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 5px;
-  margin-left: auto;
+  margin-left: 10px;
   padding-left: 10px;
-  max-width: min(460px, 62vw);
+  border-left: 1px solid #e1e6ed;
+  max-width: min(520px, 70vw);
   overflow: visible;
-  flex-shrink: 1;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .clyra-message-source-chip {
   display: inline-flex;
@@ -5446,11 +5447,13 @@ body,
   border-radius: 999px;
   background: #fff;
   color: #4b5b70;
-  flex-shrink: 1;
+  flex: 0 0 auto;
   min-width: 22px;
   overflow: hidden;
   cursor: pointer;
   text-decoration: none;
+  position: relative;
+  z-index: 1;
   transition:
     max-width 0.34s cubic-bezier(0.22, 1, 0.36, 1),
     gap 0.28s cubic-bezier(0.22, 1, 0.36, 1),
@@ -5460,7 +5463,9 @@ body,
     border-color 0.2s ease;
 }
 .clyra-message-source-chip:hover,
-.clyra-message-source-chip:focus-visible {
+.clyra-message-source-chip:focus-visible,
+.clyra-message-source-chip.is-expanded {
+  z-index: 2;
   max-width: 240px;
   gap: 6px;
   padding: 0 10px 0 2px;
@@ -5498,7 +5503,8 @@ body,
     transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .clyra-message-source-chip:hover .clyra-message-source-chip__bullet,
-.clyra-message-source-chip:focus-visible .clyra-message-source-chip__bullet {
+.clyra-message-source-chip:focus-visible .clyra-message-source-chip__bullet,
+.clyra-message-source-chip.is-expanded .clyra-message-source-chip__bullet {
   max-width: 200px;
   opacity: 1;
   transform: translateX(0);
@@ -5524,8 +5530,15 @@ body,
 
 /* Keep action-row height stable while a source pill expands horizontally */
 .clyra-message-actions:has(.clyra-message-source-chip:hover),
-.clyra-message-actions:has(.clyra-message-source-chip:focus-visible) {
+.clyra-message-actions:has(.clyra-message-source-chip:focus-visible),
+.clyra-message-actions:has(.clyra-message-source-chip.is-expanded) {
   overflow: visible;
+}
+
+/* Source chips must stay clickable even if a status node is exiting. */
+.clyra-message-actions .clyra-message-source-chips,
+.clyra-message-actions .clyra-message-source-chip {
+  pointer-events: auto;
 }
 
 .clyra-browser-ai-control {
@@ -5739,8 +5752,9 @@ body,
   .clyra-stream-paint__caret { animation: none; opacity: 0.22; }
 }
 
-/* Assistant controls must never leak through a held thinking state. */
-.clyra-assistant-message:has([role="status"]) .clyra-message-actions {
+/* Assistant controls must never leak through a held thinking state.
+   Once the answer + actions are showing, keep chips/buttons interactive. */
+.clyra-assistant-message:has([role="status"]):not(:has(.clyra-message-source-chips)) .clyra-message-actions {
   opacity: 0 !important;
   pointer-events: none;
 }
