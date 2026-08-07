@@ -35,6 +35,11 @@ export default function ClyraCodeWorkspace() {
     replyPermission,
   } = useClyraCode();
 
+  useEffect(() => {
+    // Keep Chat/Vibe/Clip rail out of the coding surface; hover-dot reveals it.
+    window.dispatchEvent(new CustomEvent("clyra:workflow-tabs-hide"));
+  }, []);
+
   // Views consume harness diffs when present, or summaries synthesized from
   // real tool payloads when the diff endpoint is empty.
   const state = useMemo(

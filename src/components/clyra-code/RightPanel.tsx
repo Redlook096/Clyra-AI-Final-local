@@ -149,10 +149,13 @@ function BrowserView({
     session?.status === "compiling" ||
     session?.status === "restarting" ||
     session?.status === "refreshing";
+  const missingEntry =
+    /index\.html|entry point|not yet created/i.test(String(session?.lastError?.message || ""));
   const failed =
-    session?.status === "build_failed" ||
-    session?.status === "server_crashed" ||
-    session?.status === "runtime_error";
+    !missingEntry &&
+    (session?.status === "build_failed" ||
+      session?.status === "server_crashed" ||
+      session?.status === "runtime_error");
 
   useEffect(() => {
     if (!url) return;
