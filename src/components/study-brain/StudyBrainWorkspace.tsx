@@ -19,12 +19,12 @@ import {
   Presentation,
   Trash2,
   X,
-  Youtube,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { cn, formatApiError } from "../../lib/utils";
 import { MarkdownMessageContent } from "../MarkdownMessageContent";
 import { ShiningBrainIcon, ShiningText, ThinkingDots } from "../ShiningText";
+import { GoogleProductIcon, YouTubeBrandIcon } from "../brand/ProductIcons";
 import { getElectronDesktop } from "../../lib/electron-runtime";
 import {
   connectedSources,
@@ -90,6 +90,8 @@ export default function StudyBrainWorkspace({
   const [inspectorTab, setInspectorTab] = useState<"source" | "chat" | "materials">("chat");
   const [addOpen, setAddOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
+  const [linkHint, setLinkHint] = useState("Paste a YouTube, website, or Google link");
+  const [linkTitle, setLinkTitle] = useState("Add link");
   const [renaming, setRenaming] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [dragging, setDragging] = useState(false);
@@ -520,7 +522,7 @@ export default function StudyBrainWorkspace({
                 <Plus className="h-3.5 w-3.5" strokeWidth={1.75} /> Add resource
               </button>
               {addOpen ? (
-                <div className="absolute right-0 top-[calc(100%+6px)] z-30 w-[260px] overflow-hidden rounded-[10px] border border-[color:var(--clyra-border)] bg-white py-1.5 shadow-[var(--clyra-shadow-popover)]">
+                <div className="absolute right-0 top-[calc(100%+6px)] z-30 w-[280px] overflow-hidden rounded-[12px] border border-[color:var(--clyra-border)] bg-white py-1.5 shadow-[var(--clyra-shadow-popover)]">
                   <p className="px-3 pb-1 pt-1 text-[10.5px] font-medium uppercase tracking-[0.07em] text-[color:var(--clyra-text-tertiary)]">
                     Upload
                   </p>
@@ -541,7 +543,9 @@ export default function StudyBrainWorkspace({
                       }}
                       className="flex w-full items-center gap-2.5 px-3 py-[7px] text-left text-[12.5px] text-[color:var(--clyra-text)] transition-colors hover:bg-[color:var(--clyra-hover)]"
                     >
-                      <item.icon className="h-[15px] w-[15px] text-[color:var(--clyra-text-secondary)]" strokeWidth={1.75} />
+                      <span className="grid h-6 w-6 place-items-center rounded-[7px] border border-[color:var(--clyra-border)] bg-[color:var(--clyra-surface-muted)]">
+                        <item.icon className="h-[14px] w-[14px] text-[color:var(--clyra-text-secondary)]" strokeWidth={1.75} />
+                      </span>
                       {item.label}
                     </button>
                   ))}
@@ -551,20 +555,64 @@ export default function StudyBrainWorkspace({
                   </p>
                   {(
                     [
-                      { label: "YouTube", icon: Youtube },
-                      { label: "Website", icon: Globe },
-                    ] as const
+                      {
+                        id: "youtube",
+                        label: "YouTube",
+                        icon: <YouTubeBrandIcon className="h-4 w-4" />,
+                        title: "Add YouTube video",
+                        hint: "Paste a YouTube URL",
+                      },
+                      {
+                        id: "web",
+                        label: "Website",
+                        icon: <Globe className="h-[15px] w-[15px] text-[color:var(--clyra-text-secondary)]" strokeWidth={1.75} />,
+                        title: "Add website",
+                        hint: "Paste a website URL",
+                      },
+                      {
+                        id: "docs",
+                        label: "Google Docs",
+                        icon: <GoogleProductIcon product="docs" className="h-4 w-4" />,
+                        title: "Add Google Doc",
+                        hint: "Paste a docs.google.com link",
+                      },
+                      {
+                        id: "sheets",
+                        label: "Google Sheets",
+                        icon: <GoogleProductIcon product="sheets" className="h-4 w-4" />,
+                        title: "Add Google Sheet",
+                        hint: "Paste a sheets.google.com link",
+                      },
+                      {
+                        id: "slides",
+                        label: "Google Slides",
+                        icon: <GoogleProductIcon product="slides" className="h-4 w-4" />,
+                        title: "Add Google Slides",
+                        hint: "Paste a slides.google.com link",
+                      },
+                      {
+                        id: "drive",
+                        label: "Google Drive",
+                        icon: <GoogleProductIcon product="drive" className="h-4 w-4" />,
+                        title: "Add Google Drive file",
+                        hint: "Paste a drive.google.com link",
+                      },
+                    ] as Array<{ id: string; label: string; icon: ReactNode; title: string; hint: string }>
                   ).map((item) => (
                     <button
-                      key={item.label}
+                      key={item.id}
                       type="button"
                       onClick={() => {
                         setAddOpen(false);
+                        setLinkTitle(item.title);
+                        setLinkHint(item.hint);
                         setLinkOpen(true);
                       }}
                       className="flex w-full items-center gap-2.5 px-3 py-[7px] text-left text-[12.5px] text-[color:var(--clyra-text)] transition-colors hover:bg-[color:var(--clyra-hover)]"
                     >
-                      <item.icon className="h-[15px] w-[15px] text-[color:var(--clyra-text-secondary)]" strokeWidth={1.75} />
+                      <span className="grid h-6 w-6 place-items-center rounded-[7px] border border-[color:var(--clyra-border)] bg-white">
+                        {item.icon}
+                      </span>
                       {item.label}
                     </button>
                   ))}
@@ -580,7 +628,9 @@ export default function StudyBrainWorkspace({
                     }}
                     className="flex w-full items-center gap-2.5 px-3 py-[7px] text-left text-[12.5px] text-[color:var(--clyra-text)] transition-colors hover:bg-[color:var(--clyra-hover)]"
                   >
-                    <NotebookPen className="h-[15px] w-[15px] text-[color:var(--clyra-text-secondary)]" strokeWidth={1.75} />
+                    <span className="grid h-6 w-6 place-items-center rounded-[7px] border border-[color:var(--clyra-border)] bg-[color:var(--clyra-surface-muted)]">
+                      <NotebookPen className="h-[14px] w-[14px] text-[color:var(--clyra-text-secondary)]" strokeWidth={1.75} />
+                    </span>
                     Paste text
                   </button>
                   <button
@@ -593,7 +643,9 @@ export default function StudyBrainWorkspace({
                     }}
                     className="flex w-full items-center gap-2.5 px-3 py-[7px] text-left text-[12.5px] text-[color:var(--clyra-text)] transition-colors hover:bg-[color:var(--clyra-hover)]"
                   >
-                    <FilePlus2 className="h-[15px] w-[15px] text-[color:var(--clyra-text-secondary)]" strokeWidth={1.75} />
+                    <span className="grid h-6 w-6 place-items-center rounded-[7px] border border-[color:var(--clyra-border)] bg-[color:var(--clyra-surface-muted)]">
+                      <FilePlus2 className="h-[14px] w-[14px] text-[color:var(--clyra-text-secondary)]" strokeWidth={1.75} />
+                    </span>
                     Blank note
                   </button>
                 </div>
@@ -943,8 +995,16 @@ export default function StudyBrainWorkspace({
         <div className="fixed inset-0 z-[80] grid place-items-center bg-[color:var(--clyra-text)]/15 p-4 backdrop-blur-[2px]">
           <div className="w-full max-w-md rounded-[14px] border border-[color:var(--clyra-border)] bg-white p-4 shadow-[var(--clyra-shadow-popover)]">
             <div className="mb-3 flex items-center justify-between">
-              <p className="text-[13px] font-medium">Add link</p>
-              <button type="button" onClick={() => setLinkOpen(false)} className="grid h-7 w-7 place-items-center rounded-[8px] hover:bg-[color:var(--clyra-hover)]">
+              <p className="text-[13px] font-medium">{linkTitle}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setLinkOpen(false);
+                  setLinkTitle("Add link");
+                  setLinkHint("Paste a YouTube, website, or Google link");
+                }}
+                className="grid h-7 w-7 place-items-center rounded-[8px] hover:bg-[color:var(--clyra-hover)]"
+              >
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -962,6 +1022,8 @@ export default function StudyBrainWorkspace({
                   ),
                 );
                 setUrlDraft("");
+                setLinkTitle("Add link");
+                setLinkHint("Paste a YouTube, website, or Google link");
               }}
             >
               <div className="flex h-9 flex-1 items-center gap-1.5 rounded-[8px] border border-[color:var(--clyra-border)] bg-[color:var(--clyra-surface-muted)] px-2.5">
@@ -970,7 +1032,7 @@ export default function StudyBrainWorkspace({
                   autoFocus
                   value={urlDraft}
                   onChange={(event) => setUrlDraft(event.target.value)}
-                  placeholder="YouTube, website, or Drive link"
+                  placeholder={linkHint}
                   className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-[color:var(--clyra-text-tertiary)]"
                 />
               </div>

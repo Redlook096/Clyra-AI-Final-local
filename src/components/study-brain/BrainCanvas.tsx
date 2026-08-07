@@ -1,5 +1,6 @@
 import {
   Background,
+  ConnectionMode,
   Controls,
   MiniMap,
   ReactFlow,
@@ -12,6 +13,7 @@ import {
   type Node,
   type OnConnect,
   type Viewport,
+  type XYPosition,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef } from "react";
@@ -25,12 +27,28 @@ const nodeTypes = {
   source: SourceNodeView,
 };
 
+const EDGE_STYLE = {
+  stroke: "rgba(15, 23, 42, 0.16)",
+  strokeWidth: 1.35,
+};
+
+type SideId = "left" | "right" | "top" | "bottom";
+
+/** Which side of `from` faces toward `to` — used for straight hub spokes. */
+function facingSide(from: XYPosition, to: XYPosition): SideId {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? "right" : "left";
+  return dy >= 0 ? "bottom" : "top";
+}
+
 function brainToFlow(brain: StudyBrain, processing: boolean, onAction: (action: BrainAction) => void) {
+  const brainPos = brain.positions.brain || { x: 420, y: 280 };
   const nodes: Node[] = [
     {
       id: "brain",
       type: "brain",
-      position: brain.positions.brain || { x: 420, y: 280 },
+      position: brainPos,
       data: {
         title: brain.title,
         processing,
@@ -45,17 +63,23 @@ function brainToFlow(brain: StudyBrain, processing: boolean, onAction: (action: 
     nodes.push({
       id: source.id,
       type: "source",
-      position: brain.positions[source.id] || positionAroundBrain(brain.positions.brain || { x: 420, y: 280 }, index),
+      position: brain.positions[source.id] || positionAroundBrain(brainPos, index),
       data: { source: { ...source, connected: brain.connections.includes(source.id) } },
     });
   });
-  const edges: Edge[] = brain.connections.map((sourceId) => ({
-    id: `e-${sourceId}-brain`,
-    source: sourceId,
-    target: "brain",
-    animated: processing,
-    style: { stroke: "rgba(0,0,0,0.12)", strokeWidth: 1.15 },
-  }));
+  const edges: Edge[] = brain.connections.map((sourceId) => {
+    const sourcePos = brain.positions[sourceId] || brainPos;
+    return {
+      id: `e-${sourceId}-brain`,
+      type: "straight",
+      source: sourceId,
+      target: "brain",
+      sourceHandle: facingSide(sourcePos, brainPos),
+      targetHandle: facingSide(brainPos, sourcePos),
+      animated: processing,
+      style: EDGE_STYLE,
+    };
+  });
   return { nodes, edges };
 }
 
@@ -118,8 +142,9 @@ function CanvasInner({
         const next = addEdge(
           {
             ...connection,
+            type: "straight",
             animated: false,
-            style: { stroke: "rgba(0,0,0,0.12)", strokeWidth: 1.15 },
+            style: EDGE_STYLE,
           },
           eds,
         );
@@ -135,6 +160,8 @@ function CanvasInner({
       nodes={nodes}
       edges={edges}
       nodeTypes={nodeTypes}
+      defaultEdgeOptions={{ type: "straight", style: EDGE_STYLE }}
+      connectionMode={ConnectionMode.Loose}
       onNodesChange={(changes) => {
         onNodesChange(changes);
       }}

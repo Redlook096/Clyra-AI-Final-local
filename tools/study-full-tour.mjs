@@ -127,8 +127,36 @@ async function main() {
   await take(page, "04-add-resource-menu");
   results.push({
     name: "add-resource-menu",
-    ok: await page.getByRole("button", { name: /Paste text|YouTube|Website|Blank note/i }).first().isVisible(),
-    detail: "menu visible",
+    ok:
+      (await page.getByRole("button", { name: /Paste text|YouTube|Website|Blank note/i }).first().isVisible()) &&
+      (await page.getByRole("button", { name: /Google Docs/i }).isVisible().catch(() => false)),
+    detail: "menu visible with Google options",
+  });
+  await take(page, "04b-google-menu");
+  results.push({
+    name: "google-menu-icons",
+    ok:
+      (await page.getByRole("button", { name: /Google Docs/i }).isVisible().catch(() => false)) &&
+      (await page.getByRole("button", { name: /Google Sheets/i }).isVisible().catch(() => false)) &&
+      (await page.getByRole("button", { name: /Google Slides/i }).isVisible().catch(() => false)) &&
+      (await page.getByRole("button", { name: /Google Drive/i }).isVisible().catch(() => false)),
+    detail: "Docs/Sheets/Slides/Drive present",
+  });
+  results.push({
+    name: "centre-side-dots",
+    ok: (await page.locator(".study-brain-handle").count()) >= 4,
+    detail: `handles=${await page.locator(".study-brain-handle").count()}`,
+  });
+  results.push({
+    name: "straight-edges",
+    ok: await page.evaluate(() => {
+      const path = document.querySelector(".react-flow__edge-path");
+      if (!path) return true; // no edges yet
+      const d = path.getAttribute("d") || "";
+      // straight edges are simple M...L... without cubic C curves
+      return !/[Cc]/.test(d);
+    }),
+    detail: "edge paths are straight",
   });
 
   // ---- Paste note ----
@@ -151,7 +179,7 @@ async function main() {
   await page.getByRole("button", { name: /^Website$/i }).click();
   await page.waitForTimeout(250);
   await take(page, "07-website-modal");
-  await page.getByPlaceholder(/YouTube, website/i).fill(WEB_URL);
+  await page.getByPlaceholder(/website URL|YouTube|Google|Paste a/i).fill(WEB_URL);
   await page.getByRole("button", { name: /^Add$/i }).last().click();
   await page.waitForTimeout(4000);
   await take(page, "08-website-added");
@@ -166,7 +194,7 @@ async function main() {
   await page.getByRole("button", { name: /^YouTube$/i }).click();
   await page.waitForTimeout(250);
   await take(page, "09-youtube-modal");
-  await page.getByPlaceholder(/YouTube, website/i).fill(YT_URL);
+  await page.getByPlaceholder(/YouTube URL|YouTube|Paste a/i).fill(YT_URL);
   await page.getByRole("button", { name: /^Add$/i }).last().click();
   await page.waitForTimeout(8000);
   await take(page, "10-youtube-added");
