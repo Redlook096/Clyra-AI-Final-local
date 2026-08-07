@@ -2362,13 +2362,18 @@ body,
   transition: background 180ms ease, color 180ms ease;
 }
 
+.clyra-message-actions > button {
+  width: 26px;
+  height: 26px;
+}
+
 .clyra-header-icon {
   width: 32px;
   height: 32px;
 }
 
 .clyra-header-icon:hover,
-.clyra-message-actions button:hover {
+.clyra-message-actions > button:hover {
   background: #f1f4f7;
   color: var(--chat-text);
 }
@@ -2417,6 +2422,7 @@ body,
 
 .clyra-message-actions {
   display: flex;
+  width: 100%;
   height: 26px;
   align-items: center;
   gap: 2px;
@@ -3873,8 +3879,8 @@ body,
   gap: 4px;
   margin-top: 10px;
 }
-.clyra-message-actions button { width: 30px; height: 30px; border-radius: 8px; }
-.clyra-message-actions button.is-active { color: #406b9e; background: #edf4fb; }
+.clyra-message-actions > button { width: 30px; height: 30px; border-radius: 8px; }
+.clyra-message-actions > button.is-active { color: #406b9e; background: #edf4fb; }
 .clyra-message-actions__divider { width: 1px; height: 16px; margin: 0 3px; background: #e1e6ed; }
 
 .clyra-scroll-latest {
@@ -5417,35 +5423,109 @@ body,
   --atlas-sidebar-width: clamp(300px, 27.2vw, 410px);
 }
 
-/* Finished browse/search source chips — sit beside regenerate in message actions */
+/* Finished browse/search source chips — sit to the right of message actions */
 .clyra-message-source-chips {
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 5px;
-  margin-right: 4px;
-  max-width: min(220px, 42vw);
-  overflow: hidden;
+  margin-left: auto;
+  padding-left: 10px;
+  max-width: min(460px, 62vw);
+  overflow: visible;
+  flex-shrink: 1;
 }
-.clyra-message-source-chips a {
+.clyra-message-source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  height: 22px;
+  max-width: 22px;
+  padding: 0;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+  background: #fff;
+  color: #4b5b70;
+  flex-shrink: 1;
+  min-width: 22px;
+  overflow: hidden;
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    max-width 0.34s cubic-bezier(0.22, 1, 0.36, 1),
+    gap 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    padding 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    background 0.2s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
+}
+.clyra-message-source-chip:hover,
+.clyra-message-source-chip:focus-visible {
+  max-width: 240px;
+  gap: 6px;
+  padding: 0 10px 0 2px;
+  background: #f7f9fb;
+  border-color: rgba(64, 107, 158, 0.22);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+  outline: none;
+  transform: none;
+}
+.clyra-message-source-chip__icon {
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 999px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  background: #fff;
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
-.clyra-message-source-chips a:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
-}
-.clyra-message-source-chips img {
+.clyra-message-source-chip img {
   width: 14px;
   height: 14px;
   object-fit: cover;
   border-radius: 3px;
+}
+.clyra-message-source-chip__bullet {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateX(-6px);
+  transition:
+    max-width 0.34s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.22s ease,
+    transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.clyra-message-source-chip:hover .clyra-message-source-chip__bullet,
+.clyra-message-source-chip:focus-visible .clyra-message-source-chip__bullet {
+  max-width: 200px;
+  opacity: 1;
+  transform: translateX(0);
+}
+.clyra-message-source-chip__dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: #7d8795;
+  flex-shrink: 0;
+}
+.clyra-message-source-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  color: #3d4d61;
+}
+
+/* Keep action-row height stable while a source pill expands horizontally */
+.clyra-message-actions:has(.clyra-message-source-chip:hover),
+.clyra-message-actions:has(.clyra-message-source-chip:focus-visible) {
+  overflow: visible;
 }
 
 .clyra-browser-ai-control {

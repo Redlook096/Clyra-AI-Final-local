@@ -901,23 +901,41 @@ function ChatThinkingLabel({
   );
 }
 
-/** Compact favicon chips — placed beside regenerate (Atlas finished-browse look). */
+/** Source favicons sit to the right of message actions; hover expands the site name. */
 function SourceFaviconChips({ urls }: { urls?: string[] }) {
   if (!urls?.length) return null;
   const items = [...new Map(urls.map((url) => [hostnameFromUrl(url), url])).entries()]
     .filter(([host]) => host)
     .slice(0, 8);
   if (!items.length) return null;
+
   return (
     <div className="clyra-message-source-chips" aria-label="Sources">
-      {items.map(([host, url]) => (
-        <a key={url} href={url} target="_blank" rel="noreferrer" title={host}>
-          <img
-            src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`}
-            alt=""
-          />
-        </a>
-      ))}
+      {items.map(([host, url]) => {
+        const label = host.replace(/^www\./i, "");
+        return (
+          <a
+            key={url}
+            className="clyra-message-source-chip"
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Open ${label} in your browser`}
+            title={label}
+          >
+            <span className="clyra-message-source-chip__icon">
+              <img
+                src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`}
+                alt=""
+              />
+            </span>
+            <span className="clyra-message-source-chip__bullet">
+              <span className="clyra-message-source-chip__dot" />
+              <span className="clyra-message-source-chip__label">{label}</span>
+            </span>
+          </a>
+        );
+      })}
     </div>
   );
 }
@@ -7166,7 +7184,6 @@ Please analyze the code you just wrote and fix this error.`;
                                         {!message.isThinking && !message.isStreaming && message.content ? (
                                           <>
                                           <div className="clyra-message-actions" aria-label="Assistant message actions">
-                                            <SourceFaviconChips urls={message.searchSources} />
                                             <button type="button" onClick={() => {
                                               void navigator.clipboard?.writeText(message.content);
                                               setCopiedMessageId(message.id);
@@ -7182,6 +7199,7 @@ Please analyze the code you just wrote and fix this error.`;
                                                 window.speechSynthesis.speak(new SpeechSynthesisUtterance(message.content));
                                               }
                                             }} aria-label="Read response aloud" title="Read aloud"><Volume2 className="h-3.5 w-3.5" /></button>
+                                            <SourceFaviconChips urls={message.searchSources} />
                                           </div>
                                           <AnimatePresence initial={false}>
                                             {feedbackMenu?.messageId === message.id ? (
