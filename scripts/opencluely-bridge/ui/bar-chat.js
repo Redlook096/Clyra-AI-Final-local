@@ -6,7 +6,8 @@
  *  - Drag handle moves the whole window; opens centered at top
  */
 (function () {
-  const HISTORY_KEY = 'opencluely_bar_chat_v1';
+  const HISTORY_KEY = 'opencluely_bar_chat_v2';
+  const GREETING = 'Hi, how can I help you?';
   const EXPANDED_W = 400;
   const COLLAPSED_H = 52;
   const DRAWER_H = 360;
@@ -45,14 +46,29 @@
     "Look at what's on my screen right now. Use your initiative: if there is a question, quiz, problem, coding prompt, form field, or anything the user likely needs answered or solved, answer it directly and helpfully. If there is no clear question, briefly say what you see and the most useful next step. Read text literally; do not invent content that is not visible.";
 
   function loadHistory() {
-    try {
-      history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
-      if (!Array.isArray(history)) history = [];
-    } catch (_) {
-      history = [];
-    }
     messagesEl.innerHTML = '';
-    history.forEach((item) => addMessage(item.text, item.type, true));
+    history = [];
+    // One clean greeting only — never replay old spam from previous sessions.
+    try {
+      localStorage.removeItem('opencluely_bar_chat_v1');
+      localStorage.removeItem(HISTORY_KEY);
+    } catch (_) {
+      /* ignore */
+    }
+    addMessage(GREETING, 'assistant', true);
+    history = [{ type: 'assistant', text: GREETING }];
+    saveHistory();
+  }
+
+  function updateCloseIcon() {
+    if (!closeBtn) return;
+    if (open || taskPromptMode) {
+      closeBtn.title = 'Collapse chat';
+      closeBtn.setAttribute('aria-label', 'Collapse chat');
+    } else {
+      closeBtn.title = 'Close';
+      closeBtn.setAttribute('aria-label', 'Close');
+    }
   }
 
   function saveHistory() {
@@ -73,7 +89,19 @@
       .replace(/\n/g, '<br>');
   }
 
+  let lastAssistantText = '';
+  let lastAssistantAt = 0;
+
   function addMessage(text, type = 'user', skipPersist = false) {
+    const t = String(text || '').trim();
+    if (!t) return;
+    // Drop duplicate assistant bubbles from dual IPC paths / double broadcast
+    if (type === 'assistant') {
+      const now = Date.now();
+      if (t === lastAssistantText && now - lastAssistantAt < 5000) return;
+      lastAssistantText = t;
+      lastAssistantAt = now;
+    }
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${type}`;
     const timeDiv = document.createElement('div');
@@ -81,14 +109,14 @@
     timeDiv.textContent = new Date().toLocaleTimeString();
     const textDiv = document.createElement('div');
     textDiv.className = 'message-text';
-    if (type === 'assistant') textDiv.innerHTML = formatMarkdown(text);
-    else textDiv.textContent = text;
+    if (type === 'assistant') textDiv.innerHTML = formatMarkdown(t);
+    else textDiv.textContent = t;
     messageDiv.appendChild(timeDiv);
     messageDiv.appendChild(textDiv);
     messagesEl.appendChild(messageDiv);
     messagesEl.scrollTop = messagesEl.scrollHeight;
     if (!skipPersist) {
-      history.push({ type, text: String(text || '') });
+      history.push({ type, text: t });
       saveHistory();
     }
   }
@@ -224,6 +252,7 @@
     shell.classList.add('is-wide', 'is-task-prompt', 'is-fading-in');
     shell.classList.remove('is-fading-out');
     drawer.setAttribute('aria-hidden', 'false');
+    updateCloseIcon();
     if (modeLabel) modeLabel.textContent = 'Take Control';
     if (modeHint) modeHint.textContent = 'What should the AI do on your computer?';
     if (inputEl) {
@@ -248,6 +277,7 @@
     wide = true;
     setControlButtonState(true);
     setModeUI('control');
+    updateCloseIcon();
     if (inputEl) inputEl.placeholder = 'Type a message… (Shift+Enter for newline)';
     drawer.setAttribute('aria-hidden', 'false');
     measureAndResize();
@@ -293,6 +323,7 @@
     open = true;
     shell.classList.add('is-chat-open');
     drawer.setAttribute('aria-hidden', 'false');
+    updateCloseIcon();
     measureAndResize();
     await wait(360);
     measureAndResize();
@@ -326,6 +357,7 @@
     open = false;
     shell.classList.remove('is-chat-open');
     drawer.setAttribute('aria-hidden', 'true');
+    updateCloseIcon();
     measureAndResize();
     await wait(320);
 
@@ -342,6 +374,7 @@
     } else {
       measureAndResize();
     }
+    updateCloseIcon();
     animating = false;
   }
 
@@ -448,10 +481,17 @@
       wide = false;
       if (inputEl) inputEl.placeholder = 'Type a message… (Shift+Enter for newline)';
       notifyDrawer(false);
+      updateCloseIcon();
       measureAndResize();
       return;
     }
-    if (controlling) await stopControlFromBar();
+    // Chat open → chevron collapses chat (does not hide the pill)
+    if (open || wide) {
+      if (controlling) await stopControlFromBar();
+      await collapse({ hideIfAlreadyCollapsed: false });
+      return;
+    }
+    // Fully collapsed X → hide overlay
     await collapse({ hideIfAlreadyCollapsed: true });
   });
 
@@ -477,7 +517,8 @@
     window.electronAPI?.receive?.('toggle-chat-drawer', onDrawerToggle);
   }
 
-  // Responses
+  // Responses — prefer transcription-llm-response only (main also used to
+  // broadcast llm-response for the same reply, which doubled bubbles).
   const api = window.electronAPI;
   if (api) {
     api.onTranscriptionLlmResponse?.((_e, data) => {
@@ -493,22 +534,27 @@
       if (!open) expandToChat(mode || 'ask');
       showThinking();
     });
-    api.onLlmResponse?.((_e, data) => {
-      hideThinking();
-      const text = data?.response || data?.text || '';
-      if (text) {
-        if (!open) expandToChat(mode || 'ask');
-        addMessage(text, 'assistant');
-      }
-    });
+    // Fallback only when transcription channel is unavailable
+    if (typeof api.onTranscriptionLlmResponse !== 'function') {
+      api.onLlmResponse?.((_e, data) => {
+        hideThinking();
+        const text = data?.response || data?.text || '';
+        if (text) {
+          if (!open) expandToChat(mode || 'ask');
+          addMessage(text, 'assistant');
+        }
+      });
+    }
     api.onOcrError?.((_e, data) => {
       hideThinking();
       addMessage(data?.error || 'Screenshot failed', 'error');
     });
     api.onSessionCleared?.(() => {
       history = [];
-      saveHistory();
       messagesEl.innerHTML = '';
+      addMessage(GREETING, 'assistant', true);
+      history = [{ type: 'assistant', text: GREETING }];
+      saveHistory();
     });
     api.onControlStatus?.((_e, data) => {
       hideThinking();

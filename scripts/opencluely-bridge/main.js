@@ -1500,13 +1500,14 @@ class ApplicationController {
         isImageAnalysis: true
       });
 
-      this.broadcastTranscriptionLLMResponse(llmResult);
-
+      // showLLMResponse opens the bar drawer and broadcasts once — do not also
+      // call broadcastTranscriptionLLMResponse or the chat bubble duplicates.
       windowManager.showLLMResponse(llmResult.response, {
         skill: this.activeSkill,
         processingTime: llmResult.metadata.processingTime,
         usedFallback: llmResult.metadata.usedFallback,
-        isImageAnalysis: true
+        isImageAnalysis: true,
+        messageId,
       });
     } catch (error) {
       logger.error("Screenshot OCR process failed", {
@@ -1574,12 +1575,13 @@ class ApplicationController {
         usedFallback: llmResult.metadata.usedFallback,
       });
 
-      this.broadcastTranscriptionLLMResponse(llmResult);
-
+      // showLLMResponse opens the bar drawer and broadcasts once — do not also
+      // call broadcastTranscriptionLLMResponse or the chat bubble duplicates.
       windowManager.showLLMResponse(llmResult.response, {
         skill: this.activeSkill,
         processingTime: llmResult.metadata.processingTime,
         usedFallback: llmResult.metadata.usedFallback,
+        messageId,
       });
     } catch (error) {
       logger.error("LLM processing failed", {

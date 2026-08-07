@@ -1240,6 +1240,7 @@ class WindowManager {
       response: content,
       text: content,
       metadata,
+      messageId: metadata.messageId || null,
       timestamp: new Date().toISOString()
     });
 
