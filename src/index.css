@@ -4556,6 +4556,7 @@ body,
   --text-tertiary: var(--clyra-text-tertiary);
   --text-disabled: #b0b5bf;
   --accent-blue: var(--clyra-accent);
+  --clyra-code-user-bubble: #aec7f1;
   --addition-green: #239653;
   --deletion-red: #d94b4b;
   --warning-amber: #b87918;

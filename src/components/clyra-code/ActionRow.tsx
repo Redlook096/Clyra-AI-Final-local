@@ -125,7 +125,10 @@ export function AgentActionRow({
             active={isActive}
             tone={isFileAction ? "blue" : "neutral"}
             mono={isMonoTarget}
-            className={cn("text-[12.5px] tracking-[-0.01em]", isFileAction && !isActive && "text-[#3a5b96]")}
+            className={cn(
+              "text-[12.5px] tracking-[-0.01em]",
+              isFileAction && !isActive && "text-[color:var(--text-secondary)]",
+            )}
           />
           {isFileAction ? (
             <DiffCounters

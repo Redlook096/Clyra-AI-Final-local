@@ -27,7 +27,7 @@ export function ThinkingIndicator({
   onStop: () => void;
 }) {
   return (
-    <div className="flex items-center gap-1.5 py-1.5">
+    <div className="flex items-center gap-1.5 py-1">
       <ShiningBrainIcon className="h-3.5 w-3.5" />
       <ShiningText text="Thinking" play className="text-[12.5px] font-medium tracking-[-0.01em]" />
       <ThinkingDots />
@@ -35,7 +35,7 @@ export function ThinkingIndicator({
       <button
         type="button"
         onClick={onStop}
-        className="ml-1 rounded-[7px] border border-[color:var(--border-medium)] px-2 py-[2px] text-[11px] font-medium text-[color:var(--text-secondary)] transition-colors hover:bg-[color:var(--surface-hover)]"
+        className="ml-1 h-6 rounded-[8px] px-2 text-[11.5px] font-medium text-[color:var(--text-secondary)] transition-colors hover:bg-[color:var(--surface-hover)]"
       >
         Stop
       </button>
@@ -163,8 +163,19 @@ export function Conversation({
         {state.log.map((entry) => {
           if (entry.type === "user") {
             return (
-              <div key={entry.id} className="my-3 flex justify-end">
-                <div className="max-w-[72%] rounded-[12px] bg-[color:var(--surface-muted)] px-3 py-2 text-[14px] leading-[1.5] tracking-[-0.01em] text-[color:var(--text-primary)]">
+              <div key={entry.id} className="my-3 flex w-full justify-end clyra-user-message-entry">
+                <div
+                  data-invert-ignore="true"
+                  className="clyra-chat-user-bubble max-w-[75%] whitespace-pre-wrap border border-slate-200/70 px-[13px] py-[10px] text-[14px] leading-[1.55] tracking-[-0.01em] shadow-none"
+                  style={{
+                    backgroundColor: "var(--clyra-code-user-bubble, #aec7f1)",
+                    color: "#1e293b",
+                    borderRadius: 14,
+                    opacity: 1,
+                    transform: "none",
+                    animation: "none",
+                  }}
+                >
                   {entry.text}
                 </div>
               </div>
@@ -175,8 +186,8 @@ export function Conversation({
               <div
                 key={entry.id}
                 className={cn(
-                  "clyra-vibe-agent-line my-2.5 text-[14px] font-normal leading-[1.55] tracking-[-0.015em] text-[color:var(--text-primary)]",
-                  "[&_p]:my-2 [&_ul]:my-2 [&_ol]:my-2 [&_pre]:my-2.5 [&_code]:text-[12px]",
+                  "clyra-vibe-agent-line my-2 text-[14px] font-normal leading-[1.55] tracking-[-0.015em] text-[color:var(--text-primary)]",
+                  "[&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_pre]:my-2 [&_code]:text-[12.5px]",
                 )}
               >
                 <MarkdownMessageContent content={entry.text} />
