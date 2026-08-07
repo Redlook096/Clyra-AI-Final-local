@@ -394,32 +394,41 @@ async function analyseCompanionVision(imagePath, question = "") {
   return JSON.parse(String(stdout || "{}"));
 }
 
-function companionVisionFallback({ question, visionSummary, ocrText, controlling }) {
+function companionVisionFallback({ question, visionSummary, ocrText, controlling, guiding, pointer }) {
   const seen = String(visionSummary || "").trim();
   const ocr = String(ocrText || "").trim().split("\n").filter(Boolean).slice(0, 6).join(" · ");
   const bits = [];
   if (seen) bits.push(seen);
   else if (ocr) bits.push(`I can read: ${ocr}`);
   else bits.push("I captured your screen but could not read much text yet.");
-  bits.push(
-    controlling
-      ? "I have desktop control ready — say what to click or type."
-      : "Ask me about what you're doing, or tap Take over if you want me to drive the cursor.",
-  );
+  if (pointer?.label) {
+    bits.push(`I'm pointing at “${pointer.label}” with the blue guide cursor — I have not clicked it.`);
+  } else if (guiding) {
+    bits.push("Guide mode is on: I can point at UI with a visible cursor without taking control.");
+  } else if (controlling) {
+    bits.push("I have desktop control ready — say what to click or type.");
+  } else {
+    bits.push("Ask me about what you're doing, tap Guide me to point, or Take over to drive the cursor.");
+  }
   if (question) bits.push(`For “${question}”: use the visible text and layout above as the source of truth.`);
   return bits.join(" ");
 }
 
-async function askCompanionModel({ question, visionSummary, ocrText, controlling }) {
+async function askCompanionModel({ question, visionSummary, ocrText, controlling, guiding, pointer }) {
   const system = [
-    "You are Clyra Screen Companion — a calm desktop helper.",
-    "You can see the user's screen via RapidOCR vision evidence and talk with them.",
+    "You are Clyra Screen Companion — a calm desktop helper with an OpenCluely-style overlay UI.",
+    "You can see the user's screen via RapidOCR (open-source ONNX) vision evidence and talk with them.",
     "Help with whatever they are doing. Be concise and practical.",
-    controlling
-      ? "You currently may control the desktop. Propose concrete next clicks/keys when useful."
-      : "You are observing only unless the user asks you to take control.",
+    guiding
+      ? "Guide mode: you show a visible pointer at UI targets but do NOT click or move the OS mouse. Describe what the blue ring is highlighting."
+      : controlling
+        ? "You currently may control the desktop. Propose concrete next clicks/keys when useful."
+        : "You are observing only unless the user asks you to Guide (point) or Take control.",
+    pointer?.label ? `You are currently pointing at: ${pointer.label}.` : "",
     "Never claim stealth or hidden overlays. Capture is user-visible.",
-  ].join(" ");
+  ]
+    .filter(Boolean)
+    .join(" ");
   const user = [
     `User: ${question}`,
     visionSummary ? `\nScreen vision:\n${visionSummary}` : "",
@@ -454,7 +463,7 @@ async function askCompanionModel({ question, visionSummary, ocrText, controlling
     /* fall through to vision-local reply */
   }
   return {
-    text: companionVisionFallback({ question, visionSummary, ocrText, controlling }),
+    text: companionVisionFallback({ question, visionSummary, ocrText, controlling, guiding, pointer }),
     source: "vision-local",
   };
 }
@@ -548,6 +557,10 @@ function registerIpc() {
   ipcMain.handle("companion:see", async (event, payload) => {
     authorizeCompanion(event);
     return companionManager?.seeScreen(String(payload?.question || ""));
+  });
+  ipcMain.handle("companion:start-guide", async (event, payload) => {
+    authorizeCompanion(event);
+    return companionManager?.startGuide(String(payload?.question || ""));
   });
   ipcMain.handle("companion:start-control", async (event) => {
     authorizeCompanion(event);

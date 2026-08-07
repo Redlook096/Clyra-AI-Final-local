@@ -39,6 +39,31 @@ async function main() {
   const image = await makeFixture();
 
   try {
+    const { pickGuideTarget } = await import("../electron/companion-guide.mjs");
+    const vision = {
+      ocr: {
+        lines: [
+          { text: "Search products", bbox: { x: 40, y: 80, w: 120, h: 24 }, score: 0.9 },
+          { text: "Apply filters", bbox: { x: 400, y: 80, w: 100, h: 28 }, score: 0.95 },
+          { text: "Cookie preferences", bbox: { x: 700, y: 400, w: 140, h: 20 }, score: 0.8 },
+        ],
+      },
+    };
+    const capture = {
+      bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+      dimensions: { width: 960, height: 540 },
+    };
+    const target = pickGuideTarget(vision, capture, "where do I click Apply filters");
+    if (!target || !/apply filters/i.test(target.label)) {
+      failures.push(`guide target missed Apply filters: ${JSON.stringify(target)}`);
+    } else {
+      console.log("guide-target:", target.label, target.x, target.y);
+    }
+  } catch (error) {
+    failures.push(`guide target failed: ${error instanceof Error ? error.message : error}`);
+  }
+
+  try {
     const { stdout } = await execFileAsync(
       "python3",
       [path.join(ROOT, "tools", "companion-vision.py"), image, "--question", "What is on screen?"],
