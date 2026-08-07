@@ -401,6 +401,19 @@ function readStoredString(key: string, fallback = "") {
   }
 }
 
+/** Drop legacy rigid Short Answer / Best Recommendation defaults so the
+ *  universal adaptive response system becomes the active chat contract. */
+function readStoredSystemPrompt() {
+  const stored = readStoredString("clyra-system-prompt").trim();
+  if (!stored) return "";
+  const looksLikeLegacyDefault =
+    stored.includes("# Short Answer") &&
+    stored.includes("# Best Recommendation") &&
+    stored.includes("You are an expert AI assistant that responds with clear, highly structured");
+  if (looksLikeLegacyDefault) return "";
+  return stored;
+}
+
 function formatRecentUpdate(updatedAt: number) {
   const elapsedMinutes = Math.max(0, Math.round((Date.now() - updatedAt) / 60_000));
   if (elapsedMinutes < 1) return "Updated just now";
@@ -2906,7 +2919,7 @@ export default function App() {
   const [codeHighlighting, setCodeHighlighting] = useState(true);
   const [markdownSupport, setMarkdownSupport] = useState(true);
   const [systemPrompt, setSystemPrompt] = useState(() =>
-    readStoredString("clyra-system-prompt"),
+    readStoredSystemPrompt(),
   );
   const [temperature, setTemperature] = useState(() =>
     readStoredNumber("clyra-temperature", 0.7, 0, 1),
