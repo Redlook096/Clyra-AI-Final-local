@@ -1386,12 +1386,20 @@ export const AnimatedMessage = ({
 
   // Robust heuristics to detect if the response is an email or structured notes, ignoring preamble.
   const isEmail =
-    /^(?:Subject:|To:|From:)\s*.+/im.test(content) ||
-    /^(?:Hi|Dear|Hello)\s+[\w\s]+,\s*\n/i.test(content);
+    thinkingMode !== "search" &&
+    thinkingMode !== "youtube" &&
+    thinkingMode !== "research" &&
+    !searchSources?.length &&
+    (/^(?:Subject:|To:|From:)\s*.+/im.test(content) ||
+      /^(?:Hi|Dear|Hello)\s+[\w\s]+,\s*\n/i.test(content));
 
   const isNote =
-    documentMode === "notes" ||
-    /^\s*#{1,3}\s+(?:Meeting Notes|Notes|Summary Notes|Session Notes)\b/i.test(content);
+    thinkingMode !== "search" &&
+    thinkingMode !== "youtube" &&
+    thinkingMode !== "research" &&
+    !searchSources?.length &&
+    (documentMode === "notes" ||
+      /^\s*#{1,3}\s+(?:Meeting Notes|Notes|Summary Notes|Session Notes)\b/i.test(content));
   const useDocumentUI = (isEmail || isNote) && content.length > 5;
 
   let preamble = "";
@@ -4745,10 +4753,18 @@ Please analyze the code you just wrote and fix this error.`;
         ...(researchRunId ? { researchRunId, googleSteps: [] } : {}),
         ...(googleAction ? { googleAction } : {}),
         ...(googleDetail ? { googleDetail } : {}),
-        // A request may contain “notes” while being explicitly routed to
-        // Google Docs. Keep the local Notes renderer exclusively for normal
-        // chat responses; Workspace results must remain openable Google docs.
-        ...(wantsNotesMode(userText) && !googleTool ? { documentMode: "notes" as const } : {}),
+        // A request may contain “notes” / “summarize” while being routed to
+        // web search, YouTube, research, or Google Docs. Keep the Notes card
+        // exclusively for plain chat note requests — search answers stay as
+        // normal message text with source chips underneath.
+        ...(wantsNotesMode(userText) &&
+        !googleTool &&
+        !isSearchMode &&
+        !isYoutubeMode &&
+        !isDeepResearchMode &&
+        !isWeatherMode
+          ? { documentMode: "notes" as const }
+          : {}),
         ...(youtubeVideoId ? { youtubeVideoId } : {}),
         ...(isVibeMode ? { vibeUserPrompt: userText } : {}),
         ...(attachedAgentCommands.length
