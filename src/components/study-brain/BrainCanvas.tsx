@@ -159,13 +159,15 @@ function CanvasInner({
     >
       <Background gap={22} size={1} color="rgba(0,0,0,0.045)" />
       <Controls showInteractive={false} className="!overflow-hidden !rounded-[10px] !border-[color:var(--clyra-border)] !shadow-none" />
-      <MiniMap
-        pannable
-        zoomable
-        className="!border-[color:var(--clyra-border)] !bg-white !shadow-none"
-        maskColor="rgba(28,28,28,0.05)"
-        nodeColor={() => "#e8e8e6"}
-      />
+      {brain.sources.length >= 8 ? (
+        <MiniMap
+          pannable
+          zoomable
+          className="!border-[color:var(--clyra-border)] !bg-white !shadow-none"
+          maskColor="rgba(28,28,28,0.05)"
+          nodeColor={() => "#e8e8e6"}
+        />
+      ) : null}
     </ReactFlow>
   );
 }

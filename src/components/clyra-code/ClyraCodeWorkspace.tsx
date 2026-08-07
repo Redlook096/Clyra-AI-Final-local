@@ -385,7 +385,7 @@ export default function ClyraCodeWorkspace() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 z-40 flex items-center justify-center bg-black/20"
+            className="absolute inset-0 z-40 flex items-center justify-center bg-[color:var(--clyra-text)]/12 backdrop-blur-[1px]"
             onClick={() => setShowNewProject(false)}
           >
             <motion.div
@@ -393,7 +393,7 @@ export default function ClyraCodeWorkspace() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 6, scale: 0.99 }}
               transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-              className="w-[360px] rounded-[14px] border border-[color:var(--border-subtle)] bg-white p-4 shadow-[0_24px_60px_rgba(15,23,42,0.18)]"
+              className="w-[360px] rounded-[14px] border border-[color:var(--border-subtle)] bg-white p-4 shadow-[var(--clyra-shadow-popover)]"
               onClick={(event) => event.stopPropagation()}
             >
               <h2 className="text-[14px] font-semibold text-[color:var(--text-primary)]">

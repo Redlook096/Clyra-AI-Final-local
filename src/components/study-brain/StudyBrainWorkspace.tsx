@@ -216,8 +216,14 @@ export default function StudyBrainWorkspace({
     const onPointer = (event: MouseEvent) => {
       if (!addMenuRef.current?.contains(event.target as Node)) setAddOpen(false);
     };
-    window.addEventListener("mousedown", onPointer);
-    return () => window.removeEventListener("mousedown", onPointer);
+    // Defer so the opening click does not immediately dismiss the menu.
+    const timer = window.setTimeout(() => {
+      window.addEventListener("mousedown", onPointer);
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("mousedown", onPointer);
+    };
   }, [addOpen]);
 
   const openCitation = useCallback(
