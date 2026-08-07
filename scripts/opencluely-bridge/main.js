@@ -1587,7 +1587,15 @@ class ApplicationController {
             messageId,
             delta
           });
-        }
+        },
+        (status) => {
+          if (status?.message) {
+            windowManager.broadcastToAllWindows("research-status", {
+              message: status.message,
+              phase: status.phase || "searching",
+            });
+          }
+        },
       );
       llmResult.metadata = { ...llmResult.metadata, messageId };
 

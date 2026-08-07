@@ -236,6 +236,161 @@ class LLMService {
     };
   }
 
+  /**
+   * Same heuristic as Clyra chat tool — when true, run /api/research/web-search first.
+   */
+  looksLikeWebSearchQuery(text) {
+    const raw = String(text || '').trim();
+    if (!raw) return false;
+    const t = raw.replace(/^\/search\s+/i, '').trim() || raw;
+    if (/^\/search\b/i.test(raw)) return true;
+    return (
+      /^(?:search|look\s*up|find|research|google)\b/i.test(t) ||
+      /\b(?:search the web|look online|from the (?:web|internet)|web search)\b/i.test(t) ||
+      /\b(?:latest|current|today'?s|this week'?s|breaking)\b.+\b(?:news|price|score|release|update|headline)s?\b/i.test(
+        t,
+      ) ||
+      /^(?:what(?:'| i)?s|who is|when (?:did|is|was)|how many)\b.+/i.test(t)
+    );
+  }
+
+  normalizeSearchQuery(text) {
+    return String(text || '')
+      .trim()
+      .replace(/^\/search\s+/i, '')
+      .trim();
+  }
+
+  /**
+   * Chat-tool backend: POST /api/research/web-search (DuckDuckGo + page fetch).
+   * Returns analysisPrompt suitable for companion/ask synthesis.
+   */
+  async callWebSearch(query, { maxResults = 6, fetchTop = 3 } = {}) {
+    const q = this.normalizeSearchQuery(query);
+    if (!q) throw new Error('Search query required');
+    const response = await httpJson(`${this.clyraBase}/api/research/web-search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: q, maxResults, fetchTop }),
+      timeoutMs: 90000,
+    });
+    const payload = response.json || {};
+    if (!response.ok || payload.ok === false) {
+      throw new Error(payload.error || `Web search failed (${response.status})`);
+    }
+    return {
+      query: q,
+      urls: Array.isArray(payload.urls) ? payload.urls : [],
+      pages: Array.isArray(payload.pages) ? payload.pages : [],
+      analysisPrompt: String(payload.analysisPrompt || '').trim(),
+      source: 'clyra-web-search',
+      payload,
+    };
+  }
+
+  async processTextWithSkill(text, activeSkill, sessionMemory = [], programmingLanguage = null, onStatus = null) {
+    if (!this.isInitialized) throw new Error('LLM service not initialized');
+    const startTime = Date.now();
+    this.requestCount += 1;
+    const skillPrompt = promptLoader.getSkillPrompt?.(activeSkill, programmingLanguage) || '';
+    const history = Array.isArray(sessionMemory)
+      ? sessionMemory
+          .slice(-6)
+          .map((m) => `${m.role || 'user'}: ${m.content || m.text || ''}`)
+          .join('\n')
+      : '';
+
+    let userText = String(text || '').trim();
+    let usedWebSearch = false;
+    let searchUrls = [];
+    let searchSource = '';
+
+    // When the user needs research, run the same backend web search as the chat tool,
+    // then synthesize with companion/ask using the grounded analysisPrompt.
+    if (this.looksLikeWebSearchQuery(userText)) {
+      const q = this.normalizeSearchQuery(userText);
+      try {
+        if (typeof onStatus === 'function') {
+          onStatus({ phase: 'searching', message: `Searching the web for “${q.slice(0, 80)}”…` });
+        }
+        logger.info('Running Clyra web search for OpenCluely ask', { query: q.slice(0, 120) });
+        const research = await this.callWebSearch(q);
+        usedWebSearch = true;
+        searchUrls = research.urls;
+        searchSource = research.source;
+        if (research.analysisPrompt) {
+          userText = [
+            `The user asked OpenCluely: ${q}`,
+            '',
+            research.analysisPrompt,
+            '',
+            'Answer helpfully using the research above. Cite sources briefly when useful.',
+          ].join('\n');
+        } else if (research.urls.length) {
+          userText = [
+            `User question: ${q}`,
+            `Web search found these URLs: ${research.urls.slice(0, 6).join(', ')}`,
+            'Answer using this research context.',
+          ].join('\n');
+        }
+        if (typeof onStatus === 'function') {
+          onStatus({
+            phase: 'synthesizing',
+            message: `Found ${research.urls.length || 0} sources — writing an answer…`,
+          });
+        }
+      } catch (searchError) {
+        logger.warn('Web search failed; falling back to plain ask', { error: searchError.message });
+        if (typeof onStatus === 'function') {
+          onStatus({
+            phase: 'search-failed',
+            message: `Web search unavailable (${searchError.message}). Answering without live research…`,
+          });
+        }
+        userText = this.normalizeSearchQuery(String(text || '').trim()) || userText;
+      }
+    }
+
+    const question = [
+      skillPrompt ? `Skill context:\n${skillPrompt.slice(0, 1200)}` : '',
+      history ? `Recent:\n${history}` : '',
+      `User: ${userText}`,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+
+    try {
+      const { text: reply, source } = await this.callClyraAsk({
+        question,
+        visionSummary: '',
+        ocrText: '',
+      });
+      return {
+        response: reply || 'No reply from Clyra API.',
+        metadata: {
+          skill: activeSkill,
+          programmingLanguage,
+          processingTime: Date.now() - startTime,
+          requestId: `txt-${this.requestCount}`,
+          usedFallback: false,
+          source: usedWebSearch ? `${searchSource}+${source}` : source,
+          usedWebSearch,
+          searchUrls,
+        },
+      };
+    } catch (error) {
+      this.errorCount += 1;
+      logger.error('Text processing failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  async processTextWithSkillStream(text, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta, onStatus) {
+    const result = await this.processTextWithSkill(text, activeSkill, sessionMemory, programmingLanguage, onStatus);
+    if (typeof onDelta === 'function' && result.response) onDelta(result.response);
+    return result;
+  }
+
   async processImageWithSkill(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null, visionMode = null) {
     if (!this.isInitialized) throw new Error('LLM service not initialized');
     if (!imageBuffer || !Buffer.isBuffer(imageBuffer)) {
@@ -291,55 +446,6 @@ class LLMService {
       programmingLanguage,
       visionMode,
     );
-    if (typeof onDelta === 'function' && result.response) onDelta(result.response);
-    return result;
-  }
-
-  async processTextWithSkill(text, activeSkill, sessionMemory = [], programmingLanguage = null) {
-    if (!this.isInitialized) throw new Error('LLM service not initialized');
-    const startTime = Date.now();
-    this.requestCount += 1;
-    const skillPrompt = promptLoader.getSkillPrompt?.(activeSkill, programmingLanguage) || '';
-    const history = Array.isArray(sessionMemory)
-      ? sessionMemory
-          .slice(-6)
-          .map((m) => `${m.role || 'user'}: ${m.content || m.text || ''}`)
-          .join('\n')
-      : '';
-    const question = [
-      skillPrompt ? `Skill context:\n${skillPrompt.slice(0, 1200)}` : '',
-      history ? `Recent:\n${history}` : '',
-      `User: ${text}`,
-    ]
-      .filter(Boolean)
-      .join('\n\n');
-
-    try {
-      const { text: reply, source } = await this.callClyraAsk({
-        question,
-        visionSummary: '',
-        ocrText: '',
-      });
-      return {
-        response: reply || 'No reply from Clyra API.',
-        metadata: {
-          skill: activeSkill,
-          programmingLanguage,
-          processingTime: Date.now() - startTime,
-          requestId: `txt-${this.requestCount}`,
-          usedFallback: false,
-          source,
-        },
-      };
-    } catch (error) {
-      this.errorCount += 1;
-      logger.error('Text processing failed', { error: error.message });
-      throw error;
-    }
-  }
-
-  async processTextWithSkillStream(text, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta) {
-    const result = await this.processTextWithSkill(text, activeSkill, sessionMemory, programmingLanguage);
     if (typeof onDelta === 'function' && result.response) onDelta(result.response);
     return result;
   }

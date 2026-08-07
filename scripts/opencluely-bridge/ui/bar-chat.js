@@ -141,11 +141,85 @@
   function measureAndResize() {
     if (!window.electronAPI?.resizeWindow) return;
     requestAnimationFrame(() => {
-      const rect = shell.getBoundingClientRect();
-      const width = Math.max(220, Math.ceil(rect.width));
-      const height = Math.max(COLLAPSED_H, Math.ceil(rect.height));
-      window.electronAPI.resizeWindow(width, height);
+      requestAnimationFrame(() => {
+        const rect = shell.getBoundingClientRect();
+        const width = Math.max(220, Math.ceil(rect.width));
+        const height = Math.max(COLLAPSED_H, Math.ceil(rect.height));
+        window.electronAPI.resizeWindow(width, height);
+      });
     });
+  }
+
+  async function expandToChat(nextMode) {
+    if (animating) return;
+    animating = true;
+    shell.classList.add('is-animating');
+    setModeUI(nextMode);
+
+    // 1) Expand width outwards first
+    wide = true;
+    shell.classList.add('is-wide');
+    notifyDrawer(true);
+    measureAndResize();
+    await wait(520);
+
+    // 2) Then expand chat downward
+    open = true;
+    shell.classList.add('is-chat-open');
+    drawer.setAttribute('aria-hidden', 'false');
+    updateCloseIcon();
+    measureAndResize();
+    await wait(500);
+    measureAndResize();
+    shell.classList.remove('is-animating');
+    animating = false;
+
+    if (nextMode === 'ask') {
+      setTimeout(() => inputEl?.focus(), 40);
+    }
+  }
+
+  async function collapse(opts = {}) {
+    const hideIfAlreadyCollapsed = Boolean(opts.hideIfAlreadyCollapsed);
+    if (animating) return;
+    if (!open && !wide) {
+      if (hideIfAlreadyCollapsed) {
+        try {
+          await window.electronAPI?.hideAllWindows?.();
+        } catch (_) {
+          /* ignore */
+        }
+      }
+      return;
+    }
+    animating = true;
+    shell.classList.add('is-animating');
+    askBtn?.classList.remove('is-active');
+    autoBtn?.classList.remove('is-active');
+
+    // 1) Collapse height first
+    open = false;
+    shell.classList.remove('is-chat-open');
+    drawer.setAttribute('aria-hidden', 'true');
+    updateCloseIcon();
+    measureAndResize();
+    await wait(480);
+
+    // 2) Then shrink width back to pill
+    wide = false;
+    shell.classList.remove('is-wide');
+    notifyDrawer(false);
+    measureAndResize();
+    await wait(520);
+    if (tab && window.electronAPI?.resizeWindow) {
+      const rect = tab.getBoundingClientRect();
+      window.electronAPI.resizeWindow(Math.ceil(rect.width), Math.ceil(rect.height));
+    } else {
+      measureAndResize();
+    }
+    updateCloseIcon();
+    shell.classList.remove('is-animating');
+    animating = false;
   }
 
   function notifyDrawer(openState) {
@@ -307,77 +381,6 @@
     setControlButtonState(false);
     addMessage('Control stopped.', 'system');
     if (modeHint) modeHint.textContent = 'Control ended';
-  }
-
-  async function expandToChat(nextMode) {
-    if (animating) return;
-    animating = true;
-    setModeUI(nextMode);
-
-    // 1) Expand width outwards first (fade glass to chat transparency)
-    wide = true;
-    shell.classList.add('is-wide');
-    notifyDrawer(true);
-    measureAndResize();
-    await wait(300);
-
-    // 2) Then expand chat downward
-    open = true;
-    shell.classList.add('is-chat-open');
-    drawer.setAttribute('aria-hidden', 'false');
-    updateCloseIcon();
-    measureAndResize();
-    await wait(360);
-    measureAndResize();
-    animating = false;
-
-    if (nextMode === 'ask') {
-      setTimeout(() => inputEl?.focus(), 40);
-    }
-  }
-
-  async function collapse(opts = {}) {
-    const hideIfAlreadyCollapsed = Boolean(opts.hideIfAlreadyCollapsed);
-    if (animating) return;
-    if (!open && !wide) {
-      // Fully collapsed — only the explicit X click should hide the overlay.
-      // Drawer sync from main must NOT hide, or /show(["main"]) races itself away.
-      if (hideIfAlreadyCollapsed) {
-        try {
-          await window.electronAPI?.hideAllWindows?.();
-        } catch (_) {
-          /* ignore */
-        }
-      }
-      return;
-    }
-    animating = true;
-    askBtn?.classList.remove('is-active');
-    autoBtn?.classList.remove('is-active');
-
-    // 1) Collapse height first
-    open = false;
-    shell.classList.remove('is-chat-open');
-    drawer.setAttribute('aria-hidden', 'true');
-    updateCloseIcon();
-    measureAndResize();
-    await wait(320);
-
-    // 2) Then shrink width back to pill
-    wide = false;
-    shell.classList.remove('is-wide');
-    notifyDrawer(false);
-    measureAndResize();
-    await wait(360);
-    // Fit to compact pill content size
-    if (tab && window.electronAPI?.resizeWindow) {
-      const rect = tab.getBoundingClientRect();
-      window.electronAPI.resizeWindow(Math.ceil(rect.width), Math.ceil(rect.height));
-    } else {
-      measureAndResize();
-    }
-    updateCloseIcon();
-    animating = false;
   }
 
   function wait(ms) {
@@ -574,6 +577,13 @@
       } else if (data?.status === 'error') {
         setControlButtonState(false);
         addMessage(data.message || 'Control error', 'error');
+      }
+    });
+    api.onResearchStatus?.((_e, data) => {
+      if (data?.message) {
+        if (!open) expandToChat(mode || 'ask');
+        addMessage(data.message, 'system');
+        if (data.phase === 'searching' || data.phase === 'synthesizing') showThinking();
       }
     });
     api.onStealthModeChanged?.((_e, data) => {

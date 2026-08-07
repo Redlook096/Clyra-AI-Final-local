@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startDesktopControl: (task) => ipcRenderer.invoke('start-desktop-control', { task }),
   stopDesktopControl: () => ipcRenderer.invoke('stop-desktop-control'),
   onControlStatus: (callback) => ipcRenderer.on('control-status', callback),
+  onResearchStatus: (callback) => ipcRenderer.on('research-status', callback),
   onStealthModeChanged: (callback) => ipcRenderer.on('stealth-mode-changed', callback),
   
   // Gemini LLM configuration

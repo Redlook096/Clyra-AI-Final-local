@@ -20,7 +20,11 @@
         --oc-drag: #8b95a5;
         --oc-input-bg: rgba(255, 255, 255, 0.92);
         --oc-msg-bg: rgba(255, 255, 255, 0.86);
-        --oc-ease: cubic-bezier(0.22, 1, 0.36, 1);
+        --oc-ease: cubic-bezier(0.16, 1, 0.3, 1);
+        --oc-ease-soft: cubic-bezier(0.33, 1, 0.68, 1);
+        --oc-dur-w: 520ms;
+        --oc-dur-h: 480ms;
+        --oc-dur-fast: 220ms;
         --oc-expanded-w: 600px;
         --oc-bar-h: 56px;
         --oc-drawer-h: 360px;
@@ -74,14 +78,14 @@
         opacity: 1;
         transform-origin: center top;
         transition:
-          width 440ms var(--oc-ease),
-          min-width 440ms var(--oc-ease),
-          border-radius 360ms var(--oc-ease),
-          background 380ms ease,
-          box-shadow 380ms ease,
-          border-color 380ms ease,
-          opacity 380ms ease,
-          transform 480ms var(--oc-ease);
+          width var(--oc-dur-w) var(--oc-ease),
+          min-width var(--oc-dur-w) var(--oc-ease),
+          border-radius var(--oc-dur-h) var(--oc-ease-soft),
+          background 420ms var(--oc-ease-soft),
+          box-shadow 420ms var(--oc-ease-soft),
+          border-color 420ms var(--oc-ease-soft),
+          opacity 380ms var(--oc-ease-soft),
+          transform 520ms var(--oc-ease);
       }
 
       .oc-shell.is-boot-squish {
@@ -146,12 +150,13 @@
         -webkit-backdrop-filter: blur(28px) saturate(1.25);
         -webkit-app-region: drag;
         transition:
-          width 440ms var(--oc-ease),
-          min-width 440ms var(--oc-ease),
-          border-radius 360ms var(--oc-ease),
-          background 380ms ease,
-          box-shadow 380ms ease,
-          border-color 380ms ease;
+          width var(--oc-dur-w) var(--oc-ease),
+          min-width var(--oc-dur-w) var(--oc-ease),
+          border-radius var(--oc-dur-h) var(--oc-ease-soft),
+          background 420ms var(--oc-ease-soft),
+          box-shadow 420ms var(--oc-ease-soft),
+          border-color 420ms var(--oc-ease-soft),
+          opacity 280ms var(--oc-ease-soft);
       }
       html.oc-stealth .command-tab {
         border-color: rgba(148, 163, 184, 0.22);
@@ -396,8 +401,8 @@
         overflow: hidden;
         pointer-events: none;
         transition:
-          max-height 420ms var(--oc-ease),
-          opacity 280ms ease;
+          max-height var(--oc-dur-h) var(--oc-ease),
+          opacity 320ms var(--oc-ease-soft);
       }
       .oc-shell.is-chat-open .chat-drawer {
         max-height: var(--oc-drawer-h);
@@ -575,13 +580,16 @@
       }
       .oc-shell.is-fading-out {
         opacity: 0;
-        transform: translateY(-6px) scale(0.98);
-        transition: opacity 320ms ease, transform 320ms var(--oc-ease);
+        transform: translateY(-6px) scale(0.985);
+        transition: opacity 360ms var(--oc-ease-soft), transform 360ms var(--oc-ease);
       }
       .oc-shell.is-fading-in {
         opacity: 1;
         transform: none;
-        transition: opacity 320ms ease, transform 320ms var(--oc-ease);
+        transition: opacity 360ms var(--oc-ease-soft), transform 360ms var(--oc-ease);
+      }
+      .oc-shell.is-animating {
+        will-change: width, transform, opacity;
       }
     </style>
   </head>
