@@ -6,6 +6,7 @@ APP="${ROOT}/apps/opencluely"
 export CLYRA_API_BASE="${CLYRA_API_BASE:-http://127.0.0.1:31415}"
 export OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
 export OPENCLUELY_VISION_MODEL="${OPENCLUELY_VISION_MODEL:-llava-phi3}"
+export CLYRA_CONTROL_PORT="${CLYRA_CONTROL_PORT:-3847}"
 export ELECTRON_DISABLE_SECURITY_WARNINGS=1
 
 # Ensure Ollama is up
@@ -17,7 +18,7 @@ fi
 
 # Ensure llava-phi3 is present
 if ! ollama list 2>/dev/null | grep -qi llava-phi3; then
-  echo "Pulling llava-phi3 (lightweight vision ~1.7GB)..."
+  echo "Pulling llava-phi3 (lightweight open vision model for ~8GB RAM)..."
   ollama pull llava-phi3
 fi
 

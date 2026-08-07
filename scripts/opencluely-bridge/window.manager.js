@@ -340,6 +340,7 @@ class WindowManager {
       };
   } else if (type === 'main') {
       // Main window configuration - fit to content, completely frameless
+      // Opaque on Linux so the original command bar stays visible over Chrome
       browserWindowOptions = {
         ...baseOptions,
         frame: false,
@@ -368,7 +369,7 @@ class WindowManager {
         ...(process.platform === 'darwin' ? { level: 'floating' } : {}),
       };
     } else if (type === 'llmResponse') {
-      // LLM Response window - completely frameless, just content
+      // LLM Response window - frameless; opaque on Linux so glass stays visible over white apps
       browserWindowOptions = {
         ...baseOptions,
         frame: false,
@@ -389,7 +390,7 @@ class WindowManager {
         ...(process.platform === 'darwin' ? { level: 'floating' } : {}),
       };
     } else if (type === 'chat') {
-      // Chat window - frameless without window controls
+      // Chat window - frameless; opaque on Linux so it stays visible over Chrome / white pages
       browserWindowOptions = {
         ...baseOptions,
         minWidth: config.get('window.minWidth'),
@@ -399,6 +400,7 @@ class WindowManager {
         frame: false,
         titleBarStyle: 'hidden',
         transparent: true,
+        backgroundColor: '#00000000',
         resizable: true,
         minimizable: false,
         maximizable: false,

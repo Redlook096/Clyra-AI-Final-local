@@ -112,7 +112,7 @@ class ApplicationController {
   constructor() {
     this.isReady = false;
     this.starting = false;
-    this.activeSkill = "dsa";
+    this.activeSkill = "general";
   // Default to C++ so language is enforced from first run
   this.codingLanguage = "cpp";
     this.speechAvailable = false;
@@ -264,6 +264,7 @@ class ApplicationController {
 
       this.starting = false;
       this.isReady = true;
+      this.startClyraControlServer();
 
       // Launch the onboarding wizard if this is the first run.
       if (this.isFirstRun) {
@@ -619,12 +620,14 @@ class ApplicationController {
       sessionManager.addUserInput(text, 'chat');
       logger.debug('Chat message added to session memory', { textLength: text.length });
 
-      // Typed messages need the full skill pipeline (with history context),
-      // NOT the voice "intelligent filter" pipeline. Voice keeps its filter
-      // behaviour; typed chat goes through processWithLLM so it gets real
-      // answers using the active skill prompt and recent conversation history.
       (async () => {
         try {
+          // If the user asks about the screen/page, run the real screenshot vision path
+          // so chat uses the same capture pipeline as ⌘⇧S (not text-only Clyra).
+          if (this._isScreenQuestion(text)) {
+            await this.triggerScreenshotOCR();
+            return;
+          }
           const sessionHistory = sessionManager.getOptimizedHistory();
           await this.processWithLLM(text, sessionHistory);
         } catch (error) {
@@ -1026,7 +1029,9 @@ class ApplicationController {
 
   navigateSkill(direction) {
     const availableSkills = [
+      "general",
       "dsa",
+      "programming",
     ];
 
     const currentIndex = availableSkills.indexOf(this.activeSkill);
@@ -1073,13 +1078,44 @@ class ApplicationController {
     try {
       windowManager.showLLMLoading();
 
-  const capture = await captureService.captureAndProcess();
+      // Hide OpenCluely overlays briefly so capture sees the real app (Chrome),
+      // not our own glass windows — otherwise vision hallucinates.
+      const hiddenForCapture = [];
+      try {
+        for (const [type, win] of windowManager.windows.entries()) {
+          if (!win || win.isDestroyed()) continue;
+          if (type === "main" || type === "chat" || type === "llmResponse" || type === "settings") {
+            if (win.isVisible()) {
+              hiddenForCapture.push(win);
+              win.hide();
+            }
+          }
+        }
+        await new Promise((r) => setTimeout(r, 120));
+      } catch (_) {
+        /* ignore */
+      }
+
+      let capture;
+      try {
+        capture = await captureService.captureAndProcess();
+      } finally {
+        for (const win of hiddenForCapture) {
+          try {
+            if (!win.isDestroyed()) windowManager.showOnCurrentDesktop(win);
+          } catch (_) {
+            /* ignore */
+          }
+        }
+      }
 
       if (!capture.imageBuffer || !capture.imageBuffer.length) {
         windowManager.hideLLMResponse();
         this.broadcastOCRError("Failed to capture screenshot image");
         return;
       }
+
+      this._lastCapture = capture;
 
       // Use image directly with LLM and active skill; do not send chat messages here
       const sessionHistory = sessionManager.getOptimizedHistory();
@@ -1973,6 +2009,111 @@ class ApplicationController {
       });
     } catch (error) {
       logger.error("Failed to update app name", { error: error.message });
+    }
+  }
+
+  /**
+   * Local control HTTP API for Clyra E2E tests.
+   * Enabled when CLYRA_CONTROL_PORT is set (default 3847 in Clyra scripts).
+   * Lets us drive the real OpenCluely Electron UI over Chrome without fake cards.
+   */
+  startClyraControlServer() {
+    const port = Number(process.env.CLYRA_CONTROL_PORT || 0);
+    if (!port) return;
+    try {
+      const http = require("http");
+      const server = http.createServer(async (req, res) => {
+        const send = (code, body) => {
+          res.writeHead(code, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(body));
+        };
+        const readBody = () =>
+          new Promise((resolve) => {
+            let raw = "";
+            req.on("data", (c) => (raw += c));
+            req.on("end", () => {
+              try {
+                resolve(raw ? JSON.parse(raw) : {});
+              } catch {
+                resolve({});
+              }
+            });
+          });
+
+        try {
+          if (req.method === "GET" && req.url === "/health") {
+            send(200, {
+              ok: true,
+              ready: this.isReady,
+              skill: this.activeSkill,
+              windows: Object.keys(windowManager.getWindowStats().windows || {}),
+            });
+            return;
+          }
+          if (req.method === "POST" && req.url === "/screenshot") {
+            await this.triggerScreenshotOCR();
+            send(200, { ok: true, action: "screenshot" });
+            return;
+          }
+          if (req.method === "POST" && req.url === "/chat") {
+            const body = await readBody();
+            const text = String(body.text || body.message || "").trim();
+            if (!text) {
+              send(400, { ok: false, error: "text required" });
+              return;
+            }
+            // Mirror IPC: screen questions use capture vision path
+            if (/\b(what('?s| is) on (my )?screen|see (my )?screen|look at (my )?screen|on my screen)\b/i.test(text)) {
+              await this.triggerScreenshotOCR();
+              send(200, { ok: true, action: "chat-via-screenshot", text });
+              return;
+            }
+            const sessionHistory = sessionManager.getOptimizedHistory();
+            await this.processWithLLM(text, sessionHistory);
+            send(200, { ok: true, action: "chat", text });
+            return;
+          }
+          if (req.method === "POST" && req.url === "/skill") {
+            const body = await readBody();
+            const skill = String(body.skill || "general").trim();
+            this.activeSkill = skill;
+            windowManager.broadcastToAllWindows("skill-updated", { skill });
+            send(200, { ok: true, skill });
+            return;
+          }
+          if (req.method === "POST" && req.url === "/show") {
+            windowManager.showAllWindows();
+            windowManager.forceAlwaysOnTopForAllWindows?.();
+            send(200, { ok: true, action: "show" });
+            return;
+          }
+          if (req.method === "POST" && req.url === "/hide-settings") {
+            windowManager.hideSettings?.();
+            send(200, { ok: true });
+            return;
+          }
+          send(404, { ok: false, error: "not found" });
+        } catch (error) {
+          logger.error("Clyra control request failed", { error: error.message, url: req.url });
+          send(500, { ok: false, error: error.message });
+        }
+      });
+      server.listen(port, "127.0.0.1", () => {
+        logger.info("Clyra control server listening", { port });
+      });
+      server.on("error", (error) => {
+        if (error && error.code === "EADDRINUSE") {
+          logger.warn("Clyra control port in use — another OpenCluely instance may be running", {
+            port,
+            error: error.message,
+          });
+          return;
+        }
+        logger.warn("Clyra control server error", { error: error.message });
+      });
+      this._clyraControlServer = server;
+    } catch (error) {
+      logger.warn("Could not start Clyra control server", { error: error.message });
     }
   }
 }
