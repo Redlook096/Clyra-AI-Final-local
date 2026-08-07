@@ -123,6 +123,7 @@ function BrowserView({
   onRestart,
   onOpenTerminal,
   onAddContext,
+  agentRunning = false,
 }: {
   session: PreviewSession | null;
   frameVersion: number;
@@ -130,6 +131,7 @@ function BrowserView({
   onRestart: () => void;
   onOpenTerminal: () => void;
   onAddContext: (context: ComposerContext) => void;
+  agentRunning?: boolean;
 }) {
   const [commenting, setCommenting] = useState(false);
   const [pin, setPin] = useState<{ x: number; y: number } | null>(null);
@@ -252,48 +254,56 @@ function BrowserView({
             className="h-full w-full border-0 bg-white"
             sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
           />
-        ) : starting ? (
-          <div className="flex h-full items-center justify-center">
-            <ShiningText text="Starting development server…" play className="text-[13px]" />
+        ) : starting || agentRunning ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 bg-[#FAFAF9]">
+            <div className="cc-preview-loader" aria-hidden />
+            <div className="flex flex-col items-center gap-1 text-center">
+              <ShiningText
+                text={starting ? "Starting live preview…" : "Building your project…"}
+                play
+                className="text-[12.5px] font-medium tracking-[-0.01em]"
+              />
+              <p className="text-[11px] text-[#8A8A8A]">
+                {starting ? "Preparing the development server" : "Preview will appear when files are ready"}
+              </p>
+            </div>
           </div>
         ) : failed ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3">
-            <p className="text-[13px] font-medium text-[color:var(--text-primary)]">
-              Preview is not available yet
-            </p>
+          <div className="flex h-full flex-col items-center justify-center gap-2.5 bg-[#FAFAF9]">
+            <p className="text-[13px] font-medium text-[#171717]">Preview could not start</p>
             {session?.lastError?.message ? (
-              <p className="max-w-[380px] text-center text-[12px] leading-[1.5] text-[color:var(--text-tertiary)]">
+              <p className="max-w-[360px] text-center text-[11.5px] leading-[1.45] text-[#8A8A8A]">
                 {session.lastError.message}
               </p>
             ) : null}
-            <div className="flex items-center gap-2">
+            <div className="mt-1 flex items-center gap-1.5">
               <button
                 type="button"
                 onClick={onRestart}
-                className="rounded-[8px] border border-[color:var(--border-medium)] px-3 py-[5px] text-[12px] font-medium transition-colors hover:bg-[color:var(--surface-hover)]"
+                className="h-7 rounded-[7px] border border-[#EEEEEC] px-2.5 text-[11.5px] text-[#171717] transition-colors hover:bg-[#F6F6F5]"
               >
                 Retry
               </button>
               <button
                 type="button"
                 onClick={onOpenTerminal}
-                className="rounded-[8px] px-3 py-[5px] text-[12px] font-medium text-[color:var(--text-secondary)] transition-colors hover:bg-[color:var(--surface-hover)]"
+                className="h-7 rounded-[7px] px-2.5 text-[11.5px] text-[#5F6368] transition-colors hover:bg-[#F6F6F5]"
               >
                 View logs
               </button>
             </div>
           </div>
         ) : (
-          <div className="relative flex h-full flex-col items-center justify-center overflow-hidden bg-[color:var(--clyra-canvas,#f7f7f6)]">
-            <div className="relative z-[1] flex max-w-[340px] flex-col items-center px-6 text-center">
-              <div className="mb-3 grid h-10 w-10 place-items-center rounded-[10px] border border-[color:var(--clyra-border,rgba(0,0,0,0.07))] bg-white text-[15px] font-medium tracking-tight text-[color:var(--clyra-text,#1c1c1c)]">
+          <div className="relative flex h-full flex-col items-center justify-center overflow-hidden bg-[#F7F7F6]">
+            <div className="relative z-[1] flex max-w-[300px] flex-col items-center px-5 text-center">
+              <div className="mb-2.5 grid h-8 w-8 place-items-center rounded-[8px] border border-[#EEEEEC] bg-white text-[13px] font-medium text-[#171717]">
                 C
               </div>
-              <h3 className="text-[16px] font-medium tracking-[-0.02em] text-[color:var(--clyra-text,#1c1c1c)]">
-                What should we build?
+              <h3 className="text-[14px] font-medium tracking-[-0.02em] text-[#171717]">
+                Build something to preview
               </h3>
-              <p className="mt-1.5 text-[12.5px] leading-relaxed text-[color:var(--clyra-text-secondary,#666)]">
-                Clyra Code can read, edit, run and preview your project in this workspace.
+              <p className="mt-1.5 text-[12px] leading-[1.45] text-[#8A8A8A]">
+                Describe what to create in the chat. The live preview opens here once files are ready.
               </p>
             </div>
           </div>
@@ -752,6 +762,7 @@ export function RightPanel({
   preview,
   onAddContext,
   focusFile,
+  agentRunning = false,
 }: {
   state: ClyraCodeState;
   actionList: AgentAction[];
@@ -760,6 +771,7 @@ export function RightPanel({
   preview: ReturnType<typeof usePreview>;
   onAddContext: (context: ComposerContext) => void;
   focusFile: string | null;
+  agentRunning?: boolean;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [openExtras, setOpenExtras] = useState<RightTab[]>([]);
@@ -846,6 +858,7 @@ export function RightPanel({
             onTabChange("terminal");
           }}
           onAddContext={onAddContext}
+          agentRunning={agentRunning}
         />
       ) : tab === "summary" ? (
         <SummaryView state={state} actions={actionList} />

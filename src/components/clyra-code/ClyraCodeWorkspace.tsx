@@ -232,27 +232,29 @@ export default function ClyraCodeWorkspace() {
           </motion.div>
         ) : null}
 
-        <header className="flex h-[52px] shrink-0 items-center gap-2 border-b border-[color:var(--border-subtle)] px-4">
+        <header className="flex h-10 shrink-0 items-center gap-2 border-b border-[#EEEEEC] px-3.5">
           {activeProject ? (
             <>
-              <h1 className="truncate text-[15px] font-semibold text-[color:var(--text-primary)]">
-                {taskTitle || "New task"}
-              </h1>
-              <span className="truncate text-[12.5px] text-[color:var(--text-tertiary)]">
-                {activeProject.name || activeProject.id}
-              </span>
-              <div className="relative ml-auto">
+              <div className="min-w-0 flex-1">
+                <h1 className="truncate text-[14px] font-semibold tracking-[-0.015em] text-[#171717]">
+                  {taskTitle || "New task"}
+                </h1>
+                <p className="truncate text-[11px] text-[#8A8A8A]">
+                  {activeProject.name || activeProject.id}
+                </p>
+              </div>
+              <div className="relative shrink-0">
                 <button
                   type="button"
                   aria-label="Task menu"
                   onClick={() => setMenuOpen((v) => !v)}
-                  className="rounded-[7px] p-1.5 text-[color:var(--text-tertiary)] transition-colors hover:bg-[color:var(--surface-hover)]"
+                  className="rounded-[6px] p-1 text-[#8A8A8A] transition-colors hover:bg-[#F6F6F5]"
                 >
-                  <MoreHorizontal className="h-[15px] w-[15px]" />
+                  <MoreHorizontal className="h-3.5 w-3.5" />
                 </button>
                 {menuOpen ? (
                   <div
-                    className="absolute right-0 top-[32px] z-30 w-[180px] rounded-[10px] border border-[color:var(--border-subtle)] bg-white py-1 shadow-[0_10px_30px_rgba(15,23,42,0.1)]"
+                    className="absolute right-0 top-[28px] z-30 w-[168px] rounded-[8px] border border-[#EEEEEC] bg-white py-0.5 shadow-[0_8px_20px_rgba(15,23,42,0.08)]"
                     onMouseLeave={() => setMenuOpen(false)}
                   >
                     <button
@@ -274,7 +276,7 @@ export default function ClyraCodeWorkspace() {
                           .catch(() => undefined);
                         setMenuOpen(false);
                       }}
-                      className="flex w-full px-3 py-[6px] text-left text-[12.5px] transition-colors hover:bg-[color:var(--surface-hover)]"
+                      className="flex w-full px-2.5 py-[5px] text-left text-[12px] transition-colors hover:bg-[#F6F6F5]"
                     >
                       Export conversation
                     </button>
@@ -284,7 +286,7 @@ export default function ClyraCodeWorkspace() {
                         selectProject(state.activeProjectId);
                         setMenuOpen(false);
                       }}
-                      className="flex w-full px-3 py-[6px] text-left text-[12.5px] transition-colors hover:bg-[color:var(--surface-hover)]"
+                      className="flex w-full px-2.5 py-[5px] text-left text-[12px] transition-colors hover:bg-[#F6F6F5]"
                     >
                       New task
                     </button>
@@ -293,7 +295,7 @@ export default function ClyraCodeWorkspace() {
               </div>
             </>
           ) : (
-            <h1 className="text-[15px] font-semibold text-[color:var(--text-primary)]">Clyra Code</h1>
+            <h1 className="text-[14px] font-semibold text-[#171717]">Clyra Code</h1>
           )}
         </header>
 
@@ -348,7 +350,7 @@ export default function ClyraCodeWorkspace() {
               onSubmit={submitPrompt}
               onStop={() => void cancelRun()}
             />
-            <footer className="flex h-[26px] shrink-0 items-center gap-4 px-5 pb-1 text-[11px] text-[color:var(--text-tertiary)]">
+            <footer className="flex h-5 shrink-0 items-center gap-3 px-4 pb-1 text-[10.5px] text-[#8A8A8A]">
               <span>Local</span>
               <span className="cc-mono truncate">{activeProject.id}</span>
               {tokensLabel ? <span className="cc-counter ml-auto">{tokensLabel}</span> : null}
@@ -376,6 +378,7 @@ export default function ClyraCodeWorkspace() {
         preview={preview}
         onAddContext={(context) => setContexts((prev) => [...prev, context])}
         focusFile={focusFile}
+        agentRunning={running}
       />
 
       {/* -------- new project modal -------- */}

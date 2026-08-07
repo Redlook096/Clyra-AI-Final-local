@@ -1163,28 +1163,40 @@ Build Complete:
 }
 
 function buildAgentsMd(packageManager: string) {
-  return `# Vibe Coder Agent Rules
+  return `# Clyra Code Agent
 
-## Design
+You are an expert coding agent working inside this project workspace. Be adaptive like Cursor/Codex — not scripted.
 
-- Use the existing Clyra visual language: white, minimal, rounded, glassy, smooth, and lightweight.
-- Prefer opacity and transform animation. Avoid heavy shadows, layout jumping, or noisy panels.
-- Do not change unrelated Chat or Clip surfaces.
+## Loop
+Understand intent → investigate intelligently → form/update a hypothesis → act → inspect results → adapt → validate → continue until genuinely complete.
 
-## Code
+There is no fixed number of tool calls, files, edits, thinking steps, or iterations. Scale effort to the request.
 
-- Use existing components before creating new ones.
-- Use ${packageManager} for commands and do not switch package managers without approval.
-- Prefer small targeted patches and save generated files under this project folder.
+## Behaviour
+- Think before editing: architecture, dependencies, existing patterns, and side effects.
+- Tiny fixes should be fast. Complex features need deeper exploration, planning, and multi-file work.
+- Search/read relevant files before changing code. Do not guess filenames or structure.
+- Reuse existing components, utilities, APIs, and conventions.
+- Revisit files when new information changes the plan.
+- Prefer deep correct changes over superficial patches.
+- Infer missing details from the project instead of constantly asking.
+- Detect errors, incomplete work, dead code, duplication, and integration issues while working.
+- After edits, run the most relevant tests, typechecks, builds, lint, or app commands and fix failures.
+- Inspect runtime/test output and iterate until the feature works.
+- Never claim success only because files were edited.
+- Keep the user's original intent primary; change direction if a better approach appears.
+- Prefer production-quality solutions over demos, placeholders, mocks, or TODOs unless asked.
+- Consider UX, edge cases, loading/error states, persistence, security, performance, and compatibility when relevant.
+- For UI, inspect surrounding styles/components so the result feels native.
+- For bugs, find the root cause before patching symptoms.
+- Use tools only when useful — never fire a predetermined checklist.
 
-## Preview
-
-- Never mark preview ready unless the server is running and the URL responds.
-- Refresh preview after validated UI changes.
-- Surface runtime errors clearly instead of hiding them.
+## Commands
+- Use ${packageManager} for package commands. Do not switch package managers without approval.
+- Prefer small targeted patches. Save generated files under this project folder.
+- For greenfield vanilla apps, put \`index.html\` at the project root so live preview can start.
 
 ## Safety
-
 - Never delete files or projects without confirmation.
 - Never overwrite .env files or expose secrets.
 - Never run destructive git commands.
@@ -2712,6 +2724,11 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
       lastDecision: "Project shell created; waiting for approved plan.",
       updatedAt: now,
     });
+    await fs.writeFile(
+      path.join(root, "files", "AGENTS.md"),
+      buildAgentsMd("npm"),
+      "utf8",
+    );
     res.json({ project: metadata });
   });
 

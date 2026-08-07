@@ -79,6 +79,16 @@ export function registerOpenCodeRoutes(app: Application) {
       const root = projectPath(projectId);
       await fs.mkdir(root, { recursive: true });
       await ensureProjectGitRepo(root).catch(() => undefined);
+      // Seed adaptive agent guidance when missing (OpenCode reads AGENTS.md).
+      try {
+        await fs.access(path.join(root, "AGENTS.md"));
+      } catch {
+        await fs.writeFile(
+          path.join(root, "AGENTS.md"),
+          `# Clyra Code Agent\n\nBe an adaptive expert coding agent. Understand intent → investigate → act → inspect → adapt → validate until complete.\nNo fixed tool-call quota. Scale effort to the request. Read before editing. Prefer production-quality work. Fix failures after checks.\n`,
+          "utf8",
+        ).catch(() => undefined);
+      }
       res.json(await openCodeRuntimeManager.start(projectId, root));
     } catch (error) {
       res.status(503).json({ error: error instanceof Error ? error.message : "OpenCode could not start." });

@@ -7,12 +7,12 @@ function ClyraMark({ compact = false }: { compact?: boolean }) {
   return (
     <span
       className={cn(
-        "flex items-center justify-center rounded-full bg-[color:var(--accent-blue)]",
-        compact ? "h-7 w-7" : "h-5 w-5",
+        "flex items-center justify-center rounded-full bg-[#2563eb]",
+        compact ? "h-6 w-6" : "h-[18px] w-[18px]",
       )}
       aria-hidden
     >
-      <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+      <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
         <path
           d="M9.5 3.4A4.1 4.1 0 1 0 9.5 8.6"
           stroke="white"
@@ -53,18 +53,18 @@ export function Sidebar({
   return (
     <aside
       className={cn(
-        "relative flex h-full shrink-0 flex-col border-r border-[color:var(--border-subtle)] bg-[color:var(--sidebar-background)] transition-[width] duration-280 ease-[cubic-bezier(0.22,1,0.36,1)]",
-        collapsed ? "w-[56px] min-w-[56px]" : "w-[220px] min-w-[200px]",
+        "relative flex h-full shrink-0 flex-col bg-[#F7F7F6] transition-[width] duration-280 ease-[cubic-bezier(0.22,1,0.36,1)]",
+        collapsed ? "w-[52px] min-w-[52px]" : "w-[208px] min-w-[188px]",
       )}
     >
-      <div className={cn("pt-4", collapsed ? "px-2" : "px-3")}>
-        <div className={cn("flex h-8 items-center", collapsed ? "justify-center" : "justify-between gap-2")}>
+      <div className={cn("pt-3", collapsed ? "px-1.5" : "px-2.5")}>
+        <div className={cn("flex h-7 items-center", collapsed ? "justify-center" : "justify-between gap-1.5")}>
           {collapsed ? (
             <ClyraMark compact />
           ) : (
-            <div className="flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 items-center gap-1.5">
               <ClyraMark />
-              <p className="truncate text-[13px] font-medium tracking-[-0.015em] text-[color:var(--text-primary)]">
+              <p className="truncate text-[12.5px] font-medium tracking-[-0.015em] text-[#171717]">
                 Clyra
               </p>
             </div>
@@ -75,11 +75,11 @@ export function Sidebar({
               aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
               onClick={onToggleCollapsed}
               className={cn(
-                "rounded-[8px] p-1.5 text-[color:var(--text-tertiary)] transition-colors hover:bg-[color:var(--surface-hover)] hover:text-[color:var(--text-primary)]",
-                collapsed && "absolute right-[-13px] top-4 z-20 border border-[color:var(--border-subtle)] bg-white",
+                "rounded-[6px] p-1 text-[#8A8A8A] transition-colors hover:bg-[#EEEEEC] hover:text-[#171717]",
+                collapsed && "absolute right-[-11px] top-3 z-20 border border-[#EEEEEC] bg-white",
               )}
             >
-              {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronLeft className="h-3.5 w-3.5" />}
+              {collapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronLeft className="h-3 w-3" />}
             </button>
           ) : null}
         </div>
@@ -87,9 +87,9 @@ export function Sidebar({
           <button
             type="button"
             onClick={onNewProject}
-            className="mt-3 flex h-8 w-full items-center gap-2 rounded-[8px] px-2 text-[12.5px] font-medium text-[color:var(--text-primary)] transition-colors duration-100 hover:bg-[color:var(--surface-hover)] active:scale-[0.99]"
+            className="mt-2 flex h-7 w-full items-center gap-1.5 rounded-[7px] px-1.5 text-[12px] text-[#171717] transition-colors duration-100 hover:bg-[#EEEEEC] active:scale-[0.99]"
           >
-            <Plus className="h-4 w-4 text-[color:var(--text-secondary)]" strokeWidth={1.75} />
+            <Plus className="h-3.5 w-3.5 text-[#5F6368]" strokeWidth={1.75} />
             New project
           </button>
         ) : (
@@ -97,17 +97,17 @@ export function Sidebar({
             type="button"
             aria-label="New project"
             onClick={onNewProject}
-            className="mt-3 mx-auto flex h-8 w-8 items-center justify-center rounded-[8px] text-[color:var(--text-secondary)] transition-colors hover:bg-[color:var(--surface-hover)]"
+            className="mt-2 mx-auto flex h-7 w-7 items-center justify-center rounded-[7px] text-[#5F6368] transition-colors hover:bg-[#EEEEEC]"
           >
-            <Plus className="h-4 w-4" strokeWidth={2} />
+            <Plus className="h-3.5 w-3.5" strokeWidth={2} />
           </button>
         )}
       </div>
 
       {!collapsed ? (
-        <div className="mt-4 min-h-0 flex-1 px-2">
+        <div className="mt-3 min-h-0 flex-1 px-1.5">
           {visible.length === 0 ? (
-            <div className="px-2 py-2 text-[12px] leading-[1.5] text-[color:var(--text-tertiary)]">
+            <div className="px-1.5 py-1.5 text-[11.5px] leading-[1.45] text-[#8A8A8A]">
               No projects yet.
             </div>
           ) : (
@@ -119,17 +119,15 @@ export function Sidebar({
                   type="button"
                   onClick={() => onSelectProject(project.id)}
                   className={cn(
-                    "flex h-8 w-full items-center gap-2 rounded-[8px] px-2 text-left transition-colors duration-100",
-                    selected
-                      ? "bg-[color:var(--surface-selected)]"
-                      : "hover:bg-[color:var(--surface-hover)]",
+                    "flex h-7 w-full items-center gap-1.5 rounded-[7px] px-1.5 text-left transition-colors duration-100",
+                    selected ? "bg-[#EEEEEC]" : "hover:bg-[#F0F0EE]",
                   )}
                 >
-                  <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[color:var(--text-primary)]">
+                  <span className="min-w-0 flex-1 truncate text-[12.5px] text-[#171717]">
                     {project.name || project.id}
                   </span>
                   {selected ? (
-                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--accent-blue)]" />
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#2563eb]" />
                   ) : null}
                 </button>
               );
@@ -140,15 +138,15 @@ export function Sidebar({
               <button
                 type="button"
                 onClick={() => setShowAll((v) => !v)}
-                className="mt-1 flex h-7 w-full items-center gap-1.5 rounded-[8px] px-2 text-[12px] text-[color:var(--text-tertiary)] transition-colors hover:bg-[color:var(--surface-hover)]"
+                className="mt-0.5 flex h-6 w-full items-center gap-1 rounded-[7px] px-1.5 text-[11.5px] text-[#8A8A8A] transition-colors hover:bg-[#F0F0EE]"
               >
                 View all
                 <ChevronDown
-                  className={cn("h-3.5 w-3.5 transition-transform", showAll && "rotate-180")}
+                  className={cn("h-3 w-3 transition-transform", showAll && "rotate-180")}
                 />
               </button>
               {showAll ? (
-                <div className="cc-scroll mt-1 max-h-56 overflow-y-auto rounded-[10px] border border-[color:var(--border-subtle)] bg-white py-1">
+                <div className="cc-scroll mt-0.5 max-h-52 overflow-y-auto rounded-[8px] border border-[#EEEEEC] bg-white py-0.5">
                   {projects.map((project) => (
                     <button
                       key={project.id}
@@ -158,8 +156,8 @@ export function Sidebar({
                         setShowAll(false);
                       }}
                       className={cn(
-                        "flex h-7 w-full items-center px-2.5 text-left text-[12.5px] transition-colors hover:bg-[color:var(--surface-hover)]",
-                        project.id === activeProjectId && "text-[color:var(--accent-blue)]",
+                        "flex h-6 w-full items-center px-2 text-left text-[12px] transition-colors hover:bg-[#F6F6F5]",
+                        project.id === activeProjectId && "text-[#2563eb]",
                       )}
                     >
                       <span className="truncate">{project.name || project.id}</span>
@@ -171,7 +169,7 @@ export function Sidebar({
           ) : null}
         </div>
       ) : (
-        <div className="mt-3 flex min-h-0 flex-1 flex-col items-center gap-1 px-1.5">
+        <div className="mt-2 flex min-h-0 flex-1 flex-col items-center gap-0.5 px-1">
           {visible.map((project) => {
             const selected = project.id === activeProjectId;
             const initial = (project.name || project.id).slice(0, 1).toUpperCase();
@@ -182,10 +180,10 @@ export function Sidebar({
                 title={project.name || project.id}
                 onClick={() => onSelectProject(project.id)}
                 className={cn(
-                  "flex h-8 w-8 items-center justify-center rounded-[8px] text-[11px] font-semibold transition-colors",
+                  "flex h-7 w-7 items-center justify-center rounded-[7px] text-[10.5px] font-medium transition-colors",
                   selected
-                    ? "bg-[color:var(--surface-selected)] text-[color:var(--accent-blue)]"
-                    : "text-[color:var(--text-tertiary)] hover:bg-[color:var(--surface-hover)]",
+                    ? "bg-[#EEEEEC] text-[#2563eb]"
+                    : "text-[#8A8A8A] hover:bg-[#F0F0EE]",
                 )}
               >
                 {initial}
@@ -195,21 +193,19 @@ export function Sidebar({
         </div>
       )}
 
-      <div className={cn("flex h-12 items-center border-t border-[color:var(--border-subtle)]", collapsed ? "justify-center px-1" : "gap-2 px-3")}>
-        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[color:var(--surface-selected)] text-[11px] font-semibold text-[color:var(--text-secondary)]">
+      <div className={cn("flex h-10 items-center border-t border-[#EEEEEC]", collapsed ? "justify-center px-1" : "gap-1.5 px-2.5")}>
+        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#EEEEEC] text-[10px] font-semibold text-[#5F6368]">
           L
         </span>
         {!collapsed ? (
           <>
-            <span className="flex-1 truncate text-[12.5px] font-medium text-[color:var(--text-primary)]">
-              Luke
-            </span>
+            <span className="flex-1 truncate text-[12px] text-[#171717]">Luke</span>
             <button
               type="button"
               aria-label="Settings"
-              className="rounded-[8px] p-1 text-[color:var(--text-tertiary)] transition-colors hover:bg-[color:var(--surface-hover)]"
+              className="rounded-[6px] p-0.5 text-[#8A8A8A] transition-colors hover:bg-[#EEEEEC]"
             >
-              <Settings2 className="h-4 w-4" strokeWidth={1.7} />
+              <Settings2 className="h-3.5 w-3.5" strokeWidth={1.7} />
             </button>
           </>
         ) : null}

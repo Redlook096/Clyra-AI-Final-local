@@ -5857,16 +5857,7 @@ Please analyze the code you just wrote and fix this error.`;
     { id: "vibe", label: "Vibe Coder", icon: SquarePen },
     { id: "clip", label: "Clip", icon: Scissors },
   ];
-  const workflowTabsRestingVisible =
-    !isCreatorWorkspace &&
-    !isBrowserWorkspace &&
-    !isCompanionWorkspace &&
-    !isStudyWorkspace &&
-    !isClipWorkspace;
-  const showWorkflowTabs =
-    !isEmbeddedToolPreview &&
-    (activeWorkspaceTab === "chat" || workflowTabsRestingVisible) &&
-    !workflowTabsHidden;
+  const showWorkflowTabs = !isEmbeddedToolPreview && !workflowTabsHidden;
 
   useEffect(() => {
     const hide = () => setWorkflowTabsHidden(true);
@@ -6102,7 +6093,9 @@ Please analyze the code you just wrote and fix this error.`;
     // All workspace loading happens during boot. Switching tools should be
     // immediate rather than showing a second transition/loading treatment.
     setIsWorkspaceSwitching(false);
-    setWorkflowTabsHidden(false);
+    // Hide the Chat/Vibe/Clip rail when entering any tool surface so it does not
+    // overlap the workspace. Chat keeps the rail visible.
+    setWorkflowTabsHidden(tabId !== "chat");
     if (workspaceSwitchTimeoutRef.current != null) {
       window.clearTimeout(workspaceSwitchTimeoutRef.current);
     }
@@ -6759,15 +6752,16 @@ Please analyze the code you just wrote and fix this error.`;
 
         <div className={cn("clyra-main-surface relative z-10 flex min-h-0 min-w-0 flex-1 flex-col bg-white sm:border-transparent", activeWorkspaceTab === "chat" && "clyra-chat-page")}>
           {workflowTabsHidden && !isEmbeddedToolPreview ? (
-            <div
+            <button
+              type="button"
               aria-label="Show workspace switcher"
-              className="absolute inset-x-0 top-0 z-[189] h-12"
+              className="clyra-workflow-tabs-hint"
               onMouseEnter={() => {
                 if (workflowTabsRevealTimerRef.current != null) window.clearTimeout(workflowTabsRevealTimerRef.current);
                 workflowTabsRevealTimerRef.current = window.setTimeout(() => {
                   setWorkflowTabsHidden(false);
                   workflowTabsRevealTimerRef.current = null;
-                }, 1000);
+                }, 280);
               }}
               onMouseLeave={() => {
                 if (workflowTabsRevealTimerRef.current != null) {
@@ -6775,7 +6769,10 @@ Please analyze the code you just wrote and fix this error.`;
                   workflowTabsRevealTimerRef.current = null;
                 }
               }}
-            />
+              onClick={() => setWorkflowTabsHidden(false)}
+            >
+              <span className="clyra-workflow-tabs-hint__dot" />
+            </button>
           ) : null}
           <AnimatePresence initial={false}>
           {showWorkflowTabs ? (
@@ -6791,6 +6788,23 @@ Please analyze the code you just wrote and fix this error.`;
               className="pointer-events-auto absolute left-1/2 top-5 z-50 -translate-x-1/2 sm:top-6"
               initial={false}
               animate={{ y: 0 }}
+              onMouseLeave={() => {
+                if (activeWorkspaceTab !== "chat") {
+                  if (workflowTabsRevealTimerRef.current != null) {
+                    window.clearTimeout(workflowTabsRevealTimerRef.current);
+                  }
+                  workflowTabsRevealTimerRef.current = window.setTimeout(() => {
+                    setWorkflowTabsHidden(true);
+                    workflowTabsRevealTimerRef.current = null;
+                  }, 450);
+                }
+              }}
+              onMouseEnter={() => {
+                if (workflowTabsRevealTimerRef.current != null) {
+                  window.clearTimeout(workflowTabsRevealTimerRef.current);
+                  workflowTabsRevealTimerRef.current = null;
+                }
+              }}
             >
               <div
                 className={cn(
@@ -6884,7 +6898,12 @@ Please analyze the code you just wrote and fix this error.`;
           </AnimatePresence>
           <AnimatePresence></AnimatePresence>
           <motion.div
-            className="clyra-screen-stage relative flex min-h-0 min-w-0 flex-1 flex-col pt-3 sm:pt-4"
+            className={cn(
+              "clyra-screen-stage relative flex min-h-0 min-w-0 flex-1 flex-col",
+              activeWorkspaceTab === "chat" && !workflowTabsHidden
+                ? "pt-3 sm:pt-4"
+                : "pt-0 sm:pt-0",
+            )}
             animate={{ x: sidebarAvoidShift }}
             transition={{
               type: "tween",

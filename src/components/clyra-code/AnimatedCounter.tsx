@@ -55,7 +55,7 @@ export function DiffCounters({
   const showDel = deletions !== undefined || showZero;
   if (!showAdd && !showDel) return null;
   return (
-    <span className={`cc-counter inline-flex items-center gap-1.5 text-[12px] ${className ?? ""}`}>
+    <span className={`cc-counter inline-flex items-center gap-1 text-[11px] tabular-nums ${className ?? ""}`}>
       {showAdd ? (
         <span className="text-[color:var(--addition-green)]">+{add}</span>
       ) : null}

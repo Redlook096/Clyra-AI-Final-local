@@ -12,7 +12,7 @@ const VERBS: Record<string, { active: string; done: string; failed: string }> = 
   create: { active: "Creating", done: "Created", failed: "Failed creating" },
   delete: { active: "Deleting", done: "Deleted", failed: "Failed deleting" },
   search: { active: "Searching", done: "Searched", failed: "Failed searching" },
-  list: { active: "Listing", done: "Listed", failed: "Failed listing" },
+  list: { active: "Explored", done: "Explored", failed: "Failed exploring" },
   command: { active: "Running", done: "Ran", failed: "Failed" },
   check: { active: "Checking", done: "Checked", failed: "Failed checking" },
   test: { active: "Testing", done: "Tested", failed: "Failed testing" },
@@ -55,7 +55,7 @@ export function AgentActionRow({
 
   if (action.kind === "permission") {
     return (
-      <div className="flex min-h-[26px] items-center gap-2 py-[2px] text-[12.5px]">
+      <div className="flex h-5 items-center gap-1.5 text-[12px]">
         <span className="font-medium text-[color:var(--warning-amber)]">
           {action.status === "active" ? "Approval needed" : "Approval"}
         </span>
@@ -68,10 +68,8 @@ export function AgentActionRow({
                 type="button"
                 onClick={() => onReplyPermission(action.permissionId!, response)}
                 className={cn(
-                  "rounded-[7px] border border-[color:var(--border-medium)] px-2 py-[2px] text-[11px] font-medium transition-colors hover:bg-[color:var(--surface-hover)]",
-                  response === "deny"
-                    ? "text-[color:var(--deletion-red)]"
-                    : "text-[color:var(--text-primary)]",
+                  "rounded-[6px] border border-[#EEEEEC] px-1.5 py-px text-[10.5px] transition-colors hover:bg-[#F6F6F5]",
+                  response === "deny" ? "text-[color:var(--deletion-red)]" : "text-[#171717]",
                 )}
               >
                 {response === "allow" ? "Allow" : response === "always" ? "Always" : "Deny"}
@@ -79,9 +77,7 @@ export function AgentActionRow({
             ))}
           </span>
         ) : action.permissionResolved ? (
-          <span className="ml-auto text-[11px] text-[color:var(--text-tertiary)]">
-            {action.permissionResolved}
-          </span>
+          <span className="ml-auto text-[10.5px] text-[#8A8A8A]">{action.permissionResolved}</span>
         ) : null}
       </div>
     );
@@ -97,14 +93,14 @@ export function AgentActionRow({
   return (
     <motion.div
       layout
-      initial={{ opacity: 0, y: 2 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.14, ease: [0.22, 1, 0.36, 1] }}
       className="group"
     >
       <div
         className={cn(
-          "grid min-h-6 items-center gap-x-2 py-1 text-[12.5px] leading-[1.45] tracking-[-0.01em]",
+          "grid h-[22px] items-center gap-x-1.5 text-[12px] leading-none tracking-[-0.01em]",
           "grid-cols-[auto_minmax(0,1fr)_auto]",
           hasDetails && "cursor-pointer",
         )}
@@ -113,25 +109,27 @@ export function AgentActionRow({
       >
         <span
           className={cn(
-            "shrink-0 font-medium",
+            "shrink-0",
             isError
-              ? "text-[color:var(--deletion-red)]"
+              ? "font-medium text-[color:var(--deletion-red)]"
               : isCancelled
-                ? "text-[color:var(--text-tertiary)]"
-                : "text-[color:var(--accent-blue)]",
+                ? "text-[#8A8A8A]"
+                : isActive
+                  ? "font-medium text-[#2563eb]"
+                  : "font-medium text-[#5F6368]",
           )}
         >
           {verb}
         </span>
-        <span className="flex min-w-0 items-center gap-2">
+        <span className="flex min-w-0 items-center gap-1.5">
           <ShimmerText
             text={action.target}
             active={isActive}
-            tone={isFileAction ? "blue" : "neutral"}
+            tone={isActive && isFileAction ? "blue" : "neutral"}
             mono={isMonoTarget}
             className={cn(
-              "text-[12.5px] tracking-[-0.01em]",
-              !isActive && "text-[color:var(--text-secondary)]",
+              "text-[12px] tracking-[-0.01em]",
+              !isActive && "text-[#5F6368]",
             )}
           />
           {isFileAction ? (
@@ -158,17 +156,19 @@ export function AgentActionRow({
             />
           ) : null}
         </span>
-        <span className="flex items-center gap-2 text-[11px] text-[color:var(--text-tertiary)]">
+        <span className="flex items-center gap-1.5 text-[10.5px] text-[#8A8A8A]">
           {commandExit ? (
             <span className={cn("cc-mono", isError && "text-[color:var(--deletion-red)]")}>
               {commandExit}
             </span>
           ) : null}
-          {duration !== null && duration > 900 ? <span className="cc-counter">{formatDuration(duration)}</span> : null}
+          {duration !== null && duration > 900 ? (
+            <span className="cc-counter">{formatDuration(duration)}</span>
+          ) : null}
           {hasDetails ? (
             <ChevronRight
               className={cn(
-                "h-3.5 w-3.5 text-[color:var(--text-disabled)] transition-transform duration-150",
+                "h-3 w-3 text-[#B0B0B0] transition-colors duration-150 group-hover:text-[#5F6368]",
                 expanded && "rotate-90",
               )}
             />
@@ -180,19 +180,19 @@ export function AgentActionRow({
         <motion.div
           initial={{ opacity: 0, height: 0 }}
           animate={{ opacity: 1, height: "auto" }}
-          transition={{ duration: 0.16, ease: "easeOut" }}
+          transition={{ duration: 0.14, ease: "easeOut" }}
           className="mb-1 overflow-hidden"
         >
-          <pre className="cc-mono max-h-56 overflow-auto cc-scroll whitespace-pre-wrap rounded-[8px] bg-[color:var(--surface-muted)] px-3 py-2 text-[11.5px] leading-[1.5] text-[color:var(--text-secondary)]">
+          <pre className="cc-mono max-h-48 overflow-auto cc-scroll whitespace-pre-wrap rounded-[7px] bg-[#F7F7F6] px-2.5 py-2 text-[11px] leading-[1.45] text-[#5F6368]">
             {(action.error ? `${action.error}\n\n` : "") + (action.output ?? "")}
           </pre>
           {isError ? (
-            <div className="mt-1 flex items-center gap-2">
+            <div className="mt-1 flex items-center gap-1.5">
               {onRetry ? (
                 <button
                   type="button"
                   onClick={() => onRetry(action)}
-                  className="rounded-[7px] border border-[color:var(--border-medium)] px-2 py-[3px] text-[11px] font-medium text-[color:var(--text-primary)] hover:bg-[color:var(--surface-hover)]"
+                  className="rounded-[6px] border border-[#EEEEEC] px-2 py-[2px] text-[10.5px] text-[#171717] hover:bg-[#F6F6F5]"
                 >
                   Ask agent to fix
                 </button>
@@ -201,7 +201,7 @@ export function AgentActionRow({
                 <button
                   type="button"
                   onClick={onOpenTerminal}
-                  className="rounded-[7px] border border-[color:var(--border-medium)] px-2 py-[3px] text-[11px] font-medium text-[color:var(--text-secondary)] hover:bg-[color:var(--surface-hover)]"
+                  className="rounded-[6px] px-2 py-[2px] text-[10.5px] text-[#5F6368] hover:bg-[#F6F6F5]"
                 >
                   Open terminal
                 </button>
@@ -212,7 +212,7 @@ export function AgentActionRow({
             <button
               type="button"
               onClick={() => onOpenFile(action.target)}
-              className="mt-1 rounded-[7px] border border-[color:var(--border-medium)] px-2 py-[3px] text-[11px] font-medium text-[color:var(--text-secondary)] hover:bg-[color:var(--surface-hover)]"
+              className="mt-1 rounded-[6px] px-2 py-[2px] text-[10.5px] text-[#5F6368] hover:bg-[#F6F6F5]"
             >
               View diff
             </button>

@@ -15,10 +15,10 @@ function ElapsedSeconds({ since }: { since: number }) {
     return () => window.clearInterval(timer);
   }, []);
   const seconds = Math.max(0, Math.round((Date.now() - since) / 1000));
-  return <span className="cc-counter text-[11px] tabular-nums text-[color:var(--text-tertiary)]">{seconds}s</span>;
+  return <span className="cc-counter text-[10.5px] tabular-nums text-[#8A8A8A]">{seconds}s</span>;
 }
 
-/** Existing Clyra thinking shimmer — no spinners/dots. */
+/** Existing Clyra thinking shimmer — no spinners. */
 export function ThinkingIndicator({
   startedAt,
   onStop,
@@ -27,15 +27,15 @@ export function ThinkingIndicator({
   onStop?: () => void;
 }) {
   return (
-    <div className="flex items-center gap-2 py-1">
+    <div className="flex items-center gap-1.5 py-[3px]">
       <ShiningBrainIcon className="h-3.5 w-3.5" />
-      <ShiningText text="Thinking" play className="text-[12.5px] font-medium tracking-[-0.01em]" />
+      <ShiningText text="Thinking" play className="text-[12px] font-medium tracking-[-0.01em]" />
       <ElapsedSeconds since={startedAt} />
       {onStop ? (
         <button
           type="button"
           onClick={onStop}
-          className="ml-0.5 h-6 rounded-[8px] px-2 text-[11.5px] font-medium text-[color:var(--text-secondary)] transition-colors hover:bg-[color:var(--surface-hover)] active:bg-[color:var(--surface-selected)]"
+          className="ml-0.5 h-5 rounded-[6px] px-1.5 text-[11px] text-[#5F6368] transition-colors hover:bg-[#F0F0EE]"
         >
           Stop
         </button>
@@ -58,7 +58,7 @@ function ThoughtSummary({ entry }: { entry: Extract<LogEntry, { type: "reasoning
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0, height: 0 }}
-          transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+          transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
           className="overflow-hidden"
         >
           <ThinkingIndicator startedAt={entry.ts} />
@@ -66,10 +66,10 @@ function ThoughtSummary({ entry }: { entry: Extract<LogEntry, { type: "reasoning
       ) : (
         <motion.div
           key={`${entry.id}-done`}
-          initial={{ opacity: 0, y: -2 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-          className="py-1 text-[12px] font-medium tracking-[-0.01em] text-[color:var(--text-tertiary)]"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+          className="py-[3px] text-[11.5px] text-[#8A8A8A]"
         >
           Thought for {seconds}s
         </motion.div>
@@ -97,25 +97,25 @@ export function CompletionSummary({
   if (!diffs.length) return null;
   return (
     <motion.div
-      initial={{ opacity: 0, y: 4 }}
+      initial={{ opacity: 0, y: 3 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-      className="mt-4 border-t border-[color:var(--border-subtle)] pt-3"
+      transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+      className="cc-changed-files mt-4 overflow-hidden rounded-[8px] bg-[#F7F7F6]"
     >
-      <div className="flex items-center gap-2 text-[12.5px]">
-        <span className="font-medium text-[color:var(--text-primary)]">
+      <div className="flex h-6 items-center gap-2 px-2.5 text-[11.5px]">
+        <span className="font-medium text-[#171717]">
           {diffs.length} file{diffs.length === 1 ? "" : "s"} changed
         </span>
         <DiffCounters additions={totals.additions} deletions={totals.deletions} />
         <button
           type="button"
           onClick={onOpenChanges}
-          className="ml-auto h-6 rounded-[8px] px-2 text-[11.5px] font-medium text-[color:var(--accent-blue)] transition-colors hover:bg-[color:var(--surface-hover)]"
+          className="ml-auto text-[11.5px] text-[#2563eb] transition-opacity hover:opacity-80"
         >
           Review changes
         </button>
       </div>
-      <div className="mt-1 flex flex-col">
+      <div className="flex flex-col pb-0.5">
         {diffs.map((diff) => {
           const path = stripFilePrefix(diff.file);
           return (
@@ -124,11 +124,9 @@ export function CompletionSummary({
               type="button"
               onClick={() => onOpenFile(path)}
               title={path}
-              className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-[8px] px-1.5 py-1 text-left transition-colors hover:bg-[color:var(--surface-hover)]"
+              className="grid h-[22px] grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-2.5 text-left transition-colors hover:bg-[#EEEEEC]"
             >
-              <span className="cc-mono truncate text-[11.5px] text-[color:var(--text-secondary)]">
-                {path}
-              </span>
+              <span className="cc-mono truncate text-[11.5px] text-[#5F6368]">{path}</span>
               <DiffCounters additions={diff.additions} deletions={diff.deletions} />
             </button>
           );
@@ -182,20 +180,25 @@ export function Conversation({
   const hasOpenReasoning = state.log.some(
     (entry) => entry.type === "reasoning" && !entry.endedAt,
   );
-  // Waiting gap between tools — never while a tool or open reasoning row is active.
   const showThinking = running && !!state.runStartedAt && !hasActiveTool && !hasOpenReasoning;
 
   return (
-    <div ref={scrollRef} className="cc-scroll min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-3 sm:px-6">
-      <div className="mx-auto flex max-w-[640px] flex-col gap-0.5">
-        {state.log.map((entry) => {
+    <div ref={scrollRef} className="cc-scroll min-h-0 flex-1 overflow-y-auto px-4 pb-3 pt-2 sm:px-5">
+      <div className="mx-auto flex max-w-[620px] flex-col">
+        {state.log.map((entry, index) => {
+          const prev = state.log[index - 1];
+          const nextKindGap =
+            prev &&
+            ((prev.type === "action" && entry.type === "assistant") ||
+              (prev.type === "assistant" && entry.type === "action") ||
+              (prev.type === "user" && entry.type !== "user"));
+
           if (entry.type === "user") {
             return (
-              <div key={entry.id} className="my-3 flex w-full justify-end">
-                {/* Subtle rounded surface only — not a chat bubble / card */}
+              <div key={entry.id} className="mb-3 mt-2 flex w-full justify-end">
                 <div
                   data-invert-ignore="true"
-                  className="cc-user-prompt max-w-[min(100%,520px)] whitespace-pre-wrap px-3 py-2.5 text-[13.5px] leading-[1.55] tracking-[-0.01em] text-[color:var(--text-primary)]"
+                  className="cc-user-prompt max-w-[min(100%,480px)] whitespace-pre-wrap px-3 py-2.5 text-[12.5px] leading-[1.5] tracking-[-0.01em] text-[#171717]"
                 >
                   {entry.text}
                 </div>
@@ -207,8 +210,10 @@ export function Conversation({
               <div
                 key={entry.id}
                 className={cn(
-                  "my-2 text-[13.5px] font-normal leading-[1.6] tracking-[-0.015em] text-[color:var(--text-primary)]",
-                  "[&_p]:my-2 [&_ul]:my-2 [&_ol]:my-2 [&_li]:my-1 [&_pre]:my-2.5 [&_code]:text-[12.5px]",
+                  "text-[12.5px] font-normal leading-[1.5] tracking-[-0.012em] text-[#171717]",
+                  "[&_p]:my-[8px] [&_ul]:my-[8px] [&_ol]:my-[8px] [&_li]:my-[3px] [&_pre]:my-2 [&_code]:text-[11.5px]",
+                  "[&_strong]:font-semibold",
+                  nextKindGap ? "mt-3" : "mt-1.5",
                 )}
               >
                 <MarkdownMessageContent content={entry.text} />
@@ -216,19 +221,24 @@ export function Conversation({
             );
           }
           if (entry.type === "reasoning") {
-            return <ThoughtSummary key={entry.id} entry={entry} />;
+            return (
+              <div key={entry.id} className={cn(nextKindGap ? "mt-2.5" : "mt-0.5")}>
+                <ThoughtSummary entry={entry} />
+              </div>
+            );
           }
           const action = state.actions[entry.actionId];
           if (!action) return null;
           return (
-            <AgentActionRow
-              key={entry.id}
-              action={action}
-              onReplyPermission={onReplyPermission}
-              onRetry={onRetry}
-              onOpenTerminal={onOpenTerminal}
-              onOpenFile={onOpenFile}
-            />
+            <div key={entry.id} className={cn(prev?.type === "action" ? "mt-[5px]" : nextKindGap ? "mt-3" : "mt-1")}>
+              <AgentActionRow
+                action={action}
+                onReplyPermission={onReplyPermission}
+                onRetry={onRetry}
+                onOpenTerminal={onOpenTerminal}
+                onOpenFile={onOpenFile}
+              />
+            </div>
           );
         })}
 
@@ -239,8 +249,8 @@ export function Conversation({
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: "auto" }}
               exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-              className="overflow-hidden"
+              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              className="mt-1.5 overflow-hidden"
             >
               <ThinkingIndicator startedAt={state.runStartedAt!} onStop={onCancel} />
             </motion.div>
@@ -248,16 +258,14 @@ export function Conversation({
         </AnimatePresence>
 
         {state.runState === "failed" && state.error ? (
-          <div className="my-2 text-[12.5px] leading-[1.5]">
+          <div className="mt-2 text-[12px] leading-[1.45]">
             <span className="font-medium text-[color:var(--deletion-red)]">Failed</span>{" "}
-            <span className="text-[color:var(--text-secondary)]">{state.error}</span>
+            <span className="text-[#5F6368]">{state.error}</span>
           </div>
         ) : null}
 
         {state.runState === "cancelled" ? (
-          <div className="my-2 text-[12.5px] text-[color:var(--text-tertiary)]">
-            Cancelled by user
-          </div>
+          <div className="mt-2 text-[11.5px] text-[#8A8A8A]">Cancelled by user</div>
         ) : null}
 
         {showCompletion ? (

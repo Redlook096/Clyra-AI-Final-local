@@ -4541,30 +4541,30 @@ body,
    Clyra Code — agent-first coding workspace theme
    ============================================================ */
 .clyra-code-root {
-  --app-background: var(--clyra-canvas);
-  --sidebar-background: var(--clyra-canvas);
-  --main-background: var(--clyra-surface);
-  --preview-background: var(--clyra-surface);
-  --composer-surface: var(--clyra-surface);
-  --surface-muted: var(--clyra-surface-muted);
-  --surface-hover: var(--clyra-hover);
-  --surface-selected: var(--clyra-selected);
-  --border-subtle: var(--clyra-border);
-  --border-medium: var(--clyra-border-strong);
-  --text-primary: var(--clyra-text);
-  --text-secondary: var(--clyra-text-secondary);
-  --text-tertiary: var(--clyra-text-tertiary);
-  --text-disabled: #b0b5bf;
-  --accent-blue: var(--clyra-accent);
-  --clyra-code-user-bubble: #f1f3f6;
+  --app-background: #F7F7F6;
+  --sidebar-background: #F7F7F6;
+  --main-background: #FFFFFF;
+  --preview-background: #FFFFFF;
+  --composer-surface: #FFFFFF;
+  --surface-muted: #F6F6F5;
+  --surface-hover: #F0F0EE;
+  --surface-selected: #EEEEEC;
+  --border-subtle: #EEEEEC;
+  --border-medium: #D8D8D6;
+  --text-primary: #171717;
+  --text-secondary: #5F6368;
+  --text-tertiary: #8A8A8A;
+  --text-disabled: #B0B0B0;
+  --accent-blue: #2563eb;
+  --clyra-code-user-bubble: #F1F3F6;
   --addition-green: #239653;
-  --deletion-red: #d94b4b;
+  --deletion-red: #C44B4B;
   --warning-amber: #b87918;
-  --radius-row: 7px;
-  --radius-control: var(--clyra-radius-md);
-  --radius-tab: var(--clyra-radius-md);
-  --radius-input: var(--clyra-radius-xl);
-  --radius-panel: var(--clyra-radius-lg);
+  --radius-row: 6px;
+  --radius-control: 7px;
+  --radius-tab: 8px;
+  --radius-input: 11px;
+  --radius-panel: 8px;
   font-family: "Geist", "Geist Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-feature-settings: "ss01" on, "cv11" on;
   letter-spacing: -0.011em;
@@ -4610,10 +4610,55 @@ body,
 
 /* User prompt: subtle rounded surface only — not a chat bubble or card */
 .clyra-code-root .cc-user-prompt {
-  background: var(--clyra-code-user-bubble, #f1f3f6);
-  border-radius: 10px;
+  background: var(--clyra-code-user-bubble, #F1F3F6);
+  border-radius: 9px;
   border: none;
   box-shadow: none;
+}
+
+/* Minimal professional preview loading indicator */
+.clyra-code-root .cc-preview-loader {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1.5px solid #EEEEEC;
+  border-top-color: #5F6368;
+  animation: cc-preview-spin 0.85s linear infinite;
+}
+@keyframes cc-preview-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .clyra-code-root .cc-preview-loader { animation: none; border-top-color: #EEEEEC; }
+}
+
+/* Subtle top-dot to reveal workspace tabs without overlapping content */
+.clyra-workflow-tabs-hint {
+  position: absolute;
+  left: 50%;
+  top: 6px;
+  z-index: 189;
+  width: 28px;
+  height: 16px;
+  margin-left: -14px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+.clyra-workflow-tabs-hint__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(23, 23, 23, 0.22);
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+.clyra-workflow-tabs-hint:hover .clyra-workflow-tabs-hint__dot,
+.clyra-workflow-tabs-hint:focus-visible .clyra-workflow-tabs-hint__dot {
+  background: rgba(23, 23, 23, 0.45);
+  transform: scale(1.15);
 }
 
 .cc-resize-handle {
