@@ -34,9 +34,8 @@ class WindowManager {
     // Window binding properties
     this.bindWindows = false; // Disabled on Linux-friendly Clyra bridge to avoid resize recursion
     this.chatDrawerOpen = false; // Chat expands under the centered main bar (no separate panel)
-    this.mainExpandedWidth = 420; // Max width while chat drawer is open
-    this.mainCollapsedMaxWidth = 560; // Compact frosted pill (+ Take Control + Stealth)
-    this.mainExpandedWidth = 440; // Ask / Auto Answer expanded shell
+    this.mainCollapsedMaxWidth = 720; // Compact frosted pill (+ icons + Stealth + drag)
+    this.mainExpandedWidth = 580; // Ask / Auto Answer expanded shell
     this.windowGap = 10; // Small gap between windows
     this.boundWindowsPosition = { x: 0, y: 0 }; // Track position of bound windows
     this.stealthEnabled = false;
@@ -356,9 +355,9 @@ class WindowManager {
         backgroundColor: '#00000000',
   // Allow resizing so users can adjust width; we will lock height in handlers
   resizable: true,
-    // Compact bar can collapse; expanded chat drawer needs ~440px
+    // Compact bar can collapse; expanded chat drawer needs room for all controls
     minWidth: 60,
-    maxWidth: Math.max(this.windowConfigs.main.width, this.mainExpandedWidth || 440),
+    maxWidth: Math.max(this.windowConfigs.main.width, this.mainExpandedWidth || 580, 580),
         minimizable: false,
         maximizable: false,
         closable: false,
@@ -1719,9 +1718,9 @@ class WindowManager {
 
   getMainMaxWidth() {
     if (this.chatDrawerOpen) {
-      return Math.max(this.mainExpandedWidth || 420, 400);
+      return Math.max(this.mainExpandedWidth || 580, 520);
     }
-    return Math.max(this.mainCollapsedMaxWidth || 360, 220);
+    return Math.max(this.mainCollapsedMaxWidth || 720, 360);
   }
 
   centerMainWindowAtTop() {

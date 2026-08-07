@@ -64,15 +64,16 @@ window.__ocHideCursor=function(){
 const GLOW_HTML = `<!doctype html>
 <html><head><meta charset="utf-8"/><style>
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;pointer-events:none}
-#glow{position:fixed;inset:0;box-shadow:inset 0 0 0 3px rgba(59,130,246,.55), inset 0 0 80px rgba(59,130,246,.28);
-  background:radial-gradient(ellipse at center, rgba(59,130,246,.10) 0%, rgba(59,130,246,.04) 45%, transparent 72%);
-  animation:pulse 2.4s ease-in-out infinite;opacity:0;transition:opacity .45s ease}
+#glow{position:fixed;inset:0;
+  /* Even transparent light-blue wash across the whole screen */
+  background:rgba(125, 211, 252, 0.22);
+  box-shadow: inset 0 0 0 3px rgba(125, 211, 252, 0.48),
+              inset 0 0 140px rgba(147, 197, 253, 0.28);
+  opacity:0; transition: opacity .45s ease}
 #glow.on{opacity:1}
-@keyframes pulse{0%,100%{box-shadow:inset 0 0 0 3px rgba(59,130,246,.48), inset 0 0 70px rgba(59,130,246,.22)}
-50%{box-shadow:inset 0 0 0 4px rgba(59,130,246,.72), inset 0 0 110px rgba(59,130,246,.34)}}
 #badge{position:fixed;top:18px;left:50%;transform:translateX(-50%);padding:7px 14px;border-radius:999px;
-  background:rgba(37,99,235,.92);color:#fff;font:600 12px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-  letter-spacing:.02em;box-shadow:0 10px 28px rgba(37,99,235,.35);opacity:0;transition:opacity .35s ease}
+  background:rgba(56,189,248,.88);color:#fff;font:600 12px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  letter-spacing:.02em;box-shadow:0 10px 28px rgba(56,189,248,.28);opacity:0;transition:opacity .35s ease}
 #badge.on{opacity:1}
 </style></head><body>
 <div id="glow"></div>

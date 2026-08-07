@@ -186,6 +186,34 @@ async function captureFrameDataUrl(video: HTMLVideoElement | null): Promise<stri
   return canvas.toDataURL("image/jpeg", 0.72);
 }
 
+/** Wait until the live <video> has a drawable frame (camera often needs a beat). */
+async function waitForVideoFrame(
+  video: HTMLVideoElement | null,
+  { timeoutMs = 2500 }: { timeoutMs?: number } = {},
+): Promise<boolean> {
+  if (!video) return false;
+  if (video.readyState >= 2 && video.videoWidth > 2) return true;
+  const start = Date.now();
+  return await new Promise((resolve) => {
+    const done = (ok: boolean) => {
+      video.removeEventListener("loadeddata", onReady);
+      video.removeEventListener("playing", onReady);
+      clearInterval(poll);
+      resolve(ok);
+    };
+    const onReady = () => {
+      if (video.readyState >= 2 && video.videoWidth > 2) done(true);
+    };
+    const poll = setInterval(() => {
+      if (video.readyState >= 2 && video.videoWidth > 2) done(true);
+      else if (Date.now() - start > timeoutMs) done(false);
+    }, 80);
+    video.addEventListener("loadeddata", onReady);
+    video.addEventListener("playing", onReady);
+    void video.play().catch(() => undefined);
+  });
+}
+
 export function VoiceCallOverlay({
   open,
   status,
@@ -275,8 +303,16 @@ export function VoiceCallOverlay({
           ? "What do you see on my camera? Answer helpfully about what is visible."
           : "What is on my shared screen? Help briefly.");
 
-      // Prefer live camera / screenshare frame when available (OpenCluely Ollama VLM via vision-frame).
+      // Wait for a real camera/screenshare frame, then send to OpenCluely Ollama VLM.
+      await waitForVideoFrame(mediaPreviewRef.current);
       let dataUrl = await captureFrameDataUrl(mediaPreviewRef.current);
+      // One short retry — webcams often need an extra frame after play().
+      if (!dataUrl) {
+        await new Promise((r) => setTimeout(r, 180));
+        await waitForVideoFrame(mediaPreviewRef.current, { timeoutMs: 1200 });
+        dataUrl = await captureFrameDataUrl(mediaPreviewRef.current);
+      }
+
       let visionText = "";
       let source = "";
 
@@ -284,13 +320,13 @@ export function VoiceCallOverlay({
         const response = await fetch("/api/companion/vision-frame", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image: dataUrl, question: ask }),
+          body: JSON.stringify({ image: dataUrl, question: ask, source: mediaMode }),
         });
         const payload = await response.json().catch(() => ({}));
         visionText = String(payload?.summary || payload?.text || payload?.error || "").trim();
         source = String(payload?.source || payload?.model || "vision-frame");
-      } else if (desktop?.seeScreen || desktop?.companion?.seeScreen) {
-        // Electron desktop capture path (same OpenCluely vision stack).
+      } else if (mediaMode === "screen" && (desktop?.seeScreen || desktop?.companion?.seeScreen)) {
+        // Screen-share only: fall back to Electron OS capture. Never use this for camera.
         const seen = await (desktop.seeScreen || desktop.companion!.seeScreen!)(ask);
         visionText = String(seen?.vision?.summary || seen?.vision?.text || seen?.error || "").trim();
         source = String(seen?.vision?.source || seen?.vision?.model || "electron-see");
@@ -303,7 +339,7 @@ export function VoiceCallOverlay({
       } else {
         setScreenHint(
           mediaMode === "camera"
-            ? "Turn on the camera first, then ask what you can see."
+            ? "Camera is on, but no frame was ready yet — try See camera again in a moment."
             : "Share your screen first, then ask what you’re looking at.",
         );
       }

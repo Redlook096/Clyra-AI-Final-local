@@ -8,8 +8,8 @@
 (function () {
   const HISTORY_KEY = 'opencluely_bar_chat_v2';
   const GREETING = 'Hi, how can I help you?';
-  const EXPANDED_W = 400;
-  const COLLAPSED_H = 52;
+  const EXPANDED_W = 600;
+  const COLLAPSED_H = 56;
   const DRAWER_H = 360;
 
   const shell = document.getElementById('ocShell');
@@ -223,15 +223,15 @@
     controlling = Boolean(isControlling);
     if (!controlBtn) return;
     if (controlling) {
-      controlBtn.textContent = 'Stop';
       controlBtn.classList.add('oc-stop');
       controlBtn.classList.remove('oc-control');
       controlBtn.title = 'Stop AI control';
+      controlBtn.setAttribute('aria-label', 'Stop AI control');
     } else {
-      controlBtn.textContent = 'Take Control';
       controlBtn.classList.add('oc-control');
       controlBtn.classList.remove('oc-stop');
       controlBtn.title = 'Let OpenCluely control your machine';
+      controlBtn.setAttribute('aria-label', 'Take Control');
     }
   }
 

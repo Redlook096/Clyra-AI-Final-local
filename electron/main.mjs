@@ -222,8 +222,7 @@ function configureUiSession() {
   };
   session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
     if (permission !== "media") return false;
-    // Chromium may pass mediaType=audio|video|unknown on the check path.
-    if (details?.mediaType === "video") return false;
+    // Allow mic and camera for Clyra origins (voice call + camera vision).
     return allowMediaFrom(webContents, requestingOrigin, details || {});
   });
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
@@ -231,11 +230,7 @@ function configureUiSession() {
       callback(false);
       return;
     }
-    const mediaTypes = Array.isArray(details?.mediaTypes) ? details.mediaTypes : [];
-    if (mediaTypes.length > 0 && !mediaTypes.includes("audio")) {
-      callback(false);
-      return;
-    }
+    // Allow audio and/or video from Clyra windows (voice call camera uses video-only).
     callback(allowMediaFrom(webContents, details?.requestingUrl || details?.securityOrigin, details || {}));
   });
 }
