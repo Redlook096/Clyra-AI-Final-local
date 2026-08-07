@@ -1203,7 +1203,7 @@ class ApplicationController {
 
   _isScreenQuestion(text) {
     const t = String(text || "");
-    return /\b(what('?s| is) on (my )?screen|see (my )?screen|look at (my )?screen|on my screen|what (page|site|app|website|article) (am i|is) (on|open|this)|what (am i|is) (looking at|viewing)|main (heading|title|article)|read (the )?(page|screen|heading|title)|quote the (main |page )?(heading|title|article)|interview coding|coding (interview|page)|visible on (the )?screen|describe (the |my )?(screen|page|window)|screenshot)\b/i.test(
+    return /\b(what('?s| is) on (my )?screen|see (my )?screen|look at (my )?screen|on my screen|what (page|site|app|website|article) (am i|is) (on|open|this)|what (am i|is) (looking at|viewing)|main (heading|title|article)|read (the )?(page|screen|heading|title)|quote the (main |page )?(heading|title|article)|interview coding|coding (interview|page)|visible on (the )?screen|describe (the |my )?(screen|page|window|desktop|background)|screenshot|what color|desktop background|background color|what do you see|can you see)\b/i.test(
       t
     );
   }
