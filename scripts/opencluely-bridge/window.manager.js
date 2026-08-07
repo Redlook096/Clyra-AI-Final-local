@@ -33,6 +33,8 @@ class WindowManager {
     
     // Window binding properties
     this.bindWindows = false; // Disabled on Linux-friendly Clyra bridge to avoid resize recursion
+    this.chatDrawerOpen = false; // Chat expands under the centered main bar (no separate panel)
+    this.mainExpandedWidth = 440; // Max width while chat drawer is open
     this.windowGap = 10; // Small gap between windows
     this.boundWindowsPosition = { x: 0, y: 0 }; // Track position of bound windows
     
@@ -350,9 +352,9 @@ class WindowManager {
         backgroundColor: '#00000000',
   // Allow resizing so users can adjust width; we will lock height in handlers
   resizable: true,
-    // Keep the original max width as cap; allow small min width so it can collapse to one icon
+    // Compact bar can collapse; expanded chat drawer needs ~440px
     minWidth: 60,
-    maxWidth: this.windowConfigs.main.width,
+    maxWidth: Math.max(this.windowConfigs.main.width, this.mainExpandedWidth || 440),
         minimizable: false,
         maximizable: false,
         closable: false,
@@ -541,7 +543,7 @@ class WindowManager {
             event.preventDefault();
             // Enforce width within min/max bounds
             const minW = 60;
-            const maxW = this.windowConfigs.main.width;
+            const maxW = this.getMainMaxWidth();
             const desiredW = Math.max(minW, Math.min(maxW, Math.round(newBounds.width || minW)));
             window.setContentSize(desiredW, Math.max(1, currentContentHeight));
           } catch (e) {
@@ -550,14 +552,16 @@ class WindowManager {
               const [__w, currentWindowHeight] = window.getSize();
               event.preventDefault();
               const minW = 60;
-              const maxW = this.windowConfigs.main.width;
+              const maxW = this.getMainMaxWidth();
               const desiredW = Math.max(minW, Math.min(maxW, Math.round(newBounds.width || minW)));
               window.setSize(desiredW, Math.max(1, currentWindowHeight));
             } catch { /* noop */ }
           }
         });
 
-        // When resized (by user or programmatically), keep bound windows aligned at top
+        // When resized, optionally keep bound windows aligned. Re-center is
+        // done from resize-window IPC — avoid calling it on every resize event
+        // (setPosition can re-enter and blow the stack on Linux).
         window.on('resize', () => {
           if (this.bindWindows) {
             this.positionBoundWindows();
@@ -626,7 +630,11 @@ class WindowManager {
     const [windowWidth] = window.getSize();
     
     const positions = {
-      main: { x: displayX + 50, y: displayY + topMargin },
+      // Center the tool bar horizontally at the top
+      main: {
+        x: displayX + Math.round((screenWidth - windowWidth) / 2),
+        y: displayY + topMargin
+      },
       chat: { x: displayX + screenWidth - windowWidth - 50, y: displayY + topMargin },
       llmResponse: { x: displayX + (screenWidth - windowWidth) / 2, y: displayY + topMargin },
       settings: { x: displayX + (screenWidth - windowWidth) / 2, y: displayY + topMargin }
@@ -952,8 +960,10 @@ class WindowManager {
   }
 
   switchToWindow(windowType) {
-    if (this.windows.has('chat') && this.windows.get('chat').isVisible()) {
-      this.hideChatWindow();
+    // Chat is now an expandable drawer under the centered tool bar
+    if (windowType === 'chat') {
+      this.toggleChatDrawer();
+      this.activeWindow = 'main';
       return;
     }
 
@@ -985,9 +995,9 @@ class WindowManager {
     }
 
     this.windows.forEach((window, type) => {
-      if (type !== 'llmResponse') { // Don't show LLM response unless it has content
-        this.showOnCurrentDesktop(window);
-      }
+      // Keep floating LLM + legacy chat panels hidden; answers live in the bar drawer
+      if (type === 'llmResponse' || type === 'chat') return;
+      this.showOnCurrentDesktop(window);
     });
     
     this.isVisible = true;
@@ -1194,38 +1204,21 @@ class WindowManager {
       return;
     }
 
-    const llmWindow = this.windows.get('llmResponse');
-    if (!llmWindow) {
-      logger.error('LLM response window not available');
-      return;
-    }
-
-    // Ensure window is not destroyed before use
-    if (llmWindow.isDestroyed()) {
-      logger.error('LLM response window is destroyed');
-      return;
-    }
-
-    logger.debug('Sending display-llm-response event to window');
-    llmWindow.webContents.send('display-llm-response', {
-      content,
+    // Expand the centered bar chat drawer; broadcast so bar-chat.js renders it
+    this.openChatDrawer();
+    this.broadcastToAllWindows('transcription-llm-response', {
+      response: content,
+      text: content,
       metadata,
       timestamp: new Date().toISOString()
     });
-    
-    logger.debug('Showing and focusing LLM window');
-    this.showOnCurrentDesktop(llmWindow);
-    
-    // Position bound windows when LLM response is shown
-    if (this.bindWindows) {
-      this.positionBoundWindows();
-    }
+
+    // Keep the legacy floating AI Response window hidden
+    this.hideLLMResponse();
         
-    logger.info('LLM response displayed', {
+    logger.info('LLM response routed to bar chat drawer', {
       contentLength: content.length,
-      skill: metadata.skill,
-      windowVisible: llmWindow.isVisible(),
-      boundWindows: this.bindWindows
+      skill: metadata.skill
     });
   }
 
@@ -1235,21 +1228,12 @@ class WindowManager {
       return;
     }
 
-    const llmWindow = this.windows.get('llmResponse');
-    if (llmWindow) {
-      logger.debug('Showing LLM loading state');
-      llmWindow.webContents.send('show-loading');
-      this.showOnCurrentDesktop(llmWindow);
-      
-      // Position bound windows when LLM loading is shown
-      if (this.bindWindows) {
-        this.positionBoundWindows();
-      }
-      
-      logger.debug('LLM loading window shown');
-    } else {
-      logger.error('LLM window not available for loading state');
-    }
+    this.openChatDrawer();
+    this.broadcastToAllWindows('transcription-llm-response-start', {
+      timestamp: new Date().toISOString()
+    });
+    this.hideLLMResponse();
+    logger.debug('LLM loading shown in bar chat drawer');
   }
 
   hideLLMResponse() {
@@ -1563,7 +1547,7 @@ class WindowManager {
         
         switch (type) {
           case 'main':
-            newX = displayX + 50;
+            newX = displayX + Math.round((displayWidth - windowWidth) / 2);
             newY = displayY + topMargin;
             break;
           case 'chat':
@@ -1702,28 +1686,104 @@ class WindowManager {
     return this.windowGap;
   }
 
-  showChatWindow() {
-    const chatWindow = this.windows.get('chat');
-    if (chatWindow && !chatWindow.isDestroyed()) {
-      this.showOnCurrentDesktop(chatWindow);
-      logger.debug('Chat window shown');
+  getMainMaxWidth() {
+    return Math.max(
+      this.windowConfigs?.main?.width || 520,
+      this.chatDrawerOpen ? (this.mainExpandedWidth || 440) : 0
+    );
+  }
+
+  centerMainWindowHorizontally() {
+    if (this._centeringMain) return;
+    const mainWindow = this.windows.get('main');
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    this._centeringMain = true;
+    try {
+      const display = this.currentDisplay || screen.getPrimaryDisplay();
+      const { x: displayX, y: displayY, width: screenWidth } = display.workArea || display.bounds;
+      const [windowWidth] = mainWindow.getSize();
+      const [currentX, currentY] = mainWindow.getPosition();
+      const x = displayX + Math.round((screenWidth - windowWidth) / 2);
+      const y = Number.isFinite(currentY) ? currentY : displayY + 20;
+      // Only move when the X delta is meaningful to avoid resize feedback loops
+      if (Math.abs((currentX || 0) - x) > 1) {
+        mainWindow.setPosition(Math.round(x), Math.round(y));
+      }
+    } catch (_) {
+      /* ignore */
+    } finally {
+      this._centeringMain = false;
     }
+  }
+
+  setChatDrawerOpen(open) {
+    this.chatDrawerOpen = Boolean(open);
+    const mainWindow = this.windows.get('main');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try {
+        if (typeof mainWindow.setMaximumSize === 'function') {
+          mainWindow.setMaximumSize(this.getMainMaxWidth(), 900);
+        }
+      } catch (_) {
+        /* ignore */
+      }
+      this.centerMainWindowHorizontally();
+    }
+    return this.chatDrawerOpen;
+  }
+
+  openChatDrawer() {
+    const mainWindow = this.windows.get('main');
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    this.showOnCurrentDesktop(mainWindow);
+    this.setChatDrawerOpen(true);
+    try {
+      mainWindow.webContents.send('toggle-chat-drawer', { open: true });
+    } catch (_) {
+      /* ignore */
+    }
+    // Keep legacy separate chat panel hidden — chat lives under the bar
+    this.hideChatWindow();
+    return true;
+  }
+
+  closeChatDrawer() {
+    this.setChatDrawerOpen(false);
+    const mainWindow = this.windows.get('main');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try {
+        mainWindow.webContents.send('toggle-chat-drawer', { open: false });
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  }
+
+  toggleChatDrawer() {
+    if (this.chatDrawerOpen) this.closeChatDrawer();
+    else this.openChatDrawer();
+  }
+
+  showChatWindow() {
+    // Legacy API: expand chat under the centered tool bar instead of a side panel
+    this.openChatDrawer();
+    logger.debug('Chat drawer opened under main bar');
   }
 
   hideChatWindow() {
     const chatWindow = this.windows.get('chat');
     if (chatWindow && !chatWindow.isDestroyed()) {
       chatWindow.hide();
-      logger.debug('Chat window hidden');
+      logger.debug('Legacy chat window hidden');
     }
   }
 
   handleRecordingStarted() {
     this.isRecording = true;
-    this.showChatWindow();
+    this.openChatDrawer();
     // Notify all windows about recording state
     this.broadcastToAllWindows('recording-started');
-    logger.debug('Recording started, chat window shown');
+    logger.debug('Recording started, chat drawer opened');
   }
 
   handleRecordingStopped() {

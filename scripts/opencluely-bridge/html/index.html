@@ -13,21 +13,40 @@
         height: fit-content;
         background: transparent;
         -webkit-app-region: no-drag;
+        font-family: "SF Pro Text", "Segoe UI", system-ui, sans-serif;
       }
 
-  .command-tab {
+      .oc-shell {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        width: fit-content;
+        min-width: 60px;
+        background: transparent;
+        border-radius: 10px;
+        overflow: hidden;
+      }
+
+      .oc-shell.is-chat-open {
+        width: 420px;
+        background: rgba(11, 12, 16, 0.96);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+      }
+
+      .command-tab {
         height: 28px;
         background: linear-gradient(
           135deg,
-          rgba(0, 0, 0, 0.4) 0%,
-          rgba(20, 20, 20, 0.5) 100%
+          rgba(11, 12, 16, 0.94) 0%,
+          rgba(20, 22, 28, 0.96) 100%
         );
         backdrop-filter: blur(20px);
-        border-radius: 8px;
+        border-radius: 10px;
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 16px;
+        gap: 12px;
         padding: 0 12px;
         color: rgba(255, 255, 255, 0.9);
         font-size: 11px;
@@ -35,10 +54,19 @@
         -webkit-app-region: drag;
         flex-wrap: nowrap;
         overflow: visible;
-        border: 1px solid rgba(255, 255, 255, 0.15);
-  width: 100%;
-  /* Allow horizontal collapse to approximately one icon's width */
-  min-width: 60px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        width: max-content;
+        min-width: 60px;
+        box-sizing: border-box;
+        transition: border-radius 220ms ease, width 220ms ease, border-color 220ms ease;
+      }
+
+      .oc-shell.is-chat-open .command-tab {
+        width: 100%;
+        border: none;
+        border-radius: 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        background: transparent;
       }
 
       .command-item {
@@ -52,8 +80,7 @@
         cursor: pointer;
         transition: all 0.2s ease;
         -webkit-app-region: no-drag;
-  /* Allow items to shrink so the bar can collapse to one icon width */
-  flex-shrink: 1;
+        flex-shrink: 1;
       }
 
       .command-item:hover {
@@ -86,8 +113,8 @@
         color: #4caf50;
       }
 
-      /* Small round info button */
-      #infoButton {
+      #infoButton,
+      #chatToggle {
         width: 26px;
         height: 26px;
         border-radius: 9999px;
@@ -96,11 +123,18 @@
         justify-content: center;
         padding: 0;
       }
-      #infoButton i { font-size: 14px; }
+      #infoButton i,
+      #chatToggle i { font-size: 14px; }
       #infoButton:hover {
         background: rgba(96, 165, 250, 0.18);
         color: #93c5fd;
         box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.25) inset;
+      }
+      #chatToggle:hover,
+      #chatToggle.is-open {
+        background: rgba(16, 185, 129, 0.18);
+        color: #6ee7b7;
+        box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.28) inset;
       }
 
       .command-separator {
@@ -121,11 +155,11 @@
         border-radius: 50%;
         transition: all 0.3s ease;
         position: relative;
-  flex-shrink: 0;
+        flex-shrink: 0;
       }
 
       .status-dot.interactive {
-        background-color: #10b981; /* Green for active/interactive */
+        background-color: #10b981;
         box-shadow: 0 0 10px rgba(16, 185, 129, 0.6);
         animation: pulse-green 2s infinite;
       }
@@ -135,61 +169,9 @@
         box-shadow: 0 0 10px rgba(244, 67, 54, 0.692);
       }
 
-      .hidden-indicator {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        background: rgba(0, 0, 0, 0.8);
-        color: rgba(255, 255, 255, 0.9);
-        padding: 8px 16px;
-        border-radius: 6px;
-        font-size: 12px;
-        font-weight: 500;
-        opacity: 0;
-        transition: opacity 0.3s ease;
-        z-index: 1000;
-      }
-
-      .hidden-indicator.show {
-        opacity: 1;
-      }
-
-      #skillIndicator {
-        color: #ffffff;
-        transition: all 0.3s ease;
-      }
-
-      #skillIndicator:hover {
-        color: #ffffff;
-      }
-
-      #skillIndicator.non-interactive {
-        color: #ffffff;
-        opacity: 0.7;
-      }
-
-      #skillIndicator.non-interactive:hover {
-        background: rgba(76, 175, 80, 0.05);
-        border-color: rgba(76, 175, 80, 0.15);
-        color: #ffffff;
-      }
-
-      #settingsIndicator {
-        color: #ffffff;
-        transition: all 0.3s ease;
-      }
-
-      #settingsIndicator:hover {
-        color: #ffa726;
-        background: rgba(255, 167, 38, 0.15);
-        text-shadow: 0 1px 2px rgba(255, 167, 38, 0.3);
-      }
-
-      #settingsIndicator.active {
-        color: #ffa726;
-        text-shadow: 0 1px 2px rgba(255, 167, 38, 0.3);
-      }
+      #skillIndicator { color: #ffffff; transition: all 0.3s ease; }
+      #skillIndicator:hover { color: #ffffff; }
+      #skillIndicator.non-interactive { color: #ffffff; opacity: 0.7; }
 
       .command-item select {
         background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.05) 100%);
@@ -205,7 +187,6 @@
         transition: all 0.2s ease;
         -webkit-app-region: no-drag;
         -webkit-appearance: none;
-        -moz-appearance: none;
         appearance: none;
         background-image: url("data:image/svg+xml;charset=US-ASCII,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 5'><path fill='%23ffffff' d='M2 0L0 2h4zm0 5L0 3h4z'/></svg>");
         background-repeat: no-repeat;
@@ -214,54 +195,175 @@
         padding-right: 20px;
       }
 
-      .command-item select:hover {
-        background: linear-gradient(135deg, rgba(255, 255, 255, 0.15) 0%, rgba(255, 255, 255, 0.08) 100%);
-        border-color: rgba(255, 255, 255, 0.3);
-        color: rgba(255, 255, 255, 1);
-      }
-
-      .command-item select:focus {
-        background: linear-gradient(135deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.1) 100%);
-        border-color: rgba(76, 175, 80, 0.6);
-        box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
-      }
-
       .command-item select option {
         background: rgba(30, 30, 30, 0.95);
         color: rgba(255, 255, 255, 0.9);
-        padding: 4px 8px;
-        font-weight: 500;
-      }
-
-      .command-item select option:checked {
-        background: rgba(76, 175, 80, 0.8);
-        color: white;
       }
 
       @keyframes pulse {
-        0% {
-          opacity: 1;
-          transform: scale(1);
-        }
-        50% {
-          opacity: 0.7;
-          transform: scale(1.1);
-        }
-        100% {
-          opacity: 1;
-          transform: scale(1);
-        }
+        0% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.7; transform: scale(1.1); }
+        100% { opacity: 1; transform: scale(1); }
+      }
+      @keyframes pulse-green {
+        0%, 100% { box-shadow: 0 0 8px rgba(16, 185, 129, 0.45); }
+        50% { box-shadow: 0 0 14px rgba(16, 185, 129, 0.85); }
       }
 
-      /* Info popover styles */
+      /* Expandable chat drawer under the bar — same shell, no gap */
+      .chat-drawer {
+        width: 100%;
+        max-height: 0;
+        opacity: 0;
+        overflow: hidden;
+        pointer-events: none;
+        transition:
+          max-height 320ms cubic-bezier(0.22, 1, 0.36, 1),
+          opacity 220ms ease;
+      }
+
+      .oc-shell.is-chat-open .chat-drawer {
+        max-height: 420px;
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      .chat-drawer-inner {
+        height: 380px;
+        display: flex;
+        flex-direction: column;
+        background: transparent;
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
+        -webkit-app-region: no-drag;
+        overflow: hidden;
+      }
+
+      .chat-drawer-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.92);
+        font-size: 12px;
+        font-weight: 600;
+        -webkit-app-region: drag;
+      }
+
+      .chat-drawer-header .header-actions {
+        display: flex;
+        gap: 6px;
+        -webkit-app-region: no-drag;
+      }
+
+      .chat-icon-btn {
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: rgba(255, 255, 255, 0.88);
+        border-radius: 6px;
+        padding: 4px 8px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .chat-icon-btn:hover {
+        background: rgba(255, 255, 255, 0.16);
+      }
+
+      .chat-messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 10px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .chat-messages .message {
+        max-width: 92%;
+        padding: 8px 10px;
+        border-radius: 10px;
+        font-size: 12px;
+        line-height: 1.45;
+        color: rgba(255, 255, 255, 0.92);
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+      }
+      .chat-messages .message.user {
+        align-self: flex-end;
+        background: rgba(16, 185, 129, 0.18);
+        border-color: rgba(16, 185, 129, 0.28);
+      }
+      .chat-messages .message.assistant,
+      .chat-messages .message.system {
+        align-self: flex-start;
+      }
+      .chat-messages .message.error {
+        align-self: flex-start;
+        background: rgba(244, 67, 54, 0.16);
+        border-color: rgba(244, 67, 54, 0.3);
+      }
+      .chat-messages .message-time {
+        font-size: 10px;
+        opacity: 0.55;
+        margin-bottom: 4px;
+      }
+      .chat-messages .message-text strong { font-weight: 700; }
+      .chat-messages .message-text code {
+        background: rgba(0,0,0,0.35);
+        padding: 1px 4px;
+        border-radius: 4px;
+        font-size: 11px;
+      }
+      .thinking-dots .dot {
+        animation: pulse 1.2s infinite;
+        margin-right: 2px;
+      }
+
+      .chat-input-row {
+        display: flex;
+        gap: 8px;
+        padding: 10px 12px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        align-items: flex-end;
+      }
+      #barChatInput {
+        flex: 1;
+        resize: none;
+        min-height: 36px;
+        max-height: 100px;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 8px;
+        color: #fff;
+        padding: 8px 10px;
+        font-size: 12px;
+        font-family: inherit;
+        outline: none;
+      }
+      #barChatInput:focus {
+        border-color: rgba(16, 185, 129, 0.45);
+      }
+      #barChatSend {
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
+        border: 1px solid rgba(16, 185, 129, 0.35);
+        background: rgba(16, 185, 129, 0.22);
+        color: #6ee7b7;
+        cursor: pointer;
+      }
+      #barChatSend:hover { background: rgba(16, 185, 129, 0.34); }
+
       .shortcuts-popover {
         position: absolute;
-        top: 36px; /* below command bar */
+        top: 36px;
         right: 8px;
         background: linear-gradient(
           135deg,
-          rgba(20, 20, 20, 0.7) 0%,
-          rgba(10, 10, 10, 0.6) 100%
+          rgba(20, 20, 20, 0.92) 0%,
+          rgba(10, 10, 10, 0.9) 100%
         );
         backdrop-filter: blur(18px);
         border: 1px solid rgba(255, 255, 255, 0.12);
@@ -272,64 +374,47 @@
         min-width: 340px;
         z-index: 1000;
         -webkit-app-region: no-drag;
-        /* Hidden by default: do not intercept clicks */
         pointer-events: none;
         opacity: 0;
         visibility: hidden;
         transition: opacity 120ms ease, visibility 120ms ease;
       }
-
-      /* Open state: visible and interactive */
       .shortcuts-popover.is-open {
         pointer-events: auto;
         opacity: 1;
         visibility: visible;
       }
-
       .shortcuts-title {
         font-size: 12px;
         font-weight: 700;
-        letter-spacing: 0.2px;
         margin: 2px 0 8px 0;
         color: #e6e6e6;
         display: flex;
         align-items: center;
         gap: 8px;
       }
-
       .shortcuts-table {
         width: 100%;
         border-collapse: collapse;
         font-size: 12px;
       }
-
       .shortcuts-table th,
       .shortcuts-table td {
         padding: 8px 10px;
         border-bottom: 1px solid rgba(255, 255, 255, 0.08);
         vertical-align: middle;
       }
-
-      .shortcuts-table th {
-        text-align: left;
-        font-weight: 700;
-        color: rgba(255, 255, 255, 0.9);
-      }
-
       .kbd {
         display: inline-flex;
         align-items: center;
-        gap: 4px;
         background: rgba(255, 255, 255, 0.08);
         border: 1px solid rgba(255, 255, 255, 0.16);
         border-radius: 6px;
         padding: 3px 8px;
         font-weight: 600;
         color: #fff;
-        box-shadow: inset 0 -1px 0 rgba(0,0,0,0.25);
         white-space: nowrap;
       }
-
       .shortcuts-footer {
         display: flex;
         justify-content: space-between;
@@ -340,57 +425,74 @@
         margin-top: 8px;
         color: rgba(255, 255, 255, 0.7);
       }
-
-      .shortcuts-footer a {
-        color: #60a5fa; /* tailwind blue-400 */
-        text-decoration: none;
-      }
-
-      .shortcuts-footer a:hover {
-        text-decoration: underline;
-      }
+      .shortcuts-footer a { color: #60a5fa; text-decoration: none; }
     </style>
-  <style id="clyra-solid-panel">
-  html, body { background: rgba(11,12,16,0.94) !important; }
-  body > * { opacity: 1; }
-</style>
-</head>
+    <style id="clyra-solid-panel">
+      html, body { background: transparent !important; }
+    </style>
+  </head>
   <body>
-    <div class="command-tab">
-      <div class="command-item">
-        <i class="fas fa-camera"></i>
-        <span>⌘⇧S</span>
+    <div class="oc-shell" id="ocShell">
+      <div class="command-tab">
+        <div class="command-item">
+          <i class="fas fa-camera"></i>
+          <span>⌘⇧S</span>
+        </div>
+        <div class="command-separator"></div>
+        <div class="command-item" id="micButton">
+          <i class="fas fa-microphone"></i>
+        </div>
+        <div class="command-separator"></div>
+        <div class="command-item" id="skillIndicator">
+          <i class="fas fa-brain"></i>
+          <span>GENERAL</span>
+        </div>
+        <div class="command-separator"></div>
+        <div class="command-item" id="languageSelector">
+          <i class="fas fa-code"></i>
+          <select id="codingLanguage">
+            <option value="cpp">C++</option>
+            <option value="c">C</option>
+            <option value="python">Python</option>
+            <option value="java">Java</option>
+            <option value="javascript">JavaScript</option>
+          </select>
+        </div>
+        <div class="command-separator"></div>
+        <div class="command-item" id="chatToggle" title="Chat">
+          <i class="fas fa-comments"></i>
+        </div>
+        <div class="command-separator"></div>
+        <div class="command-item" id="infoButton" title="Shortcuts">
+          <i class="fas fa-circle-info"></i>
+        </div>
+        <div class="command-separator"></div>
+        <div class="status-dot non-interactive" id="statusDot"></div>
       </div>
-      <div class="command-separator"></div>
-      <div class="command-item" id="micButton">
-        <i class="fas fa-microphone"></i>
+
+      <div class="chat-drawer" id="chatDrawer" aria-hidden="true">
+        <div class="chat-drawer-inner">
+          <div class="chat-drawer-header">
+            <span><i class="fas fa-comments"></i> Chat</span>
+            <div class="header-actions">
+              <button type="button" class="chat-icon-btn" id="barChatClear" title="Clear">
+                <i class="fas fa-trash"></i>
+              </button>
+              <button type="button" class="chat-icon-btn" id="barChatCollapse" title="Collapse">
+                <i class="fas fa-chevron-up"></i>
+              </button>
+            </div>
+          </div>
+          <div class="chat-messages" id="barChatMessages"></div>
+          <div class="chat-input-row">
+            <textarea id="barChatInput" rows="1" placeholder="Type a message… (Shift+Enter for newline)"></textarea>
+            <button type="button" id="barChatSend" title="Send"><i class="fas fa-paper-plane"></i></button>
+          </div>
+        </div>
       </div>
-      <div class="command-separator"></div>
-      <div class="command-item" id="skillIndicator">
-        <i class="fas fa-brain"></i>
-        <span>DSA</span>
-      </div>
-      <div class="command-separator"></div>
-      <div class="command-item" id="languageSelector">
-        <i class="fas fa-code"></i>
-        <select id="codingLanguage">
-          <option value="cpp">C++</option>
-          <option value="c">C</option>
-          <option value="python">Python</option>
-          <option value="java">Java</option>
-          <option value="javascript">JavaScript</option>
-        </select>
-      </div>
-      <div class="command-separator"></div>
-      <div class="command-item" id="infoButton" title="Shortcuts">
-        <i class="fas fa-circle-info"></i>
-      </div>
-      <div class="command-separator"></div>
-      <div class="status-dot non-interactive" id="statusDot"></div>
     </div>
 
-  <!-- Shortcuts Popover (hidden by default via CSS) -->
-  <div id="shortcutsPopover" class="shortcuts-popover">
+    <div id="shortcutsPopover" class="shortcuts-popover">
       <div class="shortcuts-title">
         <i class="fas fa-bolt"></i> Global Shortcuts
       </div>
@@ -403,62 +505,38 @@
         </thead>
         <tbody>
           <tr>
-            <td>
-              <span class="kbd">Ctrl/Cmd</span>
-              + <span class="kbd">Shift</span>
-              + <span class="kbd">S</span>
-            </td>
+            <td><span class="kbd">Ctrl/Cmd</span> + <span class="kbd">Shift</span> + <span class="kbd">S</span></td>
             <td>Capture screenshot and analyze</td>
           </tr>
           <tr>
-            <td>
-              <span class="kbd">Ctrl/Cmd</span>
-              + <span class="kbd">Shift</span>
-              + <span class="kbd">V</span>
-            </td>
+            <td><span class="kbd">Ctrl/Cmd</span> + <span class="kbd">Shift</span> + <span class="kbd">C</span></td>
+            <td>Expand / collapse chat under bar</td>
+          </tr>
+          <tr>
+            <td><span class="kbd">Ctrl/Cmd</span> + <span class="kbd">Shift</span> + <span class="kbd">V</span></td>
             <td>Toggle visibility</td>
           </tr>
           <tr>
-            <td>
-              <span class="kbd">Ctrl/Cmd</span>
-              + <span class="kbd">Shift</span>
-              + <span class="kbd">I</span>
-              <span style="opacity:.7; margin:0 4px;">or</span>
-              <span class="kbd">Alt</span>
-              + <span class="kbd">A</span>
-            </td>
+            <td><span class="kbd">Alt</span> + <span class="kbd">A</span></td>
             <td>Toggle interaction (click-through)</td>
           </tr>
           <tr>
-            <td>
-              <span class="kbd">Ctrl/Cmd</span>
-              + <span class="kbd">Shift</span>
-              + <span class="kbd">C</span>
-            </td>
-            <td>Open chat</td>
-          </tr>
-          <tr>
-            <td>
-              <span class="kbd">Alt</span>
-              + <span class="kbd">R</span>
-            </td>
+            <td><span class="kbd">Alt</span> + <span class="kbd">R</span></td>
             <td>Toggle speech</td>
           </tr>
           <tr>
-            <td>
-              <span class="kbd">Ctrl/Cmd</span>
-              + <span class="kbd">,</span>
-            </td>
+            <td><span class="kbd">Ctrl/Cmd</span> + <span class="kbd">,</span></td>
             <td>Open settings</td>
           </tr>
         </tbody>
       </table>
       <div class="shortcuts-footer">
-        <span>Tip: Alt+A also toggles interaction from anywhere.</span>
+        <span>Chat opens under the centered tool bar.</span>
         <a href="https://techycsr.dev" target="_blank" rel="noreferrer noopener">Made by @TechyCSR</a>
       </div>
     </div>
 
     <script src="./src/ui/main-window.js"></script>
+    <script src="./src/ui/bar-chat.js"></script>
   </body>
 </html>

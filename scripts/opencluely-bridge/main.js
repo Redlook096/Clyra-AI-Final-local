@@ -562,20 +562,28 @@ class ApplicationController {
     ipcMain.handle("resize-window", (event, { width, height }) => {
       const mainWindow = windowManager.getWindow("main");
       if (mainWindow) {
-        // Enforce horizontal constraints: min ~one icon, max original width
         const minW = 60;
-        const maxW = windowManager.windowConfigs?.main?.width || 520;
+        const maxW = windowManager.getMainMaxWidth?.() || windowManager.windowConfigs?.main?.width || 520;
         const clampedWidth = Math.max(minW, Math.min(maxW, Math.round(width || minW)));
+        const clampedHeight = Math.max(28, Math.min(900, Math.round(height || 28)));
         try {
-          // Match content size to the DOM so no extra transparent area remains
-          mainWindow.setContentSize(Math.max(1, clampedWidth), Math.max(1, Math.round(height)));
+          mainWindow.setContentSize(Math.max(1, clampedWidth), Math.max(1, clampedHeight));
         } catch (e) {
-          // Fallback in case setContentSize isn’t available on some platform
-          mainWindow.setSize(Math.max(1, clampedWidth), Math.max(1, Math.round(height)));
+          mainWindow.setSize(Math.max(1, clampedWidth), Math.max(1, clampedHeight));
         }
-        logger.debug("Main window resized (content)", { width: clampedWidth, height });
+        try {
+          windowManager.centerMainWindowHorizontally?.();
+        } catch (_) {
+          /* ignore */
+        }
+        logger.debug("Main window resized (content)", { width: clampedWidth, height: clampedHeight });
       }
       return { success: true };
+    });
+
+    ipcMain.handle("set-chat-drawer-open", (event, open) => {
+      windowManager.setChatDrawerOpen?.(Boolean(open));
+      return { success: true, open: Boolean(open) };
     });
 
     ipcMain.handle("move-window", (event, { deltaX, deltaY }) => {
@@ -1065,6 +1073,13 @@ class ApplicationController {
 
     // Broadcast the skill change to all windows
     windowManager.broadcastToAllWindows("skill-updated", { skill: newSkill });
+  }
+
+  _isScreenQuestion(text) {
+    const t = String(text || "");
+    return /\b(what('?s| is) on (my )?screen|see (my )?screen|look at (my )?screen|on my screen|what (page|site|app|website|article) (am i|is) (on|open|this)|what (am i|is) (looking at|viewing)|main (heading|title|article)|read (the )?(page|screen|heading|title)|quote the (main |page )?(heading|title|article)|interview coding|coding (interview|page)|visible on (the )?screen|describe (the |my )?(screen|page|window)|screenshot)\b/i.test(
+      t
+    );
   }
 
   async triggerScreenshotOCR() {
@@ -2063,7 +2078,7 @@ class ApplicationController {
               return;
             }
             // Mirror IPC: screen questions use capture vision path
-            if (/\b(what('?s| is) on (my )?screen|see (my )?screen|look at (my )?screen|on my screen)\b/i.test(text)) {
+            if (this._isScreenQuestion(text)) {
               await this.triggerScreenshotOCR();
               send(200, { ok: true, action: "chat-via-screenshot", text });
               return;
@@ -2082,8 +2097,19 @@ class ApplicationController {
             return;
           }
           if (req.method === "POST" && req.url === "/show") {
+            const body = await readBody().catch(() => ({}));
+            const windows = Array.isArray(body.windows) ? body.windows : null;
             windowManager.showAllWindows();
             windowManager.forceAlwaysOnTopForAllWindows?.();
+            if (!windows || windows.includes("chat") || windows.includes("main")) {
+              // Expand chat under the centered bar when chat is requested
+              if (!windows || windows.includes("chat")) {
+                windowManager.openChatDrawer?.();
+              }
+            }
+            // Never surface the legacy floating LLM / side chat panels
+            windowManager.hideLLMResponse?.();
+            windowManager.hideChatWindow?.();
             send(200, { ok: true, action: "show" });
             return;
           }

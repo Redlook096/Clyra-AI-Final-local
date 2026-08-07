@@ -5,6 +5,13 @@ const os = require('os');
 const path = require('path');
 const logger = require('../core/logger').createServiceLogger('CAPTURE');
 
+/**
+ * Cross-platform screen capture:
+ * - Linux: ImageMagick import (+ xdotool focused window)
+ * - macOS: screencapture
+ * - Windows: PowerShell GDI+ virtual-screen bitmap
+ * Falls back to Electron desktopCapturer on every platform.
+ */
 class CaptureService {
   constructor() {
     this.isProcessing = false;
@@ -27,10 +34,6 @@ class CaptureService {
     }
   }
 
-  /**
-   * Capture screenshot and return an image buffer.
-   * options: { displayId?: number, area?: { x, y, width, height } }
-   */
   async captureAndProcess(options = {}) {
     if (this.isProcessing) throw new Error('Capture already in progress');
     this.isProcessing = true;
@@ -38,7 +41,6 @@ class CaptureService {
     try {
       const { image, metadata } = await this.captureScreenshot(options);
 
-      // Crop if area specified
       let finalImage = image;
       if (options.area && this._isValidArea(options.area)) {
         try {
@@ -58,7 +60,8 @@ class CaptureService {
       logger.logPerformance('Screenshot capture', startTime, {
         bytes: buffer.length,
         dimensions: finalImage.getSize(),
-        method: metadata.method || 'unknown'
+        method: metadata.method || 'unknown',
+        platform: process.platform
       });
 
       return {
@@ -78,30 +81,33 @@ class CaptureService {
   async captureScreenshot(options = {}) {
     const targetDisplay = this._getTargetDisplay(options.displayId);
 
-    // On Linux/Xvfb, Electron desktopCapturer often returns stale/wrong frames
-    // that make vision models hallucinate. Prefer ImageMagick + active-window crop.
-    if (process.platform === 'linux') {
-      try {
-        const linux = this._captureWithImageMagick(targetDisplay);
+    try {
+      if (process.platform === 'linux') {
+        const linux = this._captureLinuxNative(targetDisplay);
         if (linux) return linux;
-      } catch (error) {
-        logger.warn('Linux ImageMagick capture failed; falling back to desktopCapturer', {
-          error: error.message
-        });
+      } else if (process.platform === 'darwin') {
+        const mac = this._captureMacNative(targetDisplay);
+        if (mac) return mac;
+      } else if (process.platform === 'win32') {
+        const win = this._captureWindowsNative(targetDisplay);
+        if (win) return win;
       }
+    } catch (error) {
+      logger.warn('Native capture failed; falling back to desktopCapturer', {
+        platform: process.platform,
+        error: error.message
+      });
     }
 
     return this._captureWithDesktopCapturer(targetDisplay, options);
   }
 
-  _captureWithImageMagick(targetDisplay) {
+  _captureLinuxNative(targetDisplay) {
     const display = process.env.DISPLAY || ':0';
     const env = { ...process.env, DISPLAY: display };
     const outPath = path.join(os.tmpdir(), `oc-import-${process.pid}-${Date.now()}.png`);
 
-    // Prefer capturing the focused app window (Chrome, etc.) so the VLM sees
-    // readable page text instead of a tiny window on a huge wallpaper.
-    const focused = this._findFocusCaptureTarget(env);
+    const focused = this._findLinuxFocusTarget(env);
     if (focused?.id) {
       try {
         execFileSync(
@@ -122,7 +128,7 @@ class CaptureService {
             metadata: {
               displayId: targetDisplay.id,
               sourceName: focused.title || 'focused-window',
-              method: 'imagemagick-focused-window',
+              method: 'linux-imagemagick-focused',
               windowId: focused.id,
               dimensions: size,
               captureTime: new Date().toISOString()
@@ -130,7 +136,7 @@ class CaptureService {
           };
         }
       } catch (error) {
-        logger.warn('Focused-window import failed; trying root', { error: error.message });
+        logger.warn('Linux focused-window import failed; trying root', { error: error.message });
       }
     }
 
@@ -139,33 +145,83 @@ class CaptureService {
       env
     });
     let image = this._loadPng(outPath);
-
-    // Crop root capture to the largest useful app window if we can find one.
-    const crop = this._largestAppWindowCrop(env, image.getSize());
+    const crop = this._largestLinuxAppCrop(env, image.getSize());
     if (crop) {
       try {
         image = image.crop(crop);
-        logger.info('Cropped root capture to app window', { crop, imageSize: image.getSize() });
-      } catch (error) {
-        logger.warn('Root crop failed', { error: error.message, crop });
+      } catch (_) {
+        /* ignore */
       }
-    } else {
-      logger.info('Using Linux ImageMagick root capture', { imageSize: image.getSize() });
     }
-
+    logger.info('Using Linux ImageMagick root capture', {
+      cropped: Boolean(crop),
+      imageSize: image.getSize()
+    });
     return {
       image,
       metadata: {
         displayId: targetDisplay.id,
-        sourceName: crop ? 'imagemagick-root-cropped' : 'imagemagick-root',
-        method: crop ? 'imagemagick-root-cropped' : 'imagemagick-import',
+        sourceName: crop ? 'linux-root-cropped' : 'linux-root',
+        method: crop ? 'linux-imagemagick-root-cropped' : 'linux-imagemagick-root',
         dimensions: image.getSize(),
         captureTime: new Date().toISOString()
       }
     };
   }
 
-  _findFocusCaptureTarget(env) {
+  _captureMacNative(targetDisplay) {
+    const outPath = path.join(os.tmpdir(), `oc-screencapture-${process.pid}-${Date.now()}.png`);
+    execFileSync('screencapture', ['-x', outPath], { timeout: 20000 });
+    const image = this._loadPng(outPath);
+    logger.info('Using macOS screencapture', { imageSize: image.getSize() });
+    return {
+      image,
+      metadata: {
+        displayId: targetDisplay.id,
+        sourceName: 'screencapture',
+        method: 'macos-screencapture',
+        dimensions: image.getSize(),
+        captureTime: new Date().toISOString()
+      }
+    };
+  }
+
+  _captureWindowsNative(targetDisplay) {
+    const outPath = path.join(os.tmpdir(), `oc-win-capture-${process.pid}-${Date.now()}.png`);
+    const escaped = outPath.replace(/'/g, "''");
+    const ps = [
+      'Add-Type -AssemblyName System.Windows.Forms',
+      'Add-Type -AssemblyName System.Drawing',
+      '$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen',
+      '$bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height',
+      '$g = [System.Drawing.Graphics]::FromImage($bmp)',
+      '$g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)',
+      `$bmp.Save('${escaped}', [System.Drawing.Imaging.ImageFormat]::Png)`,
+      '$g.Dispose(); $bmp.Dispose()'
+    ].join('; ');
+    execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps],
+      { timeout: 25000, windowsHide: true }
+    );
+    if (!fs.existsSync(outPath)) {
+      throw new Error('Windows PowerShell capture did not produce a file');
+    }
+    const image = this._loadPng(outPath);
+    logger.info('Using Windows PowerShell screen capture', { imageSize: image.getSize() });
+    return {
+      image,
+      metadata: {
+        displayId: targetDisplay.id,
+        sourceName: 'powershell-virtual-screen',
+        method: 'windows-powershell',
+        dimensions: image.getSize(),
+        captureTime: new Date().toISOString()
+      }
+    };
+  }
+
+  _findLinuxFocusTarget(env) {
     try {
       const activeId = execFileSync('xdotool', ['getactivewindow'], {
         timeout: 3000,
@@ -173,44 +229,34 @@ class CaptureService {
         encoding: 'utf8'
       }).trim();
       if (!activeId) return null;
-      const title = this._windowName(activeId, env);
-      if (this._isSelfWindow(title)) {
-        // OpenCluely was still focused — pick the largest other useful window.
-        return this._largestAppWindow(env);
-      }
+      const title = this._linuxWindowName(activeId, env);
+      if (this._isSelfWindow(title)) return this._largestLinuxAppWindow(env);
       return { id: activeId, title };
     } catch (_) {
-      return this._largestAppWindow(env);
+      return this._largestLinuxAppWindow(env);
     }
   }
 
-  _largestAppWindow(env) {
-    const windows = this._listWindows(env)
+  _largestLinuxAppWindow(env) {
+    return this._listLinuxWindows(env)
       .filter((w) => !this._isSelfWindow(w.title))
       .filter((w) => w.width >= 400 && w.height >= 300)
-      .sort((a, b) => b.width * b.height - a.width * a.height);
-    return windows[0] || null;
+      .sort((a, b) => b.width * b.height - a.width * a.height)[0] || null;
   }
 
-  _largestAppWindowCrop(env, rootSize) {
-    const win = this._largestAppWindow(env);
+  _largestLinuxAppCrop(env, rootSize) {
+    const win = this._largestLinuxAppWindow(env);
     if (!win) return null;
     const x = Math.max(0, win.x);
     const y = Math.max(0, win.y);
     const width = Math.min(win.width, rootSize.width - x);
     const height = Math.min(win.height, rootSize.height - y);
     if (width < 200 || height < 200) return null;
-    // Prefer content area: skip a bit of chrome UI chrome if tall enough
     const contentY = height > 120 ? Math.min(90, Math.floor(height * 0.12)) : 0;
-    return {
-      x,
-      y: y + contentY,
-      width,
-      height: height - contentY
-    };
+    return { x, y: y + contentY, width, height: height - contentY };
   }
 
-  _listWindows(env) {
+  _listLinuxWindows(env) {
     try {
       const ids = execFileSync('xdotool', ['search', '--name', '.'], {
         timeout: 5000,
@@ -235,10 +281,9 @@ class CaptureService {
               .map((line) => line.split('='))
               .filter((p) => p.length === 2)
           );
-          const title = this._windowName(id, env);
           out.push({
             id,
-            title,
+            title: this._linuxWindowName(id, env),
             x: Number(vals.X) || 0,
             y: Number(vals.Y) || 0,
             width: Number(vals.WIDTH) || 0,
@@ -254,7 +299,7 @@ class CaptureService {
     }
   }
 
-  _windowName(id, env) {
+  _linuxWindowName(id, env) {
     try {
       return execFileSync('xdotool', ['getwindowname', id], {
         timeout: 2000,
@@ -273,7 +318,8 @@ class CaptureService {
       t.includes('live transcription') ||
       t.includes('ai response') ||
       t.includes('clyra') ||
-      t === 'settings'
+      t === 'settings' ||
+      t === 'chat'
     );
   }
 
@@ -286,25 +332,21 @@ class CaptureService {
     }
     const image = nativeImage.createFromBuffer(buffer);
     if (!image || image.isEmpty()) {
-      throw new Error('ImageMagick import produced an empty image');
+      throw new Error('Native capture produced an empty image');
     }
     return image;
   }
 
-  async _captureWithDesktopCapturer(targetDisplay, options = {}) {
+  async _captureWithDesktopCapturer(targetDisplay) {
     const { width, height } = targetDisplay.size || { width: 1920, height: 1080 };
-
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
       thumbnailSize: { width, height }
     });
-
-    if (sources.length === 0) {
-      throw new Error('No screen sources available for capture');
-    }
+    if (sources.length === 0) throw new Error('No screen sources available for capture');
 
     let source = sources[0];
-    const match = sources.find(s => {
+    const match = sources.find((s) => {
       const size = s.thumbnail.getSize();
       return size.width === width && size.height === height;
     });
@@ -313,7 +355,8 @@ class CaptureService {
     const image = source.thumbnail;
     if (!image) throw new Error('Failed to capture screen thumbnail');
 
-    logger.debug('Screenshot captured via desktopCapturer', {
+    logger.info('Screenshot captured via desktopCapturer', {
+      platform: process.platform,
       sourceName: source.name,
       imageSize: image.getSize()
     });
@@ -334,14 +377,19 @@ class CaptureService {
     const all = screen.getAllDisplays();
     if (!all || all.length === 0) return screen.getPrimaryDisplay();
     if (displayId == null) return screen.getPrimaryDisplay();
-    const found = all.find(d => d.id === displayId);
-    return found || screen.getPrimaryDisplay();
+    return all.find((d) => d.id === displayId) || screen.getPrimaryDisplay();
   }
 
   _isValidArea(area) {
-    return area && Number.isFinite(area.x) && Number.isFinite(area.y) &&
-      Number.isFinite(area.width) && Number.isFinite(area.height) &&
-      area.width > 0 && area.height > 0;
+    return (
+      area &&
+      Number.isFinite(area.x) &&
+      Number.isFinite(area.y) &&
+      Number.isFinite(area.width) &&
+      Number.isFinite(area.height) &&
+      area.width > 0 &&
+      area.height > 0
+    );
   }
 }
 
