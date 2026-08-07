@@ -83,7 +83,7 @@ class CaptureService {
 
     try {
       if (process.platform === 'linux') {
-        const linux = this._captureLinuxNative(targetDisplay);
+        const linux = this._captureLinuxNative(targetDisplay, options);
         if (linux) return linux;
       } else if (process.platform === 'darwin') {
         const mac = this._captureMacNative(targetDisplay);
@@ -102,41 +102,44 @@ class CaptureService {
     return this._captureWithDesktopCapturer(targetDisplay, options);
   }
 
-  _captureLinuxNative(targetDisplay) {
+  _captureLinuxNative(targetDisplay, options = {}) {
     const display = process.env.DISPLAY || ':0';
     const env = { ...process.env, DISPLAY: display };
     const outPath = path.join(os.tmpdir(), `oc-import-${process.pid}-${Date.now()}.png`);
+    const wantFull = Boolean(options.fullScreen);
 
-    const focused = this._findLinuxFocusTarget(env);
-    if (focused?.id) {
-      try {
-        execFileSync(
-          'import',
-          ['-window', focused.id, '-display', display, '-quality', '92', outPath],
-          { timeout: 15000, env }
-        );
-        const image = this._loadPng(outPath);
-        const size = image.getSize();
-        if (size.width >= 200 && size.height >= 200) {
-          logger.info('Using Linux ImageMagick focused-window capture', {
-            windowId: focused.id,
-            title: focused.title,
-            imageSize: size
-          });
-          return {
-            image,
-            metadata: {
-              displayId: targetDisplay.id,
-              sourceName: focused.title || 'focused-window',
-              method: 'linux-imagemagick-focused',
+    if (!wantFull) {
+      const focused = this._findLinuxFocusTarget(env);
+      if (focused?.id) {
+        try {
+          execFileSync(
+            'import',
+            ['-window', focused.id, '-display', display, '-quality', '92', outPath],
+            { timeout: 15000, env }
+          );
+          const image = this._loadPng(outPath);
+          const size = image.getSize();
+          if (size.width >= 200 && size.height >= 200) {
+            logger.info('Using Linux ImageMagick focused-window capture', {
               windowId: focused.id,
-              dimensions: size,
-              captureTime: new Date().toISOString()
-            }
-          };
+              title: focused.title,
+              imageSize: size
+            });
+            return {
+              image,
+              metadata: {
+                displayId: targetDisplay.id,
+                sourceName: focused.title || 'focused-window',
+                method: 'linux-imagemagick-focused',
+                windowId: focused.id,
+                dimensions: size,
+                captureTime: new Date().toISOString()
+              }
+            };
+          }
+        } catch (error) {
+          logger.warn('Linux focused-window import failed; trying root', { error: error.message });
         }
-      } catch (error) {
-        logger.warn('Linux focused-window import failed; trying root', { error: error.message });
       }
     }
 
@@ -145,24 +148,32 @@ class CaptureService {
       env
     });
     let image = this._loadPng(outPath);
-    const crop = this._largestLinuxAppCrop(env, image.getSize());
-    if (crop) {
-      try {
-        image = image.crop(crop);
-      } catch (_) {
-        /* ignore */
+    let crop = null;
+    if (!wantFull) {
+      crop = this._largestLinuxAppCrop(env, image.getSize());
+      if (crop) {
+        try {
+          image = image.crop(crop);
+        } catch (_) {
+          /* ignore */
+        }
       }
     }
     logger.info('Using Linux ImageMagick root capture', {
       cropped: Boolean(crop),
+      fullScreen: wantFull,
       imageSize: image.getSize()
     });
     return {
       image,
       metadata: {
         displayId: targetDisplay.id,
-        sourceName: crop ? 'linux-root-cropped' : 'linux-root',
-        method: crop ? 'linux-imagemagick-root-cropped' : 'linux-imagemagick-root',
+        sourceName: wantFull ? 'linux-root-fullscreen' : crop ? 'linux-root-cropped' : 'linux-root',
+        method: wantFull
+          ? 'linux-imagemagick-root-full'
+          : crop
+            ? 'linux-imagemagick-root-cropped'
+            : 'linux-imagemagick-root',
         dimensions: image.getSize(),
         captureTime: new Date().toISOString()
       }

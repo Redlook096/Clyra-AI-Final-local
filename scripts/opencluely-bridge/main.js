@@ -1228,7 +1228,8 @@ class ApplicationController {
         }
       }
       await new Promise((r) => setTimeout(r, 100));
-      return await captureService.captureAndProcess();
+      // Full-screen capture so vision coordinates match the OS display
+      return await captureService.captureAndProcess({ fullScreen: true });
     } finally {
       for (const win of hiddenForCapture) {
         try {
@@ -1293,7 +1294,7 @@ class ApplicationController {
   async runDesktopControlAgent(task) {
     this._controlAbort = false;
     await desktopControl.initialize();
-    await desktopControl.startControl();
+    await desktopControl.startControl(task);
     windowManager.broadcastToAllWindows("control-status", {
       status: "running",
       message: `Working on: ${task}`,
@@ -1308,10 +1309,12 @@ class ApplicationController {
     }
 
     const { screen } = require("electron");
+    const { safetyPromptRules } = require("./src/services/control-safety");
     const bounds = screen.getPrimaryDisplay().bounds;
     let lastSummary = "";
+    const safetyRules = safetyPromptRules(task);
 
-    for (let step = 0; step < 8; step++) {
+    for (let step = 0; step < 12; step++) {
       if (this._controlAbort) break;
       const capture = await this.#captureForAgent();
       if (!capture?.imageBuffer?.length) break;
@@ -1322,11 +1325,14 @@ class ApplicationController {
           `You are OpenCluely controlling the user's desktop to complete this task: "${task}".`,
           `Display is ${bounds.width}x${bounds.height} (origin top-left).`,
           lastSummary ? `Previous step result: ${lastSummary}` : "",
+          "You CAN click, double-click, type text, press keys, scroll, move, and wait.",
           "Choose the next ONE action only.",
           'Reply with ONLY JSON like:',
-          '{"done":false,"action":{"type":"click"|"move"|"type"|"key"|"wait"|"point","x":0,"y":0,"text":"","key":"Return","ms":400,"label":"..."},"note":"short status"}',
+          '{"done":false,"action":{"type":"click"|"doubleclick"|"move"|"type"|"key"|"scroll"|"wait"|"point","x":0,"y":0,"text":"","key":"Return","deltaY":-3,"ms":400,"label":"..."},"note":"short status"}',
           'When the task is finished: {"done":true,"note":"Completed ..."}',
-          "Prefer click/type/key. Coordinates must be on-screen. Do not invent invisible UI.",
+          "Prefer click/type/key/scroll. Coordinates must be on-screen. Do not invent invisible UI.",
+          "For typing into a field: click it first, then type.",
+          safetyRules,
         ]
           .filter(Boolean)
           .join(" "),
@@ -1360,7 +1366,16 @@ class ApplicationController {
       }
 
       const action = plan.action || {};
-      if (action.type === "click" || action.type === "move" || action.type === "point") {
+      // Attach planner note so safety can inspect intent labels
+      if (plan.note && !action.note) action.note = plan.note;
+
+      if (
+        action.type === "click" ||
+        action.type === "doubleclick" ||
+        action.type === "double_click" ||
+        action.type === "move" ||
+        action.type === "point"
+      ) {
         action.x = Math.max(4, Math.min(bounds.width - 4, Math.round(Number(action.x) || bounds.width / 2)));
         action.y = Math.max(4, Math.min(bounds.height - 4, Math.round(Number(action.y) || bounds.height / 2)));
       }
@@ -1376,7 +1391,23 @@ class ApplicationController {
           }
         }
         await new Promise((r) => setTimeout(r, 80));
-        const result = await desktopControl.runAction(action);
+        const result = await desktopControl.runAction(action, task);
+        if (result?.blocked) {
+          lastSummary = String(result.reason || "Blocked unsafe action");
+          windowManager.broadcastToAllWindows("control-status", {
+            status: "step",
+            message: lastSummary,
+            action,
+            result,
+          });
+          // Stop the loop — do not keep retrying the same destructive plan
+          windowManager.broadcastToAllWindows("control-status", {
+            status: "done",
+            message: lastSummary,
+          });
+          await desktopControl.stopControl();
+          return { ok: true, blocked: true, reason: lastSummary };
+        }
         lastSummary = String(plan.note || action.label || action.type || "step");
         windowManager.broadcastToAllWindows("control-status", {
           status: "step",

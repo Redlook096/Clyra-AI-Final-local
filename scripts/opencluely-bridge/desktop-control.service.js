@@ -1,11 +1,15 @@
 /**
  * OpenCluely desktop control — AI cursor, blue control glow, OS automation.
  * Linux: xdotool | macOS: cliclick/osascript | Windows: PowerShell
+ *
+ * Can click / type / key / scroll freely. Destructive file ops are blocked
+ * unless the user's task explicitly asks (see control-safety.js).
  */
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const { BrowserWindow, screen } = require('electron');
 const logger = require('../core/logger').createServiceLogger('DESKTOP-CONTROL');
+const { checkActionSafety } = require('./control-safety');
 
 const execFileAsync = promisify(execFile);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -92,6 +96,7 @@ class DesktopControlService {
     this.cliclick = null;
     this.lastPoint = { x: 40, y: 40 };
     this.driver = 'none';
+    this.currentTask = '';
   }
 
   async initialize() {
@@ -218,34 +223,75 @@ class DesktopControlService {
     return { ok: true, point };
   }
 
-  async click(x, y, button = 'left', label = 'Clicking') {
+  async click(x, y, button = 'left', label = 'Clicking', { clicks = 1 } = {}) {
     if (this.guideOnly) {
       return this.point(x ?? this.lastPoint.x, y ?? this.lastPoint.y, label || 'Click here');
     }
     const point = { x: Math.round(x ?? this.lastPoint.x), y: Math.round(y ?? this.lastPoint.y) };
+    const count = Math.max(1, Math.min(3, Number(clicks) || 1));
     await this.move(point.x, point.y, label);
     try {
       if (this.xdotool) {
         const btn = button === 'right' ? '3' : button === 'middle' ? '2' : '1';
-        await execFileAsync(this.xdotool, ['click', btn], { timeout: 4000 });
+        await execFileAsync(this.xdotool, ['click', '--repeat', String(count), '--delay', '80', btn], {
+          timeout: 6000,
+        });
       } else if (this.cliclick) {
-        await execFileAsync(this.cliclick, [`c:${point.x},${point.y}`], { timeout: 4000 });
+        const cmd = count >= 2 ? `dc:${point.x},${point.y}` : `c:${point.x},${point.y}`;
+        await execFileAsync(this.cliclick, [cmd], { timeout: 4000 });
       } else if (process.platform === 'win32') {
+        const downUp = `[M]::mouse_event(0x0002,0,0,0,0); [M]::mouse_event(0x0004,0,0,0,0);`;
         const ps = `
 Add-Type -AssemblyName System.Windows.Forms;
 [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${point.x},${point.y});
 Add-Type @"
 using System; using System.Runtime.InteropServices;
 public class M { [DllImport("user32.dll")] public static extern void mouse_event(int f,int a,int b,int c,int d); }
-"@; [M]::mouse_event(0x0002,0,0,0,0); [M]::mouse_event(0x0004,0,0,0,0);
+"@;
+for ($i=0; $i -lt ${count}; $i++) { ${downUp} Start-Sleep -Milliseconds 80 }
 `;
-        await execFileAsync('powershell', ['-NoProfile', '-Command', ps], { timeout: 5000 });
+        await execFileAsync('powershell', ['-NoProfile', '-Command', ps], { timeout: 8000 });
       }
     } catch (error) {
       logger.warn('Click failed', { error: error.message });
     }
-    await this.setCursor({ ...point, label: 'Clicked', kind: 'click' });
-    return { ok: true, point };
+    await this.setCursor({
+      ...point,
+      label: count >= 2 ? 'Double-clicked' : 'Clicked',
+      kind: 'click',
+    });
+    return { ok: true, point, clicks: count };
+  }
+
+  async scroll(deltaY = -3, label = 'Scrolling') {
+    if (this.guideOnly) {
+      await this.setCursor({ ...this.lastPoint, label, kind: 'point', guide: true });
+      return { ok: true, skipped: 'guide' };
+    }
+    const amount = Math.max(-20, Math.min(20, Math.round(Number(deltaY) || -3)));
+    await this.setCursor({ ...this.lastPoint, label, kind: 'move' });
+    try {
+      if (this.xdotool) {
+        // positive deltaY => scroll up (button 4); negative => scroll down (button 5)
+        const btn = amount >= 0 ? '4' : '5';
+        const reps = Math.max(1, Math.abs(amount));
+        await execFileAsync(this.xdotool, ['click', '--repeat', String(reps), '--delay', '30', btn], {
+          timeout: 6000,
+        });
+      } else if (process.platform === 'win32') {
+        const ps = `
+Add-Type -AssemblyName System.Windows.Forms;
+[System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${this.lastPoint.x},${this.lastPoint.y});
+for ($i=0; $i -lt ${Math.abs(amount)}; $i++) {
+  [System.Windows.Forms.SendKeys]::SendWait('${amount >= 0 ? '{PGUP}' : '{PGDN}'}')
+}
+`;
+        await execFileAsync('powershell', ['-NoProfile', '-Command', ps], { timeout: 6000 });
+      }
+    } catch (error) {
+      logger.warn('Scroll failed', { error: error.message });
+    }
+    return { ok: true, deltaY: amount };
   }
 
   async typeText(text, label = 'Typing') {
@@ -302,22 +348,55 @@ public class M { [DllImport("user32.dll")] public static extern void mouse_event
     return { ok: true };
   }
 
-  async runAction(action) {
+  async runAction(action, task = this.currentTask) {
     if (this.aborted) return { ok: false, aborted: true };
     if (!action || typeof action !== 'object') throw new Error('Invalid desktop action');
+
+    const safety = checkActionSafety(action, task);
+    if (safety.blocked) {
+      logger.warn('Blocked unsafe desktop action', {
+        type: action.type,
+        reason: safety.reason,
+        label: action.label,
+      });
+      return { ok: false, blocked: true, reason: safety.reason };
+    }
+
     this.active = true;
     try {
-      switch (action.type) {
+      const type = String(action.type || '').toLowerCase();
+      logger.info('Running desktop action', {
+        type,
+        x: action.x,
+        y: action.y,
+        label: action.label,
+        textPreview: action.text ? String(action.text).slice(0, 80) : undefined,
+        key: action.key,
+      });
+      switch (type) {
         case 'point':
           return this.point(action.x, action.y, action.label || 'Look here');
         case 'move':
           return this.move(action.x, action.y, action.label || 'Moving');
         case 'click':
-          return this.click(action.x, action.y, action.button, action.label || 'Clicking');
+          return this.click(action.x, action.y, action.button, action.label || 'Clicking', {
+            clicks: 1,
+          });
+        case 'doubleclick':
+        case 'double_click':
+          return this.click(action.x, action.y, action.button, action.label || 'Double-click', {
+            clicks: 2,
+          });
         case 'type':
           return this.typeText(action.text, action.label || 'Typing');
         case 'key':
+        case 'hotkey':
           return this.key(action.key, action.label || 'Key');
+        case 'scroll':
+          return this.scroll(
+            action.deltaY != null ? action.deltaY : action.amount,
+            action.label || 'Scrolling',
+          );
         case 'wait':
           await wait(Math.max(0, Math.min(8000, Number(action.ms) || 300)));
           return { ok: true };
@@ -329,10 +408,11 @@ public class M { [DllImport("user32.dll")] public static extern void mouse_event
     }
   }
 
-  async startControl() {
+  async startControl(task = '') {
     this.aborted = false;
     this.controlling = true;
     this.guideOnly = false;
+    this.currentTask = String(task || '');
     await this.setGlow(true);
     await this.setCursor({ ...this.lastPoint, label: 'Take Control', kind: 'move' });
     return { ok: true, controlling: true, driver: this.driver };
@@ -342,6 +422,7 @@ public class M { [DllImport("user32.dll")] public static extern void mouse_event
     this.aborted = true;
     this.controlling = false;
     this.guideOnly = false;
+    this.currentTask = '';
     await this.setGlow(false);
     await this.setCursor(null);
     return { ok: true, controlling: false };
