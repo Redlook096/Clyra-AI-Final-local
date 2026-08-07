@@ -232,28 +232,24 @@ async function main() {
     }
   }
 
-  // ---- Drag-out action fan ----
-  const centre = page.locator(".study-brain-node").first();
-  const c = await centre.boundingBox();
-  if (c) {
-    await page.mouse.move(c.x + c.width / 2, c.y + c.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(c.x + c.width / 2 + 48, c.y + c.height / 2 - 10, { steps: 10 });
-    await page.mouse.up();
-    await page.waitForTimeout(400);
-  } else {
-    await centre.click({ force: true });
+  // ---- Drag-out action fan (removed — actions live in Materials / Chat) ----
+  results.push({
+    name: "no-action-fan-boxes",
+    ok: !(await page.getByRole("button", { name: /^Revision plan$/i }).isVisible().catch(() => false))
+      || (await page.getByRole("button", { name: /^materials$/i }).isVisible().catch(() => false)),
+    detail: "fan boxes not on canvas",
+  });
+  await take(page, "13-no-fan-canvas");
+
+  // Materials actions instead of fan
+  const materialsOpen = page.getByRole("button", { name: /^materials$/i });
+  if (await materialsOpen.count()) {
+    await materialsOpen.first().click({ force: true });
     await page.waitForTimeout(400);
   }
-  await take(page, "13-drag-out-fan");
-  const fanVisible =
-    (await page.getByRole("button", { name: /^Quiz$/i }).isVisible().catch(() => false)) ||
-    (await page.getByRole("button", { name: /Flashcards|Study guide|Ask Brain|Summary/i }).first().isVisible().catch(() => false));
-  results.push({ name: "drag-out-fan", ok: fanVisible, detail: fanVisible ? "actions visible" : "fan not shown" });
-
-  // Click Quiz from fan if visible
-  if (await page.getByRole("button", { name: /^Quiz$/i }).isVisible().catch(() => false)) {
-    await page.getByRole("button", { name: /^Quiz$/i }).click({ force: true });
+  await take(page, "14-materials-actions");
+  if (await page.getByRole("button", { name: /^Quiz$/i }).count()) {
+    await page.getByRole("button", { name: /^Quiz$/i }).first().click({ force: true });
     await page.waitForTimeout(1500);
     await take(page, "14-quiz-action");
   }

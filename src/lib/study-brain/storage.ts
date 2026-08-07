@@ -147,16 +147,23 @@ export function citationLabel(source: StudySourceNode): string {
   return source.title;
 }
 
-/** Place new sources in a ring around the Brain node. */
+/** Place new sources on cardinal spokes only (N/E/S/W) — no diagonals. */
 export function positionAroundBrain(
   brainPos: { x: number; y: number },
   index: number,
 ): { x: number; y: number } {
-  const angle = -Math.PI / 2 + (index % 8) * (Math.PI / 4);
-  const radius = 280 + Math.floor(index / 8) * 48;
+  const spokes = [
+    { dx: 0, dy: -280 },
+    { dx: 320, dy: 0 },
+    { dx: 0, dy: 280 },
+    { dx: -320, dy: 0 },
+  ] as const;
+  const spoke = spokes[index % 4]!;
+  const ring = Math.floor(index / 4);
+  const scale = 1 + ring * 0.62;
   return {
-    x: brainPos.x + Math.cos(angle) * radius - 90,
-    y: brainPos.y + Math.sin(angle) * radius - 36,
+    x: brainPos.x + spoke.dx * scale - 100,
+    y: brainPos.y + spoke.dy * scale - 40,
   };
 }
 

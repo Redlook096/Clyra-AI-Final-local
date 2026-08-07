@@ -71,13 +71,15 @@ function brainToFlow(brain: StudyBrain, processing: boolean, onAction: (action: 
     const sourcePos = brain.positions[sourceId] || brainPos;
     return {
       id: `e-${sourceId}-brain`,
-      type: "straight",
+      // Orthogonal routing — never diagonal spokes
+      type: "smoothstep",
       source: sourceId,
       target: "brain",
       sourceHandle: facingSide(sourcePos, brainPos),
       targetHandle: facingSide(brainPos, sourcePos),
       animated: processing,
       style: EDGE_STYLE,
+      pathOptions: { borderRadius: 12, offset: 18 },
     };
   });
   return { nodes, edges };
@@ -142,9 +144,10 @@ function CanvasInner({
         const next = addEdge(
           {
             ...connection,
-            type: "straight",
+            type: "smoothstep",
             animated: false,
             style: EDGE_STYLE,
+            pathOptions: { borderRadius: 12, offset: 18 },
           },
           eds,
         );
@@ -160,7 +163,7 @@ function CanvasInner({
       nodes={nodes}
       edges={edges}
       nodeTypes={nodeTypes}
-      defaultEdgeOptions={{ type: "straight", style: EDGE_STYLE }}
+      defaultEdgeOptions={{ type: "smoothstep", style: EDGE_STYLE, pathOptions: { borderRadius: 12, offset: 18 } }}
       connectionMode={ConnectionMode.Loose}
       onNodesChange={(changes) => {
         onNodesChange(changes);

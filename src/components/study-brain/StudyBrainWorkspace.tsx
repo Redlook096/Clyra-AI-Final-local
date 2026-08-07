@@ -787,68 +787,114 @@ export default function StudyBrainWorkspace({
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
             {inspectorTab === "chat" ? (
-              <div className="space-y-3">
-                {!brain.messages.length ? (
-                  <p className="text-[12.5px] leading-5 text-[color:var(--clyra-text-tertiary)]">
-                    Connect resources, then ask grounded questions. Citations link back to sources.
-                  </p>
-                ) : null}
-                {brain.messages.map((message) => (
-                  <div key={message.id} className={cn("flex", message.role === "user" && "justify-end")}>
-                    <div
-                      className={cn(
-                        "max-w-[95%] text-[13px] leading-[1.55] tracking-[-0.01em]",
-                        message.role === "user"
-                          ? "rounded-[12px] bg-[color:var(--clyra-selected)] px-3 py-2 text-[color:var(--clyra-text)]"
-                          : "text-[color:var(--clyra-text)]",
-                      )}
-                    >
-                      {message.role === "assistant" ? (
-                        <MarkdownMessageContent content={message.content} />
-                      ) : (
-                        message.content
-                      )}
-                      {message.citations?.length ? (
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {message.citations.map((citation) => (
-                            <button
-                              key={citation}
-                              type="button"
-                              onClick={() => openCitation(citation)}
-                              className="rounded-[6px] border border-[color:var(--clyra-border)] bg-[color:var(--clyra-surface-muted)] px-2 py-0.5 text-[10.5px] text-[color:var(--clyra-text-secondary)] transition-colors hover:border-[color:var(--clyra-accent)]/30 hover:text-[color:var(--clyra-accent)]"
-                              title="Open source"
-                            >
-                              {citation}
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
+              <div className="flex min-h-full flex-col">
+                {!brain.messages.length && !busy ? (
+                  <div className="mx-auto flex min-h-[280px] w-full max-w-[280px] flex-1 flex-col items-center justify-center px-2 text-center">
+                    <div className="mb-4 grid h-11 w-11 place-items-center rounded-[14px] border border-[color:var(--clyra-border)] bg-white shadow-[0_8px_20px_rgba(15,23,42,0.05)]">
+                      <ShiningBrainIcon className="h-5 w-5" />
+                    </div>
+                    <p className="text-[15px] font-semibold tracking-[-0.03em] text-[color:var(--clyra-text)]">
+                      Ask about your sources
+                    </p>
+                    <p className="mt-1.5 text-[12.5px] leading-5 text-[color:var(--clyra-text-tertiary)]">
+                      {connectedSources(brain).length
+                        ? `${connectedSources(brain).length} connected · ask a grounded question`
+                        : "Connect a resource, then ask anything about it"}
+                    </p>
+                    <div className="mt-5 w-full space-y-1 text-left">
+                      {[
+                        "Summarise the connected sources",
+                        "What should I revise first?",
+                        "Explain the key ideas simply",
+                      ].map((prompt) => (
+                        <button
+                          key={prompt}
+                          type="button"
+                          onClick={() => {
+                            setComposer(prompt);
+                            void askBrain(prompt);
+                          }}
+                          className="block w-full rounded-[10px] px-2.5 py-2 text-left text-[12px] font-medium text-[color:var(--clyra-text-secondary)] transition-colors hover:bg-[color:var(--clyra-hover)] hover:text-[color:var(--clyra-text)]"
+                        >
+                          {prompt}
+                        </button>
+                      ))}
                     </div>
                   </div>
-                ))}
-                {busy ? (
-                  <div className="flex items-center gap-2 py-1">
-                    <ShiningBrainIcon className="h-4 w-4" />
-                    <ShiningText text="Thinking" play className="text-[12.5px] font-medium" />
-                    <ThinkingDots />
+                ) : (
+                  <div className="space-y-3.5 pb-2">
+                    {brain.messages.map((message) => (
+                      <div
+                        key={message.id}
+                        className={cn(
+                          "flex",
+                          message.role === "user" && "clyra-user-message-entry justify-end",
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            "max-w-[95%] text-[13px] leading-[1.55] tracking-[-0.01em]",
+                            message.role === "user"
+                              ? "rounded-[14px] bg-[color:var(--clyra-selected)] px-3.5 py-2.5 text-[color:var(--clyra-text)]"
+                              : "pr-1 text-[color:var(--clyra-text)]",
+                          )}
+                        >
+                          {message.role === "assistant" ? (
+                            <MarkdownMessageContent content={message.content} />
+                          ) : (
+                            message.content
+                          )}
+                          {message.citations?.length ? (
+                            <div className="mt-2.5 flex flex-wrap gap-1.5">
+                              {message.citations.map((citation) => (
+                                <button
+                                  key={citation}
+                                  type="button"
+                                  onClick={() => openCitation(citation)}
+                                  className="rounded-[8px] border border-[color:var(--clyra-border)] bg-white px-2 py-0.5 text-[10.5px] text-[color:var(--clyra-text-secondary)] transition-colors hover:border-[color:var(--clyra-accent)]/30 hover:text-[color:var(--clyra-accent)]"
+                                  title="Open source"
+                                >
+                                  {citation}
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))}
+                    {busy ? (
+                      <div className="flex items-center gap-2 py-1">
+                        <ShiningBrainIcon className="h-4 w-4" />
+                        <ShiningText text="Thinking" play className="text-[12.5px] font-medium" />
+                        <ThinkingDots />
+                      </div>
+                    ) : null}
                   </div>
-                ) : null}
+                )}
               </div>
             ) : null}
 
             {inspectorTab === "source" ? (
               selectedSource ? (
-                <div className="space-y-3">
-                  <div>
-                    <p className="text-[13px] font-medium tracking-[-0.01em]">{selectedSource.title}</p>
-                    <p className="mt-1 text-[11px] text-[color:var(--clyra-text-tertiary)]">{selectedSource.origin}</p>
+                <div className="space-y-4">
+                  <div className="rounded-[14px] border border-[color:var(--clyra-border)] bg-white p-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+                    <p className="text-[14px] font-semibold tracking-[-0.02em]">{selectedSource.title}</p>
+                    <p className="mt-1 truncate text-[11.5px] text-[color:var(--clyra-text-tertiary)]">
+                      {selectedSource.origin}
+                    </p>
+                    <p className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-[color:var(--clyra-surface-muted)] px-2.5 py-1 text-[10.5px] font-medium uppercase tracking-[0.06em] text-[color:var(--clyra-text-secondary)]">
+                      <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--clyra-accent)]" aria-hidden />
+                      {selectedSource.statusDetail || selectedSource.status}
+                    </p>
                   </div>
-                  <p className="text-[11px] uppercase tracking-[0.08em] text-[color:var(--clyra-text-tertiary)]">
-                    {selectedSource.statusDetail || selectedSource.status}
-                  </p>
-                  <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap rounded-[10px] border border-[color:var(--clyra-border)] bg-[color:var(--clyra-surface-muted)] p-3 text-[11.5px] leading-5 text-[color:var(--clyra-text-secondary)]">
-                    {selectedSource.body.slice(0, 6000)}
-                  </pre>
+                  <div>
+                    <p className="mb-2 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[color:var(--clyra-text-tertiary)]">
+                      Preview
+                    </p>
+                    <pre className="max-h-[380px] overflow-auto whitespace-pre-wrap rounded-[14px] border border-[color:var(--clyra-border)] bg-[color:var(--clyra-surface-muted)] p-3.5 text-[11.5px] leading-5 text-[color:var(--clyra-text-secondary)]">
+                      {selectedSource.body.slice(0, 6000)}
+                    </pre>
+                  </div>
                   <button
                     type="button"
                     onClick={() => {
@@ -860,33 +906,71 @@ export default function StudyBrainWorkspace({
                       });
                       setSelectedSourceId(null);
                     }}
-                    className="flex h-8 items-center gap-1.5 rounded-[8px] border border-[color:var(--clyra-border)] px-2.5 text-[11.5px] text-rose-600 transition-colors hover:bg-rose-50"
+                    className="flex h-9 items-center gap-1.5 rounded-[10px] border border-[color:var(--clyra-border)] px-3 text-[12px] text-rose-600 transition-colors hover:bg-rose-50"
                   >
                     <Trash2 className="h-3.5 w-3.5" /> Remove from canvas
                   </button>
                 </div>
               ) : (
-                <p className="text-[12.5px] text-[color:var(--clyra-text-tertiary)]">Select a resource node to inspect.</p>
+                <div className="mx-auto flex min-h-[240px] max-w-[240px] flex-col items-center justify-center text-center">
+                  <p className="text-[14px] font-semibold tracking-[-0.02em] text-[color:var(--clyra-text)]">
+                    Inspect a resource
+                  </p>
+                  <p className="mt-1.5 text-[12.5px] leading-5 text-[color:var(--clyra-text-tertiary)]">
+                    Select a node on the canvas to preview its content.
+                  </p>
+                </div>
               )
             ) : null}
 
             {inspectorTab === "materials" ? (
               <div className="space-y-4">
-                <div className="flex flex-wrap gap-1.5">
-                  {(["quiz", "flashcards", "guide"] as const).map((action) => (
+                <div>
+                  <p className="text-[14px] font-semibold tracking-[-0.02em] text-[color:var(--clyra-text)]">
+                    Study materials
+                  </p>
+                  <p className="mt-1 text-[12px] leading-5 text-[color:var(--clyra-text-tertiary)]">
+                    Generate from connected resources.
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {(
+                    [
+                      { id: "quiz" as const, label: "Quiz", run: () => void generateMaterial("quiz") },
+                      { id: "flashcards" as const, label: "Flashcards", run: () => void generateMaterial("flashcards") },
+                      { id: "guide" as const, label: "Notes", run: () => void generateMaterial("guide") },
+                      {
+                        id: "summary" as const,
+                        label: "Summary",
+                        run: () => void askBrain("Summarise the connected sources for revision.", "summary"),
+                      },
+                      {
+                        id: "explain" as const,
+                        label: "Teach me",
+                        run: () =>
+                          void askBrain("Teach me the most important ideas from the connected sources.", "explain"),
+                      },
+                      {
+                        id: "plan" as const,
+                        label: "Revision plan",
+                        run: () =>
+                          void askBrain("Create a personalised revision plan from the connected sources.", "plan"),
+                      },
+                    ] as const
+                  ).map((action) => (
                     <button
-                      key={action}
+                      key={action.id}
                       type="button"
-                      onClick={() => void generateMaterial(action)}
-                      className="h-8 rounded-[8px] border border-[color:var(--clyra-border)] px-2.5 text-[11.5px] font-medium capitalize transition-colors hover:bg-[color:var(--clyra-hover)]"
+                      onClick={action.run}
+                      className="flex h-10 items-center justify-center rounded-[12px] border border-[color:var(--clyra-border)] bg-white text-[12px] font-medium text-[color:var(--clyra-text)] shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-colors hover:bg-[color:var(--clyra-hover)]"
                     >
-                      {action === "guide" ? "notes" : action}
+                      {action.label}
                     </button>
                   ))}
                 </div>
                 {brain.materials.quiz ? (
-                  <div className="space-y-2 border-t border-[color:var(--clyra-border)] pt-3">
-                    <p className="text-[12.5px] font-medium">{brain.materials.quiz.topic}</p>
+                  <div className="space-y-2 rounded-[14px] border border-[color:var(--clyra-border)] bg-white p-3.5">
+                    <p className="text-[12.5px] font-semibold">{brain.materials.quiz.topic}</p>
                     <p className="text-[11px] text-[color:var(--clyra-text-tertiary)]">
                       {brain.materials.quiz.questions.length} questions
                     </p>

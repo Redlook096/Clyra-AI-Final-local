@@ -710,6 +710,7 @@ export default function WebBrowserWorkspace() {
   const viewportTimerRef = useRef<number | null>(null);
   const previousActiveTabRef = useRef("default");
   const agentOriginTabRef = useRef<string | null>(null);
+  const sideLockRef = useRef(false);
   const handledAgentSessionsRef = useRef(new Set(
     messages
       .map((message) => message.id)
@@ -829,15 +830,29 @@ export default function WebBrowserWorkspace() {
 
   useEffect(() => {
     mountedRef.current = true;
-    void loadState();
-    void syncAgentSession();
+    let cancelled = false;
+    void (async () => {
+      await loadState();
+      await syncAgentSession();
+      if (cancelled || !mountedRef.current) return;
+      // Every Browser open lands on the large Clyra welcome (same as a new tab).
+      await requestBrowser("/api/openbrowser/navigate", {
+        body: { target: "https://www.google.com/" },
+        quiet: true,
+      }).catch(() => undefined);
+      if (!cancelled && mountedRef.current) {
+        setSideOpen(false);
+        setAddress("google.com");
+      }
+    })();
     return () => {
+      cancelled = true;
       mountedRef.current = false;
       if (typingTimerRef.current != null) window.clearTimeout(typingTimerRef.current);
       if (scrollTimerRef.current != null) window.clearTimeout(scrollTimerRef.current);
       if (viewportTimerRef.current != null) window.clearTimeout(viewportTimerRef.current);
     };
-  }, [loadState, syncAgentSession]);
+  }, [loadState, requestBrowser, syncAgentSession]);
 
   useEffect(() => {
     const desktop = getElectronDesktop();
@@ -934,6 +949,7 @@ export default function WebBrowserWorkspace() {
   const performAction = useCallback(
     async (action: BrowserAction, quiet = false) => {
       if (action.type === "open_tab") {
+        sideLockRef.current = false;
         setSideOpen(false);
         setSideView("agent");
       }
@@ -1018,6 +1034,7 @@ export default function WebBrowserWorkspace() {
     setAgentControlledTabId(originTabId);
     setTask("");
     setIsAgentBusy(true);
+    sideLockRef.current = true;
     setSideOpen(true);
     setSideView("agent");
     setAgentPhase("planning");
@@ -1030,6 +1047,10 @@ export default function WebBrowserWorkspace() {
     setRunItems([]);
     setRunTask(cleanTask);
     setCompletedStepsOpen(false);
+    // Let the sidebar width animation start, then float the user bubble up.
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+    });
     setMessages((current) => [...current, { id: `user-${Date.now()}`, role: "user", content: cleanTask }]);
     const abort = new AbortController();
     assistAbortRef.current?.abort();
@@ -1307,17 +1328,16 @@ export default function WebBrowserWorkspace() {
     : "";
   const showAgentChrome = isAgentBusy || agentDemo;
   const showStartPage =
-    Boolean(browserState) &&
     !showAgentChrome &&
-    isBrowserStartPageUrl(activeTab?.url || browserState?.url || "");
+    (!browserState || isBrowserStartPageUrl(activeTab?.url || browserState?.url || ""));
   const aiInControl = agentDemo
     || (["planning", "observing", "executing", "verifying", "recovering"].includes(agentPhase) && !browserState?.agent.manualControl);
 
-  // New browser sessions and start-page tabs keep Ask Clyra closed until requested.
+  // Keep Ask Clyra closed on pure welcome loads, but never yank it shut mid-send.
   useEffect(() => {
-    if (!showStartPage) return;
+    if (!showStartPage || sideLockRef.current || isAgentBusy) return;
     setSideOpen(false);
-  }, [activeTab?.id, showStartPage]);
+  }, [activeTab?.id, showStartPage, isAgentBusy]);
   const agentTaskTitle = agentDemo
     ? (agentDemoKind === "ebay" ? "Searching MacBook M2 on eBay" : "Fulfilling beach essentials request")
     : (runTask || browserState?.agent.task || agentStatus || "Working");
@@ -1334,6 +1354,7 @@ export default function WebBrowserWorkspace() {
   const liveCursor = cursor && isAgentBusy ? cursor : demoCursor;
 
   const openSideView = (view: SideView) => {
+    sideLockRef.current = true;
     setSideView(view);
     setSideOpen(true);
     setBrowserMenuOpen(false);
@@ -1524,7 +1545,11 @@ export default function WebBrowserWorkspace() {
             type="button"
             onClick={() => {
               setSideView("agent");
-              setSideOpen((value) => (sideView === "agent" ? !value : true));
+              setSideOpen((value) => {
+                const next = sideView === "agent" ? !value : true;
+                sideLockRef.current = next;
+                return next;
+              });
             }}
             className={cn(
               "ml-0.5 flex h-[25px] shrink-0 items-center gap-1 rounded-[7px] px-2 text-[10.5px] font-medium transition-[background-color,color] duration-150",
@@ -1570,6 +1595,7 @@ export default function WebBrowserWorkspace() {
                   void navigate(undefined, target);
                 }}
                 onAskAgent={(prompt) => {
+                  sideLockRef.current = true;
                   setSideOpen(true);
                   setSideView("agent");
                   setTask(prompt);
@@ -1773,7 +1799,7 @@ export default function WebBrowserWorkspace() {
               initial={{ opacity: 0, width: 0 }}
               animate={{ opacity: 1, width: "var(--atlas-sidebar-width)" }}
               exit={{ opacity: 0, width: 0 }}
-              transition={{ duration: 0.36, ease: [0.16, 1, 0.3, 1] }}
+              transition={{ duration: 0.42, ease: [0.16, 1, 0.3, 1] }}
               className="absolute inset-x-0 bottom-0 top-[calc(var(--atlas-titlebar-height)+var(--atlas-toolbar-height))] z-40 flex min-h-0 w-full flex-col overflow-hidden bg-[var(--atlas-sidebar-bg)] text-[var(--atlas-text-primary)] lg:static lg:w-[var(--atlas-sidebar-width)] lg:max-w-[var(--atlas-sidebar-width)] lg:shrink-0"
             >
               <header className="relative flex h-[34px] shrink-0 items-center justify-between border-b border-[var(--atlas-divider)] px-2">
@@ -1879,9 +1905,9 @@ export default function WebBrowserWorkspace() {
                         <motion.div
                           key={message.id}
                           layout="position"
-                          initial={message.role === "user" ? { opacity: 0, y: 16, scale: 0.97 } : { opacity: 0, y: 4 }}
+                          initial={message.role === "user" ? false : { opacity: 0, y: 4 }}
                           animate={{ opacity: 1, y: 0, scale: 1 }}
-                          transition={{ duration: message.role === "user" ? 0.42 : 0.18, ease: [0.16, 1, 0.3, 1] }}
+                          transition={{ duration: message.role === "user" ? 0.01 : 0.18, ease: [0.16, 1, 0.3, 1] }}
                           className={cn("flex", message.role === "user" && "clyra-browser-user-message-entry origin-bottom-right justify-end")}
                         >
                           <div className={cn(
