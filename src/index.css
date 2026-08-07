@@ -4556,7 +4556,7 @@ body,
   --text-tertiary: var(--clyra-text-tertiary);
   --text-disabled: #b0b5bf;
   --accent-blue: var(--clyra-accent);
-  --clyra-code-user-bubble: #aec7f1;
+  --clyra-code-user-bubble: #f1f3f6;
   --addition-green: #239653;
   --deletion-red: #d94b4b;
   --warning-amber: #b87918;
@@ -4606,6 +4606,14 @@ body,
 .cc-counter {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum";
+}
+
+/* User prompt: subtle rounded surface only — not a chat bubble or card */
+.clyra-code-root .cc-user-prompt {
+  background: var(--clyra-code-user-bubble, #f1f3f6);
+  border-radius: 10px;
+  border: none;
+  box-shadow: none;
 }
 
 .cc-resize-handle {

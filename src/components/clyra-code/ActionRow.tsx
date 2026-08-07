@@ -14,6 +14,8 @@ const VERBS: Record<string, { active: string; done: string; failed: string }> = 
   search: { active: "Searching", done: "Searched", failed: "Failed searching" },
   list: { active: "Listing", done: "Listed", failed: "Failed listing" },
   command: { active: "Running", done: "Ran", failed: "Failed" },
+  check: { active: "Checking", done: "Checked", failed: "Failed checking" },
+  test: { active: "Testing", done: "Tested", failed: "Failed testing" },
   fetch: { active: "Fetching", done: "Fetched", failed: "Failed fetching" },
   todo: { active: "Planning", done: "Planned", failed: "Failed planning" },
   permission: { active: "Awaiting approval", done: "Approved", failed: "Denied" },
@@ -47,7 +49,7 @@ export function AgentActionRow({
   const isCancelled = action.status === "cancelled";
   const verb = isActive ? verbs.active : isError ? verbs.failed : isCancelled ? "Cancelled" : verbs.done;
   const isFileAction = /^(edit|create|delete)$/.test(action.kind);
-  const isMonoTarget = /^(command|edit|create|delete|read|list)$/.test(action.kind);
+  const isMonoTarget = /^(command|check|test|edit|create|delete|read|list)$/.test(action.kind);
   const hasDetails = Boolean(action.output?.trim() || action.error?.trim());
   const duration = action.endedAt && action.startedAt ? action.endedAt - action.startedAt : null;
 
@@ -85,22 +87,24 @@ export function AgentActionRow({
     );
   }
 
-  const commandExit = action.kind === "command" && !isActive
-    ? isError
-      ? "exit 1"
-      : "exit 0"
-    : null;
+  const commandExit =
+    /^(command|check|test)$/.test(action.kind) && !isActive
+      ? isError
+        ? "exit 1"
+        : "exit 0"
+      : null;
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 3 }}
-      animate={{ opacity: action.status === "success" ? 0.92 : 1, y: 0 }}
-      transition={{ duration: 0.18, ease: "easeOut" }}
+      layout
+      initial={{ opacity: 0, y: 2 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
       className="group"
     >
       <div
         className={cn(
-          "grid min-h-[26px] items-center gap-x-1.5 py-[3px] text-[13px] leading-[1.5] tracking-[-0.01em]",
+          "grid min-h-6 items-center gap-x-2 py-1 text-[12.5px] leading-[1.45] tracking-[-0.01em]",
           "grid-cols-[auto_minmax(0,1fr)_auto]",
           hasDetails && "cursor-pointer",
         )}
@@ -109,7 +113,7 @@ export function AgentActionRow({
       >
         <span
           className={cn(
-            "font-medium",
+            "shrink-0 font-medium",
             isError
               ? "text-[color:var(--deletion-red)]"
               : isCancelled
@@ -119,7 +123,7 @@ export function AgentActionRow({
         >
           {verb}
         </span>
-        <span className="flex min-w-0 items-center gap-1.5">
+        <span className="flex min-w-0 items-center gap-2">
           <ShimmerText
             text={action.target}
             active={isActive}
@@ -127,7 +131,7 @@ export function AgentActionRow({
             mono={isMonoTarget}
             className={cn(
               "text-[12.5px] tracking-[-0.01em]",
-              isFileAction && !isActive && "text-[color:var(--text-secondary)]",
+              !isActive && "text-[color:var(--text-secondary)]",
             )}
           />
           {isFileAction ? (
@@ -160,11 +164,11 @@ export function AgentActionRow({
               {commandExit}
             </span>
           ) : null}
-          {duration !== null && duration > 900 ? <span>{formatDuration(duration)}</span> : null}
+          {duration !== null && duration > 900 ? <span className="cc-counter">{formatDuration(duration)}</span> : null}
           {hasDetails ? (
             <ChevronRight
               className={cn(
-                "h-3 w-3 text-[color:var(--text-disabled)] transition-transform duration-150",
+                "h-3.5 w-3.5 text-[color:var(--text-disabled)] transition-transform duration-150",
                 expanded && "rotate-90",
               )}
             />
@@ -193,7 +197,7 @@ export function AgentActionRow({
                   Ask agent to fix
                 </button>
               ) : null}
-              {onOpenTerminal && action.kind === "command" ? (
+              {onOpenTerminal && /^(command|check|test)$/.test(action.kind) ? (
                 <button
                   type="button"
                   onClick={onOpenTerminal}

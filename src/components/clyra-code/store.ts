@@ -18,6 +18,8 @@ export type ActionKind =
   | "search"
   | "list"
   | "command"
+  | "check"
+  | "test"
   | "fetch"
   | "todo"
   | "permission"
@@ -108,12 +110,26 @@ function cleanCommand(command: string) {
     .trim();
 }
 
+function classifyCommand(command: string): ActionKind {
+  const c = command.toLowerCase();
+  if (/\b(vitest|jest|pytest|playwright|cypress|mocha|ava|tap|npm\s+test|pnpm\s+test|yarn\s+test|cargo\s+test|go\s+test)\b/.test(c)) {
+    return "test";
+  }
+  if (/\b(tsc|typecheck|eslint|lint|prettier|biome|ruff|mypy|pyright|clippy|cargo\s+check)\b/.test(c)) {
+    return "check";
+  }
+  return "command";
+}
+
 function classifyTool(tool: string, input: Record<string, unknown>): { kind: ActionKind; target: string } {
   const lower = tool.toLowerCase();
   const file = String(input.filePath || input.path || input.file || "");
   const command = String(input.command || input.cmd || "");
   const query = String(input.pattern || input.query || input.search || "");
-  if (/^(bash|shell|command)$/.test(lower)) return { kind: "command", target: cleanCommand(command) || tool };
+  if (/^(bash|shell|command)$/.test(lower)) {
+    const cleaned = cleanCommand(command) || tool;
+    return { kind: classifyCommand(cleaned), target: cleaned };
+  }
   if (lower === "write") return { kind: "create", target: stripProjectPrefix(file) };
   if (/^(edit|apply_patch|str_replace|patch)$/.test(lower)) return { kind: "edit", target: stripProjectPrefix(file) };
   if (/^(delete|rm|remove)$/.test(lower)) return { kind: "delete", target: stripProjectPrefix(file) };

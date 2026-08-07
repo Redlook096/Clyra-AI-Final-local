@@ -232,13 +232,13 @@ function BrowserView({
             setComment("");
           }}
           className={cn(
-            "ml-1 flex items-center gap-1.5 rounded-full px-2.5 py-[4px] text-[11.5px] font-medium transition-colors",
+            "ml-1 flex h-7 items-center gap-1.5 rounded-[8px] px-2.5 text-[11.5px] font-medium transition-colors",
             commenting
-              ? "bg-[color:var(--accent-blue)] text-white"
-              : "bg-[#e8f0fc] text-[color:var(--accent-blue)] hover:bg-[#dce9fa]",
+              ? "bg-[color:var(--surface-selected)] text-[color:var(--text-primary)]"
+              : "text-[color:var(--text-secondary)] hover:bg-[color:var(--surface-hover)]",
           )}
         >
-          <MessageSquarePlus className="h-[13px] w-[13px]" strokeWidth={1.9} />
+          <MessageSquarePlus className="h-3.5 w-3.5" strokeWidth={1.9} />
           Commenting
         </button>
       </div>

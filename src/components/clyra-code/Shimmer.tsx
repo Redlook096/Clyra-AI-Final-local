@@ -23,9 +23,8 @@ export function ShimmerText({
     return (
       <span
         className={cn(
-          "truncate",
+          "truncate text-[color:var(--text-secondary)]",
           mono && "cc-mono",
-          tone === "blue" ? "text-[color:var(--accent-blue)]" : "text-[color:var(--text-primary)]",
           className,
         )}
       >
