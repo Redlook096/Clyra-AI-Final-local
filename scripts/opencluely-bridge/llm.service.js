@@ -126,8 +126,17 @@ class LLMService {
     }
   }
 
-  formatImageInstruction(activeSkill, programmingLanguage) {
+  formatImageInstruction(activeSkill, programmingLanguage, visionMode = null) {
     const skill = activeSkill || 'general';
+    if (visionMode === 'auto' || skill === 'auto') {
+      return [
+        "Look at this screenshot of the user's screen carefully.",
+        'Use your initiative: if there is a visible question, quiz, exam problem, coding challenge, interview prompt, form, error message, or task the user likely needs solved — answer or solve it directly and helpfully.',
+        'Quote key on-screen text literally when relevant.',
+        'If there is no clear question, briefly describe what is on screen and suggest the most useful next step.',
+        'Do not invent apps, sites, or text that are not visible. Be concise. No stealth.',
+      ].join(' ');
+    }
     if (skill === 'general' || skill === 'screen') {
       return [
         "Look at this screenshot of the user's screen.",
@@ -227,14 +236,14 @@ class LLMService {
     };
   }
 
-  async processImageWithSkill(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null) {
+  async processImageWithSkill(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null, visionMode = null) {
     if (!this.isInitialized) throw new Error('LLM service not initialized');
     if (!imageBuffer || !Buffer.isBuffer(imageBuffer)) {
       throw new Error('Invalid image buffer provided to processImageWithSkill');
     }
     const startTime = Date.now();
     this.requestCount += 1;
-    const instruction = this.formatImageInstruction(activeSkill, programmingLanguage);
+    const instruction = this.formatImageInstruction(activeSkill, programmingLanguage, visionMode);
     try {
       const visionText = await this.callVision(imageBuffer, instruction);
       let finalText = visionText;
@@ -263,6 +272,7 @@ class LLMService {
           source,
           mimeType,
           visionModel: this.model,
+          visionMode: visionMode || 'describe',
         },
       };
     } catch (error) {
@@ -272,13 +282,14 @@ class LLMService {
     }
   }
 
-  async processImageWithSkillStream(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta) {
+  async processImageWithSkillStream(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta, visionMode = null) {
     const result = await this.processImageWithSkill(
       imageBuffer,
       mimeType,
       activeSkill,
       sessionMemory,
       programmingLanguage,
+      visionMode,
     );
     if (typeof onDelta === 'function' && result.response) onDelta(result.response);
     return result;

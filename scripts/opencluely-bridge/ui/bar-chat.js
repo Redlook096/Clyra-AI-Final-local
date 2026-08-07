@@ -1,25 +1,41 @@
 /**
- * Chat drawer that expands smoothly under the centered command bar.
- * Replaces the separate Live Transcription & Chat BrowserWindow panel.
+ * Light frosted OpenCluely bar:
+ *  - Ask → expand width then chat (normal Q&A)
+ *  - Auto Answer → expand + screenshot vision with initiative
+ *  - X collapses back to the compact pill
+ *  - Drag handle moves the whole window; opens centered at top
  */
 (function () {
   const HISTORY_KEY = 'opencluely_bar_chat_v1';
+  const EXPANDED_W = 400;
+  const COLLAPSED_H = 52;
+  const DRAWER_H = 360;
+
   const shell = document.getElementById('ocShell');
+  const tab = document.getElementById('commandTab');
   const drawer = document.getElementById('chatDrawer');
   const messagesEl = document.getElementById('barChatMessages');
   const inputEl = document.getElementById('barChatInput');
   const sendBtn = document.getElementById('barChatSend');
-  const clearBtn = document.getElementById('barChatClear');
-  const collapseBtn = document.getElementById('barChatCollapse');
-  const toggleBtn = document.getElementById('chatToggle');
+  const closeBtn = document.getElementById('ocCloseBtn');
+  const askBtn = document.getElementById('ocAskBtn');
+  const autoBtn = document.getElementById('ocAutoBtn');
+  const modeLabel = document.getElementById('chatModeLabel');
+  const modeHint = document.getElementById('chatModeHint');
 
   if (!shell || !drawer || !messagesEl) {
-    console.warn('[BarChat] drawer elements missing');
+    console.warn('[BarChat] missing shell elements');
     return;
   }
 
   let open = false;
+  let wide = false;
+  let mode = 'ask'; // 'ask' | 'auto'
   let history = [];
+  let animating = false;
+
+  const AUTO_PROMPT =
+    "Look at what's on my screen right now. Use your initiative: if there is a question, quiz, problem, coding prompt, form field, or anything the user likely needs answered or solved, answer it directly and helpfully. If there is no clear question, briefly say what you see and the most useful next step. Read text literally; do not invent content that is not visible.";
 
   function loadHistory() {
     try {
@@ -53,24 +69,17 @@
   function addMessage(text, type = 'user', skipPersist = false) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${type}`;
-
     const timeDiv = document.createElement('div');
     timeDiv.className = 'message-time';
     timeDiv.textContent = new Date().toLocaleTimeString();
-
     const textDiv = document.createElement('div');
     textDiv.className = 'message-text';
-    if (type === 'assistant') {
-      textDiv.innerHTML = formatMarkdown(text);
-    } else {
-      textDiv.textContent = text;
-    }
-
+    if (type === 'assistant') textDiv.innerHTML = formatMarkdown(text);
+    else textDiv.textContent = text;
     messageDiv.appendChild(timeDiv);
     messageDiv.appendChild(textDiv);
     messagesEl.appendChild(messageDiv);
     messagesEl.scrollTop = messagesEl.scrollHeight;
-
     if (!skipPersist) {
       history.push({ type, text: String(text || '') });
       saveHistory();
@@ -89,87 +98,173 @@
   }
 
   function hideThinking() {
-    const el = document.getElementById('bar-thinking');
-    if (el) el.remove();
+    document.getElementById('bar-thinking')?.remove();
   }
 
-  function resizeShell() {
-    // Prefer MainWindowUI resize when available (accounts for popover too)
-    if (window.mainWindowUI && typeof window.mainWindowUI.resizeWindowToContent === 'function') {
-      window.mainWindowUI.resizeWindowToContent();
-      return;
-    }
-    if (!window.electronAPI || !window.electronAPI.resizeWindow) return;
+  function measureAndResize() {
+    if (!window.electronAPI?.resizeWindow) return;
     requestAnimationFrame(() => {
       const rect = shell.getBoundingClientRect();
-      const width = Math.max(60, Math.ceil(rect.width));
-      const height = Math.max(28, Math.ceil(rect.height));
+      const width = Math.max(220, Math.ceil(rect.width));
+      const height = Math.max(COLLAPSED_H, Math.ceil(rect.height));
       window.electronAPI.resizeWindow(width, height);
     });
   }
 
-  function setOpen(next, { focusInput = true } = {}) {
-    open = Boolean(next);
-    shell.classList.toggle('is-chat-open', open);
-    drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
-    if (toggleBtn) toggleBtn.classList.toggle('is-open', open);
-    // Tell main process so resize clamps / centering can adapt
+  function notifyDrawer(openState) {
     try {
-      if (window.electronAPI && window.electronAPI.setChatDrawerOpen) {
-        window.electronAPI.setChatDrawerOpen(open);
-      }
+      window.electronAPI?.setChatDrawerOpen?.(openState);
     } catch (_) {
       /* ignore */
     }
-    // Allow CSS transition to start, then size the BrowserWindow
-    resizeShell();
-    setTimeout(resizeShell, 60);
-    setTimeout(resizeShell, 340);
-    if (open && focusInput && inputEl) {
-      setTimeout(() => inputEl.focus(), 280);
+  }
+
+  function setModeUI(next) {
+    mode = next;
+    askBtn?.classList.toggle('is-active', mode === 'ask' && open);
+    autoBtn?.classList.toggle('is-active', mode === 'auto' && open);
+    if (modeLabel) modeLabel.textContent = mode === 'auto' ? 'Auto Answer' : 'Ask';
+    if (modeHint) {
+      modeHint.textContent =
+        mode === 'auto' ? 'Reading your screen…' : 'Type a question…';
     }
   }
 
-  function toggle() {
-    setOpen(!open);
+  async function expandToChat(nextMode) {
+    if (animating) return;
+    animating = true;
+    setModeUI(nextMode);
+
+    // 1) Expand width outwards first (fade glass to chat transparency)
+    wide = true;
+    shell.classList.add('is-wide');
+    notifyDrawer(true);
+    measureAndResize();
+    await wait(300);
+
+    // 2) Then expand chat downward
+    open = true;
+    shell.classList.add('is-chat-open');
+    drawer.setAttribute('aria-hidden', 'false');
+    measureAndResize();
+    await wait(360);
+    measureAndResize();
+    animating = false;
+
+    if (nextMode === 'ask') {
+      setTimeout(() => inputEl?.focus(), 40);
+    }
+  }
+
+  async function collapse() {
+    if (animating) return;
+    if (!open && !wide) {
+      // Fully collapsed — X can hide the window
+      try {
+        await window.electronAPI?.hideAllWindows?.();
+      } catch (_) {
+        /* ignore */
+      }
+      return;
+    }
+    animating = true;
+    askBtn?.classList.remove('is-active');
+    autoBtn?.classList.remove('is-active');
+
+    // 1) Collapse height first
+    open = false;
+    shell.classList.remove('is-chat-open');
+    drawer.setAttribute('aria-hidden', 'true');
+    measureAndResize();
+    await wait(320);
+
+    // 2) Then shrink width back to pill
+    wide = false;
+    shell.classList.remove('is-wide');
+    notifyDrawer(false);
+    measureAndResize();
+    await wait(360);
+    // Fit to compact pill content size
+    if (tab && window.electronAPI?.resizeWindow) {
+      const rect = tab.getBoundingClientRect();
+      window.electronAPI.resizeWindow(Math.ceil(rect.width), Math.ceil(rect.height));
+    } else {
+      measureAndResize();
+    }
+    animating = false;
+  }
+
+  function wait(ms) {
+    return new Promise((r) => setTimeout(r, ms));
   }
 
   async function sendCurrent() {
     const text = (inputEl?.value || '').trim();
     if (!text) return;
-    if (!open) setOpen(true, { focusInput: false });
+    if (!open) await expandToChat('ask');
     addMessage(text, 'user');
     inputEl.value = '';
     autoGrow();
     showThinking();
     try {
-      if (window.electronAPI && window.electronAPI.sendChatMessage) {
-        await window.electronAPI.sendChatMessage(text);
-      }
+      await window.electronAPI?.sendChatMessage?.(text);
     } catch (error) {
       hideThinking();
       addMessage(`Failed to send: ${error.message}`, 'error');
     }
   }
 
+  async function runAutoAnswer() {
+    await expandToChat('auto');
+    addMessage('Auto Answer — reading your screen…', 'system');
+    showThinking();
+    try {
+      // Prefer dedicated control endpoint when available
+      const res = await fetch('http://127.0.0.1:3847/auto-answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: AUTO_PROMPT }),
+      });
+      if (!res.ok) {
+        // Fallback: chat path that triggers screenshot vision
+        await window.electronAPI?.sendChatMessage?.(AUTO_PROMPT);
+      }
+    } catch (_) {
+      try {
+        await window.electronAPI?.sendChatMessage?.(AUTO_PROMPT);
+      } catch (error) {
+        hideThinking();
+        addMessage(`Auto Answer failed: ${error.message}`, 'error');
+      }
+    }
+  }
+
   function autoGrow() {
     if (!inputEl) return;
     inputEl.style.height = 'auto';
-    inputEl.style.height = Math.min(inputEl.scrollHeight, 100) + 'px';
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 96) + 'px';
   }
 
-  // Wire controls
-  toggleBtn?.addEventListener('click', (e) => {
+  // Buttons
+  askBtn?.addEventListener('click', async (e) => {
     e.stopPropagation();
-    toggle();
+    if (open && mode === 'ask') {
+      inputEl?.focus();
+      return;
+    }
+    await expandToChat('ask');
   });
-  collapseBtn?.addEventListener('click', () => setOpen(false));
-  clearBtn?.addEventListener('click', () => {
-    history = [];
-    saveHistory();
-    messagesEl.innerHTML = '';
-    addMessage('Chat cleared.', 'system');
+
+  autoBtn?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await runAutoAnswer();
   });
+
+  closeBtn?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await collapse();
+  });
+
   sendBtn?.addEventListener('click', () => sendCurrent());
   inputEl?.addEventListener('input', autoGrow);
   inputEl?.addEventListener('keydown', (e) => {
@@ -179,84 +274,71 @@
     }
   });
 
-  // Listen for main-process open/close requests (shortcut, recording, screenshot)
-  if (window.electronAPI?.receive) {
-    window.electronAPI.receive('toggle-chat-drawer', (_e, payload) => {
-      if (payload && typeof payload.open === 'boolean') setOpen(payload.open);
-      else toggle();
-    });
-  }
-  if (window.electronAPI?.onToggleChatDrawer) {
-    window.electronAPI.onToggleChatDrawer((_event, payload) => {
-      if (payload && typeof payload.open === 'boolean') setOpen(payload.open);
-      else toggle();
-    });
-  }
+  // Main-process open/close
+  window.electronAPI?.onToggleChatDrawer?.((_event, payload) => {
+    if (payload && typeof payload.open === 'boolean') {
+      if (payload.open) expandToChat(mode || 'ask');
+      else collapse();
+    }
+  });
+  window.electronAPI?.receive?.('toggle-chat-drawer', (_e, payload) => {
+    if (payload && typeof payload.open === 'boolean') {
+      if (payload.open) expandToChat(mode || 'ask');
+      else collapse();
+    }
+  });
 
-  // LLM / OCR responses → show in drawer (and auto-expand)
+  // Responses
   const api = window.electronAPI;
   if (api) {
     api.onTranscriptionLlmResponse?.((_e, data) => {
       hideThinking();
-      const text = data?.response || data?.text || data?.dataPreview || '';
+      const text = data?.response || data?.text || '';
       if (text) {
-        setOpen(true, { focusInput: false });
+        if (!open) expandToChat(mode || 'ask');
         addMessage(text, 'assistant');
+        if (modeHint && mode === 'auto') modeHint.textContent = 'Answer ready';
       }
     });
     api.onTranscriptionLlmResponseStart?.(() => {
-      setOpen(true, { focusInput: false });
+      if (!open) expandToChat(mode || 'ask');
       showThinking();
     });
     api.onLlmResponse?.((_e, data) => {
       hideThinking();
       const text = data?.response || data?.text || '';
       if (text) {
-        setOpen(true, { focusInput: false });
+        if (!open) expandToChat(mode || 'ask');
         addMessage(text, 'assistant');
       }
     });
     api.onOcrError?.((_e, data) => {
       hideThinking();
-      setOpen(true, { focusInput: false });
       addMessage(data?.error || 'Screenshot failed', 'error');
     });
-    api.onSpeechError?.((_e, data) => {
-      setOpen(true, { focusInput: false });
-      addMessage(data?.error || 'Speech error', 'error');
-    });
-    api.onTranscriptionReceived?.((_e, data) => {
-      const text = typeof data === 'string' ? data : data?.text;
-      if (text) {
-        setOpen(true, { focusInput: false });
-        addMessage(text, 'transcription');
-        showThinking();
-      }
-    });
-    api.onRecordingStarted?.(() => setOpen(true, { focusInput: false }));
     api.onSessionCleared?.(() => {
       history = [];
       saveHistory();
       messagesEl.innerHTML = '';
-      addMessage('Session cleared.', 'system');
     });
   }
 
-  // Also support window.api.receive for recording events
-  if (window.api?.receive) {
-    window.api.receive('recording-started', () => setOpen(true, { focusInput: false }));
-  }
-
+  // Fit collapsed pill on load + tell main process we're ready for centering
   loadHistory();
-  if (history.length === 0) {
-    addMessage('Chat lives under the tool bar — click the chat icon or press Ctrl/Cmd+Shift+C.', 'system');
-  }
+  setTimeout(() => {
+    if (tab && window.electronAPI?.resizeWindow) {
+      const rect = tab.getBoundingClientRect();
+      window.electronAPI.resizeWindow(Math.ceil(rect.width), Math.ceil(rect.height));
+    }
+    window.electronAPI?.setChatDrawerOpen?.(false);
+    window.electronAPI?.notifyMainWindowReady?.();
+  }, 80);
 
-  // Expose for main-window resize integration
   window.barChat = {
     isOpen: () => open,
-    setOpen,
-    toggle,
-    resizeShell,
+    expandToChat,
+    collapse,
+    runAutoAnswer,
+    measureAndResize,
   };
 })();

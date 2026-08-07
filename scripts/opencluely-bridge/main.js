@@ -572,7 +572,7 @@ class ApplicationController {
           mainWindow.setSize(Math.max(1, clampedWidth), Math.max(1, clampedHeight));
         }
         try {
-          windowManager.centerMainWindowHorizontally?.();
+          windowManager.centerMainWindowAtTop?.();
         } catch (_) {
           /* ignore */
         }
@@ -1075,6 +1075,16 @@ class ApplicationController {
     windowManager.broadcastToAllWindows("skill-updated", { skill: newSkill });
   }
 
+  async triggerAutoAnswer() {
+    windowManager.openChatDrawer();
+    this._visionMode = "auto";
+    try {
+      await this.triggerScreenshotOCR();
+    } finally {
+      this._visionMode = null;
+    }
+  }
+
   _isScreenQuestion(text) {
     const t = String(text || "");
     return /\b(what('?s| is) on (my )?screen|see (my )?screen|look at (my )?screen|on my screen|what (page|site|app|website|article) (am i|is) (on|open|this)|what (am i|is) (looking at|viewing)|main (heading|title|article)|read (the )?(page|screen|heading|title)|quote the (main |page )?(heading|title|article)|interview coding|coding (interview|page)|visible on (the )?screen|describe (the |my )?(screen|page|window)|screenshot)\b/i.test(
@@ -1156,7 +1166,8 @@ class ApplicationController {
             messageId,
             delta
           });
-        }
+        },
+        this._visionMode || null,
       );
       llmResult.metadata = { ...llmResult.metadata, messageId };
 
@@ -2068,6 +2079,11 @@ class ApplicationController {
           if (req.method === "POST" && req.url === "/screenshot") {
             await this.triggerScreenshotOCR();
             send(200, { ok: true, action: "screenshot" });
+            return;
+          }
+          if (req.method === "POST" && req.url === "/auto-answer") {
+            await this.triggerAutoAnswer();
+            send(200, { ok: true, action: "auto-answer" });
             return;
           }
           if (req.method === "POST" && req.url === "/chat") {

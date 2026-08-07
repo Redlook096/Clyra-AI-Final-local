@@ -34,14 +34,15 @@ class WindowManager {
     // Window binding properties
     this.bindWindows = false; // Disabled on Linux-friendly Clyra bridge to avoid resize recursion
     this.chatDrawerOpen = false; // Chat expands under the centered main bar (no separate panel)
-    this.mainExpandedWidth = 440; // Max width while chat drawer is open
+    this.mainExpandedWidth = 420; // Max width while chat drawer is open
+    this.mainCollapsedMaxWidth = 360; // Compact frosted pill
     this.windowGap = 10; // Small gap between windows
     this.boundWindowsPosition = { x: 0, y: 0 }; // Track position of bound windows
     
     this.windowConfigs = {
       main: {
-        width: 520,
-        height: 35,
+        width: 340,
+        height: 52,
         useContentSize: true,
         file: 'index.html',
         title: 'OpenCluely'
@@ -176,6 +177,7 @@ class WindowManager {
     }
     
     this.isVisible = true;
+    this.centerMainWindowAtTop();
     logger.info('Main window displayed');
     // Notify renderer to refresh speech availability
     mainWindow.webContents.send('main-window-shown', {});
@@ -995,12 +997,18 @@ class WindowManager {
     }
 
     this.windows.forEach((window, type) => {
-      // Keep floating LLM + legacy chat panels hidden; answers live in the bar drawer
-      if (type === 'llmResponse' || type === 'chat') return;
+      // Keep floating LLM + legacy chat + settings panels hidden;
+      // the light frosted bar + drawer is the only interactive surface.
+      if (type === 'llmResponse' || type === 'chat' || type === 'settings' || type === 'onboarding') return;
       this.showOnCurrentDesktop(window);
     });
     
     this.isVisible = true;
+    try {
+      this.centerMainWindowAtTop?.();
+    } catch (_) {
+      /* ignore */
+    }
     const activeWindow = this.windows.get(this.activeWindow);
     if (activeWindow) {
       activeWindow.focus();
@@ -1687,10 +1695,25 @@ class WindowManager {
   }
 
   getMainMaxWidth() {
-    return Math.max(
-      this.windowConfigs?.main?.width || 520,
-      this.chatDrawerOpen ? (this.mainExpandedWidth || 440) : 0
-    );
+    if (this.chatDrawerOpen) {
+      return Math.max(this.windowConfigs?.main?.width || 520, this.mainExpandedWidth || 420);
+    }
+    return Math.max(this.mainCollapsedMaxWidth || 360, 220);
+  }
+
+  centerMainWindowAtTop() {
+    const mainWindow = this.windows.get('main');
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try {
+      const display = this.currentDisplay || screen.getPrimaryDisplay();
+      const { x: displayX, y: displayY, width: screenWidth } = display.workArea || display.bounds;
+      const [windowWidth] = mainWindow.getSize();
+      const x = displayX + Math.round((screenWidth - windowWidth) / 2);
+      const y = displayY + 20;
+      mainWindow.setPosition(Math.round(x), Math.round(y));
+    } catch (_) {
+      /* ignore */
+    }
   }
 
   centerMainWindowHorizontally() {
@@ -1727,7 +1750,7 @@ class WindowManager {
       } catch (_) {
         /* ignore */
       }
-      this.centerMainWindowHorizontally();
+      this.centerMainWindowAtTop();
     }
     return this.chatDrawerOpen;
   }
@@ -1736,6 +1759,7 @@ class WindowManager {
     const mainWindow = this.windows.get('main');
     if (!mainWindow || mainWindow.isDestroyed()) return false;
     this.showOnCurrentDesktop(mainWindow);
+    this.centerMainWindowAtTop();
     this.setChatDrawerOpen(true);
     try {
       mainWindow.webContents.send('toggle-chat-drawer', { open: true });
