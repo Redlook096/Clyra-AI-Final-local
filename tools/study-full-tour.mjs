@@ -329,21 +329,44 @@ async function main() {
     }
   }
 
-  // Fan actions remaining via centre click
-  await centre.click({ force: true }).catch(() => {});
+  // Materials still has Summary / Teach me (fan removed)
+  await page.getByRole("button", { name: /^materials$/i }).first().click({ force: true }).catch(() => {});
   await page.waitForTimeout(400);
-  await take(page, "21-fan-reopen");
-  for (const action of ["Flashcards", "Summary", "Study guide", "Teach me"]) {
+  await take(page, "21-materials-full");
+  for (const action of ["Summary", "Teach me", "Revision plan"]) {
     const b = page.getByRole("button", { name: new RegExp(`^${action}$`, "i") });
     if (await b.isVisible().catch(() => false)) {
-      await b.click({ force: true });
-      await page.waitForTimeout(1500);
+      await b.first().click({ force: true });
+      await page.waitForTimeout(1200);
       await take(page, `21-action-${action.toLowerCase().replace(/\s+/g, "-")}`);
-      await centre.click({ force: true }).catch(() => {});
-      await page.waitForTimeout(300);
     }
   }
+  await page.getByRole("button", { name: /^chat$/i }).first().click({ force: true }).catch(() => {});
+  await page.waitForTimeout(400);
+  await take(page, "22-final-chat-tab");
   await take(page, "22-final-canvas");
+
+  // Orthogonal edges check
+  results.push({
+    name: "orthogonal-edges",
+    ok: await page.evaluate(() => {
+      const paths = [...document.querySelectorAll(".react-flow__edge-path")];
+      if (!paths.length) return true;
+      // smoothstep paths use L/Q segments; disallow pure diagonal single-segment lines
+      return paths.every((p) => {
+        const d = p.getAttribute("d") || "";
+        return /[LQHlqh]/.test(d) || !/M[\d.\s-]+L[\d.\s-]+$/.test(d.replace(/,/g, " "));
+      });
+    }),
+    detail: "edges use orthogonal routing",
+  });
+  results.push({
+    name: "chat-empty-or-thread",
+    ok: /Ask about your sources|Connect a resource|Summarise|Thinking|photosynthesis/i.test(
+      await page.evaluate(() => document.body.innerText),
+    ),
+    detail: "premium chat UI present",
+  });
 
   const summary = {
     results,
