@@ -188,7 +188,6 @@ export function Conversation({
           }
           const action = state.actions[entry.actionId];
           if (!action) return null;
-          if (action.kind === "todo") return null;
           return (
             <AgentActionRow
               key={entry.id}

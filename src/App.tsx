@@ -65,7 +65,7 @@ import {
   Edit2,
   Youtube,
 } from "lucide-react";
-import { cn } from "./lib/utils";
+import { cn, formatApiError } from "./lib/utils";
 import { SettingsModal } from "./components/SettingsModal";
 import { ChatSearchModal } from "./components/ChatSearchModal";
 import { ShiningBrainIcon, ShiningText, ThinkingDots } from "./components/ShiningText";
@@ -4401,7 +4401,7 @@ Please analyze the code you just wrote and fix this error.`;
         : cleanPrompt;
       const response = await fetch("/api/study/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: cleanPrompt, mode: "plan", context: [{ id: "conversation-brief", title: "Conversation brief", source: "Current chat", body: evidence.slice(0, 8_000) }] }) });
       const payload = await response.json();
-      if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Study Pal could not prepare the workspace");
+      if (!response.ok || !payload?.ok) throw new Error(formatApiError(payload?.error, "Study Pal could not prepare the workspace"));
       return { status: "ready", action: "Mapped study sources", summary: String(payload.answer || "Study plan prepared.").slice(0, 360) };
     }
     if (agentId === "vibe") {
@@ -4414,7 +4414,7 @@ Please analyze the code you just wrote and fix this error.`;
     if (agentId === "fake-text" || agentId === "would-rather") {
       const response = await fetch("/api/creator/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: agentId === "fake-text" ? "fake_text_story" : "would_rather", prompt: cleanPrompt, count: agentId === "fake-text" ? 8 : 5, tone: "engaging" }) });
       const payload = await response.json();
-      if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Creator agent could not generate a script");
+      if (!response.ok || !payload?.ok) throw new Error(formatApiError(payload?.error, "Creator agent could not generate a script"));
       const data = payload.data || {};
       const count = agentId === "fake-text" ? (Array.isArray(data.messages) ? data.messages.length : 0) : (Array.isArray(data.rounds) ? data.rounds.length : 0);
       return { status: "ready", action: "Drafted timeline", summary: agentId === "fake-text" ? `${data.title || "Text story"} is drafted with ${count} timed messages for ${data.contactName || "the selected contact"}.` : `${data.title || "Would You Rather"} is drafted with ${count} voiced questions and percentage reveals.` };
@@ -8216,42 +8216,20 @@ Please analyze the code you just wrote and fix this error.`;
             </div>
           </motion.div>
           <AnimatePresence>
-            {toastMessage && (
+            {toastMessage ? (
               <motion.div
-                initial={{ opacity: 0, y: -40, scale: 0.9 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.9, y: -20 }}
-                transition={{
-                  type: "spring",
-                  stiffness: 400,
-                  damping: 25,
-                  mass: 0.8,
-                }}
-                className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] px-3.5 py-3 bg-white text-slate-700 text-sm font-medium rounded-[32px] shadow-[0_8px_30px_rgb(0,0,0,0.08)] border border-slate-200/60 flex items-center gap-3.5 max-w-[90vw]"
+                role="status"
+                aria-live="polite"
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                className="fixed top-5 left-1/2 z-[100] flex max-w-[min(440px,92vw)] -translate-x-1/2 items-center gap-2.5 rounded-xl border border-black/[0.06] bg-white px-3.5 py-2.5 text-[13px] font-medium leading-snug text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.08)]"
               >
-                <div className="relative flex items-center justify-center w-8 h-8 rounded-full shrink-0 ml-1">
-                  <MessageCircleDashed className="w-5 h-5 text-slate-600 stroke-[1.5]" />
-                  <motion.div
-                    initial={{ scale: 1, opacity: 1, y: 0 }}
-                    animate={{ scale: 0, opacity: 0, y: -5 }}
-                    transition={{ duration: 0.3, delay: 0.4, ease: "backIn" }}
-                    className="absolute inset-0 flex items-center justify-center pointer-events-none"
-                  >
-                    <div className="flex items-center justify-center w-full h-full bg-white rounded-full">
-                      <Check className="w-4 h-4 stroke-[3] text-slate-500" />
-                    </div>
-                  </motion.div>
-                </div>
-                <div className="flex flex-col pr-3">
-                  <span className="font-semibold text-slate-800 tracking-tight leading-tight mb-[3px]">
-                    Temporary chat disabled
-                  </span>
-                  <span className="text-slate-500 text-[13px] leading-tight font-normal">
-                    This conversation is saved to your history.
-                  </span>
-                </div>
+                <Check className="h-4 w-4 shrink-0 text-slate-500" aria-hidden />
+                <span>{toastMessage}</span>
               </motion.div>
-            )}
+            ) : null}
           </AnimatePresence>
         </div>
       </motion.div>

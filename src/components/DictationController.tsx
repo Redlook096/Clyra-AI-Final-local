@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { getElectronDesktop } from "../lib/electron-runtime";
+import { formatApiError } from "../lib/utils";
 import { VoicePcmCapturer } from "../lib/voicePcmCapture";
 import {
   remainingVoiceSilenceMs,
@@ -123,7 +124,7 @@ export function DictationController() {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok || !payload?.ok) {
-          throw new Error(payload?.error || `Clyra request failed (${response.status}).`);
+          throw new Error(formatApiError(payload?.error, `Clyra request failed (${response.status}).`));
         }
         return payload;
       } catch (error) {

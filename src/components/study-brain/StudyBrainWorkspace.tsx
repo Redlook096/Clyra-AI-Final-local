@@ -16,7 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { cn } from "../../lib/utils";
+import { cn, formatApiError } from "../../lib/utils";
 import { MarkdownMessageContent } from "../MarkdownMessageContent";
 import { ShiningBrainIcon, ShiningText, ThinkingDots } from "../ShiningText";
 import { getElectronDesktop } from "../../lib/electron-runtime";
@@ -59,7 +59,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload?.ok === false) {
-    throw new Error(softenStudyError(String(payload?.error || `Request failed (${response.status})`)));
+    throw new Error(softenStudyError(formatApiError(payload?.error, `Request failed (${response.status})`)));
   }
   return payload as T;
 }
