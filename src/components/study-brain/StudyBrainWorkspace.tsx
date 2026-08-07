@@ -933,7 +933,7 @@ export default function StudyBrainWorkspace({
                     Generate from connected resources.
                   </p>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-0.5">
                   {(
                     [
                       { id: "quiz" as const, label: "Quiz", run: () => void generateMaterial("quiz") },
@@ -962,7 +962,7 @@ export default function StudyBrainWorkspace({
                       key={action.id}
                       type="button"
                       onClick={action.run}
-                      className="flex h-10 items-center justify-center rounded-[12px] border border-[color:var(--clyra-border)] bg-white text-[12px] font-medium text-[color:var(--clyra-text)] shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-colors hover:bg-[color:var(--clyra-hover)]"
+                      className="flex h-9 w-full items-center rounded-[10px] px-2.5 text-left text-[12.5px] font-medium text-[color:var(--clyra-text)] transition-colors hover:bg-[color:var(--clyra-hover)]"
                     >
                       {action.label}
                     </button>
