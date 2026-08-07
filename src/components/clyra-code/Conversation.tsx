@@ -47,7 +47,7 @@ function ThoughtSummary({ entry }: { entry: Extract<LogEntry, { type: "reasoning
   if (!entry.endedAt) return null;
   const seconds = Math.max(1, Math.round((entry.endedAt - entry.ts) / 1000));
   return (
-    <div className="py-1 text-[12px] font-medium tracking-[-0.01em] text-slate-400">
+    <div className="py-1 text-[12px] font-medium tracking-[-0.01em] text-[color:var(--text-tertiary)]">
       Thought for {seconds}s
     </div>
   );
@@ -75,10 +75,10 @@ export function CompletionSummary({
       initial={{ opacity: 0, y: 3 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, ease: "easeOut" }}
-      className="mt-3 rounded-[10px] bg-[color:var(--surface-muted)] px-3.5 py-2.5"
+      className="mt-3 border-t border-[color:var(--border-subtle)] pt-3"
     >
       <div className="flex items-center gap-2 text-[12.5px]">
-        <span className="font-semibold text-[color:var(--text-primary)]">
+        <span className="font-medium text-[color:var(--text-primary)]">
           {diffs.length} file{diffs.length === 1 ? "" : "s"} changed
         </span>
         <DiffCounters additions={totals.additions} deletions={totals.deletions} />
@@ -164,7 +164,7 @@ export function Conversation({
           if (entry.type === "user") {
             return (
               <div key={entry.id} className="my-3 flex justify-end">
-                <div className="max-w-[82%] rounded-[14px] bg-[color:var(--surface-muted)] px-3.5 py-2.5 text-[13.5px] leading-[1.55] tracking-[-0.01em] text-[color:var(--text-primary)]">
+                <div className="max-w-[72%] rounded-[12px] bg-[color:var(--surface-muted)] px-3 py-2 text-[14px] leading-[1.5] tracking-[-0.01em] text-[color:var(--text-primary)]">
                   {entry.text}
                 </div>
               </div>
@@ -175,7 +175,7 @@ export function Conversation({
               <div
                 key={entry.id}
                 className={cn(
-                  "clyra-vibe-agent-line my-2.5 text-[13.5px] font-normal leading-[1.6] tracking-[-0.015em] text-slate-600",
+                  "clyra-vibe-agent-line my-2.5 text-[14px] font-normal leading-[1.55] tracking-[-0.015em] text-[color:var(--text-primary)]",
                   "[&_p]:my-2 [&_ul]:my-2 [&_ol]:my-2 [&_pre]:my-2.5 [&_code]:text-[12px]",
                 )}
               >

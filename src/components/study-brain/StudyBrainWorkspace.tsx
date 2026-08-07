@@ -5,15 +5,21 @@
 import {
   BookOpen,
   FilePlus2,
+  FileText,
+  Film,
+  Globe,
   GraduationCap,
+  Image as ImageIcon,
   Link2,
   Loader2,
+  NotebookPen,
   PanelRightClose,
   PanelRightOpen,
   Plus,
+  Presentation,
   Trash2,
-  Upload,
   X,
+  Youtube,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn, formatApiError } from "../../lib/utils";
@@ -82,7 +88,14 @@ export default function StudyBrainWorkspace({
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inspectorTab, setInspectorTab] = useState<"source" | "chat" | "materials">("chat");
+  const [addOpen, setAddOpen] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const addMenuRef = useRef<HTMLDivElement>(null);
+  const dragDepth = useRef(0);
   const seeded = useRef(false);
 
   const brain = useMemo(() => {
@@ -106,11 +119,16 @@ export default function StudyBrainWorkspace({
     [persist, store],
   );
 
+  const storeRef = useRef(store);
+  storeRef.current = store;
+  const brainRef = useRef(brain);
+  brainRef.current = brain;
+
   useEffect(() => {
     if (seeded.current) return;
     seeded.current = true;
     if (!store.brains.length) {
-      const created = emptyBrain(agentPrompt.trim() ? agentPrompt.trim().slice(0, 60) : "Biology Exam");
+      const created = emptyBrain(agentPrompt.trim() ? agentPrompt.trim().slice(0, 60) : "Biology");
       persist({ version: 4, brains: [created], activeBrainId: created.id });
     } else if (!store.activeBrainId && store.brains[0]) {
       persist({ ...store, activeBrainId: store.brains[0].id });
@@ -119,24 +137,28 @@ export default function StudyBrainWorkspace({
 
   const ensureBrain = useCallback(() => {
     if (brain) return brain;
-    const created = emptyBrain("New Study Brain");
+    const created = emptyBrain("New study space");
     persist({ version: 4, brains: [created, ...store.brains], activeBrainId: created.id });
     return created;
   }, [brain, persist, store.brains]);
 
   const addSource = useCallback(
-    async (factory: () => Promise<StudySourceNode> | StudySourceNode) => {
-      const current = ensureBrain();
+    async (factory: () => Promise<StudySourceNode> | StudySourceNode, dropIndex = 0) => {
+      const latestStore = storeRef.current;
+      const current =
+        latestStore.brains.find((item) => item.id === latestStore.activeBrainId) ||
+        latestStore.brains[0] ||
+        ensureBrain();
       setError(null);
       setBusy(true);
-      setStatus("Uploading…");
+      setStatus(dropIndex > 0 ? `Uploading ${dropIndex + 1}…` : "Uploading…");
       try {
-        setStatus("Extracting…");
+        setStatus("Reading document…");
         const source = await factory();
         if (hasDuplicateOrigin(current, source.origin)) {
-          throw new Error("That source is already on this Brain. Connect or rename the existing node instead.");
+          throw new Error("That source is already on this study space.");
         }
-        setStatus("Indexing…");
+        setStatus("Processing…");
         const brainPos = current.positions.brain || { x: 420, y: 280 };
         const index = current.sources.length;
         const positioned: StudyBrain = {
@@ -144,7 +166,7 @@ export default function StudyBrainWorkspace({
           sources: [...current.sources, source],
           positions: {
             ...current.positions,
-            [source.id]: positionAroundBrain(brainPos, index),
+            [source.id]: positionAroundBrain(brainPos, index + dropIndex),
           },
           connections: [...current.connections, source.id],
           updatedAt: Date.now(),
@@ -152,20 +174,51 @@ export default function StudyBrainWorkspace({
         positioned.sources = positioned.sources.map((item) =>
           item.id === source.id ? { ...item, connected: true, status: "ready", statusDetail: "Connected" } : item,
         );
-        updateBrain(positioned);
+        const nextStore: StudyBrainStore = {
+          ...latestStore,
+          brains: latestStore.brains.some((item) => item.id === positioned.id)
+            ? latestStore.brains.map((item) => (item.id === positioned.id ? positioned : item))
+            : [positioned, ...latestStore.brains],
+          activeBrainId: positioned.id,
+        };
+        persist(nextStore);
         setSelectedSourceId(source.id);
         setInspectorTab("source");
         setStatus("Ready");
+        return source;
       } catch (cause) {
         setError(cause instanceof Error ? softenStudyError(cause.message) : "Could not add source");
         setStatus(null);
+        return null;
       } finally {
         setBusy(false);
         window.setTimeout(() => setStatus(null), 1200);
       }
     },
-    [ensureBrain, updateBrain],
+    [ensureBrain, persist],
   );
+
+  const addFiles = useCallback(
+    async (files: FileList | File[]) => {
+      const list = Array.from(files);
+      if (!list.length) return;
+      setAddOpen(false);
+      for (let i = 0; i < list.length; i += 1) {
+        const file = list[i];
+        await addSource(() => ingestTextFile(file), i);
+      }
+    },
+    [addSource],
+  );
+
+  useEffect(() => {
+    if (!addOpen) return;
+    const onPointer = (event: MouseEvent) => {
+      if (!addMenuRef.current?.contains(event.target as Node)) setAddOpen(false);
+    };
+    window.addEventListener("mousedown", onPointer);
+    return () => window.removeEventListener("mousedown", onPointer);
+  }, [addOpen]);
 
   const openCitation = useCallback(
     (citation: string) => {
@@ -361,48 +414,52 @@ export default function StudyBrainWorkspace({
   }
 
   return (
-    <div
-      className="flex h-full min-h-0 bg-[#fbfbfa] text-[#18212f]"
-      style={{ fontFamily: "Geist, ui-sans-serif, system-ui, sans-serif" }}
-    >
+    <div className="study-brain-shell flex h-full min-h-0 bg-[color:var(--clyra-canvas)] text-[color:var(--clyra-text)]">
       {/* Left rail */}
-      <aside className="flex w-[220px] shrink-0 flex-col border-r border-[#e7e7e4] bg-white">
-        <div className="flex items-center gap-2 border-b border-[#e7e7e4] px-3 py-3">
-          <span className="grid h-6 w-6 place-items-center rounded-full bg-[#eef4ff] text-[#0052fb]">
-            <GraduationCap className="h-3.5 w-3.5" />
+      <aside className="flex w-[232px] shrink-0 flex-col border-r border-[color:var(--clyra-border)] bg-[color:var(--clyra-surface)]">
+        <div className="flex items-center gap-2.5 border-b border-[color:var(--clyra-border)] px-3.5 py-3">
+          <span className="grid h-7 w-7 place-items-center rounded-[8px] bg-[color:var(--clyra-accent-soft)] text-[color:var(--clyra-accent)]">
+            <GraduationCap className="h-3.5 w-3.5" strokeWidth={1.75} />
           </span>
           <div className="min-w-0">
-            <p className="text-[12.5px] font-semibold tracking-[-0.01em]">Study Brain</p>
-            <p className="text-[10.5px] text-[#8b939e]">Sources → Brain → materials</p>
+            <p className="text-[13px] font-medium tracking-[-0.015em]">Clyra Study</p>
+            <p className="text-[11px] text-[color:var(--clyra-text-tertiary)]">Study spaces</p>
           </div>
         </div>
         <button
           type="button"
           onClick={() => {
-            const created = emptyBrain("New Study Brain");
+            const created = emptyBrain("New study space");
             persist({
               version: 4,
               brains: [created, ...store.brains],
               activeBrainId: created.id,
             });
           }}
-          className="mx-3 mt-3 flex h-8 items-center justify-center gap-1.5 rounded-[10px] border border-[#e7e7e4] text-[12px] font-medium text-[#18212f] hover:bg-[#f7f8fa]"
+          className="mx-3 mt-3 flex h-8 items-center justify-center gap-1.5 rounded-[8px] border border-[color:var(--clyra-border)] text-[12.5px] font-medium text-[color:var(--clyra-text)] transition-colors hover:bg-[color:var(--clyra-hover)]"
         >
-          <Plus className="h-3.5 w-3.5" /> New Brain
+          <Plus className="h-3.5 w-3.5" strokeWidth={1.75} /> New study space
         </button>
-        <div className="mt-2 min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-3">
+        <div className="mt-3 px-3">
+          <p className="px-1 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[color:var(--clyra-text-tertiary)]">
+            Recent
+          </p>
+        </div>
+        <div className="mt-1 min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-3">
           {store.brains.map((item) => (
             <button
               key={item.id}
               type="button"
               onClick={() => persist({ ...store, activeBrainId: item.id })}
               className={cn(
-                "flex w-full items-center justify-between rounded-[10px] px-2.5 py-2 text-left text-[12px]",
-                item.id === brain.id ? "bg-[#f1f3f7] font-medium text-[#18212f]" : "text-[#697386] hover:bg-[#f7f8fa]",
+                "flex w-full items-center justify-between rounded-[8px] px-2.5 py-[7px] text-left text-[12.5px] transition-colors",
+                item.id === brain.id
+                  ? "bg-[color:var(--clyra-selected)] font-medium text-[color:var(--clyra-text)]"
+                  : "text-[color:var(--clyra-text-secondary)] hover:bg-[color:var(--clyra-hover)]",
               )}
             >
               <span className="truncate">{item.title}</span>
-              <span className="text-[10px] text-[#8b939e]">{item.sources.length}</span>
+              <span className="text-[10.5px] text-[color:var(--clyra-text-tertiary)]">{item.sources.length}</span>
             </button>
           ))}
         </div>
@@ -410,72 +467,146 @@ export default function StudyBrainWorkspace({
 
       {/* Canvas column */}
       <section className="relative flex min-w-0 flex-1 flex-col">
-        <div className="pointer-events-none absolute left-1/2 top-3 z-20 flex -translate-x-1/2 items-center gap-1 rounded-[12px] border border-[#e7e7e4] bg-white/95 p-1 shadow-[0_8px_24px_rgba(24,33,47,0.05)] backdrop-blur">
-          <div className="pointer-events-auto flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => fileRef.current?.click()}
-              className="flex h-8 items-center gap-1.5 rounded-[8px] px-2.5 text-[11.5px] font-medium text-[#18212f] hover:bg-[#f1f3f7]"
-            >
-              <Upload className="h-3.5 w-3.5" /> File
-            </button>
-            <button
-              type="button"
-              onClick={() => setPasteOpen(true)}
-              className="flex h-8 items-center gap-1.5 rounded-[8px] px-2.5 text-[11.5px] font-medium text-[#18212f] hover:bg-[#f1f3f7]"
-            >
-              <FilePlus2 className="h-3.5 w-3.5" /> Paste
-            </button>
-            <form
-              className="flex items-center gap-1"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const value = urlDraft.trim();
-                if (!value) return;
-                void addSource(() =>
-                  ingestAnyUrl(value, desktop?.google?.execute
-                    ? (payload) => desktop.google.execute(payload as any)
-                    : undefined),
-                );
-                setUrlDraft("");
-              }}
-            >
-              <div className="flex h-8 items-center gap-1 rounded-[8px] border border-[#e7e7e4] bg-[#fbfbfa] px-2">
-                <Link2 className="h-3.5 w-3.5 text-[#8b939e]" />
-                <input
-                  value={urlDraft}
-                  onChange={(event) => setUrlDraft(event.target.value)}
-                  placeholder="YouTube, web, or Google link"
-                  className="w-[220px] bg-transparent text-[11.5px] outline-none placeholder:text-[#8b939e]"
-                />
-              </div>
+        <header className="flex h-11 shrink-0 items-center justify-between border-b border-[color:var(--clyra-border)] bg-[color:var(--clyra-surface)] px-4">
+          <div className="min-w-0">
+            {renaming ? (
+              <input
+                autoFocus
+                value={titleDraft}
+                onChange={(event) => setTitleDraft(event.target.value)}
+                onBlur={() => {
+                  const next = titleDraft.trim() || brain.title;
+                  updateBrain({ ...brain, title: next, updatedAt: Date.now() });
+                  setRenaming(false);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                  if (event.key === "Escape") setRenaming(false);
+                }}
+                className="h-8 w-[220px] rounded-[8px] border border-[color:var(--clyra-border)] bg-[color:var(--clyra-surface-muted)] px-2 text-[14px] font-medium outline-none focus:border-[color:var(--clyra-accent)]/35"
+              />
+            ) : (
               <button
-                type="submit"
-                disabled={busy || !urlDraft.trim()}
-                className="flex h-8 items-center rounded-[8px] bg-[#0052fb] px-2.5 text-[11.5px] font-medium text-white disabled:bg-[#e8eaef] disabled:text-[#b0b5bf]"
+                type="button"
+                onDoubleClick={() => {
+                  setTitleDraft(brain.title);
+                  setRenaming(true);
+                }}
+                className="truncate text-[14px] font-medium tracking-[-0.015em] text-[color:var(--clyra-text)]"
+                title="Double-click to rename"
               >
-                Add
+                {brain.title}
               </button>
-            </form>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="relative" ref={addMenuRef}>
+              <button
+                type="button"
+                onClick={() => setAddOpen((open) => !open)}
+                className="flex h-8 items-center gap-1.5 rounded-[8px] bg-[color:var(--clyra-accent)] px-2.5 text-[12px] font-medium text-white transition-opacity hover:opacity-95"
+              >
+                <Plus className="h-3.5 w-3.5" strokeWidth={1.75} /> Add resource
+              </button>
+              {addOpen ? (
+                <div className="absolute right-0 top-[calc(100%+6px)] z-30 w-[260px] overflow-hidden rounded-[10px] border border-[color:var(--clyra-border)] bg-white py-1.5 shadow-[var(--clyra-shadow-popover)]">
+                  <p className="px-3 pb-1 pt-1 text-[10.5px] font-medium uppercase tracking-[0.07em] text-[color:var(--clyra-text-tertiary)]">
+                    Upload
+                  </p>
+                  {(
+                    [
+                      { label: "PDF or document", icon: FileText, run: () => fileRef.current?.click() },
+                      { label: "Slides", icon: Presentation, run: () => fileRef.current?.click() },
+                      { label: "Image", icon: ImageIcon, run: () => fileRef.current?.click() },
+                      { label: "Audio", icon: Film, run: () => fileRef.current?.click() },
+                    ] as const
+                  ).map((item) => (
+                    <button
+                      key={item.label}
+                      type="button"
+                      onClick={() => {
+                        setAddOpen(false);
+                        item.run();
+                      }}
+                      className="flex w-full items-center gap-2.5 px-3 py-[7px] text-left text-[12.5px] text-[color:var(--clyra-text)] transition-colors hover:bg-[color:var(--clyra-hover)]"
+                    >
+                      <item.icon className="h-[15px] w-[15px] text-[color:var(--clyra-text-secondary)]" strokeWidth={1.75} />
+                      {item.label}
+                    </button>
+                  ))}
+                  <div className="my-1.5 border-t border-[color:var(--clyra-border)]" />
+                  <p className="px-3 pb-1 text-[10.5px] font-medium uppercase tracking-[0.07em] text-[color:var(--clyra-text-tertiary)]">
+                    Link
+                  </p>
+                  {(
+                    [
+                      { label: "YouTube", icon: Youtube },
+                      { label: "Website", icon: Globe },
+                    ] as const
+                  ).map((item) => (
+                    <button
+                      key={item.label}
+                      type="button"
+                      onClick={() => {
+                        setAddOpen(false);
+                        setLinkOpen(true);
+                      }}
+                      className="flex w-full items-center gap-2.5 px-3 py-[7px] text-left text-[12.5px] text-[color:var(--clyra-text)] transition-colors hover:bg-[color:var(--clyra-hover)]"
+                    >
+                      <item.icon className="h-[15px] w-[15px] text-[color:var(--clyra-text-secondary)]" strokeWidth={1.75} />
+                      {item.label}
+                    </button>
+                  ))}
+                  <div className="my-1.5 border-t border-[color:var(--clyra-border)]" />
+                  <p className="px-3 pb-1 text-[10.5px] font-medium uppercase tracking-[0.07em] text-[color:var(--clyra-text-tertiary)]">
+                    Create
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddOpen(false);
+                      setPasteOpen(true);
+                    }}
+                    className="flex w-full items-center gap-2.5 px-3 py-[7px] text-left text-[12.5px] text-[color:var(--clyra-text)] transition-colors hover:bg-[color:var(--clyra-hover)]"
+                  >
+                    <NotebookPen className="h-[15px] w-[15px] text-[color:var(--clyra-text-secondary)]" strokeWidth={1.75} />
+                    Paste text
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddOpen(false);
+                      void addSource(async () =>
+                        ingestPaste("Blank study note — replace with your own notes.", "Blank note"),
+                      );
+                    }}
+                    className="flex w-full items-center gap-2.5 px-3 py-[7px] text-left text-[12.5px] text-[color:var(--clyra-text)] transition-colors hover:bg-[color:var(--clyra-hover)]"
+                  >
+                    <FilePlus2 className="h-[15px] w-[15px] text-[color:var(--clyra-text-secondary)]" strokeWidth={1.75} />
+                    Blank note
+                  </button>
+                </div>
+              ) : null}
+            </div>
             <button
               type="button"
               onClick={() => setInspectorOpen((open) => !open)}
-              className="flex h-8 w-8 items-center justify-center rounded-[8px] text-[#697386] hover:bg-[#f1f3f7]"
+              className="flex h-8 w-8 items-center justify-center rounded-[8px] text-[color:var(--clyra-text-secondary)] transition-colors hover:bg-[color:var(--clyra-hover)]"
               aria-label="Toggle inspector"
             >
-              {inspectorOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
+              {inspectorOpen ? <PanelRightClose className="h-4 w-4" strokeWidth={1.75} /> : <PanelRightOpen className="h-4 w-4" strokeWidth={1.75} />}
             </button>
           </div>
-        </div>
+        </header>
 
         {(status || error) && (
-          <div className="pointer-events-none absolute left-4 top-14 z-20">
+          <div className="pointer-events-none absolute left-4 top-[52px] z-20">
             <div
               className={cn(
-                "rounded-[10px] border px-2.5 py-1.5 text-[11px] font-medium",
+                "rounded-[8px] border px-2.5 py-1.5 text-[11.5px] font-medium shadow-[0_6px_16px_rgba(15,23,42,0.06)]",
                 error
-                  ? "border-rose-200 bg-white text-rose-600"
-                  : "border-[#e7e7e4] bg-white text-[#496a95]",
+                  ? "border-rose-200/80 bg-white text-rose-600"
+                  : "border-[color:var(--clyra-border)] bg-white text-[color:var(--clyra-text-secondary)]",
               )}
             >
               {error || status}
@@ -483,7 +614,39 @@ export default function StudyBrainWorkspace({
           </div>
         )}
 
-        <div className="min-h-0 flex-1">
+        <div
+          className="relative min-h-0 flex-1"
+          onDragEnter={(event) => {
+            event.preventDefault();
+            dragDepth.current += 1;
+            setDragging(true);
+          }}
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+          }}
+          onDragLeave={(event) => {
+            event.preventDefault();
+            dragDepth.current = Math.max(0, dragDepth.current - 1);
+            if (dragDepth.current === 0) setDragging(false);
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            dragDepth.current = 0;
+            setDragging(false);
+            const files = event.dataTransfer.files;
+            if (files?.length) void addFiles(files);
+            const uri = event.dataTransfer.getData("text/uri-list") || event.dataTransfer.getData("text/plain");
+            if (uri && /^https?:\/\//i.test(uri.trim())) {
+              void addSource(() =>
+                ingestAnyUrl(
+                  uri.trim(),
+                  desktop?.google?.execute ? (payload) => desktop.google.execute(payload as any) : undefined,
+                ),
+              );
+            }
+          }}
+        >
           <BrainCanvas
             brain={brain}
             processing={busy}
@@ -491,12 +654,21 @@ export default function StudyBrainWorkspace({
             onAction={onBrainAction}
             onSelectSource={setSelectedSourceId}
           />
+          {dragging ? (
+            <div className="pointer-events-none absolute inset-3 z-20 grid place-items-center rounded-[12px] border border-dashed border-[color:var(--clyra-accent)]/40 bg-[color:var(--clyra-accent-soft)]/70 backdrop-blur-[1px]">
+              <div className="text-center">
+                <p className="text-[14px] font-medium text-[color:var(--clyra-text)]">Drop resources anywhere</p>
+                <p className="mt-1 text-[12px] text-[color:var(--clyra-text-secondary)]">
+                  PDF · Slides · Documents · Images · Audio · Links
+                </p>
+              </div>
+            </div>
+          ) : null}
         </div>
 
-        {/* Bottom ask composer — chat parity */}
-        <div className="border-t border-[#e7e7e4] bg-[#fbfbfa] px-4 py-3">
+        <div className="border-t border-[color:var(--clyra-border)] bg-[color:var(--clyra-canvas)] px-4 py-3">
           <form
-            className="mx-auto flex max-w-[760px] items-end gap-2 rounded-[18px] border border-[#dfe7f1] bg-white px-3 py-2"
+            className="mx-auto flex max-w-[760px] items-end gap-2 rounded-[14px] border border-[color:var(--clyra-border)] bg-white px-3 py-2"
             onSubmit={(event) => {
               event.preventDefault();
               const value = composer.trim();
@@ -508,7 +680,7 @@ export default function StudyBrainWorkspace({
             <textarea
               value={composer}
               rows={2}
-              placeholder="Ask the Brain about connected sources…"
+              placeholder="Ask about connected resources…"
               onChange={(event) => setComposer(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
@@ -516,12 +688,13 @@ export default function StudyBrainWorkspace({
                   event.currentTarget.form?.requestSubmit();
                 }
               }}
-              className="min-h-[44px] flex-1 resize-none bg-transparent text-[14px] leading-[1.45] outline-none placeholder:text-[#8b939e]"
+              className="min-h-[40px] flex-1 resize-none bg-transparent text-[13.5px] leading-[1.45] outline-none placeholder:text-[color:var(--clyra-text-tertiary)]"
             />
             <button
               type="submit"
               disabled={busy || !composer.trim()}
-              className="mb-0.5 flex h-[30px] w-[30px] items-center justify-center rounded-full bg-[#0052fb] text-white disabled:bg-[#e8eaef] disabled:text-[#b0b5bf]"
+              className="mb-0.5 flex h-7 w-7 items-center justify-center rounded-[8px] bg-[color:var(--clyra-accent)] text-white disabled:bg-[color:var(--clyra-surface-muted)] disabled:text-[color:var(--clyra-text-tertiary)]"
+              aria-label="Ask"
             >
               {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "↑"}
             </button>
@@ -531,16 +704,18 @@ export default function StudyBrainWorkspace({
 
       {/* Right inspector */}
       {inspectorOpen ? (
-        <aside className="flex w-[320px] shrink-0 flex-col border-l border-[#e7e7e4] bg-white">
-          <div className="flex items-center gap-1 border-b border-[#e7e7e4] px-2 py-2">
+        <aside className="flex w-[320px] shrink-0 flex-col border-l border-[color:var(--clyra-border)] bg-[color:var(--clyra-surface)]">
+          <div className="flex items-center gap-1 border-b border-[color:var(--clyra-border)] px-2 py-2">
             {(["chat", "source", "materials"] as const).map((tab) => (
               <button
                 key={tab}
                 type="button"
                 onClick={() => setInspectorTab(tab)}
                 className={cn(
-                  "h-8 rounded-[8px] px-2.5 text-[11.5px] font-medium capitalize",
-                  inspectorTab === tab ? "bg-[#f1f3f7] text-[#18212f]" : "text-[#697386] hover:bg-[#f7f8fa]",
+                  "h-8 rounded-[8px] px-2.5 text-[12px] font-medium capitalize transition-colors",
+                  inspectorTab === tab
+                    ? "bg-[color:var(--clyra-selected)] text-[color:var(--clyra-text)]"
+                    : "text-[color:var(--clyra-text-secondary)] hover:bg-[color:var(--clyra-hover)]",
                 )}
               >
                 {tab}
@@ -551,18 +726,18 @@ export default function StudyBrainWorkspace({
             {inspectorTab === "chat" ? (
               <div className="space-y-3">
                 {!brain.messages.length ? (
-                  <p className="text-[12.5px] leading-5 text-[#8b939e]">
-                    Connect sources, then ask grounded questions. Citations appear as source titles.
+                  <p className="text-[12.5px] leading-5 text-[color:var(--clyra-text-tertiary)]">
+                    Connect resources, then ask grounded questions. Citations link back to sources.
                   </p>
                 ) : null}
                 {brain.messages.map((message) => (
                   <div key={message.id} className={cn("flex", message.role === "user" && "justify-end")}>
                     <div
                       className={cn(
-                        "max-w-[95%] text-[13.5px] leading-[1.55] tracking-[-0.01em]",
+                        "max-w-[95%] text-[13px] leading-[1.55] tracking-[-0.01em]",
                         message.role === "user"
-                          ? "rounded-[14px] bg-[#aec7f1] px-3 py-2 text-[#18212f]"
-                          : "text-[#18212f]",
+                          ? "rounded-[12px] bg-[color:var(--clyra-selected)] px-3 py-2 text-[color:var(--clyra-text)]"
+                          : "text-[color:var(--clyra-text)]",
                       )}
                     >
                       {message.role === "assistant" ? (
@@ -577,7 +752,7 @@ export default function StudyBrainWorkspace({
                               key={citation}
                               type="button"
                               onClick={() => openCitation(citation)}
-                              className="rounded-full border border-[#e7e7e4] bg-[#fbfbfa] px-2 py-0.5 text-[10px] text-[#697386] transition-colors hover:border-[#0052fb]/35 hover:text-[#0052fb]"
+                              className="rounded-[6px] border border-[color:var(--clyra-border)] bg-[color:var(--clyra-surface-muted)] px-2 py-0.5 text-[10.5px] text-[color:var(--clyra-text-secondary)] transition-colors hover:border-[color:var(--clyra-accent)]/30 hover:text-[color:var(--clyra-accent)]"
                               title="Open source"
                             >
                               {citation}
@@ -591,7 +766,7 @@ export default function StudyBrainWorkspace({
                 {busy ? (
                   <div className="flex items-center gap-2 py-1">
                     <ShiningBrainIcon className="h-4 w-4" />
-                    <ShiningText text="Thinking" play className="text-[13px] font-medium" />
+                    <ShiningText text="Thinking" play className="text-[12.5px] font-medium" />
                     <ThinkingDots />
                   </div>
                 ) : null}
@@ -602,13 +777,13 @@ export default function StudyBrainWorkspace({
               selectedSource ? (
                 <div className="space-y-3">
                   <div>
-                    <p className="text-[13px] font-semibold tracking-[-0.01em]">{selectedSource.title}</p>
-                    <p className="mt-1 text-[11px] text-[#8b939e]">{selectedSource.origin}</p>
+                    <p className="text-[13px] font-medium tracking-[-0.01em]">{selectedSource.title}</p>
+                    <p className="mt-1 text-[11px] text-[color:var(--clyra-text-tertiary)]">{selectedSource.origin}</p>
                   </div>
-                  <p className="text-[11px] uppercase tracking-[0.08em] text-[#8b939e]">
+                  <p className="text-[11px] uppercase tracking-[0.08em] text-[color:var(--clyra-text-tertiary)]">
                     {selectedSource.statusDetail || selectedSource.status}
                   </p>
-                  <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap rounded-[12px] border border-[#e7e7e4] bg-[#fbfbfa] p-3 text-[11.5px] leading-5 text-[#697386]">
+                  <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap rounded-[10px] border border-[color:var(--clyra-border)] bg-[color:var(--clyra-surface-muted)] p-3 text-[11.5px] leading-5 text-[color:var(--clyra-text-secondary)]">
                     {selectedSource.body.slice(0, 6000)}
                   </pre>
                   <button
@@ -622,13 +797,13 @@ export default function StudyBrainWorkspace({
                       });
                       setSelectedSourceId(null);
                     }}
-                    className="flex h-8 items-center gap-1.5 rounded-[8px] border border-[#e7e7e4] px-2.5 text-[11.5px] text-rose-600 hover:bg-rose-50"
+                    className="flex h-8 items-center gap-1.5 rounded-[8px] border border-[color:var(--clyra-border)] px-2.5 text-[11.5px] text-rose-600 transition-colors hover:bg-rose-50"
                   >
                     <Trash2 className="h-3.5 w-3.5" /> Remove from canvas
                   </button>
                 </div>
               ) : (
-                <p className="text-[12.5px] text-[#8b939e]">Select a source node to inspect its text.</p>
+                <p className="text-[12.5px] text-[color:var(--clyra-text-tertiary)]">Select a resource node to inspect.</p>
               )
             ) : null}
 
@@ -640,19 +815,19 @@ export default function StudyBrainWorkspace({
                       key={action}
                       type="button"
                       onClick={() => void generateMaterial(action)}
-                      className="h-8 rounded-[8px] border border-[#e7e7e4] px-2.5 text-[11.5px] font-medium capitalize hover:bg-[#f7f8fa]"
+                      className="h-8 rounded-[8px] border border-[color:var(--clyra-border)] px-2.5 text-[11.5px] font-medium capitalize transition-colors hover:bg-[color:var(--clyra-hover)]"
                     >
-                      {action}
+                      {action === "guide" ? "notes" : action}
                     </button>
                   ))}
                 </div>
                 {brain.materials.quiz ? (
-                  <div className="rounded-[12px] border border-[#e7e7e4] p-3">
-                    <p className="text-[12px] font-semibold">{brain.materials.quiz.topic}</p>
-                    <p className="mt-1 text-[11px] text-[#8b939e]">
+                  <div className="space-y-2 border-t border-[color:var(--clyra-border)] pt-3">
+                    <p className="text-[12.5px] font-medium">{brain.materials.quiz.topic}</p>
+                    <p className="text-[11px] text-[color:var(--clyra-text-tertiary)]">
                       {brain.materials.quiz.questions.length} questions
                     </p>
-                    <ol className="mt-2 list-decimal space-y-2 pl-4 text-[12px] text-[#697386]">
+                    <ol className="list-decimal space-y-2 pl-4 text-[12px] text-[color:var(--clyra-text-secondary)]">
                       {brain.materials.quiz.questions.slice(0, 4).map((q) => (
                         <li key={q.id}>{q.question}</li>
                       ))}
@@ -660,16 +835,16 @@ export default function StudyBrainWorkspace({
                   </div>
                 ) : null}
                 {brain.materials.flashcards ? (
-                  <div className="rounded-[12px] border border-[#e7e7e4] p-3">
-                    <p className="text-[12px] font-semibold">{brain.materials.flashcards.topic}</p>
-                    <p className="mt-1 text-[11px] text-[#8b939e]">
+                  <div className="space-y-2 border-t border-[color:var(--clyra-border)] pt-3">
+                    <p className="text-[12.5px] font-medium">{brain.materials.flashcards.topic}</p>
+                    <p className="text-[11px] text-[color:var(--clyra-text-tertiary)]">
                       {brain.materials.flashcards.cards.length} cards · rate confidence to schedule review
                     </p>
-                    <div className="mt-2 space-y-2">
+                    <div className="space-y-2">
                       {brain.materials.flashcards.cards.slice(0, 5).map((card) => (
-                        <div key={card.id} className="rounded-[8px] bg-[#fbfbfa] px-2.5 py-2 text-[12px]">
-                          <p className="font-medium text-[#18212f]">{card.front}</p>
-                          <p className="mt-1 text-[#697386]">{card.back}</p>
+                        <div key={card.id} className="rounded-[8px] bg-[color:var(--clyra-surface-muted)] px-2.5 py-2 text-[12px]">
+                          <p className="font-medium text-[color:var(--clyra-text)]">{card.front}</p>
+                          <p className="mt-1 text-[color:var(--clyra-text-secondary)]">{card.back}</p>
                           <div className="mt-2 flex items-center gap-1">
                             {[1, 2, 3, 4, 5].map((level) => (
                               <button
@@ -706,8 +881,8 @@ export default function StudyBrainWorkspace({
                                 className={cn(
                                   "grid h-6 w-6 place-items-center rounded-[6px] border text-[10px] font-medium",
                                   (card.confidence || 0) === level
-                                    ? "border-[#0052fb]/40 bg-[#eef4ff] text-[#0052fb]"
-                                    : "border-[#e7e7e4] text-[#8b939e] hover:bg-white",
+                                    ? "border-[color:var(--clyra-accent)]/35 bg-[color:var(--clyra-accent-soft)] text-[color:var(--clyra-accent)]"
+                                    : "border-[color:var(--clyra-border)] text-[color:var(--clyra-text-tertiary)] hover:bg-white",
                                 )}
                               >
                                 {level}
@@ -720,17 +895,17 @@ export default function StudyBrainWorkspace({
                   </div>
                 ) : null}
                 {brain.materials.guide ? (
-                  <div className="rounded-[12px] border border-[#e7e7e4] p-3">
+                  <div className="space-y-2 border-t border-[color:var(--clyra-border)] pt-3">
                     <div className="flex items-center gap-1.5">
-                      <BookOpen className="h-3.5 w-3.5 text-[#0052fb]" />
-                      <p className="text-[12px] font-semibold">{brain.materials.guide.title}</p>
+                      <BookOpen className="h-3.5 w-3.5 text-[color:var(--clyra-accent)]" />
+                      <p className="text-[12.5px] font-medium">{brain.materials.guide.title}</p>
                     </div>
-                    <p className="mt-2 text-[12px] leading-5 text-[#697386]">{brain.materials.guide.summary}</p>
+                    <p className="text-[12px] leading-5 text-[color:var(--clyra-text-secondary)]">{brain.materials.guide.summary}</p>
                   </div>
                 ) : null}
                 {!brain.materials.quiz && !brain.materials.flashcards && !brain.materials.guide ? (
-                  <p className="text-[12.5px] text-[#8b939e]">
-                    Drag out from the Brain node or use the buttons above to generate materials.
+                  <p className="text-[12.5px] text-[color:var(--clyra-text-tertiary)]">
+                    Select the centre node or use the buttons above to generate notes, flashcards, or a quiz from connected resources.
                   </p>
                 ) : null}
               </div>
@@ -742,22 +917,70 @@ export default function StudyBrainWorkspace({
       <input
         ref={fileRef}
         type="file"
-        accept=".txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf"
+        multiple
+        accept=".txt,.md,.markdown,.pdf,.ppt,.pptx,.doc,.docx,text/plain,text/markdown,application/pdf,image/*,audio/*"
         className="hidden"
         onChange={(event) => {
-          const file = event.target.files?.[0];
+          const files = event.target.files;
           event.target.value = "";
-          if (!file) return;
-          void addSource(() => ingestTextFile(file));
+          if (!files?.length) return;
+          void addFiles(files);
         }}
       />
 
-      {pasteOpen ? (
-        <div className="fixed inset-0 z-[80] grid place-items-center bg-[#18212f]/20 p-4 backdrop-blur-[2px]">
-          <div className="w-full max-w-lg rounded-[16px] border border-[#e7e7e4] bg-white p-4 shadow-[0_20px_50px_rgba(24,33,47,0.12)]">
+      {linkOpen ? (
+        <div className="fixed inset-0 z-[80] grid place-items-center bg-[color:var(--clyra-text)]/15 p-4 backdrop-blur-[2px]">
+          <div className="w-full max-w-md rounded-[14px] border border-[color:var(--clyra-border)] bg-white p-4 shadow-[var(--clyra-shadow-popover)]">
             <div className="mb-3 flex items-center justify-between">
-              <p className="text-[13px] font-semibold">Paste notes</p>
-              <button type="button" onClick={() => setPasteOpen(false)} className="grid h-7 w-7 place-items-center rounded-full hover:bg-[#f1f3f7]">
+              <p className="text-[13px] font-medium">Add link</p>
+              <button type="button" onClick={() => setLinkOpen(false)} className="grid h-7 w-7 place-items-center rounded-[8px] hover:bg-[color:var(--clyra-hover)]">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <form
+              className="flex items-center gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const value = urlDraft.trim();
+                if (!value) return;
+                setLinkOpen(false);
+                void addSource(() =>
+                  ingestAnyUrl(
+                    value,
+                    desktop?.google?.execute ? (payload) => desktop.google.execute(payload as any) : undefined,
+                  ),
+                );
+                setUrlDraft("");
+              }}
+            >
+              <div className="flex h-9 flex-1 items-center gap-1.5 rounded-[8px] border border-[color:var(--clyra-border)] bg-[color:var(--clyra-surface-muted)] px-2.5">
+                <Link2 className="h-3.5 w-3.5 text-[color:var(--clyra-text-tertiary)]" strokeWidth={1.75} />
+                <input
+                  autoFocus
+                  value={urlDraft}
+                  onChange={(event) => setUrlDraft(event.target.value)}
+                  placeholder="YouTube, website, or Drive link"
+                  className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-[color:var(--clyra-text-tertiary)]"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={busy || !urlDraft.trim()}
+                className="flex h-9 items-center rounded-[8px] bg-[color:var(--clyra-accent)] px-3 text-[12.5px] font-medium text-white disabled:bg-[color:var(--clyra-surface-muted)] disabled:text-[color:var(--clyra-text-tertiary)]"
+              >
+                Add
+              </button>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {pasteOpen ? (
+        <div className="fixed inset-0 z-[80] grid place-items-center bg-[color:var(--clyra-text)]/15 p-4 backdrop-blur-[2px]">
+          <div className="w-full max-w-lg rounded-[14px] border border-[color:var(--clyra-border)] bg-white p-4 shadow-[var(--clyra-shadow-popover)]">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-[13px] font-medium">Paste notes</p>
+              <button type="button" onClick={() => setPasteOpen(false)} className="grid h-7 w-7 place-items-center rounded-[8px] hover:bg-[color:var(--clyra-hover)]">
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -766,10 +989,10 @@ export default function StudyBrainWorkspace({
               onChange={(event) => setPasteText(event.target.value)}
               rows={8}
               placeholder="Paste lecture notes or extracted PDF text…"
-              className="w-full resize-none rounded-[12px] border border-[#e7e7e4] bg-[#fbfbfa] px-3 py-2 text-[13px] outline-none"
+              className="w-full resize-none rounded-[10px] border border-[color:var(--clyra-border)] bg-[color:var(--clyra-surface-muted)] px-3 py-2 text-[13px] outline-none"
             />
             <div className="mt-3 flex justify-end gap-2">
-              <button type="button" onClick={() => setPasteOpen(false)} className="h-8 rounded-[8px] px-3 text-[12px] text-[#697386]">
+              <button type="button" onClick={() => setPasteOpen(false)} className="h-8 rounded-[8px] px-3 text-[12px] text-[color:var(--clyra-text-secondary)]">
                 Cancel
               </button>
               <button
@@ -784,7 +1007,7 @@ export default function StudyBrainWorkspace({
                     setError(cause instanceof Error ? cause.message : "Paste failed");
                   }
                 }}
-                className="h-8 rounded-[8px] bg-[#0052fb] px-3 text-[12px] font-medium text-white"
+                className="h-8 rounded-[8px] bg-[color:var(--clyra-accent)] px-3 text-[12px] font-medium text-white"
               >
                 Add to canvas
               </button>

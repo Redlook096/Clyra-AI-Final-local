@@ -42,7 +42,7 @@ export function Composer({
 
   return (
     <div className="px-5 pb-3 pt-1">
-      <div className="mx-auto max-w-[680px] rounded-[16px] border border-[color:var(--border-subtle)] bg-[color:var(--composer-surface)] transition-[border-color,box-shadow] duration-150 focus-within:border-[color:var(--border-medium)] focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+      <div className="mx-auto max-w-[760px] rounded-[14px] border border-[color:var(--border-subtle)] bg-[color:var(--composer-surface)] transition-[border-color] duration-150 focus-within:border-[color:var(--border-medium)]">
         {contexts.length > 0 ? (
           <div className="flex flex-wrap gap-1.5 px-3.5 pt-2.5">
             {contexts.map((context) => (
@@ -100,9 +100,9 @@ export function Composer({
               type="button"
               onClick={onStop}
               aria-label="Stop"
-              className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-[color:var(--text-primary)] text-white transition-transform active:scale-[0.96]"
+              className="flex h-[28px] w-[28px] items-center justify-center rounded-[8px] bg-[color:var(--text-primary)] text-white transition-transform active:scale-[0.96]"
             >
-              <Square className="h-[11px] w-[11px]" fill="currentColor" />
+              <Square className="h-[10px] w-[10px]" fill="currentColor" />
             </button>
           ) : (
             <button
@@ -111,7 +111,7 @@ export function Composer({
               disabled={!value.trim()}
               aria-label="Send"
               className={cn(
-                "flex h-[30px] w-[30px] items-center justify-center rounded-full transition-all active:scale-[0.96]",
+                "flex h-[28px] w-[28px] items-center justify-center rounded-[8px] transition-all active:scale-[0.96]",
                 value.trim()
                   ? "bg-[color:var(--accent-blue)] text-white"
                   : "bg-[color:var(--surface-muted)] text-[color:var(--text-disabled)]",

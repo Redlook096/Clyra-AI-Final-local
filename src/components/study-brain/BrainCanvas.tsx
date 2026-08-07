@@ -32,6 +32,7 @@ function brainToFlow(brain: StudyBrain, processing: boolean, onAction: (action: 
       type: "brain",
       position: brain.positions.brain || { x: 420, y: 280 },
       data: {
+        title: brain.title,
         processing,
         connectedCount: brain.connections.length,
         onAction,
@@ -53,7 +54,7 @@ function brainToFlow(brain: StudyBrain, processing: boolean, onAction: (action: 
     source: sourceId,
     target: "brain",
     animated: processing,
-    style: { stroke: "#c5ccd6", strokeWidth: 1.25 },
+    style: { stroke: "rgba(0,0,0,0.12)", strokeWidth: 1.15 },
   }));
   return { nodes, edges };
 }
@@ -118,7 +119,7 @@ function CanvasInner({
           {
             ...connection,
             animated: false,
-            style: { stroke: "#c5ccd6", strokeWidth: 1.25 },
+            style: { stroke: "rgba(0,0,0,0.12)", strokeWidth: 1.15 },
           },
           eds,
         );
@@ -153,17 +154,17 @@ function CanvasInner({
       snapGrid={[16, 16]}
       panOnScroll
       selectionOnDrag
-      className="study-brain-flow bg-[#fbfbfa]"
+      className="study-brain-flow bg-[color:var(--clyra-canvas)]"
       proOptions={{ hideAttribution: true }}
     >
-      <Background gap={24} size={1} color="#ecece8" />
-      <Controls showInteractive={false} className="!shadow-none !border-[#e7e7e4] !overflow-hidden !rounded-[10px]" />
+      <Background gap={22} size={1} color="rgba(0,0,0,0.045)" />
+      <Controls showInteractive={false} className="!overflow-hidden !rounded-[10px] !border-[color:var(--clyra-border)] !shadow-none" />
       <MiniMap
         pannable
         zoomable
-        className="!border-[#e7e7e4] !bg-white !shadow-none"
-        maskColor="rgba(24,33,47,0.06)"
-        nodeColor={() => "#d7dee8"}
+        className="!border-[color:var(--clyra-border)] !bg-white !shadow-none"
+        maskColor="rgba(28,28,28,0.05)"
+        nodeColor={() => "#e8e8e6"}
       />
     </ReactFlow>
   );

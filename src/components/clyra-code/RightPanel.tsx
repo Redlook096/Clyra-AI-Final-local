@@ -284,23 +284,15 @@ function BrowserView({
             </div>
           </div>
         ) : (
-          <div className="relative flex h-full flex-col items-center justify-center overflow-hidden bg-[#0c0d10]">
-            <div
-              aria-hidden
-              className="pointer-events-none absolute inset-0 opacity-[0.04]"
-              style={{
-                backgroundImage:
-                  "radial-gradient(ellipse at 70% 20%, #fff 0%, transparent 55%), linear-gradient(180deg, transparent, #000 90%)",
-              }}
-            />
+          <div className="relative flex h-full flex-col items-center justify-center overflow-hidden bg-[color:var(--clyra-canvas,#f7f7f6)]">
             <div className="relative z-[1] flex max-w-[340px] flex-col items-center px-6 text-center">
-              <div className="mb-4 grid h-11 w-11 place-items-center rounded-[10px] border border-white/10 bg-white/[0.04] text-[18px] font-semibold tracking-tight text-white/90">
+              <div className="mb-3 grid h-10 w-10 place-items-center rounded-[10px] border border-[color:var(--clyra-border,rgba(0,0,0,0.07))] bg-white text-[15px] font-medium tracking-tight text-[color:var(--clyra-text,#1c1c1c)]">
                 C
               </div>
-              <h3 className="text-[18px] font-semibold tracking-[-0.02em] text-white">
+              <h3 className="text-[16px] font-medium tracking-[-0.02em] text-[color:var(--clyra-text,#1c1c1c)]">
                 What should we build?
               </h3>
-              <p className="mt-2 text-[12.5px] leading-relaxed text-white/45">
+              <p className="mt-1.5 text-[12.5px] leading-relaxed text-[color:var(--clyra-text-secondary,#666)]">
                 Clyra Code can read, edit, run and preview your project in this workspace.
               </p>
             </div>

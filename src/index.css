@@ -18,6 +18,26 @@
   /* Set by App resize / visualViewport (defaults safe for SSR) */
   --clyra-ui-scale: 1;
   --clyra-content-cap: 768px;
+
+  /* Shared Clyra light design tokens */
+  --clyra-canvas: #f7f7f6;
+  --clyra-surface: #ffffff;
+  --clyra-surface-muted: #f4f4f3;
+  --clyra-hover: rgba(0, 0, 0, 0.035);
+  --clyra-selected: rgba(0, 0, 0, 0.055);
+  --clyra-border: rgba(0, 0, 0, 0.07);
+  --clyra-border-strong: rgba(0, 0, 0, 0.1);
+  --clyra-text: #1c1c1c;
+  --clyra-text-secondary: #666666;
+  --clyra-text-tertiary: #929292;
+  --clyra-accent: #0052fb;
+  --clyra-accent-soft: #eef3ff;
+  --clyra-radius-sm: 6px;
+  --clyra-radius-md: 8px;
+  --clyra-radius-lg: 12px;
+  --clyra-radius-xl: 14px;
+  --clyra-shadow-popover: 0 8px 24px rgba(15, 23, 42, 0.08);
+  --clyra-transition-fast: 140ms ease;
 }
 
 .clyra-app-shell {
@@ -4521,29 +4541,29 @@ body,
    Clyra Code — agent-first coding workspace theme
    ============================================================ */
 .clyra-code-root {
-  --app-background: #f4f5f8;
-  --sidebar-background: #eef0f5;
-  --main-background: #fbfbfc;
-  --preview-background: #ffffff;
-  --composer-surface: #ffffff;
-  --surface-muted: #eef0f4;
-  --surface-hover: #e8eaef;
-  --surface-selected: #e2e6ef;
-  --border-subtle: rgba(24, 28, 40, 0.07);
-  --border-medium: rgba(24, 28, 40, 0.12);
-  --text-primary: #1a1d26;
-  --text-secondary: #5c6370;
-  --text-tertiary: #8b919c;
+  --app-background: var(--clyra-canvas);
+  --sidebar-background: var(--clyra-canvas);
+  --main-background: var(--clyra-surface);
+  --preview-background: var(--clyra-surface);
+  --composer-surface: var(--clyra-surface);
+  --surface-muted: var(--clyra-surface-muted);
+  --surface-hover: var(--clyra-hover);
+  --surface-selected: var(--clyra-selected);
+  --border-subtle: var(--clyra-border);
+  --border-medium: var(--clyra-border-strong);
+  --text-primary: var(--clyra-text);
+  --text-secondary: var(--clyra-text-secondary);
+  --text-tertiary: var(--clyra-text-tertiary);
   --text-disabled: #b0b5bf;
-  --accent-blue: #2b6ef2;
+  --accent-blue: var(--clyra-accent);
   --addition-green: #239653;
   --deletion-red: #d94b4b;
   --warning-amber: #b87918;
   --radius-row: 7px;
-  --radius-control: 8px;
-  --radius-tab: 8px;
-  --radius-input: 14px;
-  --radius-panel: 14px;
+  --radius-control: var(--clyra-radius-md);
+  --radius-tab: var(--clyra-radius-md);
+  --radius-input: var(--clyra-radius-xl);
+  --radius-panel: var(--clyra-radius-lg);
   font-family: "Geist", "Geist Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-feature-settings: "ss01" on, "cv11" on;
   letter-spacing: -0.011em;
@@ -4560,7 +4580,7 @@ body,
 /* Masked glyph shimmer for active action targets. Light passes across the
    text itself (background-clip: text), never a surrounding rectangle. */
 .cc-shimmer {
-  --cc-shimmer-base: #404040;
+  --cc-shimmer-base: #666666;
   background-image: linear-gradient(
     100deg,
     var(--cc-shimmer-base) 0%,
@@ -5408,22 +5428,22 @@ body,
 }
 
 :root {
-  --atlas-window-bg: #f6f7f7;
-  --atlas-titlebar-bg: #f2f4f4;
-  --atlas-toolbar-bg: #fafbfb;
+  --atlas-window-bg: var(--clyra-canvas);
+  --atlas-titlebar-bg: var(--clyra-canvas);
+  --atlas-toolbar-bg: var(--clyra-surface);
   --atlas-tab-active: #ffffff;
-  --atlas-sidebar-bg: #fbfbfa;
-  --atlas-user-bubble: #f1f1ef;
-  --atlas-text-primary: #202124;
-  --atlas-text-secondary: #676b70;
-  --atlas-text-tertiary: #96999d;
-  --atlas-divider: rgba(20, 24, 28, 0.10);
-  --atlas-clyra-blue: #6799df;
+  --atlas-sidebar-bg: var(--clyra-surface);
+  --atlas-user-bubble: var(--clyra-surface-muted);
+  --atlas-text-primary: var(--clyra-text);
+  --atlas-text-secondary: var(--clyra-text-secondary);
+  --atlas-text-tertiary: var(--clyra-text-tertiary);
+  --atlas-divider: var(--clyra-border);
+  --atlas-clyra-blue: var(--clyra-accent);
   --atlas-agent-black: #171817;
   --atlas-stop-red: #dd5e58;
   --atlas-titlebar-height: 42px;
   --atlas-toolbar-height: 46px;
-  --atlas-sidebar-width: clamp(380px, 32vw, 480px);
+  --atlas-sidebar-width: clamp(340px, 30vw, 390px);
 }
 
 /* Finished browse/search source chips — sit to the right of message actions */
@@ -6311,6 +6331,11 @@ body,
   background: #E3E8F0;
 }
 
+.study-brain-shell {
+  color: var(--clyra-text);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
 /* Study Brain canvas */
 .study-brain-flow {
   width: 100%;
@@ -6318,13 +6343,13 @@ body,
 }
 
 .study-brain-flow .react-flow__controls-button {
-  border-bottom-color: #e7e7e4 !important;
+  border-bottom-color: var(--clyra-border) !important;
   background: #fff !important;
-  fill: #697386 !important;
+  fill: var(--clyra-text-secondary) !important;
 }
 
 .study-brain-node {
-  box-shadow: 0 1px 2px rgba(24, 33, 47, 0.04);
+  box-shadow: 0 1px 2px rgba(28, 28, 28, 0.04);
 }
 
 .study-brain-node--pulse {
@@ -6337,7 +6362,7 @@ body,
     box-shadow: 0 0 0 0 rgba(0, 82, 251, 0);
   }
   50% {
-    box-shadow: 0 0 0 8px rgba(0, 82, 251, 0.06);
+    box-shadow: 0 0 0 6px rgba(0, 82, 251, 0.07);
   }
 }
 

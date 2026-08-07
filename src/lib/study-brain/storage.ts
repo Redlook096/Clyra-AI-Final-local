@@ -5,7 +5,7 @@ const LEGACY_V3 = "clyra.study-pal.v3";
 
 export const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
-export function emptyBrain(title = "Untitled Brain"): StudyBrain {
+export function emptyBrain(title = "New study space"): StudyBrain {
   const now = Date.now();
   return {
     id: uid(),

@@ -58,7 +58,13 @@ export function Sidebar({
     >
       <div className={cn("pt-4", collapsed ? "px-2" : "px-4")}>
         <div className={cn("flex items-center", collapsed ? "justify-center" : "justify-between")}>
-          <ClyraMark compact={collapsed} />
+          {collapsed ? (
+            <ClyraMark compact />
+          ) : (
+            <div className="min-w-0">
+              <p className="text-[13px] font-medium tracking-[-0.015em] text-[color:var(--text-primary)]">Clyra Code</p>
+            </div>
+          )}
           {onToggleCollapsed ? (
             <button
               type="button"
@@ -77,11 +83,10 @@ export function Sidebar({
           <button
             type="button"
             onClick={onNewProject}
-            className="mt-4 flex h-[36px] w-full items-center gap-2 rounded-[9px] border border-[color:var(--border-medium)] bg-white/85 px-3 text-[13px] font-medium text-[color:var(--text-primary)] shadow-none transition-colors duration-100 hover:bg-white active:scale-[0.99]"
+            className="mt-4 flex h-8 w-full items-center gap-2 rounded-[8px] px-2.5 text-[12.5px] font-medium text-[color:var(--text-primary)] transition-colors duration-100 hover:bg-[color:var(--surface-hover)] active:scale-[0.99]"
           >
-            <Plus className="h-[15px] w-[15px] text-[color:var(--text-secondary)]" strokeWidth={2} />
+            <Plus className="h-[15px] w-[15px] text-[color:var(--text-secondary)]" strokeWidth={1.75} />
             New project
-            <kbd className="cc-mono ml-auto text-[10.5px] text-[color:var(--text-tertiary)]">⌘N</kbd>
           </button>
         ) : (
           <button

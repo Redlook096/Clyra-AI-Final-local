@@ -118,10 +118,30 @@ export async function ingestTextFile(file: File): Promise<StudySourceNode> {
     ? "markdown"
     : lower.endsWith(".pdf")
       ? "pdf"
-      : "text";
-  if (kind === "pdf") {
-    throw new Error("PDF binary parsing needs text export for now — paste the PDF text or convert to .txt/.md.");
+      : lower.endsWith(".ppt") || lower.endsWith(".pptx")
+        ? "slides"
+        : lower.endsWith(".doc") || lower.endsWith(".docx")
+          ? "doc"
+          : file.type.startsWith("image/")
+            ? "image"
+            : file.type.startsWith("audio/")
+              ? "audio"
+              : "text";
+
+  if (kind === "pdf" || kind === "slides" || kind === "doc" || kind === "image" || kind === "audio") {
+    // Binary formats: create a ready node with metadata so the canvas stays usable.
+    // Text extraction can be filled later via paste / Ask Clyra.
+    return emptySource({
+      kind,
+      title: name.replace(/\.[^.]+$/, ""),
+      origin: name,
+      body: `[${kind.toUpperCase()} resource: ${name}]\n\nFile attached to Study Brain (${Math.max(1, Math.round(file.size / 1024))} KB). Paste extracted text or ask Clyra once OCR/transcript support is connected.`,
+      status: "ready",
+      statusDetail: kind === "pdf" || kind === "slides" || kind === "doc" ? "Attached · paste text to deepen" : "Attached",
+      meta: { bytes: String(file.size), mime: file.type || "" },
+    });
   }
+
   const body = await file.text();
   if (body.trim().length < 20) throw new Error("That file did not contain enough readable text.");
   return emptySource({

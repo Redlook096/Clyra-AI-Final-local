@@ -32,7 +32,6 @@ import {
   Search,
   Settings2,
   ShieldCheck,
-  Sparkles,
   Star,
   Trash2,
   TriangleAlert,
@@ -361,7 +360,7 @@ const ACTION_ICONS: Record<ActionIconKey, LucideIcon> = {
   hover: MousePointer2,
   done: CircleCheck,
   ask: CircleHelp,
-  generic: Sparkles,
+  generic: CircleHelp,
 };
 
 function truncateLabel(value: string, max = 30) {
@@ -615,8 +614,8 @@ function IconButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-500 transition-[background-color,color,transform,opacity] duration-150 hover:bg-slate-100 hover:text-slate-900 active:scale-[0.94] disabled:pointer-events-none disabled:opacity-30",
-        active && "bg-slate-100 text-slate-700 hover:bg-slate-200 hover:text-slate-900",
+        "grid h-8 w-8 shrink-0 place-items-center rounded-[8px] text-[color:var(--atlas-text-secondary)] transition-[background-color,color,transform,opacity] duration-150 hover:bg-[color:var(--clyra-hover)] hover:text-[color:var(--atlas-text-primary)] active:scale-[0.94] disabled:pointer-events-none disabled:opacity-30",
+        active && "bg-[color:var(--clyra-selected)] text-[color:var(--atlas-text-primary)]",
         className,
       )}
     >
@@ -635,7 +634,9 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (val
       onClick={() => onChange(!checked)}
       className={cn(
         "relative h-5 w-9 shrink-0 rounded-full border transition-[background-color,border-color] duration-150",
-        checked ? "border-slate-900 bg-slate-900" : "border-slate-300 bg-slate-200",
+        checked
+          ? "border-[color:var(--clyra-accent)] bg-[color:var(--clyra-accent)]"
+          : "border-[color:var(--clyra-border-strong)] bg-[color:var(--clyra-surface-muted)]",
       )}
     >
       <span
@@ -1533,7 +1534,6 @@ export default function WebBrowserWorkspace() {
             )}
             aria-label={sideOpen ? "Hide Ask Clyra" : "Ask Clyra"}
           >
-            <Sparkles className="h-3 w-3 opacity-80" />
             Ask Clyra
           </button>
         </div>
@@ -1719,7 +1719,7 @@ export default function WebBrowserWorkspace() {
                       onClick={() => void controlAgent("return_control")}
                       className="flex shrink-0 items-center gap-1 border-l border-white/15 px-3 text-[10.5px] font-semibold text-white/90 transition-colors hover:bg-white/10"
                     >
-                      <Sparkles className="h-3 w-3" /> Resume AI
+                      <CirclePlay className="h-3 w-3" /> Resume AI
                     </button>
                   ) : agentPhase === "paused" ? (
                     <button
@@ -2218,7 +2218,7 @@ function ReasoningCard({ item, reducedMotion }: { item: Extract<RunItem, { kind:
 
 function ActionRow({ item, reducedMotion }: { item: Extract<RunItem, { kind: "action" }>; reducedMotion: boolean }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const Icon = ACTION_ICONS[item.icon] || Sparkles;
+  const Icon = ACTION_ICONS[item.icon] || CircleHelp;
   return (
     <motion.div initial={{ opacity: 0, x: -3 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.14 }} className="px-0.5 py-0.5">
       <div className="flex items-center gap-2">
