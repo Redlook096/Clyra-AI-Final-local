@@ -117,6 +117,7 @@ class ApplicationController {
   // Default to C++ so language is enforced from first run
   this.codingLanguage = "cpp";
     this.speechAvailable = false;
+    this.stealthEnabled = false;
 
     // Utterance coalescing: VAD emits a transcript per natural pause, but a
     // single spoken question can still arrive as a few fragments (mid-thought
@@ -688,6 +689,18 @@ class ApplicationController {
       return { ok: true };
     });
 
+    ipcMain.handle("set-stealth-mode", async (_event, payload) => {
+      const enabled = Boolean(payload?.enabled);
+      return this.setStealthMode(enabled);
+    });
+
+    ipcMain.handle("get-stealth-mode", () => ({
+      ok: true,
+      stealth: Boolean(this.stealthEnabled),
+      platform: process.platform,
+      contentProtection: Boolean(this.stealthEnabled),
+    }));
+
     ipcMain.handle("get-skill-prompt", (event, skillName) => {
       try {
         const { promptLoader } = require('./prompt-loader');
@@ -1122,6 +1135,70 @@ class ApplicationController {
     } finally {
       this._visionMode = null;
     }
+  }
+
+  setStealthMode(enabled) {
+    this.stealthEnabled = Boolean(enabled);
+    const result = windowManager.setStealthMode(this.stealthEnabled);
+    try {
+      if (this.stealthEnabled) {
+        // Disguise as a system utility in the dock / process list
+        const iconKey = config.get("stealth.defaultIcon") || "terminal";
+        this.updateAppIcon(iconKey);
+        if (process.platform === "darwin" && app.dock) {
+          try {
+            app.dock.hide();
+          } catch (_) {
+            /* ignore */
+          }
+        }
+      } else {
+        // Restore honest OpenCluely branding
+        app.setName("OpenCluely");
+        process.title = "OpenCluely";
+        windowManager.windows.forEach((win) => {
+          if (win && !win.isDestroyed()) win.setTitle("OpenCluely");
+        });
+        if (process.platform === "darwin" && app.dock) {
+          try {
+            app.dock.show();
+          } catch (_) {
+            /* ignore */
+          }
+        }
+      }
+    } catch (error) {
+      logger.warn("Stealth branding update failed", { error: error.message });
+    }
+    windowManager.broadcastToAllWindows("stealth-mode-changed", {
+      stealth: this.stealthEnabled,
+      platform: process.platform,
+    });
+    // Ensure main renderer theme flips even if IPC listener missed the event
+    try {
+      const mainWindow = windowManager.getWindow("main");
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents
+          .executeJavaScript(
+            `document.documentElement.classList.toggle('oc-stealth', ${this.stealthEnabled ? "true" : "false"});
+             const wrap=document.getElementById('ocStealthWrap');
+             const sw=document.getElementById('ocStealthSwitch');
+             if(wrap) wrap.classList.toggle('is-on', ${this.stealthEnabled ? "true" : "false"});
+             if(sw) sw.setAttribute('aria-checked', '${this.stealthEnabled ? "true" : "false"}');
+             true;`,
+            true,
+          )
+          .catch(() => {});
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    logger.info("Stealth mode updated", {
+      stealth: this.stealthEnabled,
+      platform: process.platform,
+      contentProtection: this.stealthEnabled,
+    });
+    return { ...result, stealth: this.stealthEnabled };
   }
 
   _isScreenQuestion(text) {
@@ -2352,6 +2429,26 @@ class ApplicationController {
               message: "Control stopped.",
             });
             send(200, { ok: true, action: "control-stop" });
+            return;
+          }
+          if (req.method === "POST" && req.url === "/stealth") {
+            const body = await readBody();
+            const enabled =
+              body.enabled === true ||
+              body.stealth === true ||
+              body.on === true ||
+              String(body.mode || "").toLowerCase() === "on";
+            const result = this.setStealthMode(enabled);
+            send(200, { ok: true, action: "stealth", ...result });
+            return;
+          }
+          if (req.method === "GET" && req.url === "/stealth") {
+            send(200, {
+              ok: true,
+              stealth: Boolean(this.stealthEnabled),
+              platform: process.platform,
+              contentProtection: Boolean(this.stealthEnabled),
+            });
             return;
           }
           if (req.method === "POST" && req.url === "/control/point") {

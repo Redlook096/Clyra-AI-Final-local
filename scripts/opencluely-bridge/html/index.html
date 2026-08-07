@@ -14,11 +14,35 @@
         --oc-text-strong: #1f2937;
         --oc-shadow: 0 10px 28px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.06);
         --oc-btn-bg: #ffffff;
+        --oc-btn-border: rgba(15, 23, 42, 0.06);
+        --oc-close-bg: #ffffff;
+        --oc-close-fg: #5b6575;
+        --oc-drag: #9aa3b2;
+        --oc-input-bg: rgba(255, 255, 255, 0.9);
+        --oc-msg-bg: rgba(255, 255, 255, 0.82);
         --oc-ease: cubic-bezier(0.22, 1, 0.36, 1);
         --oc-collapsed-w: auto;
-        --oc-expanded-w: 400px;
+        --oc-expanded-w: 420px;
         --oc-bar-h: 52px;
         --oc-drawer-h: 360px;
+        --oc-stealth-accent: #38bdf8;
+      }
+
+      /* Dark stealth theme */
+      html.oc-stealth {
+        --oc-glass: rgba(22, 27, 34, 0.82);
+        --oc-glass-open: rgba(17, 24, 39, 0.92);
+        --oc-border: rgba(148, 163, 184, 0.14);
+        --oc-text: #cbd5e1;
+        --oc-text-strong: #f1f5f9;
+        --oc-shadow: 0 14px 36px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.28);
+        --oc-btn-bg: rgba(30, 41, 59, 0.92);
+        --oc-btn-border: rgba(148, 163, 184, 0.16);
+        --oc-close-bg: rgba(30, 41, 59, 0.95);
+        --oc-close-fg: #e2e8f0;
+        --oc-drag: #64748b;
+        --oc-input-bg: rgba(15, 23, 42, 0.88);
+        --oc-msg-bg: rgba(30, 41, 59, 0.88);
       }
 
       * { box-sizing: border-box; }
@@ -33,7 +57,10 @@
         font-family: "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
         -webkit-font-smoothing: antialiased;
         -webkit-app-region: no-drag;
+        color-scheme: light;
+        transition: color-scheme 420ms ease;
       }
+      html.oc-stealth, html.oc-stealth body { color-scheme: dark; }
 
       .oc-shell {
         display: flex;
@@ -44,13 +71,56 @@
         background: transparent;
         border-radius: 999px;
         overflow: hidden;
+        opacity: 1;
+        transform-origin: center center;
         transition:
-          width 380ms var(--oc-ease),
+          width 480ms var(--oc-ease),
+          min-width 480ms var(--oc-ease),
           border-radius 380ms var(--oc-ease),
-          background 320ms ease,
-          box-shadow 320ms ease,
-          border-color 320ms ease;
+          background 420ms ease,
+          box-shadow 420ms ease,
+          border-color 420ms ease,
+          opacity 420ms ease,
+          transform 520ms var(--oc-ease);
       }
+
+      /* Launch: thin squished pill → expand → reveal */
+      .oc-shell.is-boot-squish {
+        width: 52px !important;
+        min-width: 52px !important;
+        opacity: 0;
+        transform: scaleX(0.22) scaleY(0.92);
+        pointer-events: none;
+      }
+      .oc-shell.is-boot-squish .oc-boot-hide {
+        opacity: 0 !important;
+        transform: translateX(-6px) scale(0.92);
+        pointer-events: none;
+      }
+      .oc-shell.is-boot-fade {
+        opacity: 1;
+        transform: scaleX(0.28) scaleY(0.96);
+      }
+      .oc-shell.is-boot-expand {
+        opacity: 1;
+        transform: scaleX(1) scaleY(1);
+        width: max-content;
+        min-width: 320px;
+      }
+      .oc-shell.is-boot-reveal .oc-boot-hide {
+        opacity: 1;
+        transform: none;
+        pointer-events: auto;
+        transition:
+          opacity 360ms var(--oc-ease),
+          transform 420ms var(--oc-ease);
+      }
+      .oc-shell.is-boot-reveal .oc-boot-hide:nth-child(1) { transition-delay: 40ms; }
+      .oc-shell.is-boot-reveal .oc-boot-hide:nth-child(2) { transition-delay: 90ms; }
+      .oc-shell.is-boot-reveal .oc-boot-hide:nth-child(3) { transition-delay: 140ms; }
+      .oc-shell.is-boot-reveal .oc-boot-hide:nth-child(4) { transition-delay: 190ms; }
+      .oc-shell.is-boot-reveal .oc-stealth-wrap { transition-delay: 220ms; }
+      .oc-shell.is-boot-reveal .oc-drag { transition-delay: 260ms; }
 
       .oc-shell.is-wide,
       .oc-shell.is-chat-open {
@@ -84,12 +154,16 @@
         -webkit-backdrop-filter: blur(24px) saturate(1.2);
         -webkit-app-region: drag;
         transition:
-          width 380ms var(--oc-ease),
+          width 480ms var(--oc-ease),
+          min-width 480ms var(--oc-ease),
           border-radius 380ms var(--oc-ease),
-          background 320ms ease,
-          box-shadow 320ms ease,
-          border-color 320ms ease,
+          background 420ms ease,
+          box-shadow 420ms ease,
+          border-color 420ms ease,
           opacity 280ms ease;
+      }
+      html.oc-stealth .command-tab {
+        border-color: rgba(148, 163, 184, 0.22);
       }
 
       .oc-shell.is-wide .command-tab,
@@ -105,7 +179,7 @@
       }
 
       .oc-shell.is-chat-open .command-tab {
-        border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+        border-bottom: 1px solid var(--oc-border);
       }
 
       .oc-close {
@@ -113,19 +187,21 @@
         height: 32px;
         border-radius: 999px;
         border: none;
-        background: #fff;
-        color: #5b6575;
+        background: var(--oc-close-bg);
+        color: var(--oc-close-fg);
         display: inline-grid;
         place-items: center;
         cursor: pointer;
         box-shadow: 0 2px 8px rgba(15, 23, 42, 0.10);
         -webkit-app-region: no-drag;
-        transition: transform 180ms var(--oc-ease), background 180ms ease, color 180ms ease;
+        transition: transform 180ms var(--oc-ease), background 220ms ease, color 220ms ease;
         flex-shrink: 0;
       }
+      html.oc-stealth .oc-close {
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+      }
       .oc-close:hover {
-        background: #f3f4f6;
-        color: #111827;
+        filter: brightness(1.06);
         transform: scale(1.04);
       }
       .oc-close svg { width: 12px; height: 12px; }
@@ -142,7 +218,7 @@
         height: 34px;
         padding: 0 16px;
         border-radius: 999px;
-        border: 1px solid rgba(15, 23, 42, 0.06);
+        border: 1px solid var(--oc-btn-border);
         background: var(--oc-btn-bg);
         color: var(--oc-text);
         font-size: 13px;
@@ -150,14 +226,13 @@
         letter-spacing: -0.01em;
         cursor: pointer;
         box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
-        transition: transform 180ms var(--oc-ease), background 180ms ease, box-shadow 180ms ease, color 180ms ease;
+        transition: transform 180ms var(--oc-ease), background 220ms ease, box-shadow 180ms ease, color 220ms ease, border-color 220ms ease, opacity 360ms var(--oc-ease);
         white-space: nowrap;
       }
       .oc-pill-btn:hover {
-        background: #fafbfc;
+        filter: brightness(1.04);
         color: var(--oc-text-strong);
         transform: translateY(-0.5px);
-        box-shadow: 0 3px 10px rgba(15, 23, 42, 0.08);
       }
       .oc-pill-btn:active { transform: translateY(0); }
       .oc-pill-btn.is-active {
@@ -166,6 +241,76 @@
         border-color: rgba(15, 23, 42, 0.14);
         box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06);
       }
+      html.oc-stealth .oc-pill-btn.is-active {
+        background: rgba(56, 189, 248, 0.16);
+        color: #e0f2fe;
+        border-color: rgba(56, 189, 248, 0.28);
+      }
+
+      /* Stealth toggle */
+      .oc-stealth-wrap {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        height: 34px;
+        padding: 0 8px 0 10px;
+        border-radius: 999px;
+        border: 1px solid var(--oc-btn-border);
+        background: var(--oc-btn-bg);
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+        -webkit-app-region: no-drag;
+        flex-shrink: 0;
+        transition: background 280ms ease, border-color 280ms ease, box-shadow 280ms ease, opacity 360ms var(--oc-ease), transform 420ms var(--oc-ease);
+      }
+      .oc-stealth-wrap.is-on {
+        border-color: rgba(56, 189, 248, 0.35);
+        box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12), 0 1px 3px rgba(15, 23, 42, 0.08);
+      }
+      .oc-stealth-label {
+        font-size: 11.5px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        color: var(--oc-text);
+        user-select: none;
+        transition: color 240ms ease;
+      }
+      .oc-stealth-wrap.is-on .oc-stealth-label {
+        color: var(--oc-stealth-accent);
+      }
+      .oc-stealth-switch {
+        position: relative;
+        width: 34px;
+        height: 20px;
+        border-radius: 999px;
+        border: none;
+        padding: 0;
+        background: rgba(148, 163, 184, 0.45);
+        cursor: pointer;
+        transition: background 240ms ease;
+        flex-shrink: 0;
+      }
+      .oc-stealth-switch::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #fff;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.25);
+        transition: transform 260ms var(--oc-ease);
+      }
+      .oc-stealth-wrap.is-on .oc-stealth-switch {
+        background: linear-gradient(135deg, #0ea5e9, #6366f1);
+      }
+      .oc-stealth-wrap.is-on .oc-stealth-switch::after {
+        transform: translateX(14px);
+      }
+      .oc-stealth-switch:focus-visible {
+        outline: 2px solid rgba(56, 189, 248, 0.55);
+        outline-offset: 2px;
+      }
 
       .oc-drag {
         width: 28px;
@@ -173,15 +318,16 @@
         border-radius: 10px;
         border: none;
         background: transparent;
-        color: #9aa3b2;
+        color: var(--oc-drag);
         display: inline-grid;
         place-items: center;
         cursor: grab;
         -webkit-app-region: drag;
         flex-shrink: 0;
-        transition: color 160ms ease, background 160ms ease;
+        transition: color 160ms ease, background 160ms ease, opacity 360ms var(--oc-ease), transform 420ms var(--oc-ease);
       }
-      .oc-drag:hover { color: #6b7280; background: rgba(255,255,255,0.55); }
+      .oc-drag:hover { color: var(--oc-text); background: rgba(255,255,255,0.18); }
+      html.oc-stealth .oc-drag:hover { background: rgba(255,255,255,0.08); }
       .oc-drag:active { cursor: grabbing; }
       .oc-drag-dots {
         display: grid;
@@ -256,17 +402,22 @@
         font-size: 12.5px;
         line-height: 1.45;
         color: var(--oc-text-strong) !important;
-        background: rgba(255, 255, 255, 0.82) !important;
-        border: 1px solid rgba(15, 23, 42, 0.06);
+        background: var(--oc-msg-bg) !important;
+        border: 1px solid var(--oc-border);
         box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
         backdrop-filter: none;
         text-shadow: none;
+        transition: background 280ms ease, color 280ms ease, border-color 280ms ease;
       }
       .chat-messages .message.user {
         align-self: flex-end;
         background: #e8eef8 !important;
         border-color: rgba(55, 65, 81, 0.12);
         color: var(--oc-text-strong) !important;
+      }
+      html.oc-stealth .chat-messages .message.user {
+        background: rgba(56, 189, 248, 0.14) !important;
+        border-color: rgba(56, 189, 248, 0.22);
       }
       .chat-messages .message.assistant,
       .chat-messages .message.system,
@@ -343,8 +494,8 @@
         resize: none;
         min-height: 38px;
         max-height: 96px;
-        background: rgba(255, 255, 255, 0.9);
-        border: 1px solid rgba(15, 23, 42, 0.08);
+        background: var(--oc-input-bg);
+        border: 1px solid var(--oc-border);
         border-radius: 12px;
         color: var(--oc-text-strong);
         padding: 9px 11px;
@@ -352,32 +503,41 @@
         font-family: inherit;
         outline: none;
         box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.03);
+        transition: background 280ms ease, border-color 280ms ease, color 280ms ease;
       }
-      #barChatInput::placeholder { color: #9aa3b2; }
+      #barChatInput::placeholder { color: var(--oc-drag); }
       #barChatInput:focus {
         border-color: rgba(55, 65, 81, 0.28);
         box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.06);
+      }
+      html.oc-stealth #barChatInput:focus {
+        border-color: rgba(56, 189, 248, 0.4);
+        box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12);
       }
       #barChatSend {
         width: 38px;
         height: 38px;
         border-radius: 12px;
-        border: 1px solid rgba(15, 23, 42, 0.10);
-        background: #ffffff;
+        border: 1px solid var(--oc-border);
+        background: var(--oc-btn-bg);
         color: var(--oc-text-strong);
         cursor: pointer;
         display: grid;
         place-items: center;
         box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
-        transition: transform 160ms var(--oc-ease), background 160ms ease;
+        transition: transform 160ms var(--oc-ease), background 220ms ease, color 220ms ease;
       }
-      #barChatSend:hover { background: #f3f4f6; transform: scale(1.04); }
+      #barChatSend:hover { filter: brightness(1.06); transform: scale(1.04); }
       #barChatSend svg { width: 15px; height: 15px; }
 
       .oc-pill-btn.oc-control {
         background: #111827;
         color: #fff;
         border-color: rgba(15, 23, 42, 0.35);
+      }
+      html.oc-stealth .oc-pill-btn.oc-control {
+        background: #0f172a;
+        border-color: rgba(56, 189, 248, 0.25);
       }
       .oc-pill-btn.oc-control:hover {
         background: #1f2937;
@@ -438,21 +598,26 @@
     </style>
   </head>
   <body data-oc-light-bar="1">
-    <div class="oc-shell" id="ocShell">
+    <div class="oc-shell is-boot-squish" id="ocShell">
       <div class="command-tab" id="commandTab">
-        <button type="button" class="oc-close" id="ocCloseBtn" title="Collapse" aria-label="Collapse">
+        <button type="button" class="oc-close oc-boot-hide" id="ocCloseBtn" title="Collapse" aria-label="Collapse">
           <svg viewBox="0 0 12 12" fill="none" aria-hidden="true">
             <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
           </svg>
         </button>
 
         <div class="oc-actions">
-          <button type="button" class="oc-pill-btn" id="ocAskBtn">Ask</button>
-          <button type="button" class="oc-pill-btn" id="ocAutoBtn">Auto Answer</button>
-          <button type="button" class="oc-pill-btn oc-control" id="ocControlBtn">Take Control</button>
+          <button type="button" class="oc-pill-btn oc-boot-hide" id="ocAskBtn">Ask</button>
+          <button type="button" class="oc-pill-btn oc-boot-hide" id="ocAutoBtn">Auto Answer</button>
+          <button type="button" class="oc-pill-btn oc-control oc-boot-hide" id="ocControlBtn">Take Control</button>
         </div>
 
-        <button type="button" class="oc-drag" id="ocDragHandle" title="Drag to move" aria-label="Drag bar">
+        <div class="oc-stealth-wrap oc-boot-hide" id="ocStealthWrap" title="Hide OpenCluely from screen shares & Zoom">
+          <span class="oc-stealth-label">Stealth</span>
+          <button type="button" class="oc-stealth-switch" id="ocStealthSwitch" role="switch" aria-checked="false" aria-label="Stealth mode"></button>
+        </div>
+
+        <button type="button" class="oc-drag oc-boot-hide" id="ocDragHandle" title="Drag to move" aria-label="Drag bar">
           <span class="oc-drag-dots" aria-hidden="true">
             <span></span><span></span>
             <span></span><span></span>

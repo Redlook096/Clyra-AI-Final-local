@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startDesktopControl: (task) => ipcRenderer.invoke('start-desktop-control', { task }),
   stopDesktopControl: () => ipcRenderer.invoke('stop-desktop-control'),
   onControlStatus: (callback) => ipcRenderer.on('control-status', callback),
+  onStealthModeChanged: (callback) => ipcRenderer.on('stealth-mode-changed', callback),
   
   // Gemini LLM configuration
   setGeminiApiKey: (apiKey) => ipcRenderer.invoke('set-gemini-api-key', apiKey),
@@ -64,6 +65,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   updateAppIcon: (iconKey) => ipcRenderer.invoke('update-app-icon', iconKey),
   updateActiveSkill: (skill) => ipcRenderer.invoke('update-active-skill', skill),
+  setStealthMode: (enabled) => ipcRenderer.invoke('set-stealth-mode', { enabled: Boolean(enabled) }),
+  getStealthMode: () => ipcRenderer.invoke('get-stealth-mode'),
   restartAppForStealth: () => ipcRenderer.invoke('restart-app-for-stealth'),
   closeWindow: () => ipcRenderer.invoke('close-window'),
   notifyMainWindowReady: () => {

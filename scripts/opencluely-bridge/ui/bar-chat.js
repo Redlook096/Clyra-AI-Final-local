@@ -21,6 +21,8 @@
   const askBtn = document.getElementById('ocAskBtn');
   const autoBtn = document.getElementById('ocAutoBtn');
   const controlBtn = document.getElementById('ocControlBtn');
+  const stealthWrap = document.getElementById('ocStealthWrap');
+  const stealthSwitch = document.getElementById('ocStealthSwitch');
   const modeLabel = document.getElementById('chatModeLabel');
   const modeHint = document.getElementById('chatModeHint');
 
@@ -36,6 +38,8 @@
   let animating = false;
   let controlling = false;
   let taskPromptMode = false;
+  let stealthOn = false;
+  const STEALTH_KEY = 'opencluely_stealth_v1';
 
   const AUTO_PROMPT =
     "Look at what's on my screen right now. Use your initiative: if there is a question, quiz, problem, coding prompt, form field, or anything the user likely needs answered or solved, answer it directly and helpfully. If there is no clear question, briefly say what you see and the most useful next step. Read text literally; do not invent content that is not visible.";
@@ -138,6 +142,54 @@
             ? 'Describe the task for the AI…'
             : 'Type a question…';
     }
+  }
+
+  function applyStealthUI(enabled, { persist = true, notifyMain = true } = {}) {
+    stealthOn = Boolean(enabled);
+    document.documentElement.classList.toggle('oc-stealth', stealthOn);
+    stealthWrap?.classList.toggle('is-on', stealthOn);
+    if (stealthSwitch) {
+      stealthSwitch.setAttribute('aria-checked', stealthOn ? 'true' : 'false');
+    }
+    if (persist) {
+      try {
+        localStorage.setItem(STEALTH_KEY, stealthOn ? '1' : '0');
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    if (notifyMain) {
+      try {
+        window.electronAPI?.setStealthMode?.(stealthOn);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  }
+
+  async function runBootAnimation() {
+    // 1) Start squished + invisible (already in HTML)
+    shell.classList.add('is-boot-squish');
+    // Fit Electron window to thin pill first
+    if (window.electronAPI?.resizeWindow) {
+      window.electronAPI.resizeWindow(56, COLLAPSED_H);
+    }
+    await wait(40);
+    // 2) Fade in while still thin
+    shell.classList.add('is-boot-fade');
+    await wait(280);
+    // 3) Expand horizontally into full pill
+    shell.classList.remove('is-boot-squish');
+    shell.classList.add('is-boot-expand');
+    await wait(40);
+    measureAndResize();
+    await wait(420);
+    // 4) Reveal buttons / stealth / drag
+    shell.classList.add('is-boot-reveal');
+    await wait(420);
+    shell.classList.remove('is-boot-fade', 'is-boot-expand');
+    // Keep reveal class so opacity stays; clear boot-hide transforms via CSS
+    measureAndResize();
   }
 
   function setControlButtonState(isControlling) {
@@ -374,6 +426,20 @@
     await enterTaskPrompt();
   });
 
+  const toggleStealth = () => {
+    applyStealthUI(!stealthOn);
+    measureAndResize();
+  };
+  stealthSwitch?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleStealth();
+  });
+  stealthWrap?.addEventListener('click', (e) => {
+    if (e.target === stealthSwitch) return;
+    e.stopPropagation();
+    toggleStealth();
+  });
+
   closeBtn?.addEventListener('click', async (e) => {
     e.stopPropagation();
     if (taskPromptMode) {
@@ -463,19 +529,31 @@
         addMessage(data.message || 'Control error', 'error');
       }
     });
+    api.onStealthModeChanged?.((_e, data) => {
+      if (typeof data?.stealth === 'boolean') {
+        applyStealthUI(data.stealth, { persist: true, notifyMain: false });
+        measureAndResize();
+      }
+    });
   }
 
-  // Fit collapsed pill on load + tell main process we're ready for centering
+  // Fit collapsed pill on load + boot animation + stealth restore
   loadHistory();
   setControlButtonState(false);
-  setTimeout(() => {
-    if (tab && window.electronAPI?.resizeWindow) {
-      const rect = tab.getBoundingClientRect();
-      window.electronAPI.resizeWindow(Math.ceil(rect.width), Math.ceil(rect.height));
-    }
+  try {
+    stealthOn = localStorage.getItem(STEALTH_KEY) === '1';
+  } catch (_) {
+    stealthOn = false;
+  }
+  applyStealthUI(stealthOn, { persist: false, notifyMain: true });
+
+  (async () => {
+    await runBootAnimation();
     window.electronAPI?.setChatDrawerOpen?.(false);
     window.electronAPI?.notifyMainWindowReady?.();
-  }, 80);
+    // Re-apply stealth to main once window is ready (content protection)
+    if (stealthOn) applyStealthUI(true, { persist: false, notifyMain: true });
+  })();
 
   window.barChat = {
     isOpen: () => open,
@@ -485,5 +563,7 @@
     measureAndResize,
     enterTaskPrompt,
     stopControlFromBar,
+    setStealth: applyStealthUI,
+    isStealth: () => stealthOn,
   };
 })();

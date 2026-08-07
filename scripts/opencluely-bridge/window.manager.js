@@ -35,10 +35,11 @@ class WindowManager {
     this.bindWindows = false; // Disabled on Linux-friendly Clyra bridge to avoid resize recursion
     this.chatDrawerOpen = false; // Chat expands under the centered main bar (no separate panel)
     this.mainExpandedWidth = 420; // Max width while chat drawer is open
-    this.mainCollapsedMaxWidth = 520; // Compact frosted pill (+ Take Control)
+    this.mainCollapsedMaxWidth = 560; // Compact frosted pill (+ Take Control + Stealth)
     this.mainExpandedWidth = 440; // Ask / Auto Answer expanded shell
     this.windowGap = 10; // Small gap between windows
     this.boundWindowsPosition = { x: 0, y: 0 }; // Track position of bound windows
+    this.stealthEnabled = false;
     
     this.windowConfigs = {
       main: {
@@ -588,34 +589,54 @@ class WindowManager {
     return window;
   }
 
-  applyStealthMeasures(window, type) {
-    // Overlay UX only — NO stealth / content-protection / process disguise
+  applyStealthMeasures(window, type, enabled = this.stealthEnabled) {
+    // When stealth is ON:
+    //  - setContentProtection(true) → invisible to Zoom/Meet/Teams/OBS screen capture
+    //    (macOS NSWindowSharingNone / Windows WDA_EXCLUDEFROMCAPTURE; Linux no-op)
+    //  - skip taskbar / dock so the process is less obvious
+    // When OFF: normal visible overlay, light-theme friendly
+    const stealth = Boolean(enabled);
     try {
       window.setAlwaysOnTop(true);
     } catch (_) {
       /* ignore */
     }
     try {
-      window.setSkipTaskbar(false);
+      window.setSkipTaskbar(stealth);
     } catch (_) {
       /* ignore */
     }
     try {
-      window.setContentProtection(false);
+      // Electron content protection — hide from screen shares when stealth is on
+      window.setContentProtection(stealth);
     } catch (_) {
       /* ignore */
     }
     try {
-      window.setVisibleOnAllWorkspaces(false);
+      if (stealth) {
+        window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      } else {
+        window.setVisibleOnAllWorkspaces(false);
+      }
     } catch (_) {
       /* ignore */
     }
-    logger.debug('Applied overlay measures without stealth', {
+    logger.debug('Applied overlay stealth measures', {
       type,
       platform: process.platform,
-      contentProtection: false,
-      skipTaskbar: false,
+      stealth,
+      contentProtection: stealth,
+      skipTaskbar: stealth,
     });
+  }
+
+  setStealthMode(enabled) {
+    this.stealthEnabled = Boolean(enabled);
+    this.windows.forEach((window, type) => {
+      if (!window || window.isDestroyed()) return;
+      this.applyStealthMeasures(window, type, this.stealthEnabled);
+    });
+    return { ok: true, stealth: this.stealthEnabled, platform: process.platform };
   }
 
   positionWindow(window, type) {

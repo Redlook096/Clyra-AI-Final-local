@@ -109,10 +109,11 @@ class ConfigManager {
       },
 
       stealth: {
-        // Rejected: no screen-share invisibility / process disguise
-        hideFromDock: false,
-        noAttachConsole: false,
-        disguiseProcess: false
+        // Toggleable: content protection + process disguise when enabled from the bar
+        hideFromDock: true,
+        noAttachConsole: true,
+        disguiseProcess: true,
+        defaultIcon: 'terminal',
       }
     };
   }
