@@ -41,10 +41,10 @@ export type TaskViewTab = {
 type Rect = { left: number; top: number; width: number; height: number };
 
 const EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
-const OPEN_MS = 440;
-const SELECT_MS = 440;
-const EXIT_MS = 210;
-const REFLOW_MS = 320;
+const OPEN_MS = 380;
+const SELECT_MS = 400;
+const EXIT_MS = 180;
+const REFLOW_MS = 280;
 const GAP = 24;
 const PAD_X = 40;
 const PAD_Y = 32;

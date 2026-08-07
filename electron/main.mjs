@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import dotenv from "dotenv";
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell, WebContentsView } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeTheme, session, shell, WebContentsView } from "electron";
 import { ChromiumBrowserManager } from "./browser-manager.mjs";
 import { ChromiumSurfaceManager } from "./surface-manager.mjs";
 import { DictationManager } from "./dictation-manager.mjs";
@@ -706,6 +706,17 @@ async function createWindow() {
   await smartToolbarManager.initialize();
   await companionManager.initialize();
   registerIpc();
+
+  // Global Task View — works even when a BrowserView page owns keyboard focus.
+  try {
+    globalShortcut.register("CommandOrControl+J", () => {
+      if (uiView && !uiView.webContents.isDestroyed()) {
+        uiView.webContents.send("taskview:toggle");
+      }
+    });
+  } catch (error) {
+    console.warn("[taskview] global shortcut unavailable:", error);
+  }
 
   if (process.env.CLYRA_COMPANION_SMOKE === "1") {
     setTimeout(() => {

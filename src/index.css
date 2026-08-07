@@ -5404,7 +5404,7 @@ body,
   --atlas-toolbar-bg: #fafbfb;
   --atlas-tab-active: #ffffff;
   --atlas-sidebar-bg: #fbfbfa;
-  --atlas-user-bubble: #f2f4f6;
+  --atlas-user-bubble: #f1f1ef;
   --atlas-text-primary: #202124;
   --atlas-text-secondary: #676b70;
   --atlas-text-tertiary: #96999d;
@@ -5414,7 +5414,38 @@ body,
   --atlas-stop-red: #dd5e58;
   --atlas-titlebar-height: 30px;
   --atlas-toolbar-height: 32px;
-  --atlas-sidebar-width: clamp(286px, 26.5vw, 380px);
+  --atlas-sidebar-width: clamp(300px, 27.2vw, 410px);
+}
+
+/* Finished browse/search source chips — sit beside regenerate in message actions */
+.clyra-message-source-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 4px;
+  max-width: min(220px, 42vw);
+  overflow: hidden;
+}
+.clyra-message-source-chips a {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: #fff;
+  flex-shrink: 0;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.clyra-message-source-chips a:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
+}
+.clyra-message-source-chips img {
+  width: 14px;
+  height: 14px;
+  object-fit: cover;
+  border-radius: 3px;
 }
 
 .clyra-browser-ai-control {

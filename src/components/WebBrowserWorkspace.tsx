@@ -1219,12 +1219,21 @@ export default function WebBrowserWorkspace() {
   const settings = browserState?.settings || defaultSettings;
 
   useEffect(() => {
-    if (settings.reducedMotion) {
-      chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight });
-      return;
-    }
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages.length, isAgentBusy, runItems.length, settings.reducedMotion]);
+    const scroller = chatScrollRef.current;
+    if (!scroller) return;
+    const snap = () => {
+      scroller.scrollTop = scroller.scrollHeight;
+      chatEndRef.current?.scrollIntoView({ behavior: settings.reducedMotion ? "instant" as ScrollBehavior : "smooth", block: "end" });
+    };
+    snap();
+    // Agent progress rows grow after the first paint — catch the final bottom.
+    const t1 = window.setTimeout(snap, 80);
+    const t2 = window.setTimeout(snap, 240);
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [messages.length, isAgentBusy, runItems.length, settings.reducedMotion, planDisclosureOpen, completedStepsOpen]);
 
   useEffect(() => {
     if (!desktopChromium) return;
@@ -1572,9 +1581,9 @@ export default function WebBrowserWorkspace() {
                   }}
                   className="clyra-browser-agent-cursor pointer-events-none absolute z-20 -translate-x-[3px] -translate-y-[2px]"
                 >
-                  <MousePointer2 className="relative h-[17px] w-[17px] fill-[#2a2b2a] text-[#2a2b2a] [filter:drop-shadow(0_1px_2px_rgba(0,0,0,.28))]" />
+                  <MousePointer2 className="relative h-[18px] w-[18px] fill-[#2a2b2a] text-[#2a2b2a] [filter:drop-shadow(0_1px_2px_rgba(0,0,0,.28))]" />
                   {settings.showAiActionLabels && liveCursor.label ? (
-                    <span className="absolute left-4 top-4 whitespace-nowrap rounded-[5px] bg-[var(--atlas-agent-black)] px-1.5 py-0.5 text-[10px] font-medium leading-none text-white">{liveCursor.label}</span>
+                    <span className="absolute left-[18px] top-[18px] flex h-[22px] max-w-[240px] items-center truncate whitespace-nowrap rounded-[6px] bg-[var(--atlas-agent-black)] px-2 text-[10px] font-medium leading-none text-white shadow-[0_4px_12px_rgba(0,0,0,.22)]">{liveCursor.label}</span>
                   ) : null}
                   {(liveCursor.kind === "click" || liveCursor.kind === "double_click") ? (
                     <span key={liveCursor.id} className="absolute left-[2px] top-[1px]" aria-hidden>
@@ -1611,7 +1620,7 @@ export default function WebBrowserWorkspace() {
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: 6, scale: 0.98 }}
                   transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-                  className="absolute bottom-4 left-1/2 z-30 flex h-[30px] max-w-[min(420px,92%)] -translate-x-1/2 items-stretch overflow-hidden rounded-[8px] bg-[var(--atlas-agent-black)] text-[11px] font-medium text-white shadow-[0_8px_24px_rgba(0,0,0,.28)]"
+                  className="absolute bottom-4 left-1/2 z-30 flex h-[30px] max-w-[min(420px,92%)] -translate-x-1/2 items-stretch overflow-hidden rounded-[8px] bg-[var(--atlas-agent-black)] text-[11px] font-medium text-white shadow-[0_8px_24px_rgba(0,0,0,.28)] sm:bottom-[16px]"
                 >
                   <div className="flex min-w-0 flex-1 items-center gap-2 px-3">
                     {browserState?.agent.manualControl ? (
@@ -1801,9 +1810,9 @@ export default function WebBrowserWorkspace() {
                           className={cn("flex", message.role === "user" && "clyra-browser-user-message-entry origin-bottom-right justify-end")}
                         >
                           <div className={cn(
-                            "max-w-[92%] text-[13.5px] leading-[1.55] tracking-[-0.01em]",
+                            "max-w-[92%] text-[11.5px] leading-[1.5] tracking-[-0.01em]",
                             message.role === "user"
-                              ? "rounded-[14px] bg-[var(--atlas-user-bubble)] px-3.5 py-2.5 font-normal text-[var(--atlas-text-primary)]"
+                              ? "rounded-[9px] bg-[var(--atlas-user-bubble)] px-3 py-2 font-normal text-[var(--atlas-text-primary)]"
                               : "max-w-full pr-1 font-normal text-[var(--atlas-text-primary)]",
                           )}>
                             <p className="whitespace-pre-wrap">
@@ -1819,12 +1828,17 @@ export default function WebBrowserWorkspace() {
                               )}
                             </p>
                             {message.facts?.length ? (
-                              <div className="mt-2 flex flex-wrap gap-1">
-                                {message.facts.slice(0, 5).map((fact, index) => (
-                                  <a key={`${fact.sourceUrl}-${index}`} href={fact.sourceUrl} target="_blank" rel="noreferrer" title={fact.claim} className="flex h-5 max-w-full items-center gap-1 rounded px-1.5 text-[9px] font-medium text-[var(--atlas-text-tertiary)] transition-colors hover:bg-black/[0.04] hover:text-[var(--atlas-text-primary)]">
-                                    <ExternalLink className="h-2.5 w-2.5" /><span className="truncate">{displayHost(fact.sourceUrl)}</span>
-                                  </a>
-                                ))}
+                              <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                                <div className="clyra-message-source-chips" aria-label="Visited sources">
+                                  {[...new Map(message.facts.map((fact) => [displayHost(fact.sourceUrl), fact.sourceUrl])).entries()]
+                                    .filter(([host]) => host)
+                                    .slice(0, 8)
+                                    .map(([host, url]) => (
+                                      <a key={url} href={url} target="_blank" rel="noreferrer" title={host}>
+                                        <img src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`} alt="" />
+                                      </a>
+                                    ))}
+                                </div>
                               </div>
                             ) : null}
                             {message.steps?.length ? (

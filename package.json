@@ -25,6 +25,7 @@
     "test:voice-e2e": "node tools/voice-call-e2e.mjs",
     "test:voice-e2e:dictation": "node tools/voice-call-e2e.mjs --dictation",
     "test:browser": "tsx tools/openbrowser-e2e.ts",
+    "test:browser-complex": "node tools/browser-complex-task-e2e.mjs",
     "test:creator": "tsx tools/creator-unit-tests.ts",
     "test:fake-text:timeline": "tsx tools/fake-text-timeline-unit-tests.ts",
     "test:fake-text:visual": "playwright test --config=playwright.fake-text.config.ts",

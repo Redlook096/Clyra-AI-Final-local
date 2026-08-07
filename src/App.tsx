@@ -901,36 +901,23 @@ function ChatThinkingLabel({
   );
 }
 
-function SearchSourcesFooter({ urls }: { urls?: string[] }) {
+/** Compact favicon chips — placed beside regenerate (Atlas finished-browse look). */
+function SourceFaviconChips({ urls }: { urls?: string[] }) {
   if (!urls?.length) return null;
-  const items = urls.slice(0, 8).map((url) => ({
-    url,
-    host: hostnameFromUrl(url),
-  }));
-
+  const items = [...new Map(urls.map((url) => [hostnameFromUrl(url), url])).entries()]
+    .filter(([host]) => host)
+    .slice(0, 8);
+  if (!items.length) return null;
   return (
-    <div className="mt-4 border-t border-slate-100 pt-3">
-      <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-        Sources
-      </p>
-      <div className="flex flex-wrap gap-1.5">
-        {items.map(({ url, host }) => (
-          <a
-            key={url}
-            href={url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-slate-200/80 bg-slate-50/80 px-2.5 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:border-slate-300 hover:bg-white hover:text-slate-900"
-          >
-            <img
-              src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`}
-              alt=""
-              className="h-3.5 w-3.5 shrink-0 rounded-sm object-cover"
-            />
-            <span className="truncate">{host}</span>
-          </a>
-        ))}
-      </div>
+    <div className="clyra-message-source-chips" aria-label="Sources">
+      {items.map(([host, url]) => (
+        <a key={url} href={url} target="_blank" rel="noreferrer" title={host}>
+          <img
+            src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`}
+            alt=""
+          />
+        </a>
+      ))}
     </div>
   );
 }
@@ -1555,7 +1542,6 @@ export const AnimatedMessage = ({
             transition={{ duration: 0.56, ease: CHAT_EASE_OUT }}
           >
             {answerBody}
-            {thinkingMode === "search" ? <SearchSourcesFooter urls={searchSources} /> : null}
             {gmailResults && onGmailRefresh && onGmailSummarize && onGmailGenerateReply && onGmailSaveReply && onGmailSendReply && onGmailModify && onGmailThread && onGmailFollowUp && onGmailCancelFollowUp ? <GmailEmailResults results={gmailResults} onRefresh={onGmailRefresh} onSummarize={onGmailSummarize} onGenerateReply={onGmailGenerateReply} onSaveReply={onGmailSaveReply} onSendReply={onGmailSendReply} onModify={onGmailModify} onThread={onGmailThread} onFollowUp={onGmailFollowUp} onCancelFollowUp={onGmailCancelFollowUp} /> : null}
             {workspaceResult ? <WorkspaceResultCard result={workspaceResult} /> : null}
           </motion.div>
@@ -1574,9 +1560,6 @@ export const AnimatedMessage = ({
           transition={{ duration: 0.62, ease: CHAT_EASE_OUT }}
         >
           {answerBody}
-          {thinkingMode === "search" ? (
-            <SearchSourcesFooter urls={searchSources} />
-          ) : null}
           {gmailResults && onGmailRefresh && onGmailSummarize && onGmailGenerateReply && onGmailSaveReply && onGmailSendReply && onGmailModify && onGmailThread && onGmailFollowUp && onGmailCancelFollowUp ? <GmailEmailResults results={gmailResults} onRefresh={onGmailRefresh} onSummarize={onGmailSummarize} onGenerateReply={onGmailGenerateReply} onSaveReply={onGmailSaveReply} onSendReply={onGmailSendReply} onModify={onGmailModify} onThread={onGmailThread} onFollowUp={onGmailFollowUp} onCancelFollowUp={onGmailCancelFollowUp} /> : null}
           {workspaceResult ? <WorkspaceResultCard result={workspaceResult} /> : null}
         </motion.div>
@@ -1997,6 +1980,69 @@ export default function App() {
       return false;
     }
   }, []);
+  const captureDomFallback = useCallback(async (tabId: WorkspaceTabId) => {
+    const scene = workspaceSceneRef.current;
+    if (!scene || tabId !== activeWorkspaceTab) return false;
+    const width = Math.max(2, Math.round(scene.clientWidth || window.innerWidth * 0.7));
+    const height = Math.max(2, Math.round(scene.clientHeight || window.innerHeight * 0.7));
+    const scale = Math.min(1, 1400 / width);
+    const outW = Math.max(2, Math.round(width * scale));
+    const outH = Math.max(2, Math.round(height * scale));
+    const paintFallback = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = outW;
+      canvas.height = outH;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return null;
+      ctx.fillStyle = "#f6f7f7";
+      ctx.fillRect(0, 0, outW, outH);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, outW, Math.round(62 * scale));
+      ctx.fillStyle = "#18212f";
+      ctx.font = `600 ${Math.round(15 * scale)}px ui-sans-serif, system-ui, sans-serif`;
+      ctx.fillText(String(tabId === "browser" ? "AI Browser" : tabId), Math.round(18 * scale), Math.round(36 * scale));
+      ctx.fillStyle = "#8b939e";
+      ctx.font = `${Math.round(12 * scale)}px ui-sans-serif, system-ui, sans-serif`;
+      ctx.fillText("Live workspace preview", Math.round(18 * scale), Math.round(96 * scale));
+      return canvas.toDataURL("image/jpeg", 0.88);
+    };
+    try {
+      const clone = scene.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll("iframe, video, canvas, img").forEach((node) => {
+        (node as HTMLElement).style.background = "#e8eaef";
+      });
+      const serialized = new XMLSerializer().serializeToString(clone).replace(/#/g, "%23");
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${outW}" height="${outH}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;height:${height}px;transform:scale(${scale});transform-origin:top left;overflow:hidden;background:#f6f7f7">${serialized}</div></foreignObject></svg>`;
+      const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
+      try {
+        const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = () => reject(new Error("preview render failed"));
+          img.src = url;
+        });
+        const canvas = document.createElement("canvas");
+        canvas.width = outW;
+        canvas.height = outH;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("no canvas");
+        ctx.fillStyle = "#f6f7f7";
+        ctx.fillRect(0, 0, outW, outH);
+        ctx.drawImage(image, 0, 0, outW, outH);
+        const src = canvas.toDataURL("image/jpeg", 0.86);
+        setTaskViewPreviews((current) => ({ ...current, [tabId]: { src, width: outW, height: outH } }));
+        return true;
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    } catch {
+      const src = paintFallback();
+      if (!src) return false;
+      setTaskViewPreviews((current) => ({ ...current, [tabId]: { src, width: outW, height: outH } }));
+      return true;
+    }
+  }, [activeWorkspaceTab]);
+
   const openTaskView = useCallback(async () => {
     if (isTaskViewOpen) {
       taskViewRef.current?.closeToActive();
@@ -2004,9 +2050,15 @@ export default function App() {
     }
     setIsAppLauncherOpen(false);
     setShowCommandPalette(false);
-    await captureWorkspacePreview(activeWorkspaceTab);
+    setVisitedWorkspaceTabs((current) =>
+      current.includes(activeWorkspaceTab) ? current : [...current, activeWorkspaceTab],
+    );
+    // Double-rAF lets layout settle so Electron/DOM capture matches the live tool.
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    const ok = await captureWorkspacePreview(activeWorkspaceTab);
+    if (!ok) await captureDomFallback(activeWorkspaceTab);
     setIsTaskViewOpen(true);
-  }, [activeWorkspaceTab, captureWorkspacePreview, isTaskViewOpen]);
+  }, [activeWorkspaceTab, captureDomFallback, captureWorkspacePreview, isTaskViewOpen]);
   useEffect(() => {
     const desktop = getElectronDesktop();
     return desktop?.taskView.onToggle(() => void openTaskView());
@@ -2364,19 +2416,26 @@ export default function App() {
     programmaticScrollRef.current = true;
     setShowScrollToLatest(false);
     const start = container.scrollTop;
-    const target = Math.max(0, container.scrollHeight - container.clientHeight);
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const startedAt = performance.now();
-    const duration = reducedMotion ? 0 : 520;
+    const duration = reducedMotion ? 0 : 420;
+
+    const bottom = () => Math.max(0, container.scrollHeight - container.clientHeight);
 
     const finish = () => {
-      container.scrollTop = target;
-      lastScrollTopRef.current = target;
+      // Re-read height — answer chrome (source chips, actions) often lands after start.
+      container.scrollTop = bottom();
+      lastScrollTopRef.current = container.scrollTop;
       programmaticScrollRef.current = false;
       jumpScrollRafRef.current = null;
+      // One more frame in case markdown/images expand.
+      requestAnimationFrame(() => {
+        container.scrollTop = bottom();
+        lastScrollTopRef.current = container.scrollTop;
+      });
     };
 
-    if (duration === 0 || Math.abs(target - start) < 2) {
+    if (duration === 0 || Math.abs(bottom() - start) < 2) {
       finish();
       return;
     }
@@ -2384,6 +2443,7 @@ export default function App() {
     const animate = (now: number) => {
       const progress = Math.min(1, (now - startedAt) / duration);
       const eased = 1 - Math.pow(1 - progress, 4);
+      const target = bottom();
       container.scrollTop = start + (target - start) * eased;
       lastScrollTopRef.current = container.scrollTop;
       if (progress < 1) {
@@ -2405,7 +2465,7 @@ export default function App() {
     const follow = () => {
       const target = Math.max(0, container.scrollHeight - container.clientHeight);
       const distance = target - container.scrollTop;
-      if (reducedMotion || Math.abs(distance) < 0.75) {
+      if (reducedMotion || Math.abs(distance) < 1.5) {
         container.scrollTop = target;
         lastScrollTopRef.current = target;
         programmaticScrollRef.current = false;
@@ -2413,10 +2473,8 @@ export default function App() {
         return;
       }
 
-      // A small proportional step is cheaper than repeatedly starting native
-      // smooth-scroll animations for every streamed chunk, and keeps the
-      // latest response continuously above the composer.
-      container.scrollTop += distance * 0.24;
+      // Faster catch-up so the latest answer fully clears the composer.
+      container.scrollTop += Math.max(distance * 0.42, Math.sign(distance) * 2);
       lastScrollTopRef.current = container.scrollTop;
       scrollRafRef.current = requestAnimationFrame(follow);
     };
@@ -2971,7 +3029,7 @@ export default function App() {
 
     const markNearBottom = () => {
       const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
-      const nearBottom = gap < 96;
+      const nearBottom = gap < 160;
       chatNearBottomRef.current = nearBottom;
       if (nearBottom) userPinnedAwayRef.current = false;
       setShowScrollToLatest(!nearBottom && messages.length > 0);
@@ -2985,7 +3043,7 @@ export default function App() {
       const scrollingUp = el.scrollTop + 2 < lastScrollTopRef.current;
       lastScrollTopRef.current = el.scrollTop;
       const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if (scrollingUp && gap > 96) {
+      if (scrollingUp && gap > 140) {
         userPinnedAwayRef.current = true;
         chatNearBottomRef.current = false;
         setShowScrollToLatest(true);
@@ -2996,7 +3054,7 @@ export default function App() {
 
     const onUserIntent = () => {
       const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if (gap > 96) {
+      if (gap > 140) {
         userPinnedAwayRef.current = true;
         chatNearBottomRef.current = false;
         setShowScrollToLatest(true);
@@ -3030,6 +3088,16 @@ export default function App() {
       }
     };
   }, [chatScrollSignature, autoScroll, messages.length, showVibeLivePreview, followLatest]);
+
+  // When the latest assistant reply finishes, snap fully to the bottom so
+  // source chips + action row are never clipped above the composer.
+  useEffect(() => {
+    const latest = [...messages].reverse().find((m) => m.role === "assistant");
+    if (!latest || latest.isStreaming || latest.isThinking) return;
+    if (userPinnedAwayRef.current) return;
+    const timer = window.setTimeout(() => scrollToLatest(), 64);
+    return () => window.clearTimeout(timer);
+  }, [messages, scrollToLatest]);
 
   useEffect(() => {
     if (toastMessage) {
@@ -6920,6 +6988,7 @@ Please analyze the code you just wrote and fix this error.`;
                                         {!message.isThinking && !message.isStreaming && message.content ? (
                                           <>
                                           <div className="clyra-message-actions" aria-label="Assistant message actions">
+                                            <SourceFaviconChips urls={message.searchSources} />
                                             <button type="button" onClick={() => {
                                               void navigator.clipboard?.writeText(message.content);
                                               setCopiedMessageId(message.id);
