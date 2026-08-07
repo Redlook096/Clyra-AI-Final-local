@@ -125,6 +125,11 @@ export default function StudyBrainWorkspace({
   brainRef.current = brain;
 
   useEffect(() => {
+    // Keep Chat/Vibe/Clip rail from overlapping the Study canvas.
+    window.dispatchEvent(new CustomEvent("clyra:workflow-tabs-hide"));
+  }, []);
+
+  useEffect(() => {
     if (seeded.current) return;
     seeded.current = true;
     if (!store.brains.length) {

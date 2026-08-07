@@ -27,7 +27,7 @@ export function BrainNodeView({ data, selected }: NodeProps) {
   }, []);
 
   return (
-    <div className="relative flex h-[120px] w-[240px] items-center justify-center">
+    <div className="relative z-30 flex h-[120px] w-[240px] items-center justify-center">
       <Handle
         type="target"
         position={Position.Left}
@@ -61,7 +61,7 @@ export function BrainNodeView({ data, selected }: NodeProps) {
                 setFanOpen(false);
                 onAction?.(item.id);
               }}
-              className="absolute z-20 flex h-8 min-w-[84px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[8px] border border-[color:var(--clyra-border)] bg-white px-2.5 text-[11.5px] font-medium text-[color:var(--clyra-text)] shadow-[0_6px_18px_rgba(15,23,42,0.08)] transition-colors hover:bg-[color:var(--clyra-hover)]"
+              className="absolute z-[70] flex h-8 min-w-[84px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[8px] border border-[color:var(--clyra-border)] bg-white px-2.5 text-[11.5px] font-medium text-[color:var(--clyra-text)] shadow-[0_6px_18px_rgba(15,23,42,0.08)] transition-colors hover:bg-[color:var(--clyra-hover)]"
               style={{ left: `calc(50% + ${item.x}px)`, top: `calc(50% + ${item.y}px)` }}
               title={item.hint}
             >

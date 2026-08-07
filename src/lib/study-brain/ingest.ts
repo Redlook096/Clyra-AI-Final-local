@@ -47,34 +47,66 @@ export async function ingestWebsite(url: string): Promise<StudySourceNode> {
 }
 
 export async function ingestYoutube(url: string, question?: string): Promise<StudySourceNode> {
-  const data = await postJson<{
-    ok: boolean;
+  // Same analyzer path as Chat: POST /api/research/youtube → youtube_transcript_engine
+  const response = await fetch("/api/research/youtube", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      url,
+      preferredLanguages: ["en"],
+      question: question || undefined,
+    }),
+  });
+  const data = (await response.json().catch(() => ({}))) as {
+    ok?: boolean;
     title?: string;
     videoId?: string;
     transcript?: { full_text?: string; language?: string };
     full_text?: string;
     analysisPrompt?: string;
-    error?: string;
-  }>("/api/research/youtube", {
-    url,
-    preferredLanguages: ["en"],
-    question: question || undefined,
-  });
+    error?: string | { message?: string; code?: string };
+    metadata?: { title?: string; videoId?: string };
+  };
+  const errMsg =
+    typeof data.error === "string"
+      ? data.error
+      : String(data.error?.message || (response.ok ? "" : `YouTube analyzer failed (${response.status})`));
   const body =
     String(data.transcript?.full_text || data.full_text || "").trim() ||
     String(data.analysisPrompt || "").trim();
-  if (!body) throw new Error(data.error || "No captions were available for this video.");
+  const title =
+    data.title ||
+    data.metadata?.title ||
+    "YouTube lecture";
+  const videoId = data.videoId || data.metadata?.videoId || "";
+
+  if (!body) {
+    // Keep the node on the canvas so the user sees the attempt and can retry /
+    // paste captions — still went through the shared Chat YouTube analyzer.
+    return emptySource({
+      kind: "youtube",
+      title,
+      origin: url,
+      body: `[YouTube] ${url}\n\nCaptions were not available yet.\n${errMsg || "No captions returned by the analyzer."}\n\nPaste a transcript here or retry once captions are public.`,
+      locator: videoId ? `video ${videoId}` : undefined,
+      status: "error",
+      statusDetail: errMsg || "No captions",
+      meta: { videoId: String(videoId), analyzer: "research/youtube" },
+    });
+  }
+
   return emptySource({
     kind: "youtube",
-    title: data.title || "YouTube lecture",
+    title,
     origin: url,
     body: body.slice(0, 120_000),
-    locator: data.videoId ? `video ${data.videoId}` : undefined,
+    locator: videoId ? `video ${videoId}` : undefined,
     status: "ready",
     statusDetail: "Captions indexed",
     meta: {
-      videoId: String(data.videoId || ""),
+      videoId: String(videoId),
       language: String(data.transcript?.language || "en"),
+      analyzer: "research/youtube",
     },
   });
 }
