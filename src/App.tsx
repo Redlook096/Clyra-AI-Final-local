@@ -817,10 +817,11 @@ function ChatThinkingLabel({
             ? googleAction || "Working in Google Workspace"
           : "Thinking";
 
-  const sourceHosts = searchSources
-    .map((url) => hostnameFromUrl(url))
-    .filter(Boolean)
-    .slice(0, 6);
+  const sourceHosts = [...new Set(
+    searchSources
+      .map((url) => hostnameFromUrl(url))
+      .filter(Boolean),
+  )].slice(0, 6);
 
   const waveIconClass = cn(
     "clyra-status-wave-icon",
