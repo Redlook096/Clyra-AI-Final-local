@@ -1568,6 +1568,15 @@ export default function AIClipper({
           captionY: draft.captionY,
           renderQuality: draft.renderQuality,
           words: payloadWords,
+          // Editor pin-zoom effects (preview applies to video only; captions stay fixed).
+          zoomEffects: (() => {
+            try {
+              const saved = JSON.parse(localStorage.getItem(`clyra.timeline.${selected.id}`) || "null");
+              return Array.isArray(saved?.zoomEffects) ? saved.zoomEffects : [];
+            } catch {
+              return [];
+            }
+          })(),
         }),
       });
       if (!response.ok) {

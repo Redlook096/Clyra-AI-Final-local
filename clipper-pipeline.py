@@ -3026,6 +3026,68 @@ def export_subtitled_clip(cfg):
     print(json.dumps({"type": "clip_result", "step": "result", "status": "complete", "message": "Subtitled export ready", "overall": 100, "result": result}), flush=True)
 
 
+def apply_editor_zoom_effects(crop_plan, zoom_effects, clip_duration):
+    """Multiply crop zoom by editor pin-zoom curves (ease-in/out).
+
+    Captions stay unscaled: ASS burn happens after the crop pass.
+    """
+    effects = [row for row in (zoom_effects or []) if isinstance(row, dict)]
+    if not effects:
+        return crop_plan
+    keyframes = list(crop_plan.get("cropKeyframes") or [])
+    if not keyframes:
+        # Build a minimal plate so pin zoom still applies without face tracking.
+        fps = 30.0
+        frames = max(2, int(max(0.1, float(clip_duration or 1.0)) * fps) + 1)
+        keyframes = [
+            {"timeMs": int(round(i * 1000.0 / fps)), "x": 50, "y": 42, "zoom": 1.0}
+            for i in range(frames)
+        ]
+
+    def ease(t):
+        x = max(0.0, min(1.0, float(t)))
+        return x * x * x * (x * (x * 6.0 - 15.0) + 10.0)
+
+    def pin_zoom_at(time_sec):
+        active = None
+        for effect in effects:
+            start = float(effect.get("start") or 0.0)
+            end = float(effect.get("end") or start)
+            if start - 1e-4 <= time_sec <= end + 1e-4:
+                if active is None or start >= float(active.get("start") or 0.0):
+                    active = effect
+        if active is None:
+            previous = None
+            for effect in effects:
+                end = float(effect.get("end") or 0.0)
+                if time_sec > end and (previous is None or end >= float(previous.get("end") or 0.0)):
+                    previous = effect
+            if previous is None:
+                return 1.0
+            return float(previous.get("toZoom") or previous.get("to_zoom") or 1.0)
+        start = float(active.get("start") or 0.0)
+        end = float(active.get("end") or start)
+        span = max(1e-4, end - start)
+        progress = ease((time_sec - start) / span)
+        from_zoom = float(active.get("fromZoom") or active.get("from_zoom") or 1.0)
+        to_zoom = float(active.get("toZoom") or active.get("to_zoom") or 1.0)
+        return from_zoom + (to_zoom - from_zoom) * progress
+
+    enriched = []
+    for row in keyframes:
+        item = dict(row)
+        time_sec = float(item.get("timeMs") or 0) / 1000.0
+        base = float(item.get("zoom") or 1.0)
+        item["zoom"] = max(1.0, min(2.8, base * pin_zoom_at(time_sec)))
+        enriched.append(item)
+    next_plan = dict(crop_plan)
+    next_plan["cropKeyframes"] = enriched
+    tracking = dict(next_plan.get("faceTracking") or {})
+    tracking["editorZoomEffects"] = len(effects)
+    next_plan["faceTracking"] = tracking
+    return next_plan
+
+
 def refine_clip(cfg):
     """Re-crop + subtitle burn from persisted plate/words without re-download/ASR."""
     global OUTPUT_WIDTH, OUTPUT_HEIGHT
@@ -3109,6 +3171,11 @@ def refine_clip(cfg):
     mode_value = face_cfg.get("personMode") or face_cfg.get("sceneMode", "strict")
     crop_plan["faceTracking"]["personMode"] = mode_value
     crop_plan["faceTracking"]["sceneMode"] = mode_value
+
+    zoom_effects = cfg.get("zoom_effects") or cfg.get("zoomEffects") or []
+    if isinstance(zoom_effects, list) and zoom_effects:
+        crop_plan = apply_editor_zoom_effects(crop_plan, zoom_effects, clip_duration)
+        emit("clip", "running", message="Applying editor pin-zoom effects (captions stay fixed)...", overall=12)
 
     if face_cfg.get("enableDebugOverlay"):
         debug_path = os.path.join(artifact_dir, "tracking_debug.mp4")

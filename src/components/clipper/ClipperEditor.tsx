@@ -4,7 +4,6 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Copy,
-  Crop,
   Download,
   Link2,
   Minus,
@@ -24,6 +23,9 @@ import {
   Undo2,
   ScanFace,
   Video,
+  ZoomIn,
+  ZoomOut,
+  MapPin,
 } from "lucide-react";
 import {
   useCallback,
@@ -36,6 +38,13 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "../../lib/utils";
+import {
+  createZoomPinEffect,
+  evaluateZoomAtTime,
+  normalizeZoomEffect,
+  suggestZoomEnd,
+  type ZoomPinEffect,
+} from "../../lib/clipZoomEffect";
 import SubtitleOverlay, { type CaptionStyle, type OverlayWord } from "./SubtitleOverlay";
 import { CLIP_EDITOR, CLIP_EDITOR_FONT, CLIP_EDITOR_MONO, formatEditorTime } from "./tokens";
 import { useLiveFaceTrack } from "./useLiveFaceTrack";
@@ -69,6 +78,7 @@ function parseSeconds(value?: string) {
 type TimelineSnapshot = {
   sections: Array<{ id: string; start: number; end: number }>;
   keyframes: Array<{ id: string; time: number }>;
+  zoomEffects: ZoomPinEffect[];
 };
 
 function EditorTimeline({
@@ -83,6 +93,7 @@ function EditorTimeline({
   words,
   cropKeyframes,
   onWordSelect,
+  onZoomEffectsChange,
 }: {
   clipId: string;
   videoSrc: string;
@@ -95,11 +106,13 @@ function EditorTimeline({
   words: EditorWord[];
   cropKeyframes: Array<{ timeMs: number }>;
   onWordSelect?: (index: number) => void;
+  onZoomEffectsChange?: (effects: ZoomPinEffect[]) => void;
 }) {
   const [zoom, setZoom] = useState(1);
   const [snapping, setSnapping] = useState(true);
   const [sections, setSections] = useState(() => [{ id: "source", start: 0, end: duration }]);
   const [keyframes, setKeyframes] = useState(() => cropKeyframes.map((keyframe, index) => ({ id: `${keyframe.timeMs}-${index}`, time: keyframe.timeMs / 1000 })));
+  const [zoomEffects, setZoomEffects] = useState<ZoomPinEffect[]>([]);
   const [selectedItem, setSelectedItem] = useState<string>("source");
   const [history, setHistory] = useState<TimelineSnapshot[]>([]);
   const [future, setFuture] = useState<TimelineSnapshot[]>([]);
@@ -108,8 +121,14 @@ function EditorTimeline({
   const [waveState, setWaveState] = useState<"loading" | "ready">("loading");
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const waveCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const dragRef = useRef<{ kind: "playhead" } | { kind: "keyframe"; id: string } | null>(null);
+  const dragRef = useRef<
+    | { kind: "playhead" }
+    | { kind: "keyframe"; id: string }
+    | { kind: "zoom-pin"; effectId: string; pin: "start" | "end" }
+    | null
+  >(null);
   const thumbCacheRef = useRef<Map<string, string[]>>(new Map());
+  const pendingZoomStartRef = useRef<number | null>(null);
 
   useEffect(() => {
     // Track real media duration once metadata loads, but keep user splits.
@@ -122,26 +141,33 @@ function EditorTimeline({
     // source section, then restores that clip's saved timeline edits.
     let sectionsNext: TimelineSnapshot["sections"] = [{ id: "source", start: 0, end: duration }];
     let keyframesNext: TimelineSnapshot["keyframes"] = cropKeyframes.map((keyframe, index) => ({ id: `${keyframe.timeMs}-${index}`, time: keyframe.timeMs / 1000 }));
+    let zoomEffectsNext: ZoomPinEffect[] = [];
     try {
       const saved = JSON.parse(localStorage.getItem(`clyra.timeline.${clipId}`) || "null");
       if (Array.isArray(saved?.sections) && saved.sections.length) sectionsNext = saved.sections;
       if (Array.isArray(saved?.keyframes) && saved.keyframes.length) keyframesNext = saved.keyframes;
+      if (Array.isArray(saved?.zoomEffects)) zoomEffectsNext = saved.zoomEffects;
     } catch { /* Ignore an older draft. */ }
     setSections(sectionsNext);
     setKeyframes(keyframesNext);
+    setZoomEffects(zoomEffectsNext);
     setHistory([]);
     setFuture([]);
     setSelectedItem("source");
+    pendingZoomStartRef.current = null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clipId, cropKeyframes]);
   useEffect(() => {
-    localStorage.setItem(`clyra.timeline.${clipId}`, JSON.stringify({ sections, keyframes }));
-  }, [clipId, sections, keyframes]);
+    localStorage.setItem(`clyra.timeline.${clipId}`, JSON.stringify({ sections, keyframes, zoomEffects }));
+  }, [clipId, sections, keyframes, zoomEffects]);
+  useEffect(() => {
+    onZoomEffectsChange?.(zoomEffects);
+  }, [zoomEffects, onZoomEffectsChange]);
 
   const snapshot = useCallback(() => {
-    setHistory((value) => [...value.slice(-24), { sections, keyframes }]);
+    setHistory((value) => [...value.slice(-24), { sections, keyframes, zoomEffects }]);
     setFuture([]);
-  }, [sections, keyframes]);
+  }, [sections, keyframes, zoomEffects]);
 
   const seek = useCallback((time: number) => {
     const next = Math.max(0, Math.min(duration, time));
@@ -298,6 +324,19 @@ function EditorTimeline({
       if (event.code === "Space") { event.preventDefault(); onTogglePlay(); }
       if (event.key === "ArrowLeft") seek(currentTime - (event.shiftKey ? 1 / 30 : 1));
       if (event.key === "ArrowRight") seek(currentTime + (event.shiftKey ? 1 / 30 : 1));
+      if (event.key === "Delete" || event.key === "Backspace") {
+        event.preventDefault();
+        if (zoomEffects.some((effect) => effect.id === selectedItem)) {
+          snapshot();
+          setZoomEffects((value) => value.filter((effect) => effect.id !== selectedItem));
+          setSelectedItem("source");
+          return;
+        }
+        if (selectedItem.startsWith("key")) {
+          snapshot();
+          setKeyframes((value) => value.filter((keyframe) => keyframe.id !== selectedItem));
+        }
+      }
       if (event.key.toLowerCase() === "s") setSnapping((value) => !value);
       if (event.key.toLowerCase() === "f") setZoom(1);
       if (event.key === "-") setZoom((value) => Math.max(1, value - 0.25));
@@ -305,7 +344,7 @@ function EditorTimeline({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [currentTime, onTogglePlay, seek]);
+  }, [currentTime, onTogglePlay, seek, selectedItem, snapshot, zoomEffects]);
 
   const split = () => {
     const target = sections.find((section) => currentTime > section.start + 0.15 && currentTime < section.end - 0.15);
@@ -317,6 +356,12 @@ function EditorTimeline({
     setSelectedItem(`${target.id}-b`);
   };
   const removeSelected = () => {
+    if (zoomEffects.some((effect) => effect.id === selectedItem)) {
+      snapshot();
+      setZoomEffects((value) => value.filter((effect) => effect.id !== selectedItem));
+      setSelectedItem("source");
+      return;
+    }
     if (!selectedItem.startsWith("key")) return;
     snapshot();
     setKeyframes((value) => value.filter((keyframe) => keyframe.id !== selectedItem));
@@ -324,18 +369,35 @@ function EditorTimeline({
   const undo = () => {
     const previous = history.at(-1);
     if (!previous) return;
-    setFuture((value) => [...value, { sections, keyframes }]);
+    setFuture((value) => [...value, { sections, keyframes, zoomEffects }]);
     setSections(previous.sections);
     setKeyframes(previous.keyframes);
+    setZoomEffects(previous.zoomEffects || []);
     setHistory((value) => value.slice(0, -1));
   };
   const redo = () => {
     const next = future.at(-1);
     if (!next) return;
-    setHistory((value) => [...value, { sections, keyframes }]);
+    setHistory((value) => [...value, { sections, keyframes, zoomEffects }]);
     setSections(next.sections);
     setKeyframes(next.keyframes);
+    setZoomEffects(next.zoomEffects || []);
     setFuture((value) => value.slice(0, -1));
+  };
+
+  const addZoomAtPlayhead = (direction: "in" | "out") => {
+    snapshot();
+    const start = snapping ? Math.round(currentTime * 10) / 10 : currentTime;
+    const end = snapping
+      ? Math.round(suggestZoomEnd(start, duration) * 10) / 10
+      : suggestZoomEnd(start, duration);
+    const effect = normalizeZoomEffect(
+      createZoomPinEffect({ start, end, direction }),
+      duration,
+    );
+    setZoomEffects((value) => [...value, effect]);
+    setSelectedItem(effect.id);
+    seek(start);
   };
 
   const onTrackPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -346,14 +408,27 @@ function EditorTimeline({
   const onTrackPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
     if (!drag) return;
-    const time = timeAtClientX(event.clientX);
+    const raw = timeAtClientX(event.clientX);
+    const time = snapping ? Math.round(raw * 10) / 10 : raw;
     if (drag.kind === "playhead") {
       seek(time);
       return;
     }
-    setKeyframes((value) => value.map((keyframe) => (keyframe.id === drag.id
-      ? { ...keyframe, time: snapping ? Math.round(time * 10) / 10 : time }
-      : keyframe)));
+    if (drag.kind === "keyframe") {
+      setKeyframes((value) => value.map((keyframe) => (keyframe.id === drag.id
+        ? { ...keyframe, time }
+        : keyframe)));
+      return;
+    }
+    if (drag.kind === "zoom-pin") {
+      setZoomEffects((value) => value.map((effect) => {
+        if (effect.id !== drag.effectId) return effect;
+        const next = drag.pin === "start"
+          ? { ...effect, start: Math.min(time, effect.end - 0.05) }
+          : { ...effect, end: Math.max(time, effect.start + 0.05) };
+        return normalizeZoomEffect(next, duration);
+      }));
+    }
   };
   const onTrackPointerUp = () => { dragRef.current = null; };
 
@@ -367,8 +442,9 @@ function EditorTimeline({
   }, [duration, rulerTickSeconds]);
 
   const playheadLeft = duration > 0 ? `${(currentTime / duration) * 100}%` : "0%";
-  const trackHeights = { ruler: 40, video: 58, captions: 42, audio: 66, crop: 72 } as const;
+  const trackHeights = { ruler: 40, video: 58, captions: 42, audio: 66, zoom: 72 } as const;
   const rowSeparator = { borderBottom: `1px solid ${CLIP_EDITOR.separator}` } as const;
+  const selectedZoom = zoomEffects.find((effect) => effect.id === selectedItem);
 
   return (
     <section
@@ -408,6 +484,27 @@ function EditorTimeline({
           <button type="button" disabled={!history.length} onClick={undo} className={transportButton} aria-label="Undo"><Undo2 size={15} strokeWidth={ICON_STROKE} /></button>
           <button type="button" disabled={!future.length} onClick={redo} className={transportButton} aria-label="Redo"><Redo2 size={15} strokeWidth={ICON_STROKE} /></button>
         </div>
+        <span className="mx-3 h-5 w-px" style={{ background: CLIP_EDITOR.separator }} />
+        <div className={transportGroup} style={{ color: CLIP_EDITOR.textPrimary }}>
+          <button
+            type="button"
+            onClick={() => addZoomAtPlayhead("in")}
+            className={transportButton}
+            title="Drop zoom-in pins at playhead (drag ends to set speed)"
+            aria-label="Add zoom-in effect"
+          >
+            <ZoomIn size={15} strokeWidth={ICON_STROKE} />
+          </button>
+          <button
+            type="button"
+            onClick={() => addZoomAtPlayhead("out")}
+            className={transportButton}
+            title="Drop zoom-out pins at playhead (drag ends to set speed)"
+            aria-label="Add zoom-out effect"
+          >
+            <ZoomOut size={15} strokeWidth={ICON_STROKE} />
+          </button>
+        </div>
         <div className="ml-auto flex items-center gap-2" style={{ color: CLIP_EDITOR.textPrimary }}>
           <button type="button" onClick={() => setZoom((value) => Math.max(1, value - 0.25))} className={transportButton} aria-label="Zoom out"><Minus size={15} strokeWidth={ICON_STROKE} /></button>
           <input
@@ -440,7 +537,7 @@ function EditorTimeline({
             ["Video", Video, trackHeights.video],
             ["Captions", Type, trackHeights.captions],
             ["Audio", AudioLines, trackHeights.audio],
-            ["Crop", Crop, trackHeights.crop],
+            ["Zoom", ZoomIn, trackHeights.zoom],
           ] as const).map(([label, Icon, height]) => (
             <div key={label} className="flex items-center gap-[10px] px-3" style={{ height, ...rowSeparator, color: "#53637D" }}>
               <Icon size={15} strokeWidth={ICON_STROKE} />
@@ -536,47 +633,101 @@ function EditorTimeline({
               )}
             </div>
 
-            {/* Crop keyframes: thin neutral line + blue diamonds */}
+            {/* Zoom pins: start → end band; drag pins to set duration/speed */}
             <div
               className="relative"
-              style={{ height: trackHeights.crop }}
-              onDoubleClick={(event) => { snapshot(); const time = timeAtClientX(event.clientX); setKeyframes((value) => [...value, { id: `key-${Date.now()}`, time }]); }}
+              style={{ height: trackHeights.zoom }}
+              onDoubleClick={(event) => {
+                event.stopPropagation();
+                const time = snapping ? Math.round(timeAtClientX(event.clientX) * 10) / 10 : timeAtClientX(event.clientX);
+                if (pendingZoomStartRef.current == null) {
+                  pendingZoomStartRef.current = time;
+                  return;
+                }
+                snapshot();
+                const start = Math.min(pendingZoomStartRef.current, time);
+                const end = Math.max(pendingZoomStartRef.current, time);
+                pendingZoomStartRef.current = null;
+                const effect = normalizeZoomEffect(
+                  createZoomPinEffect({ start, end: Math.max(end, start + 0.05), direction: "in" }),
+                  duration,
+                );
+                setZoomEffects((value) => [...value, effect]);
+                setSelectedItem(effect.id);
+              }}
             >
               <span className="pointer-events-none absolute left-0 right-0 top-1/2 -translate-y-1/2" style={{ height: 1.5, background: "#D8DEE8" }} />
-              {keyframes.map((keyframe) => {
-                const active = selectedItem === keyframe.id;
+              {zoomEffects.map((effect) => {
+                const active = selectedItem === effect.id;
+                const left = duration > 0 ? (effect.start / duration) * 100 : 0;
+                const width = duration > 0 ? ((effect.end - effect.start) / duration) * 100 : 0;
                 return (
-                  <button
-                    key={keyframe.id}
-                    type="button"
-                    title={formatEditorTime(keyframe.time)}
-                    onClick={(event) => { event.stopPropagation(); setSelectedItem(keyframe.id); seek(keyframe.time); }}
-                    onPointerDown={(event) => {
-                      event.stopPropagation();
-                      snapshot();
-                      setSelectedItem(keyframe.id);
-                      dragRef.current = { kind: "keyframe", id: keyframe.id };
-                      scrollerRef.current?.setPointerCapture(event.pointerId);
-                    }}
-                    className="absolute top-1/2 h-[10px] w-[10px] -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[2px] transition-colors duration-150"
-                    style={{
-                      left: `${duration > 0 ? (keyframe.time / duration) * 100 : 0}%`,
-                      background: active ? "#D7E7FF" : "#F0F6FF",
-                      border: `1.5px solid ${active ? "#0E62E6" : CLIP_EDITOR.blue}`,
-                      cursor: "ew-resize",
-                    }}
-                    aria-label={`Crop keyframe at ${formatEditorTime(keyframe.time)}`}
-                  />
+                  <div key={effect.id} className="contents">
+                    <button
+                      type="button"
+                      title={`${effect.direction === "in" ? "Zoom in" : "Zoom out"} · ${formatEditorTime(effect.end - effect.start)}`}
+                      onClick={(event) => { event.stopPropagation(); setSelectedItem(effect.id); }}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      className="absolute top-[18px] h-[22px] -translate-y-1/2 overflow-hidden rounded-[6px]"
+                      style={{
+                        left: `${left}%`,
+                        width: `${Math.max(width, 0.4)}%`,
+                        background: effect.direction === "in"
+                          ? "linear-gradient(90deg, rgba(79,124,255,0.12), rgba(79,124,255,0.32))"
+                          : "linear-gradient(90deg, rgba(16,185,129,0.32), rgba(16,185,129,0.12))",
+                        boxShadow: active ? `inset 0 0 0 1.5px ${CLIP_EDITOR.blue}` : "inset 0 0 0 1px rgba(79,124,255,0.25)",
+                      }}
+                      aria-label={`Zoom ${effect.direction} from ${formatEditorTime(effect.start)} to ${formatEditorTime(effect.end)}`}
+                    >
+                      <span className="pointer-events-none absolute inset-x-1 top-1/2 -translate-y-1/2 truncate text-left text-[9px] font-semibold uppercase tracking-wide" style={{ color: CLIP_EDITOR.blue }}>
+                        {effect.direction === "in" ? "In" : "Out"}
+                      </span>
+                    </button>
+                    {(["start", "end"] as const).map((pin) => {
+                      const pinTime = pin === "start" ? effect.start : effect.end;
+                      const pinSelected = selectedItem === effect.id;
+                      return (
+                        <button
+                          key={`${effect.id}-${pin}`}
+                          type="button"
+                          title={`${pin === "start" ? "Start" : "End"} pin · ${formatEditorTime(pinTime)}`}
+                          onClick={(event) => { event.stopPropagation(); setSelectedItem(effect.id); seek(pinTime); }}
+                          onPointerDown={(event) => {
+                            event.stopPropagation();
+                            snapshot();
+                            setSelectedItem(effect.id);
+                            dragRef.current = { kind: "zoom-pin", effectId: effect.id, pin };
+                            scrollerRef.current?.setPointerCapture(event.pointerId);
+                          }}
+                          className="absolute top-1/2 z-10 flex h-7 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center"
+                          style={{ left: `${duration > 0 ? (pinTime / duration) * 100 : 0}%`, cursor: "ew-resize" }}
+                          aria-label={`Zoom ${pin} pin at ${formatEditorTime(pinTime)}`}
+                        >
+                          <span
+                            className="grid h-[18px] w-[14px] place-items-center rounded-[4px] text-white shadow-sm"
+                            style={{
+                              background: pinSelected ? CLIP_EDITOR.blue : effect.direction === "in" ? "#4F7CFF" : "#10B981",
+                              boxShadow: pinSelected ? "0 0 0 2px rgba(79,124,255,0.28)" : undefined,
+                            }}
+                          >
+                            <MapPin size={10} strokeWidth={2.4} />
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 );
               })}
-              {!keyframes.length ? (
+              {!zoomEffects.length ? (
                 <span className="pointer-events-none absolute left-3 top-2 text-[10.5px]" style={{ color: CLIP_EDITOR.textMuted }}>
-                  Double-click to add a crop keyframe
+                  {pendingZoomStartRef.current != null
+                    ? "Double-click again to drop the end pin"
+                    : "Zoom In / Out, or double-click start then end pin"}
                 </span>
               ) : null}
             </div>
 
-            {/* Playhead: ruler through crop track, above content */}
+            {/* Playhead: ruler through zoom track, above content */}
             <div className="pointer-events-none absolute bottom-0 top-0 z-30" style={{ left: playheadLeft }}>
               <span className="absolute bottom-0 top-[30px] w-[2px] -translate-x-1/2" style={{ background: CLIP_EDITOR.blue }} />
               <span
@@ -587,6 +738,42 @@ function EditorTimeline({
           </div>
         </div>
       </div>
+      {selectedZoom ? (
+        <div
+          className="flex h-9 shrink-0 items-center gap-3 px-3 text-[11px]"
+          style={{ borderTop: `1px solid ${CLIP_EDITOR.separator}`, color: CLIP_EDITOR.textSecondary, background: "#F8FAFD" }}
+        >
+          <span className="font-semibold" style={{ color: CLIP_EDITOR.blue }}>
+            Zoom {selectedZoom.direction}
+          </span>
+          <span className="tabular-nums" style={{ fontFamily: CLIP_EDITOR_MONO }}>
+            {formatEditorTime(selectedZoom.start)} → {formatEditorTime(selectedZoom.end)}
+          </span>
+          <span>· speed from pin gap ({(selectedZoom.end - selectedZoom.start).toFixed(2)}s)</span>
+          <label className="ml-auto flex items-center gap-2">
+            <span>Intensity</span>
+            <input
+              type="range"
+              min="1.2"
+              max="2.4"
+              step="0.05"
+              value={selectedZoom.direction === "in" ? selectedZoom.toZoom : selectedZoom.fromZoom}
+              onChange={(event) => {
+                const intensity = Number(event.target.value);
+                snapshot();
+                setZoomEffects((value) => value.map((effect) => {
+                  if (effect.id !== selectedZoom.id) return effect;
+                  return effect.direction === "in"
+                    ? { ...effect, fromZoom: 1, toZoom: intensity }
+                    : { ...effect, fromZoom: intensity, toZoom: 1 };
+                }));
+              }}
+              className="clipper-zoom-slider w-[100px]"
+              aria-label="Zoom intensity"
+            />
+          </label>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -793,10 +980,20 @@ export default function ClipperEditor({
   const [playing, setPlaying] = useState(false);
   const [videoDuration, setVideoDuration] = useState(0);
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
+  const [zoomEffects, setZoomEffects] = useState<ZoomPinEffect[]>([]);
   const backdropRef = useRef<HTMLVideoElement | null>(null);
   const rafRef = useRef(0);
+  const zoomRafRef = useRef(0);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const zoomEffectsRef = useRef<ZoomPinEffect[]>([]);
   const faceTrack = useLiveFaceTrack(videoEl, faceTrackingEnabled && Boolean(selected));
+  const faceTrackRef = useRef(faceTrack);
+  faceTrackRef.current = faceTrack;
+  zoomEffectsRef.current = zoomEffects;
+
+  const onZoomEffectsChange = useCallback((effects: ZoomPinEffect[]) => {
+    setZoomEffects(effects);
+  }, []);
 
   useEffect(() => {
     // Cover the Clyra shell chrome while the desktop editor is open.
@@ -814,6 +1011,44 @@ export default function ClipperEditor({
 
   const duration = videoDuration || parseSeconds(selected?.clip_duration) || 1;
   const videoSrc = selected ? srcFor(selected) : "";
+
+  /* Butter-smooth pin zoom on the VIDEO only — subtitles stay siblings
+     and never inherit the scale transform. */
+  useEffect(() => {
+    const apply = () => {
+      const node = videoRef.current;
+      if (!node) return;
+      const time = node.currentTime || 0;
+      const sample = evaluateZoomAtTime(zoomEffectsRef.current, time);
+      const face = faceTrackingEnabled ? faceTrackRef.current : null;
+      const baseZoom = face?.zoom ?? 1;
+      const pinZoom = sample.zoom;
+      const finalZoom = Math.min(2.8, Math.max(1, baseZoom * pinZoom));
+      const originX = sample.effectId || sample.progress > 0 ? sample.originX : (face?.x ?? 50);
+      const originY = sample.effectId || sample.progress > 0 ? sample.originY : (face?.y ?? 50);
+      if (face) {
+        node.style.objectFit = "cover";
+        node.style.objectPosition = `${face.x}% ${face.y}%`;
+      } else if (pinZoom !== 1 || sample.progress > 0) {
+        node.style.objectFit = "cover";
+        node.style.objectPosition = `${originX}% ${originY}%`;
+      } else {
+        node.style.objectFit = "contain";
+        node.style.objectPosition = "50% 50%";
+      }
+      node.style.transformOrigin = `${originX}% ${originY}%`;
+      node.style.transform = `scale(${finalZoom})`;
+      node.style.willChange = "transform";
+    };
+
+    const tick = () => {
+      apply();
+      zoomRafRef.current = requestAnimationFrame(tick);
+    };
+    apply();
+    zoomRafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(zoomRafRef.current);
+  }, [faceTrackingEnabled, videoSrc, videoRef, zoomEffects]);
 
   /* Smooth playhead: read video time on animation frames while playing.
      Updates are throttled to ~30fps so state churn never lags playback. */
@@ -1082,16 +1317,7 @@ export default function ClipperEditor({
                         onLoadedMetadata={(event) => setVideoDuration(event.currentTarget.duration || 0)}
                         onTimeUpdate={(event) => { if (!playing) onTimeChange(event.currentTarget.currentTime); }}
                         className="absolute inset-0 h-full w-full will-change-transform"
-                        style={
-                          faceTrackingEnabled && faceTrack
-                            ? {
-                                objectFit: "cover",
-                                objectPosition: `${faceTrack.x}% ${faceTrack.y}%`,
-                                transform: `scale(${faceTrack.zoom})`,
-                                transformOrigin: `${faceTrack.x}% ${faceTrack.y}%`,
-                              }
-                            : { objectFit: "contain" }
-                        }
+                        style={{ objectFit: "contain" }}
                       />
                       {captionsVisible ? (
                         <SubtitleOverlay
@@ -1133,6 +1359,7 @@ export default function ClipperEditor({
                   words={words}
                   cropKeyframes={selected.crop_keyframes || []}
                   onWordSelect={onActiveWordIndex}
+                  onZoomEffectsChange={onZoomEffectsChange}
                 />
               </div>
             </>

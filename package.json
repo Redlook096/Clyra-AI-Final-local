@@ -31,6 +31,7 @@
     "test:fake-text:visual": "playwright test --config=playwright.fake-text.config.ts",
     "test:fake-text:render": "playwright test --config=playwright.fake-text.render.config.ts",
     "test:clipper": "tsx tools/clipper-unit-tests.ts",
+    "test:clip-zoom": "tsx tools/clip-zoom-effect-unit-tests.ts",
     "test:clipper-publishing": "tsx tools/clipper-publishing-unit-tests.ts",
     "test:licensed-footage": "tsx tools/licensed-footage-unit-tests.ts",
     "test:agent-controller": "tsx tools/agent-controller-unit-tests.ts",

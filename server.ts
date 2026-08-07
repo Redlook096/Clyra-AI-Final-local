@@ -3471,6 +3471,9 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
       // only composited into pixels for an explicit export.
       burn_captions: body.burnCaptions ?? body.burn_captions ?? false,
       subtitles_only: body.subtitlesOnly ?? body.subtitles_only ?? false,
+      // Editor pin-zoom effects: ease-in/out zoom that must NOT scale burned captions
+      // (ASS is applied after crop). Preview keeps SubtitleOverlay as a sibling of <video>.
+      zoom_effects: body.zoomEffects || body.zoom_effects || [],
     };
     spawnClipperPipeline(["--refine", JSON.stringify(cfg)], res, "Refining crop and captions...");
   });
