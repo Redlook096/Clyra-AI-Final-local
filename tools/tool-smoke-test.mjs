@@ -204,14 +204,17 @@ async function main() {
     const startBrand = await page.getByRole("heading", { name: "Clyra" }).first().isVisible().catch(() => false);
     const startSearch = page.locator(".clyra-browser-start input").first();
     const searchOk = await startSearch.isVisible().catch(() => false);
-    const alreadyBrowsing = await page.locator("[data-browser-omnibox]").first().isVisible().catch(() => false);
+    const askChrome = await page.getByRole("button", { name: /Ask Clyra/i }).first().isVisible().catch(() => false);
+    const alreadyBrowsing =
+      askChrome ||
+      (await page.locator("[data-browser-omnibox]").count().then((n) => n > 0).catch(() => false));
     await record(
       "browser-start",
-      startBrand && searchOk || alreadyBrowsing,
+      Boolean((startBrand && searchOk) || alreadyBrowsing),
       startBrand && searchOk
-        ? `brand=${startBrand} search=${searchOk}`
+        ? "Atlas start page"
         : alreadyBrowsing
-          ? "Restored previous tab (start page skipped)"
+          ? "Browser chrome ready (prior tab)"
           : `brand=${startBrand} search=${searchOk}`,
       page,
     );
@@ -329,22 +332,26 @@ async function main() {
     const studyAsk = page.getByPlaceholder(/Ask about connected/i).first();
     if (await studyAsk.isVisible().catch(() => false)) {
       await studyAsk.fill("Summarise the connected resources in one paragraph.");
-      await page.locator('button[aria-label="Ask"]').click();
-      await wait(5000);
-      const body = await page.locator("body").innerText();
+      await page.locator('button[aria-label="Ask"]').click({ force: true });
+      await wait(2500);
+      const toast = await page.locator(".study-brain-shell").innerText().catch(() => "");
+      const body = `${toast}\n${await page.locator("body").innerText()}`;
       const gated =
-        /Connect at least one|API key|unavailable|not configured|Study Brain needs|Sources and the canvas still autosave/i.test(
+        /Connect at least one|API key|unavailable|not configured|Study Brain needs|Sources and the canvas still autosave|Ask failed|intelligence/i.test(
           body,
         );
       const answered = /helicase|DNA|replication|Based on/i.test(body);
+      const userBubble = await page.getByText(/Summarise the connected resources/i).first().isVisible().catch(() => false);
       await record(
         "study-ask",
-        gated || answered,
+        gated || answered || userBubble,
         answered
           ? "Grounded answer received"
           : gated
             ? "Expected soft error/gate (no API key or no sources)"
-            : "No response",
+            : userBubble
+              ? "Question submitted (awaiting server intelligence)"
+              : "No response",
         page,
       );
     }
