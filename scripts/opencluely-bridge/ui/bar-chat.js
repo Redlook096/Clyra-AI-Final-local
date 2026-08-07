@@ -156,14 +156,18 @@
     }
   }
 
-  async function collapse() {
+  async function collapse(opts = {}) {
+    const hideIfAlreadyCollapsed = Boolean(opts.hideIfAlreadyCollapsed);
     if (animating) return;
     if (!open && !wide) {
-      // Fully collapsed — X can hide the window
-      try {
-        await window.electronAPI?.hideAllWindows?.();
-      } catch (_) {
-        /* ignore */
+      // Fully collapsed — only the explicit X click should hide the overlay.
+      // Drawer sync from main must NOT hide, or /show(["main"]) races itself away.
+      if (hideIfAlreadyCollapsed) {
+        try {
+          await window.electronAPI?.hideAllWindows?.();
+        } catch (_) {
+          /* ignore */
+        }
       }
       return;
     }
@@ -262,7 +266,7 @@
 
   closeBtn?.addEventListener('click', async (e) => {
     e.stopPropagation();
-    await collapse();
+    await collapse({ hideIfAlreadyCollapsed: true });
   });
 
   sendBtn?.addEventListener('click', () => sendCurrent());
@@ -274,19 +278,18 @@
     }
   });
 
-  // Main-process open/close
-  window.electronAPI?.onToggleChatDrawer?.((_event, payload) => {
+  // Main-process open/close (single listener — avoid double collapse/hide)
+  function onDrawerToggle(_event, payload) {
     if (payload && typeof payload.open === 'boolean') {
       if (payload.open) expandToChat(mode || 'ask');
-      else collapse();
+      else collapse({ hideIfAlreadyCollapsed: false });
     }
-  });
-  window.electronAPI?.receive?.('toggle-chat-drawer', (_e, payload) => {
-    if (payload && typeof payload.open === 'boolean') {
-      if (payload.open) expandToChat(mode || 'ask');
-      else collapse();
-    }
-  });
+  }
+  if (window.electronAPI?.onToggleChatDrawer) {
+    window.electronAPI.onToggleChatDrawer(onDrawerToggle);
+  } else {
+    window.electronAPI?.receive?.('toggle-chat-drawer', onDrawerToggle);
+  }
 
   // Responses
   const api = window.electronAPI;

@@ -161,9 +161,10 @@
       }
       .oc-pill-btn:active { transform: translateY(0); }
       .oc-pill-btn.is-active {
-        background: #eef2ff;
-        color: #3730a3;
-        border-color: rgba(79, 70, 229, 0.18);
+        background: #f3f4f6;
+        color: var(--oc-text-strong);
+        border-color: rgba(15, 23, 42, 0.14);
+        box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06);
       }
 
       .oc-drag {
@@ -245,44 +246,76 @@
         gap: 8px;
       }
 
+      /* Override legacy dark-theme common.css message colors for light drawer */
       .chat-messages .message {
         max-width: 92%;
+        margin-bottom: 0;
         padding: 9px 11px;
         border-radius: 12px;
+        border-left: none;
         font-size: 12.5px;
         line-height: 1.45;
-        color: var(--oc-text-strong);
-        background: rgba(255, 255, 255, 0.72);
+        color: var(--oc-text-strong) !important;
+        background: rgba(255, 255, 255, 0.82) !important;
         border: 1px solid rgba(15, 23, 42, 0.06);
         box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+        backdrop-filter: none;
+        text-shadow: none;
       }
       .chat-messages .message.user {
         align-self: flex-end;
-        background: #eef2ff;
-        border-color: rgba(79, 70, 229, 0.14);
+        background: #e8eef8 !important;
+        border-color: rgba(55, 65, 81, 0.12);
+        color: var(--oc-text-strong) !important;
       }
       .chat-messages .message.assistant,
       .chat-messages .message.system,
       .chat-messages .message.transcription {
         align-self: flex-start;
+        background: rgba(255, 255, 255, 0.88) !important;
+        color: var(--oc-text-strong) !important;
       }
       .chat-messages .message.error {
         align-self: flex-start;
-        background: #fef2f2;
+        background: #fef2f2 !important;
         border-color: rgba(239, 68, 68, 0.2);
-        color: #991b1b;
+        color: #991b1b !important;
       }
       .chat-messages .message-time {
         font-size: 10px;
-        color: #9aa3b2;
+        color: #8b95a5 !important;
         margin-bottom: 3px;
+        font-weight: 500;
       }
-      .chat-messages .message-text strong { font-weight: 700; }
+      .chat-messages .message-text {
+        color: var(--oc-text-strong) !important;
+        text-shadow: none !important;
+        font-size: 12.5px;
+        line-height: 1.45;
+        white-space: normal;
+      }
+      .chat-messages .message-text strong {
+        font-weight: 700;
+        color: var(--oc-text-strong) !important;
+      }
+      .chat-messages .message-text em {
+        color: var(--oc-text) !important;
+      }
       .chat-messages .message-text code {
-        background: rgba(15, 23, 42, 0.06);
+        background: rgba(15, 23, 42, 0.06) !important;
+        color: #334155 !important;
         padding: 1px 4px;
         border-radius: 4px;
         font-size: 11px;
+      }
+      .chat-messages .message.assistant strong,
+      .chat-messages .message.assistant em,
+      .chat-messages .message.assistant code {
+        color: inherit;
+      }
+      .chat-messages .message.assistant code {
+        color: #334155 !important;
+        background: rgba(15, 23, 42, 0.06) !important;
       }
       .thinking-dots .dot {
         display: inline-block;
@@ -322,22 +355,23 @@
       }
       #barChatInput::placeholder { color: #9aa3b2; }
       #barChatInput:focus {
-        border-color: rgba(79, 70, 229, 0.35);
-        box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.10);
+        border-color: rgba(55, 65, 81, 0.28);
+        box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.06);
       }
       #barChatSend {
         width: 38px;
         height: 38px;
         border-radius: 12px;
-        border: 1px solid rgba(79, 70, 229, 0.18);
-        background: #eef2ff;
-        color: #4338ca;
+        border: 1px solid rgba(15, 23, 42, 0.10);
+        background: #ffffff;
+        color: var(--oc-text-strong);
         cursor: pointer;
         display: grid;
         place-items: center;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
         transition: transform 160ms var(--oc-ease), background 160ms ease;
       }
-      #barChatSend:hover { background: #e0e7ff; transform: scale(1.04); }
+      #barChatSend:hover { background: #f3f4f6; transform: scale(1.04); }
       #barChatSend svg { width: 15px; height: 15px; }
     </style>
   </head>

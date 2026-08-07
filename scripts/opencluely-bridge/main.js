@@ -2117,15 +2117,20 @@ class ApplicationController {
             const windows = Array.isArray(body.windows) ? body.windows : null;
             windowManager.showAllWindows();
             windowManager.forceAlwaysOnTopForAllWindows?.();
-            if (!windows || windows.includes("chat") || windows.includes("main")) {
-              // Expand chat under the centered bar when chat is requested
-              if (!windows || windows.includes("chat")) {
-                windowManager.openChatDrawer?.();
-              }
-            }
+            windowManager.hideSettings?.();
             // Never surface the legacy floating LLM / side chat panels
             windowManager.hideLLMResponse?.();
             windowManager.hideChatWindow?.();
+            windowManager.centerMainWindowAtTop?.();
+            // Expand chat only when explicitly requested; keep collapsed pill otherwise
+            if (windows && windows.includes("chat")) {
+              windowManager.openChatDrawer?.();
+            } else if (windows && windows.includes("main")) {
+              // Soft-close drawer UI without hiding the overlay window
+              windowManager.closeChatDrawer?.();
+            } else if (!windows) {
+              windowManager.openChatDrawer?.();
+            }
             send(200, { ok: true, action: "show" });
             return;
           }

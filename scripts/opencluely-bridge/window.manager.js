@@ -36,6 +36,7 @@ class WindowManager {
     this.chatDrawerOpen = false; // Chat expands under the centered main bar (no separate panel)
     this.mainExpandedWidth = 420; // Max width while chat drawer is open
     this.mainCollapsedMaxWidth = 360; // Compact frosted pill
+    this.mainExpandedWidth = 420; // Ask / Auto Answer expanded shell
     this.windowGap = 10; // Small gap between windows
     this.boundWindowsPosition = { x: 0, y: 0 }; // Track position of bound windows
     
@@ -1696,7 +1697,7 @@ class WindowManager {
 
   getMainMaxWidth() {
     if (this.chatDrawerOpen) {
-      return Math.max(this.windowConfigs?.main?.width || 520, this.mainExpandedWidth || 420);
+      return Math.max(this.mainExpandedWidth || 420, 400);
     }
     return Math.max(this.mainCollapsedMaxWidth || 360, 220);
   }
