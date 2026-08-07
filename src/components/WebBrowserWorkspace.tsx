@@ -55,6 +55,7 @@ import {
 import { cn } from "../lib/utils";
 import { getElectronDesktop, isElectronRuntime, requestElectronBrowser } from "../lib/electron-runtime";
 import { ElectronWebContentsSurface } from "./ElectronWebContentsSurface";
+import { BrowserStartPage, isBrowserStartPageUrl } from "./BrowserStartPage";
 import { ShiningBrainIcon, ShiningText, ThinkingDots } from "./ShiningText";
 
 type AgentStatus =
@@ -658,7 +659,8 @@ export default function WebBrowserWorkspace() {
   const [isBrowserBusy, setIsBrowserBusy] = useState(false);
   const [isAgentBusy, setIsAgentBusy] = useState(false);
   const [sideView, setSideView] = useState<SideView>("agent");
-  const [sideOpen, setSideOpen] = useState(true);
+  // Start with Ask Clyra closed so a new browser / new tab opens on the page canvas.
+  const [sideOpen, setSideOpen] = useState(false);
   const [omniboxFocused, setOmniboxFocused] = useState(false);
   const [agentDemo] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -928,7 +930,13 @@ export default function WebBrowserWorkspace() {
   }, [browserState, desktopChromium, frameTick, isAgentBusy]);
 
   const performAction = useCallback(
-    (action: BrowserAction, quiet = false) => requestBrowser("/api/openbrowser/action", { body: { action }, quiet }),
+    async (action: BrowserAction, quiet = false) => {
+      if (action.type === "open_tab") {
+        setSideOpen(false);
+        setSideView("agent");
+      }
+      return requestBrowser("/api/openbrowser/action", { body: { action }, quiet });
+    },
     [requestBrowser],
   );
 
@@ -1265,8 +1273,18 @@ export default function WebBrowserWorkspace() {
     ? `/api/openbrowser/frame?${isAgentBusy || agentDemo ? "fresh=1&" : ""}v=${browserState.frameVersion}&t=${frameTick}`
     : "";
   const showAgentChrome = isAgentBusy || agentDemo;
+  const showStartPage =
+    Boolean(browserState) &&
+    !showAgentChrome &&
+    isBrowserStartPageUrl(activeTab?.url || browserState?.url || "");
   const aiInControl = agentDemo
     || (["planning", "observing", "executing", "verifying", "recovering"].includes(agentPhase) && !browserState?.agent.manualControl);
+
+  // New browser sessions and start-page tabs keep Ask Clyra closed until requested.
+  useEffect(() => {
+    if (!showStartPage) return;
+    setSideOpen(false);
+  }, [activeTab?.id, showStartPage]);
   const agentTaskTitle = agentDemo
     ? (agentDemoKind === "ebay" ? "Searching MacBook M2 on eBay" : "Fulfilling beach essentials request")
     : (runTask || browserState?.agent.task || agentStatus || "Working");
@@ -1511,12 +1529,29 @@ export default function WebBrowserWorkspace() {
             className="group relative min-h-0 flex-1 overflow-hidden bg-white outline-none"
             aria-label="Interactive browser page"
           >
-            {browserState && desktopChromium ? (
+            {showStartPage ? (
+              <BrowserStartPage
+                history={browserState?.history}
+                bookmarks={browserState?.bookmarks}
+                onNavigate={(target) => {
+                  setAddress(target);
+                  void navigate(undefined, target);
+                }}
+                onAskAgent={(prompt) => {
+                  setSideOpen(true);
+                  setSideView("agent");
+                  setTask(prompt);
+                  void runAgentTask(prompt);
+                }}
+                onOpenSettings={() => openSideView("settings")}
+              />
+            ) : browserState && desktopChromium ? (
               <ElectronWebContentsSurface
                 title={`Live browser page: ${browserState.title}`}
                 surfaceId="primary-browser"
                 kind="browser"
                 className="h-full w-full"
+                active={!showStartPage}
                 fallback={
                   <img
                     data-clyra-browser-frame="1"
