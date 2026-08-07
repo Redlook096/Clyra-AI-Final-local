@@ -34,6 +34,17 @@ if [[ ! -x "${ELECTRON_BIN}" ]]; then
   exit 1
 fi
 
+# Unique macOS TCC identity so Privacy → Microphone lists "OpenCluely".
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  node "${ROOT}/tools/patch-electron-macos-privacy.mjs" opencluely >/dev/null || true
+fi
+
 # Headless-friendly Electron flags
+# On macOS keep GPU enabled so the overlay feels native; Linux headless keeps the safer flags.
+EXTRA_FLAGS=()
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  EXTRA_FLAGS+=(--no-sandbox --disable-gpu --disable-dev-shm-usage)
+fi
+
 exec env -u ELECTRON_RUN_AS_NODE \
-  "${ELECTRON_BIN}" . --no-sandbox --disable-gpu --disable-dev-shm-usage "$@"
+  "${ELECTRON_BIN}" . "${EXTRA_FLAGS[@]}" "$@"

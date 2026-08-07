@@ -243,6 +243,67 @@ function isRunnableFile(candidate) {
   }
 }
 
+/** POST JSON to OpenCluely's local control API; try current + legacy ports. */
+async function postOpenCluelyControl(pathname, body = {}) {
+  const ports = [
+    Number(process.env.CLYRA_CONTROL_PORT || 0),
+    3848,
+    3847,
+  ].filter((port, index, all) => Number.isFinite(port) && port > 0 && all.indexOf(port) === index);
+
+  const payload = JSON.stringify(body);
+  for (const port of ports) {
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const req = http.request(
+          {
+            host: "127.0.0.1",
+            port,
+            path: pathname,
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Content-Length": Buffer.byteLength(payload),
+            },
+            timeout: 1_500,
+          },
+          (res) => {
+            const chunks = [];
+            res.on("data", (chunk) => chunks.push(chunk));
+            res.on("end", () => {
+              resolve({
+                ok: (res.statusCode || 500) < 400,
+                status: res.statusCode || 0,
+                port,
+                body: Buffer.concat(chunks).toString("utf8"),
+              });
+            });
+          },
+        );
+        req.on("timeout", () => {
+          req.destroy(new Error("timeout"));
+        });
+        req.on("error", reject);
+        req.write(payload);
+        req.end();
+      });
+      if (result.ok) return result;
+    } catch {
+      // Try the next control port.
+    }
+  }
+  return null;
+}
+
+async function toggleOpenCluelyOverlay() {
+  const toggled = await postOpenCluelyControl("/toggle");
+  if (toggled?.ok) return toggled;
+  const shown = await postOpenCluelyControl("/show", { windows: ["main"] });
+  if (shown?.ok) return shown;
+  console.warn("[opencluely] Cmd+/ — OpenCluely control API not reachable on 3848/3847");
+  return null;
+}
+
 function attachLocalService(child, label, { onSpawnError, onUnexpectedExit } = {}) {
   let lastStderr = "";
   reportDesktopLifecycle(`service ${label} spawned pid=${child.pid ?? "unknown"}`);
@@ -556,9 +617,21 @@ function registerIpc() {
     if (mic && mic.ok === false) return { ...status, ...mic };
     return { ok: true, ...(status || {}), ...(mic || {}) };
   });
+  ipcMain.handle("dictation:ensure-camera", async (event) => {
+    authorize(event);
+    const camera = await dictationManager?.ensureCameraAccess();
+    const status = await dictationManager?.permissionStatus();
+    if (camera && camera.ok === false) return { ...status, ...camera };
+    return { ok: true, ...(status || {}), ...(camera || {}) };
+  });
   ipcMain.handle("dictation:open-microphone-settings", async (event) => {
     authorize(event);
     await dictationManager?.openMicrophoneSettings();
+    return { ok: true };
+  });
+  ipcMain.handle("dictation:open-camera-settings", async (event) => {
+    authorize(event);
+    await dictationManager?.openCameraSettings();
     return { ok: true };
   });
   ipcMain.on("dictation:pill-action", (event, action) => { authorizeDictation(event); void dictationManager?.action(String(action || "cancel")); });
@@ -743,6 +816,18 @@ async function createWindow() {
     });
   } catch (error) {
     console.warn("[taskview] global shortcut unavailable:", error);
+  }
+
+  // ⌘/ — activate OpenCluely overlay (show/hide via local control API).
+  try {
+    const registered = globalShortcut.register("CommandOrControl+/", () => {
+      void toggleOpenCluelyOverlay();
+    });
+    if (!registered) {
+      console.warn("[opencluely] Cmd+/ is already owned by another app (OpenCluely may handle it).");
+    }
+  } catch (error) {
+    console.warn("[opencluely] Cmd+/ shortcut unavailable:", error);
   }
 
   if (process.env.CLYRA_COMPANION_SMOKE === "1") {

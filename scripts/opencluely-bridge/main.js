@@ -1,7 +1,7 @@
 const path = require("path");
 const fs = require("fs");
 const { fileURLToPath } = require("url");
-const { app, BrowserWindow, globalShortcut, session, ipcMain } = require("electron");
+const { app, BrowserWindow, globalShortcut, session, ipcMain, systemPreferences } = require("electron");
 
 // ── Resolve a stable .env location ──
 // In packaged builds process.cwd() is unstable and frequently read-only
@@ -365,7 +365,12 @@ class ApplicationController {
           return false;
         }
         if (permission === "media") {
-          return !details.mediaType || details.mediaType === "audio";
+          // Allow mic + camera (voice / vision helpers).
+          return (
+            !details.mediaType ||
+            details.mediaType === "audio" ||
+            details.mediaType === "video"
+          );
         }
         return permission === "display-capture";
       }
@@ -377,7 +382,10 @@ class ApplicationController {
         if (isTrustedAppContents(webContents)) {
           if (permission === "media") {
             const mediaTypes = Array.isArray(details.mediaTypes) ? details.mediaTypes : [];
-            granted = mediaTypes.length === 0 || mediaTypes.includes("audio");
+            granted =
+              mediaTypes.length === 0 ||
+              mediaTypes.includes("audio") ||
+              mediaTypes.includes("video");
           } else {
             granted = permission === "display-capture";
           }
@@ -395,6 +403,7 @@ class ApplicationController {
 
   setupGlobalShortcuts() {
     const shortcuts = {
+      "CommandOrControl+/": () => windowManager.toggleVisibility(),
       "CommandOrControl+Shift+S": () => this.triggerScreenshotOCR(),
       "CommandOrControl+Shift+V": () => windowManager.toggleVisibility(),
       "CommandOrControl+Shift+I": () => windowManager.toggleInteraction(),
@@ -481,7 +490,11 @@ class ApplicationController {
       return speechService.isAvailable ? speechService.isAvailable() : false;
     });
 
-    ipcMain.handle("start-speech-recognition", () => {
+    ipcMain.handle("start-speech-recognition", async () => {
+      const mic = await this.ensureMicrophoneAccess();
+      if (mic && mic.ok === false) {
+        return { ...(speechService.getStatus() || {}), error: mic.error, microphoneDenied: true };
+      }
       speechService.startRecording();
       return speechService.getStatus();
     });
@@ -1004,7 +1017,45 @@ class ApplicationController {
     });
   }
 
-  toggleSpeechRecognition() {
+  async ensureMicrophoneAccess() {
+    if (process.platform !== "darwin") return { ok: true, status: "unknown" };
+    let status = "unknown";
+    try {
+      status = systemPreferences.getMediaAccessStatus("microphone");
+    } catch {
+      return { ok: true, status: "unknown" };
+    }
+    if (status === "granted") return { ok: true, status };
+    try {
+      const granted = await systemPreferences.askForMediaAccess("microphone");
+      if (granted) return { ok: true, status: "granted" };
+    } catch (error) {
+      logger.warn("askForMediaAccess(microphone) failed", { error: error.message });
+    }
+    // Open Privacy pane so the user can enable “OpenCluely”.
+    try {
+      const { shell } = require("electron");
+      const { execFile } = require("child_process");
+      execFile(
+        "open",
+        ["x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"],
+        () => undefined,
+      );
+      void shell.openExternal(
+        "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone",
+      ).catch(() => undefined);
+    } catch {
+      // ignore
+    }
+    return {
+      ok: false,
+      status: "denied",
+      error:
+        'Microphone access is blocked. Enable “OpenCluely” under System Settings → Privacy & Security → Microphone.',
+    };
+  }
+
+  async toggleSpeechRecognition() {
     const isAvailable = typeof speechService.isAvailable === 'function' ? speechService.isAvailable() : !!speechService.getStatus?.().isInitialized;
     if (!isAvailable) {
       logger.warn("Speech recognition unavailable; toggle ignored");
@@ -1024,6 +1075,14 @@ class ApplicationController {
       }
     } else {
       try {
+        const mic = await this.ensureMicrophoneAccess();
+        if (mic && mic.ok === false) {
+          windowManager.broadcastToAllWindows("speech-status", {
+            status: mic.error || "Microphone permission required",
+            available: true,
+          });
+          return;
+        }
         speechService.startRecording();
         windowManager.showChatWindow();
         logger.info("Speech recognition started via global shortcut");
@@ -2549,6 +2608,16 @@ class ApplicationController {
               windowManager.openChatDrawer?.();
             }
             send(200, { ok: true, action: "show" });
+            return;
+          }
+          if (req.method === "POST" && req.url === "/hide") {
+            windowManager.hideAllWindows();
+            send(200, { ok: true, action: "hide" });
+            return;
+          }
+          if (req.method === "POST" && req.url === "/toggle") {
+            const visible = windowManager.toggleVisibility();
+            send(200, { ok: true, action: "toggle", visible: Boolean(visible) });
             return;
           }
           if (req.method === "POST" && req.url === "/hide-settings") {

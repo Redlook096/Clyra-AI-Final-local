@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { BrowserWindow, clipboard, globalShortcut, screen, shell, systemPreferences } from "electron";
+import { app, BrowserWindow, clipboard, globalShortcut, screen, shell, systemPreferences } from "electron";
 
 const execFileAsync = promisify(execFile);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -115,16 +115,22 @@ export class DictationManager {
     this.window = null;
   }
 
-  /** macOS mic / accessibility status for actionable UI copy. */
+  /** macOS mic / camera / accessibility status for actionable UI copy. */
   async permissionStatus() {
     if (process.platform !== "darwin") {
-      return { microphone: "unknown", accessibility: true, trusted: true };
+      return { microphone: "unknown", camera: "unknown", accessibility: true, trusted: true };
     }
     let microphone = "unknown";
+    let camera = "unknown";
     try {
       microphone = systemPreferences.getMediaAccessStatus("microphone");
     } catch {
       microphone = "unknown";
+    }
+    try {
+      camera = systemPreferences.getMediaAccessStatus("camera");
+    } catch {
+      camera = "unknown";
     }
     let accessibility = true;
     try {
@@ -132,70 +138,98 @@ export class DictationManager {
     } catch {
       accessibility = true;
     }
-    return { microphone, accessibility, trusted: accessibility };
+    return { microphone, camera, accessibility, trusted: accessibility };
   }
 
   micAppLabel() {
-    // In desktop:dev the binary is still Electron.app, so macOS lists
-    // "Electron" under Microphone — not the product name from app.setName.
-    return process.env.CLYRA_ELECTRON_DEV === "1" ? "Electron" : "Clyra";
+    // After tools/patch-electron-macos-privacy.mjs, desktop:dev lists as "Clyra".
+    // Fall back to Electron only when the patched name is unavailable.
+    try {
+      const name = String(app.getName?.() || "").trim();
+      if (name && !/^electron$/i.test(name)) return name;
+    } catch {
+      // ignore
+    }
+    return process.env.CLYRA_ELECTRON_DEV === "1" ? "Clyra" : "Clyra";
+  }
+
+  mediaBlockedMessage(kind = "microphone", status = "denied") {
+    const appLabel = this.micAppLabel();
+    const label = kind === "camera" ? "Camera" : "Microphone";
+    if (process.platform === "win32") {
+      return `${label} access is blocked. Opening Windows Settings → Privacy → ${label} so you can enable ${appLabel}.`;
+    }
+    if (status === "restricted") {
+      return `${label} access is restricted by the system. Opening System Settings → Privacy & Security → ${label} so you can enable ${appLabel}.`;
+    }
+    return `${label} access is blocked. Opening System Settings → Privacy & Security → ${label} and turn on “${appLabel}”.`;
   }
 
   micBlockedMessage(status = "denied") {
-    const appLabel = this.micAppLabel();
-    if (process.platform === "win32") {
-      return `Microphone access is blocked. Opening Windows Settings → Privacy → Microphone so you can enable ${appLabel}.`;
-    }
-    if (status === "restricted") {
-      return `Microphone access is restricted by the system. Opening System Settings → Privacy & Security → Microphone so you can enable ${appLabel}.`;
-    }
-    return `Microphone access is blocked. Opening System Settings → Privacy & Security → Microphone so you can turn on ${appLabel}.`;
+    return this.mediaBlockedMessage("microphone", status);
   }
 
-  async ensureMicrophoneAccess() {
-    if (process.platform === "linux") return { ok: true, status: "unknown" };
+  async ensureMediaAccess(mediaType = "microphone") {
+    if (process.platform === "linux") return { ok: true, status: "unknown", mediaType };
     if (process.platform === "win32") {
       // Windows has no askForMediaAccess equivalent; Chromium still prompts /
-      // respects Privacy → Microphone. If getUserMedia later fails we open
-      // Settings from the renderer path.
-      return { ok: true, status: "unknown" };
+      // respects Privacy settings. If getUserMedia later fails we open Settings.
+      return { ok: true, status: "unknown", mediaType };
     }
+    const kind = mediaType === "camera" ? "camera" : "microphone";
     let status = "unknown";
     try {
-      status = systemPreferences.getMediaAccessStatus("microphone");
+      status = systemPreferences.getMediaAccessStatus(kind);
     } catch {
       // Prefer attempting capture over hard-failing when the TCC query fails.
-      return { ok: true, status: "unknown" };
+      return { ok: true, status: "unknown", mediaType: kind };
     }
-    if (status === "granted") return { ok: true, status };
-    if (status === "denied" || status === "restricted") {
-      await this.openMicrophoneSettings();
+    if (status === "granted") return { ok: true, status, mediaType: kind };
+
+    // Always attempt the native prompt once. After we re-identity Electron.app
+    // for TCC, a stale "denied" from the shared com.github.Electron bundle can
+    // clear into a real prompt for ai.clyra.desktop.dev / "Clyra".
+    if (status === "not-determined" || status === "unknown" || status === "denied") {
+      try {
+        const granted = await systemPreferences.askForMediaAccess(kind);
+        if (granted) return { ok: true, status: "granted", mediaType: kind };
+      } catch (error) {
+        await this.openPrivacySettings(kind);
+        return {
+          ok: false,
+          status: "denied",
+          mediaType: kind,
+          error: this.mediaBlockedMessage(kind, "denied"),
+          cause: error instanceof Error ? error.message : String(error || ""),
+        };
+      }
+    }
+
+    if (status === "restricted") {
+      await this.openPrivacySettings(kind);
       return {
         ok: false,
         status,
-        error: this.micBlockedMessage(status),
+        mediaType: kind,
+        error: this.mediaBlockedMessage(kind, status),
       };
     }
-    // not-determined / unknown — prompt once from the main process so a
-    // background renderer does not silently fail getUserMedia.
-    try {
-      const granted = await systemPreferences.askForMediaAccess("microphone");
-      if (granted) return { ok: true, status: "granted" };
-      await this.openMicrophoneSettings();
-      return {
-        ok: false,
-        status: "denied",
-        error: this.micBlockedMessage("denied"),
-      };
-    } catch (error) {
-      await this.openMicrophoneSettings();
-      return {
-        ok: false,
-        status: "denied",
-        error: this.micBlockedMessage("denied"),
-        cause: error instanceof Error ? error.message : String(error || ""),
-      };
-    }
+
+    await this.openPrivacySettings(kind);
+    return {
+      ok: false,
+      status: "denied",
+      mediaType: kind,
+      error: this.mediaBlockedMessage(kind, "denied"),
+    };
+  }
+
+  async ensureMicrophoneAccess() {
+    return this.ensureMediaAccess("microphone");
+  }
+
+  async ensureCameraAccess() {
+    return this.ensureMediaAccess("camera");
   }
 
   /**
@@ -212,13 +246,14 @@ export class DictationManager {
     this.window.setBounds({ x: px, y: py, width: PILL_WIDTH, height: PILL_HEIGHT });
   }
 
-  async openMicrophoneSettings() {
+  async openPrivacySettings(kind = "microphone") {
     // Prefer the OS `open` / `start` CLIs — shell.openExternal often no-ops on
     // preference-pane URLs (especially on newer macOS System Settings).
+    const pane = kind === "camera" ? "Privacy_Camera" : "Privacy_Microphone";
     if (process.platform === "darwin") {
       const candidates = [
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
-        "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone",
+        `x-apple.systempreferences:com.apple.preference.security?${pane}`,
+        `x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?${pane}`,
         "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension",
       ];
       for (const url of candidates) {
@@ -238,16 +273,25 @@ export class DictationManager {
       }
     }
     if (process.platform === "win32") {
+      const uri = kind === "camera" ? "ms-settings:privacy-webcam" : "ms-settings:privacy-microphone";
       try {
         // Empty title arg keeps `start` from treating the URI as a window title.
-        await execFileAsync("cmd", ["/c", "start", "", "ms-settings:privacy-microphone"], { timeout: 4_000, windowsHide: true });
+        await execFileAsync("cmd", ["/c", "start", "", uri], { timeout: 4_000, windowsHide: true });
         return { ok: true };
       } catch {
-        await shell.openExternal("ms-settings:privacy-microphone").catch(() => undefined);
+        await shell.openExternal(uri).catch(() => undefined);
         return { ok: true };
       }
     }
     return { ok: false };
+  }
+
+  async openMicrophoneSettings() {
+    return this.openPrivacySettings("microphone");
+  }
+
+  async openCameraSettings() {
+    return this.openPrivacySettings("camera");
   }
 
   ensurePill() {

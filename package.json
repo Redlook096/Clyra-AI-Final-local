@@ -164,6 +164,8 @@
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Clyra needs microphone access for Cmd+Shift+K dictation and Voice Call.",
+        "NSCameraUsageDescription": "Clyra needs camera access for Voice Call camera vision.",
+        "NSScreenCaptureUsageDescription": "Clyra needs screen recording access to share your screen in Voice Call.",
         "NSAppleEventsUsageDescription": "Clyra needs Accessibility / Apple Events access to paste dictation into other apps."
       }
     },

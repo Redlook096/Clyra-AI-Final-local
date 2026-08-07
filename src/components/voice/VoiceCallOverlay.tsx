@@ -381,6 +381,12 @@ export function VoiceCallOverlay({
       track.stop();
     }
     try {
+      const desktopPermission = await getElectronDesktop()?.dictation.ensureCamera?.().catch(() => null);
+      if (desktopPermission && desktopPermission.ok === false) {
+        setMediaError(String(desktopPermission.error || "Camera permission was not granted."));
+        setMediaMode("none");
+        return;
+      }
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: "user",
@@ -404,9 +410,12 @@ export function VoiceCallOverlay({
     } catch (cause) {
       if (requestId !== mediaRequestIdRef.current) return;
       const name = cause instanceof DOMException ? cause.name : "";
+      if (name === "NotAllowedError") {
+        void getElectronDesktop()?.dictation.openCameraSettings?.().catch(() => undefined);
+      }
       setMediaError(
         name === "NotAllowedError"
-          ? "Camera permission was not granted."
+          ? "Camera permission was not granted. Enable “Clyra” under System Settings → Privacy & Security → Camera."
           : "Could not start the camera.",
       );
       setMediaMode("none");

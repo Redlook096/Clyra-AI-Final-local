@@ -59,8 +59,10 @@ export type ClyraDesktopBridge = {
     setState: (payload: unknown) => Promise<any>;
     serviceUrl: () => Promise<string>;
     insert: (payload: { text: string; target?: unknown }) => Promise<any>;
-    ensurePermissions?: () => Promise<{ ok: boolean; status?: string; error?: string; microphone?: string; accessibility?: boolean }>;
+    ensurePermissions?: () => Promise<{ ok: boolean; status?: string; error?: string; microphone?: string; camera?: string; accessibility?: boolean }>;
+    ensureCamera?: () => Promise<{ ok: boolean; status?: string; error?: string; microphone?: string; camera?: string }>;
     openMicrophoneSettings?: () => Promise<{ ok: boolean }>;
+    openCameraSettings?: () => Promise<{ ok: boolean }>;
     onTrigger: (callback: (payload: any) => void) => () => void;
     onAction: (callback: (payload: any) => void) => () => void;
   };
