@@ -45,19 +45,36 @@ export function ThinkingIndicator({
 }
 
 function ThoughtSummary({ entry }: { entry: Extract<LogEntry, { type: "reasoning" }> }) {
-  if (!entry.endedAt) {
-    return <ThinkingIndicator startedAt={entry.ts} />;
-  }
-  const seconds = Math.max(1, Math.round((entry.endedAt - entry.ts) / 1000));
+  const open = !entry.endedAt;
+  const seconds = entry.endedAt
+    ? Math.max(1, Math.round((entry.endedAt - entry.ts) / 1000))
+    : 0;
+
   return (
-    <motion.div
-      initial={{ opacity: 0.6, height: 26 }}
-      animate={{ opacity: 1, height: "auto" }}
-      transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-      className="overflow-hidden py-1 text-[12px] font-medium tracking-[-0.01em] text-[color:var(--text-tertiary)]"
-    >
-      Thought for {seconds}s
-    </motion.div>
+    <AnimatePresence mode="wait" initial={false}>
+      {open ? (
+        <motion.div
+          key={`${entry.id}-open`}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0, height: 0 }}
+          transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+          className="overflow-hidden"
+        >
+          <ThinkingIndicator startedAt={entry.ts} />
+        </motion.div>
+      ) : (
+        <motion.div
+          key={`${entry.id}-done`}
+          initial={{ opacity: 0, y: -2 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+          className="py-1 text-[12px] font-medium tracking-[-0.01em] text-[color:var(--text-tertiary)]"
+        >
+          Thought for {seconds}s
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 
@@ -199,11 +216,7 @@ export function Conversation({
             );
           }
           if (entry.type === "reasoning") {
-            return (
-              <AnimatePresence mode="wait" key={entry.id}>
-                <ThoughtSummary entry={entry} />
-              </AnimatePresence>
-            );
+            return <ThoughtSummary key={entry.id} entry={entry} />;
           }
           const action = state.actions[entry.actionId];
           if (!action) return null;
