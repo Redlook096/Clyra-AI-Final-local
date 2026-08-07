@@ -29,13 +29,7 @@ function speakReply(text: string) {
 }
 
 export default function ScreenCompanionWorkspace() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "hello",
-      role: "assistant",
-      text: "Hello — ask what’s on your screen, or say “show me where to click” and I’ll point.",
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState<"talk" | "message">("message");
@@ -236,7 +230,7 @@ export default function ScreenCompanionWorkspace() {
         </div>
 
         <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto px-5 py-5">
-          {messages.length <= 1 ? (
+          {!messages.length && !busy ? (
             <div className="mx-auto flex min-h-[220px] max-w-[300px] flex-col items-center justify-center text-center">
               <div className="mb-4 grid h-11 w-11 place-items-center rounded-[14px] border border-[color:var(--clyra-border,#e5e7eb)] bg-[color:var(--clyra-surface-muted,#f8f9fb)]">
                 <Eye className="h-5 w-5 text-[color:var(--clyra-accent,#0052fb)]" strokeWidth={1.75} />
