@@ -11,8 +11,11 @@ import { RightPanel, usePreview, type RightTab } from "./RightPanel";
 import { formatTokens } from "./format";
 
 const WIDTH_KEY = "clyra-code:conversation-width";
-const MIN_CONVERSATION = 480;
-const MIN_PREVIEW = 480;
+const SIDEBAR_KEY = "clyra-code:sidebar-collapsed";
+const MIN_CONVERSATION = 420;
+const MIN_PREVIEW = 520;
+const SIDEBAR_EXPANDED = 240;
+const SIDEBAR_COLLAPSED = 56;
 
 /**
  * Clyra Code — the agent-first coding workspace. Three columns: project
@@ -60,12 +63,45 @@ export default function ClyraCodeWorkspace() {
   const preview = usePreview(state.activeProjectId, buildVersion);
 
   /* -------------------- resizable centre column -------------------- */
-  const [conversationWidth, setConversationWidth] = useState(() => {
-    const raw = Number(localStorage.getItem(WIDTH_KEY));
-    return Number.isFinite(raw) && raw >= MIN_CONVERSATION ? raw : 640;
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(SIDEBAR_KEY) === "1";
+    } catch {
+      return false;
+    }
   });
+  const sidebarWidth = sidebarCollapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
   const shellRef = useRef<HTMLDivElement | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [conversationWidth, setConversationWidth] = useState(() => {
+    const raw = Number(localStorage.getItem(WIDTH_KEY));
+    if (Number.isFinite(raw) && raw >= MIN_CONVERSATION) return raw;
+    // ~47% of the chat+preview pair on a typical desktop (sidebar aside).
+    return 560;
+  });
+
+  // First layout (no saved width): pin conversation to ~47% of remaining space.
+  useEffect(() => {
+    if (localStorage.getItem(WIDTH_KEY)) return;
+    const shell = shellRef.current;
+    if (!shell) return;
+    const available = shell.clientWidth - sidebarWidth - 2;
+    const target = Math.round(available * 0.47);
+    const max = available - MIN_PREVIEW;
+    setConversationWidth(Math.min(max, Math.max(MIN_CONVERSATION, target)));
+  }, [sidebarWidth]);
+
+  const toggleSidebarCollapsed = useCallback(() => {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      try {
+        localStorage.setItem(SIDEBAR_KEY, next ? "1" : "0");
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }, []);
 
   const onDragStart = useCallback(
     (event: React.PointerEvent) => {
@@ -76,7 +112,7 @@ export default function ClyraCodeWorkspace() {
       const move = (moveEvent: PointerEvent) => {
         const shell = shellRef.current;
         if (!shell) return;
-        const max = shell.clientWidth - 280 - MIN_PREVIEW - 2;
+        const max = shell.clientWidth - sidebarWidth - MIN_PREVIEW - 2;
         const next = Math.min(max, Math.max(MIN_CONVERSATION, startWidth + moveEvent.clientX - startX));
         setConversationWidth(next);
       };
@@ -92,7 +128,7 @@ export default function ClyraCodeWorkspace() {
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
     },
-    [conversationWidth],
+    [conversationWidth, sidebarWidth],
   );
 
   /* -------------------- project creation -------------------- */
@@ -161,6 +197,8 @@ export default function ClyraCodeWorkspace() {
       <Sidebar
         projects={state.projects}
         activeProjectId={state.activeProjectId}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={toggleSidebarCollapsed}
         onSelectProject={(id) => {
           selectProject(id);
           setRightTab("browser");
@@ -177,7 +215,7 @@ export default function ClyraCodeWorkspace() {
           }, 0);
         }}
       />
-      <div className="cc-resize-handle" aria-hidden />
+      {!sidebarCollapsed ? <div className="cc-resize-handle" aria-hidden /> : null}
 
       {/* -------- centre: agent conversation -------- */}
       <section

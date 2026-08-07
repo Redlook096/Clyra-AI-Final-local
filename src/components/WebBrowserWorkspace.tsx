@@ -696,6 +696,7 @@ export default function WebBrowserWorkspace() {
   const [completedStepsOpen, setCompletedStepsOpen] = useState(false);
   const [agentControlledTabId, setAgentControlledTabId] = useState<string | null>(null);
   const streamingRunRef = useRef(false);
+  const assistAbortRef = useRef<AbortController | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -971,6 +972,17 @@ export default function WebBrowserWorkspace() {
   }, [performAction]);
 
   const controlAgent = async (command: "pause" | "resume" | "take_control" | "return_control" | "stop") => {
+    if (command === "stop") {
+      assistAbortRef.current?.abort();
+      assistAbortRef.current = null;
+      streamingRunRef.current = false;
+      setIsAgentBusy(false);
+      setAgentPhase("idle");
+      setAgentStatus("Ready");
+      setCursor(null);
+      setAgentControlledTabId(null);
+      agentOriginTabRef.current = null;
+    }
     const response = await requestBrowser("/api/openbrowser/control", { body: { command }, quiet: true }).catch(() => null);
     if (!response) return;
     const agent = response.agent as { status?: AgentStatus; paused?: boolean; manualControl?: boolean } | undefined;
@@ -987,7 +999,7 @@ export default function WebBrowserWorkspace() {
       if (agent.manualControl || command === "pause") setCursor(null);
     }
     if (command === "stop") {
-      setAgentStatus("Stopping task");
+      setAgentStatus("Ready");
     } else if (command === "pause" || command === "take_control") {
       setAgentPhase("paused");
       setAgentStatus(command === "take_control" ? "You have control" : "Task paused");
@@ -1018,11 +1030,15 @@ export default function WebBrowserWorkspace() {
     setRunTask(cleanTask);
     setCompletedStepsOpen(false);
     setMessages((current) => [...current, { id: `user-${Date.now()}`, role: "user", content: cleanTask }]);
+    const abort = new AbortController();
+    assistAbortRef.current?.abort();
+    assistAbortRef.current = abort;
     try {
       const response = await fetch("/api/openbrowser/assist", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
         body: JSON.stringify({ task: cleanTask }),
+        signal: abort.signal,
       });
       if (!response.ok || !response.body) {
         const payload = await response.json().catch(() => null);
@@ -1034,6 +1050,7 @@ export default function WebBrowserWorkspace() {
       let completePayload: Record<string, unknown> | null = null;
       let acknowledgedPlan = false;
       while (true) {
+        if (abort.signal.aborted) break;
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
@@ -1076,6 +1093,13 @@ export default function WebBrowserWorkspace() {
           if (next.type === "complete") completePayload = next;
         }
       }
+      if (abort.signal.aborted) {
+        setMessages((current) => [
+          ...current,
+          { id: `assistant-stop-${Date.now()}`, role: "assistant", content: "Stopped." },
+        ]);
+        return;
+      }
       if (!completePayload?.ok) throw new Error("The browser agent stopped before returning a verified result.");
       const payload = completePayload as Record<string, any>;
       if (payload.state) applyState(payload.state as BrowserState);
@@ -1107,15 +1131,20 @@ export default function WebBrowserWorkspace() {
         },
       ]);
     } catch (nextError) {
-      setMessages((current) => [
-        ...current,
-        {
-          id: `error-${Date.now()}`,
-          role: "assistant",
-          content: nextError instanceof Error ? nextError.message : "The browser agent could not complete that task.",
-        },
-      ]);
+      if (abort.signal.aborted || (nextError instanceof DOMException && nextError.name === "AbortError")) {
+        // Soft stop — already messaged above when aborting cleanly.
+      } else {
+        setMessages((current) => [
+          ...current,
+          {
+            id: `error-${Date.now()}`,
+            role: "assistant",
+            content: nextError instanceof Error ? nextError.message : "The browser agent could not complete that task.",
+          },
+        ]);
+      }
     } finally {
+      if (assistAbortRef.current === abort) assistAbortRef.current = null;
       streamingRunRef.current = false;
       if (mountedRef.current) {
         setIsAgentBusy(false);
@@ -1166,7 +1195,7 @@ export default function WebBrowserWorkspace() {
     if (event.key.length === 1) {
       typingBufferRef.current += event.key;
       if (typingTimerRef.current != null) window.clearTimeout(typingTimerRef.current);
-      typingTimerRef.current = window.setTimeout(flushTyping, 72);
+      typingTimerRef.current = window.setTimeout(flushTyping, 36);
       return;
     }
     if (event.key === "Enter" && typingBufferRef.current) {
@@ -1619,15 +1648,21 @@ export default function WebBrowserWorkspace() {
                     scale: { duration: 0.16 },
                     opacity: { duration: 0.1 },
                   }}
-                  className="clyra-browser-agent-cursor pointer-events-none absolute z-20 -translate-x-[3px] -translate-y-[2px]"
+                  className="clyra-browser-agent-cursor pointer-events-none absolute z-20 -translate-x-[2px] -translate-y-[2px]"
                 >
-                  <MousePointer2 className="relative h-[18px] w-[18px] fill-[#2a2b2a] text-[#2a2b2a] [filter:drop-shadow(0_1px_2px_rgba(0,0,0,.28))]" />
+                  <svg
+                    className="clyra-browser-agent-cursor__arrow"
+                    viewBox="0 0 16 16"
+                    aria-hidden
+                  >
+                    <path d="M3.2 1.6 13.4 7.4a.7.7 0 0 1-.05 1.25L8.6 10.1l-1.4 4.55a.7.7 0 0 1-1.3.05L3.2 1.6Z" />
+                  </svg>
                   {settings.showAiActionLabels && liveCursor.label ? (
                     <span className="absolute left-[18px] top-[18px] flex h-[22px] max-w-[240px] items-center truncate whitespace-nowrap rounded-[6px] bg-[var(--atlas-agent-black)] px-2 text-[10px] font-medium leading-none text-white shadow-[0_4px_12px_rgba(0,0,0,.22)]">{liveCursor.label}</span>
                   ) : null}
                   {(liveCursor.kind === "click" || liveCursor.kind === "double_click") ? (
-                    <span key={liveCursor.id} className="absolute left-[2px] top-[1px]" aria-hidden>
-                      <span className="absolute h-2.5 w-2.5 animate-ping rounded-full bg-black/25 [animation-duration:0.55s]" />
+                    <span key={liveCursor.id} className="absolute left-[3px] top-[2px]" aria-hidden>
+                      <span className="absolute h-2.5 w-2.5 animate-ping rounded-full bg-[rgba(96,152,230,0.35)] [animation-duration:0.55s]" />
                     </span>
                   ) : null}
                 </motion.div>
@@ -1850,9 +1885,9 @@ export default function WebBrowserWorkspace() {
                           className={cn("flex", message.role === "user" && "clyra-browser-user-message-entry origin-bottom-right justify-end")}
                         >
                           <div className={cn(
-                            "max-w-[92%] text-[11.5px] leading-[1.5] tracking-[-0.01em]",
+                            "max-w-[92%] text-[13px] leading-[1.55] tracking-[-0.01em]",
                             message.role === "user"
-                              ? "rounded-[9px] bg-[var(--atlas-user-bubble)] px-3 py-2 font-normal text-[var(--atlas-text-primary)]"
+                              ? "rounded-[10px] bg-[var(--atlas-user-bubble)] px-3 py-2 font-normal text-[var(--atlas-text-primary)]"
                               : "max-w-full pr-1 font-normal text-[var(--atlas-text-primary)]",
                           )}>
                             <p className="whitespace-pre-wrap">
@@ -1860,7 +1895,7 @@ export default function WebBrowserWorkspace() {
                                 <TypewriterText
                                   text={message.content}
                                   active={animateTypewriter}
-                                  msPerChar={12}
+                                  msPerChar={8}
                                   onComplete={() => { hydratedMessageIdsRef.current.add(message.id); }}
                                 />
                               ) : (
@@ -1882,7 +1917,7 @@ export default function WebBrowserWorkspace() {
                               </div>
                             ) : null}
                             {message.steps?.length ? (
-                              <button type="button" onClick={() => setActivityOpen((value) => !value)} className="mt-2 flex items-center gap-1.5 text-[10px] font-medium text-[var(--atlas-text-tertiary)] hover:text-[var(--atlas-text-secondary)]">
+                              <button type="button" onClick={() => setActivityOpen((value) => !value)} className="mt-2 flex items-center gap-1.5 text-[11px] font-medium text-[var(--atlas-text-tertiary)] hover:text-[var(--atlas-text-secondary)]">
                                 <Check className="h-3 w-3 text-emerald-500" /> {message.steps.length} verified actions <ChevronDown className={cn("h-3 w-3 transition-transform", activityOpen && "rotate-180")} />
                               </button>
                             ) : null}
@@ -1965,7 +2000,7 @@ export default function WebBrowserWorkspace() {
                         onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void runAgentTask(); } }}
                         rows={2}
                         placeholder="Describe a task"
-                        className="w-full flex-1 resize-none bg-transparent px-0.5 py-1 text-[12.5px] font-medium leading-5 text-[var(--atlas-text-primary)] outline-none placeholder:text-[var(--atlas-text-tertiary)]"
+                        className="w-full flex-1 resize-none bg-transparent px-0.5 py-1 text-[13px] font-normal leading-5 text-[var(--atlas-text-primary)] outline-none placeholder:text-[var(--atlas-text-tertiary)]"
                       />
                       <div className="flex items-center justify-between pt-1">
                         <span className="text-[10px] font-medium text-[var(--atlas-text-tertiary)]">Agent · Sources</span>
@@ -2172,9 +2207,9 @@ function ReasoningCard({ item, reducedMotion }: { item: Extract<RunItem, { kind:
       <div className="flex items-start gap-2">
         <span className="mt-[2px]"><VerdictIcon verdict={item.evaluation?.verdict} /></span>
         <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-medium leading-4 text-[var(--atlas-text-primary)]">{item.nextGoal}</p>
-          {item.evaluation?.reason ? <p className="mt-0.5 text-[10px] font-medium leading-3.5 text-[var(--atlas-text-tertiary)]">{item.evaluation.reason}</p> : null}
-          {item.memory ? <p className="mt-1 text-[10px] font-medium leading-3.5 text-[var(--atlas-text-tertiary)]">{item.memory}</p> : null}
+          <p className="text-[12.5px] font-medium leading-[1.45] text-[var(--atlas-text-primary)]">{item.nextGoal}</p>
+          {item.evaluation?.reason ? <p className="mt-0.5 text-[11.5px] font-normal leading-[1.4] text-[var(--atlas-text-tertiary)]">{item.evaluation.reason}</p> : null}
+          {item.memory ? <p className="mt-1 text-[11.5px] font-normal leading-[1.4] text-[var(--atlas-text-tertiary)]">{item.memory}</p> : null}
         </div>
       </div>
     </motion.div>
@@ -2345,7 +2380,7 @@ function AgentRunSection({
       {thinking ? (
         <div className="flex items-center gap-2 px-0.5 py-1.5">
           <ShiningBrainIcon className="h-4 w-4 shrink-0" />
-          <ShiningText text={statusText || "Thinking"} preset="thinkingChat" play={!reducedMotion} className="min-w-0 flex-1 truncate text-[14px] font-medium tracking-[-0.01em]" />
+          <ShiningText text={statusText || "Thinking"} preset="thinkingChat" play={!reducedMotion} className="min-w-0 flex-1 truncate text-[13px] font-medium tracking-[-0.01em]" />
           <ThinkingDots />
           {factCount > 0 ? <span className="shrink-0 text-[11px] font-medium text-[var(--atlas-text-tertiary)]">{factCount} facts</span> : null}
         </div>

@@ -27,15 +27,15 @@ export function ThinkingIndicator({
   onStop: () => void;
 }) {
   return (
-    <div className="flex items-center gap-2 py-2">
-      <ShiningBrainIcon className="h-4 w-4" />
-      <ShiningText text="Thinking" play className="text-[14px] font-medium tracking-[-0.01em]" />
+    <div className="flex items-center gap-1.5 py-1.5">
+      <ShiningBrainIcon className="h-3.5 w-3.5" />
+      <ShiningText text="Thinking" play className="text-[12.5px] font-medium tracking-[-0.01em]" />
       <ThinkingDots />
       <ElapsedSeconds since={startedAt} />
       <button
         type="button"
         onClick={onStop}
-        className="ml-1 rounded-[8px] border border-[color:var(--border-medium)] px-2.5 py-[3px] text-[11.5px] font-medium text-[color:var(--text-secondary)] transition-colors hover:bg-[color:var(--surface-hover)]"
+        className="ml-1 rounded-[7px] border border-[color:var(--border-medium)] px-2 py-[2px] text-[11px] font-medium text-[color:var(--text-secondary)] transition-colors hover:bg-[color:var(--surface-hover)]"
       >
         Stop
       </button>
@@ -47,7 +47,7 @@ function ThoughtSummary({ entry }: { entry: Extract<LogEntry, { type: "reasoning
   if (!entry.endedAt) return null;
   const seconds = Math.max(1, Math.round((entry.endedAt - entry.ts) / 1000));
   return (
-    <div className="py-[2px] text-[12px] text-[color:var(--text-tertiary)]">
+    <div className="py-1 text-[12px] font-medium tracking-[-0.01em] text-slate-400">
       Thought for {seconds}s
     </div>
   );
@@ -151,15 +151,20 @@ export function Conversation({
   });
 
   const showCompletion = state.runState === "complete" && state.diffs.length > 0;
+  const hasActiveTool = Object.values(state.actions).some(
+    (action) => action.status === "active" || action.status === "queued",
+  );
+  // Only show the thinking row while waiting — not for the whole tool run.
+  const showThinking = running && !!state.runStartedAt && !hasActiveTool;
 
   return (
-    <div ref={scrollRef} className="cc-scroll min-h-0 flex-1 overflow-y-auto px-6 pb-5 pt-4">
-      <div className="mx-auto flex max-w-[680px] flex-col">
+    <div ref={scrollRef} className="cc-scroll min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-4 sm:px-6">
+      <div className="mx-auto flex max-w-[640px] flex-col">
         {state.log.map((entry) => {
           if (entry.type === "user") {
             return (
               <div key={entry.id} className="my-3 flex justify-end">
-                <div className="max-w-[82%] rounded-[14px] bg-[color:var(--surface-muted)] px-3.5 py-2.5 text-[14px] leading-[1.55] tracking-[-0.01em] text-[color:var(--text-primary)]">
+                <div className="max-w-[82%] rounded-[14px] bg-[color:var(--surface-muted)] px-3.5 py-2.5 text-[13.5px] leading-[1.55] tracking-[-0.01em] text-[color:var(--text-primary)]">
                   {entry.text}
                 </div>
               </div>
@@ -170,8 +175,8 @@ export function Conversation({
               <div
                 key={entry.id}
                 className={cn(
-                  "my-2 text-[14px] leading-[1.65] tracking-[-0.011em] text-[color:var(--text-primary)]",
-                  "[&_p]:my-2 [&_ul]:my-2 [&_ol]:my-2 [&_pre]:my-2.5 [&_code]:text-[12.5px]",
+                  "clyra-vibe-agent-line my-2.5 text-[13.5px] font-normal leading-[1.6] tracking-[-0.015em] text-slate-600",
+                  "[&_p]:my-2 [&_ul]:my-2 [&_ol]:my-2 [&_pre]:my-2.5 [&_code]:text-[12px]",
                 )}
               >
                 <MarkdownMessageContent content={entry.text} />
@@ -196,8 +201,8 @@ export function Conversation({
           );
         })}
 
-        {running && state.runStartedAt ? (
-          <ThinkingIndicator startedAt={state.runStartedAt} onStop={onCancel} />
+        {showThinking ? (
+          <ThinkingIndicator startedAt={state.runStartedAt!} onStop={onCancel} />
         ) : null}
 
         {state.runState === "failed" && state.error ? (

@@ -22,11 +22,11 @@ export function ShiningBrainIcon({ className }: { className?: string }) {
               ease: "linear",
             }}
           >
-            <stop offset="0%" stopColor="#a1a1aa" />
-            <stop offset="38%" stopColor="#a1a1aa" />
-            <stop offset="50%" stopColor="#111827" />
-            <stop offset="62%" stopColor="#a1a1aa" />
-            <stop offset="100%" stopColor="#a1a1aa" />
+            <stop offset="0%" stopColor="#94a3b8" />
+            <stop offset="38%" stopColor="#94a3b8" />
+            <stop offset="50%" stopColor="#64748b" />
+            <stop offset="62%" stopColor="#94a3b8" />
+            <stop offset="100%" stopColor="#94a3b8" />
           </motion.linearGradient>
         </defs>
       </svg>
@@ -78,8 +78,8 @@ export function ShiningText({
       className={cn(
         "inline-block bg-clip-text text-transparent",
         preset === "thinkingChat"
-          ? "clyra-thinking-shimmer text-[15px] font-medium leading-none sm:text-[16px]"
-          : "clyra-shining-text bg-[linear-gradient(110deg,#404040,35%,#fff,50%,#404040,75%,#404040)] bg-[length:200%_100%]",
+          ? "clyra-thinking-shimmer text-[12.5px] font-medium leading-none tracking-[-0.01em] sm:text-[13px]"
+          : "clyra-shining-text bg-[linear-gradient(110deg,#52525b,35%,#94a3b8,50%,#52525b,75%,#52525b)] bg-[length:200%_100%]",
         className,
       )}
       initial={false}

@@ -284,10 +284,26 @@ function BrowserView({
             </div>
           </div>
         ) : (
-          <div className="flex h-full items-center justify-center">
-            <p className="text-[12.5px] text-[color:var(--text-tertiary)]">
-              The preview starts automatically when the project is runnable.
-            </p>
+          <div className="relative flex h-full flex-col items-center justify-center overflow-hidden bg-[#0c0d10]">
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0 opacity-[0.04]"
+              style={{
+                backgroundImage:
+                  "radial-gradient(ellipse at 70% 20%, #fff 0%, transparent 55%), linear-gradient(180deg, transparent, #000 90%)",
+              }}
+            />
+            <div className="relative z-[1] flex max-w-[340px] flex-col items-center px-6 text-center">
+              <div className="mb-4 grid h-11 w-11 place-items-center rounded-[10px] border border-white/10 bg-white/[0.04] text-[18px] font-semibold tracking-tight text-white/90">
+                C
+              </div>
+              <h3 className="text-[18px] font-semibold tracking-[-0.02em] text-white">
+                What should we build?
+              </h3>
+              <p className="mt-2 text-[12.5px] leading-relaxed text-white/45">
+                Clyra Code can read, edit, run and preview your project in this workspace.
+              </p>
+            </div>
           </div>
         )}
 

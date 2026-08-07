@@ -187,8 +187,9 @@ export function VibeMiniCodeBox({
         rafRef.current = null;
       };
     }
-    if (!segmentComplete) return;
-    const id = window.setTimeout(() => setCollapsed(true), COLLAPSE_HOLD_MS);
+    // Don't stall the timeline if the stream never closes the code fence.
+    const hold = segmentComplete ? COLLAPSE_HOLD_MS : Math.min(COLLAPSE_HOLD_MS, 1100);
+    const id = window.setTimeout(() => setCollapsed(true), hold);
     return () => window.clearTimeout(id);
   }, [archived, active, collapsed, revealed, code.length, segmentComplete, started]);
 

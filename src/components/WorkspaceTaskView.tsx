@@ -40,11 +40,11 @@ export type TaskViewTab = {
 
 type Rect = { left: number; top: number; width: number; height: number };
 
-const EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
-const OPEN_MS = 380;
-const SELECT_MS = 400;
-const EXIT_MS = 180;
-const REFLOW_MS = 280;
+const EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
+const OPEN_MS = 520;
+const SELECT_MS = 560;
+const EXIT_MS = 220;
+const REFLOW_MS = 340;
 const GAP = 24;
 const PAD_X = 40;
 const PAD_Y = 32;
@@ -118,11 +118,19 @@ function rectOf(sceneRef?: RefObject<HTMLElement | null>): Rect {
 }
 
 function transformBetween(from: Rect, to: Rect) {
+  // Uniform scale keeps the FLIP zoom from looking like it stops short and
+  // then "spawns" the remaining stretch when axes disagree.
+  const scale = Math.min(
+    from.width / Math.max(1, to.width),
+    from.height / Math.max(1, to.height),
+  );
+  const scaledW = to.width * scale;
+  const scaledH = to.height * scale;
   return {
-    x: from.left - to.left,
-    y: from.top - to.top,
-    scaleX: from.width / Math.max(1, to.width),
-    scaleY: from.height / Math.max(1, to.height),
+    x: from.left - to.left + (from.width - scaledW) / 2,
+    y: from.top - to.top + (from.height - scaledH) / 2,
+    scaleX: scale,
+    scaleY: scale,
   };
 }
 
@@ -206,25 +214,35 @@ export const WorkspaceTaskView = forwardRef<TaskViewHandle, {
           if (!node || !card) return;
           const from = tab.id === activeId ? transformBetween(scene, card) : null;
           node.style.willChange = "transform, opacity";
-          node.animate(
-            tab.id === activeId && from
-              ? [
-                  { transform: `translate3d(${from.x}px, ${from.y}px, 0) scale(${from.scaleX}, ${from.scaleY})`, opacity: 1 },
-                  { transform: "translate3d(0, 0, 0) scale(1)", opacity: 1 },
-                ]
-              : [
-                  { transform: "translate3d(0, 10px, 0) scale(.96)", opacity: 0 },
+          if (tab.id === activeId && from) {
+            node.animate(
+              [
+                { transform: `translate3d(${from.x}px, ${from.y}px, 0) scale(${from.scaleX}, ${from.scaleY})`, opacity: 1 },
+                { transform: "translate3d(0, 0, 0) scale(1)", opacity: 1 },
+              ],
+              { duration: OPEN_MS, easing: EASE, fill: "both" },
+            ).finished.finally(() => { node.style.willChange = "auto"; });
+          } else {
+            // Wait for the active card to finish zooming so siblings don't
+            // "spawn in" while the FLIP still looks incomplete.
+            node.style.opacity = "0";
+            window.setTimeout(() => {
+              node.animate(
+                [
+                  { transform: "translate3d(0, 14px, 0) scale(.94)", opacity: 0 },
                   { transform: "translate3d(0, 0, 0) scale(1)", opacity: 1 },
                 ],
-            { duration: tab.id === activeId ? OPEN_MS : OPEN_MS - 40, easing: EASE, fill: "both" },
-          ).finished.finally(() => { node.style.willChange = "auto"; });
+                { duration: OPEN_MS * 0.55, easing: EASE, fill: "both" },
+              ).finished.finally(() => { node.style.willChange = "auto"; });
+            }, OPEN_MS * 0.72);
+          }
         });
         return;
       }
       animateReflow();
     });
     return () => cancelAnimationFrame(frame);
-  }, [animateReflow, cards, open]);
+  }, [animateReflow, cards, open, activeId]);
 
   useEffect(() => {
     if (!open) entered.current = false;

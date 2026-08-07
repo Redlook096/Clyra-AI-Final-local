@@ -46,8 +46,9 @@ export function VibeRunBlock({
       return;
     }
     if (!active || done) return;
-    if (segmentComplete === false) return;
-    const id = window.setTimeout(() => setDone(true), HOLD_MS);
+    // Advance after hold even if the stream is slow to close the segment.
+    const hold = segmentComplete === false ? Math.min(HOLD_MS, 1400) : HOLD_MS;
+    const id = window.setTimeout(() => setDone(true), hold);
     return () => window.clearTimeout(id);
   }, [archived, active, done, segmentComplete]);
 

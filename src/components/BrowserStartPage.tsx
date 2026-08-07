@@ -201,47 +201,47 @@ export function BrowserStartPage({
         <div className="absolute -right-16 bottom-24 h-72 w-72 rounded-full bg-[var(--atlas-clyra-blue)]/[0.05] blur-3xl" />
       </div>
 
-      <div className="relative mx-auto flex w-full max-w-[920px] flex-1 flex-col px-6 pb-5 pt-10 sm:px-8 sm:pt-14">
-        <div className="mx-auto flex w-full max-w-[560px] flex-col items-center text-center">
-          <div className="mb-4 grid h-11 w-11 place-items-center rounded-full border border-[var(--atlas-divider)] bg-white shadow-[0_8px_24px_rgba(32,33,36,0.06)]">
-            <Sparkles className="h-[18px] w-[18px] text-[var(--atlas-clyra-blue)]" strokeWidth={1.75} />
+      <div className="relative mx-auto flex w-full max-w-[1180px] flex-1 flex-col px-6 pb-6 pt-12 sm:px-10 sm:pt-16">
+        <div className="mx-auto flex w-full max-w-[720px] flex-col items-center text-center">
+          <div className="mb-5 grid h-14 w-14 place-items-center rounded-full border border-[var(--atlas-divider)] bg-white shadow-[0_12px_32px_rgba(32,33,36,0.08)]">
+            <Sparkles className="h-6 w-6 text-[var(--atlas-clyra-blue)]" strokeWidth={1.6} />
           </div>
-          <h1 className="text-[22px] font-semibold tracking-[-0.03em] text-[var(--atlas-text-primary)] sm:text-[26px]">
+          <h1 className="text-[28px] font-semibold tracking-[-0.035em] text-[var(--atlas-text-primary)] sm:text-[34px]">
             AI Browser
           </h1>
-          <p className="mt-1.5 text-[12px] text-[var(--atlas-text-secondary)] sm:text-[13px]">
-            Your intelligent workspace for the web
+          <p className="mt-2 max-w-[420px] text-[13.5px] leading-relaxed text-[var(--atlas-text-secondary)] sm:text-[14.5px]">
+            Search, navigate, and let Clyra work the web for you — one intelligent workspace.
           </p>
 
           <form
             onSubmit={submitSearch}
-            className="mt-6 flex h-11 w-full items-center gap-2 rounded-full border border-[var(--atlas-divider)] bg-white px-3 shadow-[0_10px_28px_rgba(32,33,36,0.06)]"
+            className="mt-8 flex h-[52px] w-full items-center gap-2.5 rounded-full border border-[var(--atlas-divider)] bg-white px-3.5 shadow-[0_14px_40px_rgba(32,33,36,0.08)] sm:h-14"
           >
             <button
               type="button"
               aria-label="New search"
               onClick={() => setQuery("")}
-              className="grid h-7 w-7 place-items-center rounded-full text-[var(--atlas-text-tertiary)] transition-colors hover:bg-black/[0.04] hover:text-[var(--atlas-text-primary)]"
+              className="grid h-8 w-8 place-items-center rounded-full text-[var(--atlas-text-tertiary)] transition-colors hover:bg-black/[0.04] hover:text-[var(--atlas-text-primary)]"
             >
-              <Plus className="h-3.5 w-3.5" />
+              <Plus className="h-4 w-4" />
             </button>
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Ask anything or enter a URL"
-              className="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--atlas-text-primary)] outline-none placeholder:text-[var(--atlas-text-tertiary)]"
+              className="min-w-0 flex-1 bg-transparent text-[15px] text-[var(--atlas-text-primary)] outline-none placeholder:text-[var(--atlas-text-tertiary)] sm:text-[16px]"
               aria-label="Ask anything or enter a URL"
             />
             <button
               type="button"
               aria-label="Voice input coming soon"
-              className="grid h-7 w-7 place-items-center rounded-full text-[var(--atlas-text-tertiary)] transition-colors hover:bg-black/[0.04] hover:text-[var(--atlas-text-primary)]"
+              className="grid h-8 w-8 place-items-center rounded-full text-[var(--atlas-text-tertiary)] transition-colors hover:bg-black/[0.04] hover:text-[var(--atlas-text-primary)]"
             >
-              <Mic className="h-3.5 w-3.5" />
+              <Mic className="h-4 w-4" />
             </button>
           </form>
 
-          <div className="mt-3.5 flex flex-wrap items-center justify-center gap-1.5">
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
             {quickActions.map((action) => {
               const Icon = action.icon;
               return (
@@ -249,9 +249,9 @@ export function BrowserStartPage({
                   key={action.id}
                   type="button"
                   onClick={action.run}
-                  className="inline-flex h-7 items-center gap-1.5 rounded-full border border-[var(--atlas-divider)] bg-white px-2.5 text-[11px] font-medium text-[var(--atlas-text-secondary)] transition-colors hover:border-black/10 hover:bg-[#f3f4f4] hover:text-[var(--atlas-text-primary)]"
+                  className="inline-flex h-9 items-center gap-2 rounded-full border border-[var(--atlas-divider)] bg-white px-3.5 text-[12.5px] font-medium text-[var(--atlas-text-secondary)] transition-colors hover:border-black/10 hover:bg-[#f3f4f4] hover:text-[var(--atlas-text-primary)]"
                 >
-                  <Icon className="h-3 w-3 text-[var(--atlas-clyra-blue)]" strokeWidth={1.75} />
+                  <Icon className="h-3.5 w-3.5 text-[var(--atlas-clyra-blue)]" strokeWidth={1.75} />
                   {action.label}
                 </button>
               );
@@ -259,14 +259,14 @@ export function BrowserStartPage({
           </div>
         </div>
 
-        <div className="mt-10 grid flex-1 gap-6 md:grid-cols-3 md:gap-5">
+        <div className="mt-14 grid flex-1 gap-8 md:grid-cols-3 md:gap-7">
           <section className="min-w-0">
-            <div className="mb-2.5 flex items-center justify-between">
-              <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--atlas-text-tertiary)]">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-[11.5px] font-semibold uppercase tracking-[0.1em] text-[var(--atlas-text-tertiary)]">
                 Spaces
               </h2>
             </div>
-            <ul className="space-y-0.5">
+            <ul className="space-y-1">
               {(shortcuts.length ? shortcuts : SPACE_PRESETS.map((space) => ({
                 id: space.id,
                 label: space.label,
@@ -279,14 +279,14 @@ export function BrowserStartPage({
                     <button
                       type="button"
                       onClick={() => onNavigate(item.url)}
-                      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-black/[0.035]"
+                      className="flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition-colors hover:bg-black/[0.035]"
                     >
-                      <span className="grid h-7 w-7 place-items-center rounded-md border border-[var(--atlas-divider)] bg-white text-[var(--atlas-text-secondary)]">
-                        {Icon ? <Icon className="h-3.5 w-3.5" strokeWidth={1.75} /> : (
-                          <img src={faviconFor(item.url)} alt="" className="h-3.5 w-3.5" />
+                      <span className="grid h-9 w-9 place-items-center rounded-lg border border-[var(--atlas-divider)] bg-white text-[var(--atlas-text-secondary)]">
+                        {Icon ? <Icon className="h-4 w-4" strokeWidth={1.75} /> : (
+                          <img src={faviconFor(item.url)} alt="" className="h-4 w-4" />
                         )}
                       </span>
-                      <span className="min-w-0 truncate text-[12.5px] font-medium text-[var(--atlas-text-primary)]">
+                      <span className="min-w-0 truncate text-[13.5px] font-medium text-[var(--atlas-text-primary)]">
                         {item.label}
                       </span>
                     </button>
@@ -297,10 +297,10 @@ export function BrowserStartPage({
                 <button
                   type="button"
                   onClick={() => onAskAgent("Help me create a new browsing space for an upcoming project.")}
-                  className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[12.5px] font-medium text-[var(--atlas-text-secondary)] transition-colors hover:bg-black/[0.035] hover:text-[var(--atlas-text-primary)]"
+                  className="flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left text-[13.5px] font-medium text-[var(--atlas-text-secondary)] transition-colors hover:bg-black/[0.035] hover:text-[var(--atlas-text-primary)]"
                 >
-                  <span className="grid h-7 w-7 place-items-center rounded-md border border-dashed border-[var(--atlas-divider)] bg-transparent">
-                    <CirclePlus className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  <span className="grid h-9 w-9 place-items-center rounded-lg border border-dashed border-[var(--atlas-divider)] bg-transparent">
+                    <CirclePlus className="h-4 w-4" strokeWidth={1.75} />
                   </span>
                   New Space
                 </button>
@@ -309,28 +309,28 @@ export function BrowserStartPage({
           </section>
 
           <section className="min-w-0">
-            <div className="mb-2.5 flex items-center justify-between">
-              <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--atlas-text-tertiary)]">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-[11.5px] font-semibold uppercase tracking-[0.1em] text-[var(--atlas-text-tertiary)]">
                 Recent
               </h2>
             </div>
             {recent.length ? (
-              <ul className="space-y-0.5">
+              <ul className="space-y-1">
                 {recent.map((entry) => (
                   <li key={entry.id}>
                     <button
                       type="button"
                       onClick={() => onNavigate(entry.url)}
-                      className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-black/[0.035]"
+                      className="flex w-full items-start gap-3 rounded-xl px-2.5 py-2.5 text-left transition-colors hover:bg-black/[0.035]"
                     >
-                      <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-md border border-[var(--atlas-divider)] bg-white">
-                        <img src={faviconFor(entry.url)} alt="" className="h-3.5 w-3.5" />
+                      <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-lg border border-[var(--atlas-divider)] bg-white">
+                        <img src={faviconFor(entry.url)} alt="" className="h-4 w-4" />
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[12.5px] font-medium text-[var(--atlas-text-primary)]">
+                        <span className="block truncate text-[13.5px] font-medium text-[var(--atlas-text-primary)]">
                           {entry.title || hostnameOf(entry.url) || "Untitled"}
                         </span>
-                        <span className="mt-0.5 flex items-center gap-1.5 text-[10.5px] text-[var(--atlas-text-tertiary)]">
+                        <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-[var(--atlas-text-tertiary)]">
                           <span className="truncate">{hostnameOf(entry.url)}</span>
                           <span aria-hidden>·</span>
                           <span className="shrink-0">{formatRelative(entry.visitedAt)}</span>
@@ -341,33 +341,33 @@ export function BrowserStartPage({
                 ))}
               </ul>
             ) : (
-              <p className="rounded-lg border border-dashed border-[var(--atlas-divider)] px-3 py-4 text-[12px] leading-relaxed text-[var(--atlas-text-tertiary)]">
+              <p className="rounded-xl border border-dashed border-[var(--atlas-divider)] px-4 py-5 text-[13px] leading-relaxed text-[var(--atlas-text-tertiary)]">
                 Pages you visit will appear here for quick return.
               </p>
             )}
           </section>
 
           <section className="min-w-0">
-            <div className="mb-2.5 flex items-center justify-between">
-              <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--atlas-text-tertiary)]">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-[11.5px] font-semibold uppercase tracking-[0.1em] text-[var(--atlas-text-tertiary)]">
                 Suggested
               </h2>
             </div>
-            <div className="rounded-xl border border-[var(--atlas-divider)] bg-white/80 p-2">
+            <div className="rounded-2xl border border-[var(--atlas-divider)] bg-white/85 p-2.5 shadow-[0_8px_24px_rgba(32,33,36,0.04)]">
               <ul className="space-y-0.5">
                 {suggestions.map((item, index) => (
                   <li key={item}>
                     <button
                       type="button"
                       onClick={() => onAskAgent(item)}
-                      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-black/[0.035]"
+                      className="flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition-colors hover:bg-black/[0.035]"
                     >
-                      <span className="grid h-5 w-5 place-items-center rounded-full border border-[var(--atlas-divider)] text-[var(--atlas-text-tertiary)]">
-                        {index === 0 ? <Check className="h-3 w-3 text-[var(--atlas-clyra-blue)]" strokeWidth={2} /> : (
+                      <span className="grid h-6 w-6 place-items-center rounded-full border border-[var(--atlas-divider)] text-[var(--atlas-text-tertiary)]">
+                        {index === 0 ? <Check className="h-3.5 w-3.5 text-[var(--atlas-clyra-blue)]" strokeWidth={2} /> : (
                           <span className="h-1.5 w-1.5 rounded-full bg-[var(--atlas-text-tertiary)]/50" />
                         )}
                       </span>
-                      <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-[var(--atlas-text-primary)]">
+                      <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium text-[var(--atlas-text-primary)]">
                         {item}
                       </span>
                     </button>
@@ -377,20 +377,20 @@ export function BrowserStartPage({
               <button
                 type="button"
                 onClick={() => onAskAgent("Suggest three useful next browsing tasks based on my recent history.")}
-                className="mt-1 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-[12px] font-medium text-[var(--atlas-text-secondary)] transition-colors hover:bg-black/[0.035] hover:text-[var(--atlas-text-primary)]"
+                className="mt-1.5 flex w-full items-center gap-2 rounded-xl px-2.5 py-2.5 text-[13px] font-medium text-[var(--atlas-text-secondary)] transition-colors hover:bg-black/[0.035] hover:text-[var(--atlas-text-primary)]"
               >
-                <Plus className="h-3.5 w-3.5" />
+                <Plus className="h-4 w-4" />
                 Add suggestion
               </button>
             </div>
           </section>
         </div>
 
-        <div className="mt-6 flex items-center justify-end pt-2">
+        <div className="mt-8 flex items-center justify-end pt-2">
           <button
             type="button"
             onClick={onOpenSettings}
-            className="inline-flex h-8 items-center gap-1.5 rounded-full border border-[var(--atlas-divider)] bg-white px-3 text-[11px] font-medium text-[var(--atlas-text-secondary)] transition-colors hover:bg-[#f3f4f4] hover:text-[var(--atlas-text-primary)]"
+            className="inline-flex h-9 items-center gap-1.5 rounded-full border border-[var(--atlas-divider)] bg-white px-3.5 text-[12px] font-medium text-[var(--atlas-text-secondary)] transition-colors hover:bg-[#f3f4f4] hover:text-[var(--atlas-text-primary)]"
           >
             <Settings2 className="h-3.5 w-3.5" strokeWidth={1.75} />
             Customise

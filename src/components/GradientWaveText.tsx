@@ -206,7 +206,7 @@ export function GradientWaveText({
         style={{
           textAlign: align,
           backgroundImage: shimmer
-            ? "linear-gradient(105deg, #1d1d1f 0%, #1d1d1f 38%, #657f9b 45%, #dce9f4 50%, #7896b5 55%, #1d1d1f 62%, #1d1d1f 100%)"
+            ? "linear-gradient(105deg, #1d1d1f 0%, #1d1d1f 38%, #5c6b7c 45%, #8fa0b4 50%, #5c6b7c 55%, #1d1d1f 62%, #1d1d1f 100%)"
             : gradient,
           backgroundSize: shimmer ? "280% 100%" : undefined,
           backgroundPosition: shimmer ? "115% 50%" : undefined,

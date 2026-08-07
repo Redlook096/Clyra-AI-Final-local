@@ -3339,7 +3339,11 @@ export default function App() {
         setShowCommandPalette(false);
       } else if (e.key === "Escape") {
         setIsAppLauncherOpen(false);
-        setIsTaskViewOpen(false);
+        if (isTaskViewOpen) {
+          taskViewRef.current?.closeToActive();
+        } else {
+          setIsTaskViewOpen(false);
+        }
         setShowChatDropdown(false);
         setShowNotifications(false);
         setShowRewards(false);

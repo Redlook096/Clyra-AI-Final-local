@@ -10,13 +10,13 @@ import {
 } from "@/components/ShiningText";
 import { cn } from "@/lib/utils";
 
-const MAX_BODY_PX = 168;
+const MAX_BODY_PX = 148;
 
 /**
  * Type quickly enough to feel live, while still pacing the text through rAF so it
  * does not jump straight to a completed paragraph.
  */
-const MS_PER_CHARACTER = 2;
+const MS_PER_CHARACTER = 1.4;
 
 type Phase = "shining" | "typing" | "dwell" | "folded";
 
@@ -50,8 +50,9 @@ export function VibeThoughtPanel({
   const notifiedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
-  const shiningDelayRef = useRef(3000 + Math.min(1800, body.length * 3));
-  const holdMs = 1000;
+  // Keep the shimmer brief so builds do not appear stuck mid-thought.
+  const shiningDelayRef = useRef(420 + Math.min(380, body.length * 1.2));
+  const holdMs = 720;
 
   useEffect(() => {
     if (archived) {
@@ -102,14 +103,18 @@ export function VibeThoughtPanel({
     };
   }, [archived, active, phase, body.length]);
 
-  // Dwell only once typed AND the model has finished this thought.
+  // Dwell once typed. If the stream is slow to mark complete but body has
+  // caught up, do not stall the run forever on an open thinking block.
   useEffect(() => {
     if (archived) return;
     if (!active || phase !== "typing") return;
-    if (!complete) return;
-    if (revealed >= body.length && body.length > 0) {
+    if (revealed < body.length || body.length === 0) return;
+    if (complete) {
       setPhase("dwell");
+      return;
     }
+    const id = window.setTimeout(() => setPhase("dwell"), 900);
+    return () => window.clearTimeout(id);
   }, [archived, active, phase, revealed, body.length, complete]);
 
   // Fold after dwell.
@@ -165,9 +170,9 @@ export function VibeThoughtPanel({
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: active || archived ? 1 : 0.72, y: 0 }}
       transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-      className="flex w-full max-w-[640px] flex-col gap-1 text-[14px]"
+      className="flex w-full max-w-[640px] flex-col gap-0.5 text-[13px]"
     >
-      <div className="flex items-center gap-2 py-0.5" aria-live="polite">
+      <div className="flex items-center gap-1.5 py-0.5" aria-live="polite">
         {showLiveLabel ? (
           <>
             <AnimatePresence initial={false} mode="wait">
@@ -180,7 +185,7 @@ export function VibeThoughtPanel({
                   transition={{ duration: 0.18 }}
                   className="flex shrink-0"
                 >
-                  <ShiningBrainIcon />
+                  <ShiningBrainIcon className="h-3.5 w-3.5" />
                 </motion.span>
               ) : (
                 <motion.span
@@ -191,14 +196,14 @@ export function VibeThoughtPanel({
                   transition={chevronSpring}
                   className="flex shrink-0 text-slate-400"
                 >
-                  <ChevronRight className="h-4 w-4" aria-hidden />
+                  <ChevronRight className="h-3.5 w-3.5" aria-hidden />
                 </motion.span>
               )}
             </AnimatePresence>
             <ShiningText
               text="Thinking"
               preset="thinkingChat"
-              className="text-[13px] font-medium"
+              className="text-[12.5px] font-medium tracking-[-0.01em] text-slate-500"
             />
             <ThinkingDots />
           </>
@@ -206,16 +211,16 @@ export function VibeThoughtPanel({
           <button
             type="button"
             onClick={() => setExpanded((e) => !e)}
-            className="group flex w-fit items-center gap-2 rounded-md py-0.5 pl-0.5 pr-2 text-left transition-colors hover:bg-slate-100/70"
+            className="group flex w-fit items-center gap-1.5 rounded-md py-0.5 pl-0.5 pr-1.5 text-left transition-colors hover:bg-slate-100/70"
           >
             <motion.span
               className="flex shrink-0 text-slate-400 transition-colors group-hover:text-slate-500"
               animate={{ rotate: expanded ? 90 : 0 }}
               transition={chevronSpring}
             >
-              <ChevronRight className="h-4 w-4" />
+              <ChevronRight className="h-3.5 w-3.5" />
             </motion.span>
-            <span className="text-[13px] font-medium text-slate-500">
+            <span className="text-[12px] font-medium tracking-[-0.01em] text-slate-450 text-slate-500">
               Thought
             </span>
           </button>
@@ -231,26 +236,26 @@ export function VibeThoughtPanel({
             exit={{ height: 0, opacity: 0, y: -2 }}
             transition={{
               type: "spring",
-              bounce: 0.03,
-              stiffness: 180,
-              damping: 34,
-              opacity: { duration: 0.24 },
+              bounce: 0.02,
+              stiffness: 220,
+              damping: 36,
+              opacity: { duration: 0.2 },
             }}
             className="overflow-hidden"
           >
-            <div className="flex gap-3 py-2 pl-0.5 pr-1">
+            <div className="flex gap-2.5 py-1.5 pl-0.5 pr-1">
               <div
                 aria-hidden
                 className={cn(
-                  "mt-0.5 w-px shrink-0 self-stretch",
+                  "mt-1 w-px shrink-0 self-stretch rounded-full",
                   active
-                    ? "bg-gradient-to-b from-blue-400 via-slate-300 to-transparent"
-                    : "bg-slate-200",
+                    ? "bg-gradient-to-b from-slate-300 via-slate-200 to-transparent"
+                    : "bg-slate-200/80",
                 )}
               />
               <div
                 ref={scrollRef}
-                className="min-h-[1.25rem] min-w-0 flex-1 overflow-y-auto whitespace-pre-wrap text-[13.5px] font-normal leading-[1.6] tracking-[-0.012em] text-slate-600 [text-rendering:optimizeLegibility] scrollbar-none"
+                className="min-h-[1.1rem] min-w-0 flex-1 overflow-y-auto whitespace-pre-wrap text-[12.5px] font-normal leading-[1.55] tracking-[-0.015em] text-slate-500/95 [text-rendering:optimizeLegibility] scrollbar-none"
                 style={{
                   maxHeight: MAX_BODY_PX,
                   contain: "layout style paint",

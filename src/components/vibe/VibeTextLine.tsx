@@ -78,9 +78,10 @@ export function VibeTextLine({
   useEffect(() => {
     if (archived) return;
     if (!active || done) return;
-    if (!complete) return;
     if (revealed < body.length) return;
-    const id = window.setTimeout(() => setDone(true), DWELL_MS);
+    // Advance even if the stream is slow to mark the segment complete.
+    const wait = complete ? DWELL_MS : 520;
+    const id = window.setTimeout(() => setDone(true), wait);
     return () => window.clearTimeout(id);
   }, [archived, active, done, complete, revealed, body.length]);
 
@@ -98,7 +99,7 @@ export function VibeTextLine({
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
-      className="clyra-vibe-agent-line max-w-[640px] whitespace-pre-wrap text-[15px] sm:text-[16px] font-medium leading-[1.65] text-slate-600"
+      className="clyra-vibe-agent-line max-w-[640px] whitespace-pre-wrap text-[13px] sm:text-[13.5px] font-normal leading-[1.58] tracking-[-0.015em] text-slate-500"
     >
       {body.slice(0, revealed)}
     </motion.p>
