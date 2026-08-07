@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
-# Re-clone OpenCluely as a reference donor (UI language only — no stealth).
+# Remove + fresh-clone OpenCluely, then apply Clyra/Moondream bridge (no stealth).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DEST="${ROOT}/references/OpenCluely"
-mkdir -p "${ROOT}/references"
-if [[ -d "${DEST}/.git" ]]; then
-  git -C "${DEST}" fetch --depth 1 origin main
-  git -C "${DEST}" checkout -f FETCH_HEAD
-else
-  git clone --depth 1 https://github.com/TechyCSR/OpenCluely.git "${DEST}"
+DEST="${ROOT}/apps/opencluely"
+BRIDGE="${ROOT}/scripts/opencluely-bridge"
+REPO="https://github.com/TechyCSR/OpenCluely.git"
+
+echo "==> Removing previous OpenCluely"
+rm -rf "${DEST}"
+mkdir -p "${ROOT}/apps"
+echo "==> Cloning ${REPO}"
+git clone --depth 1 "${REPO}" "${DEST}"
+echo "==> At $(cd "${DEST}" && git rev-parse --short HEAD)"
+
+if [[ -d "${BRIDGE}" ]]; then
+  echo "==> Applying Clyra + Moondream bridge (original UI kept)"
+  cp "${BRIDGE}/llm.service.js" "${DEST}/src/services/llm.service.js"
+  cp "${BRIDGE}/config.js" "${DEST}/src/core/config.js"
+  cp "${BRIDGE}/main.js" "${DEST}/main.js"
+  cp "${BRIDGE}/window.manager.js" "${DEST}/src/managers/window.manager.js"
+  cp "${BRIDGE}/env" "${DEST}/.env"
+  touch "${DEST}/.opencluely-firstrun-completed"
 fi
-echo "OpenCluely reference ready at ${DEST}"
-echo "Keep: glass command tab + chat UI look"
-echo "Reject: stealth / screen-share invisibility / process disguise"
+
+echo "==> npm install"
+cd "${DEST}"
+npm install --omit=optional
+
+echo "Ready. Vision=moondream (Ollama)  Text=Clyra /api/companion/ask  Stealth=OFF"
+echo "Start: bash scripts/start-opencluely-electron.sh"

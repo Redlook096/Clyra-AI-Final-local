@@ -1,0 +1,8 @@
+# OpenCluely → Clyra + Moondream (no Gemini, no stealth)
+CLYRA_API_BASE=http://127.0.0.1:31415
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OPENCLUELY_VISION_MODEL=llava-phi3
+SPEECH_PROVIDER=whisper
+WHISPER_MODEL=tiny
+# Gemini unused — local Moondream vision + Clyra DeepSeek text
+GEMINI_API_KEY=unused-clyra-moondream

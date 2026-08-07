@@ -33,3 +33,6 @@ third_party/
 __pycache__/
 references/
 xyflow/
+
+# Fresh OpenCluely Electron clone (rebuilt via scripts/clone-opencluely.sh)
+apps/opencluely/
