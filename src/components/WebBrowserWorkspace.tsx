@@ -1519,6 +1519,7 @@ export default function WebBrowserWorkspace() {
                 className="h-full w-full"
                 fallback={
                   <img
+                    data-clyra-browser-frame="1"
                     src={frameUrl}
                     alt={`Live browser page: ${browserState.title}`}
                     draggable={false}
@@ -1529,6 +1530,7 @@ export default function WebBrowserWorkspace() {
               />
             ) : browserState ? (
               <img
+                data-clyra-browser-frame="1"
                 src={frameUrl}
                 alt={`Live browser page: ${browserState.title}`}
                 draggable={false}

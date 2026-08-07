@@ -494,15 +494,26 @@ function registerIpc() {
     const y = Math.max(0, Math.round(Number(bounds.y) || 0));
     const width = Math.max(2, Math.round(Number(bounds.width) || 2));
     const height = Math.max(2, Math.round(Number(bounds.height) || 2));
+    const nativeOnly = Boolean(payload.nativeOnly);
     const contents = uiView?.webContents;
-    if (!contents || contents.isDestroyed()) throw new Error("The active workspace is unavailable for capture.");
-    const image = await contents.capturePage({ x, y, width, height });
-    const size = image.getSize();
+    if (!nativeOnly && (!contents || contents.isDestroyed())) {
+      throw new Error("The active workspace is unavailable for capture.");
+    }
+    let src = "";
+    let size = { width, height };
+    // While Task View is open, re-capturing the UI shell would snapshot the
+    // overview overlay itself. nativeOnly refreshes just the live browser page.
+    if (!nativeOnly) {
+      const image = await contents.capturePage({ x, y, width, height });
+      size = image.getSize();
+      src = image.toDataURL();
+    }
     let nativeLayer;
     if (payload.nativeBrowser) {
       const nativeContents = browserManager?.activeContents();
       const nativeBounds = browserManager?.surface?.bounds;
       if (nativeContents && !nativeContents.isDestroyed() && nativeBounds) {
+        // capturePage works even when the WebContentsView is hidden for Task View.
         const nativeImage = await nativeContents.capturePage();
         const nativeSize = nativeImage.getSize();
         nativeLayer = {
@@ -519,7 +530,10 @@ function registerIpc() {
         };
       }
     }
-    return { ok: true, src: image.toDataURL(), width: size.width, height: size.height, nativeLayer };
+    if (nativeOnly && !nativeLayer) {
+      return { ok: false, src: "", width: size.width, height: size.height };
+    }
+    return { ok: true, src, width: size.width, height: size.height, nativeLayer };
   });
   ipcMain.handle("surface:update", (event, payload) => { authorize(event); return { ok: true, surface: surfaceManager.update(payload) }; });
   ipcMain.handle("surface:hide", (event, { id }) => { authorize(event); surfaceManager.hide(id); return { ok: true }; });

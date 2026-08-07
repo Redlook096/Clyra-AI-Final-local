@@ -31,7 +31,12 @@ export type ClyraDesktopBridge = {
     hide: (id: string) => Promise<any>;
   };
   taskView: {
-    capture: (payload: { bounds: ElectronSurfaceBounds; nativeBrowser?: boolean }) => Promise<{
+    capture: (payload: {
+      bounds: ElectronSurfaceBounds;
+      nativeBrowser?: boolean;
+      /** Refresh only the native browser layer (skip UI shell capture). */
+      nativeOnly?: boolean;
+    }) => Promise<{
       ok: boolean;
       src: string;
       width: number;

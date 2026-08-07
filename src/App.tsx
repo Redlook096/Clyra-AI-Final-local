@@ -1957,18 +1957,32 @@ export default function App() {
   const appLauncherChordRef = useRef(false);
   const taskViewRef = useRef<TaskViewHandle>(null);
   const workspaceSceneRef = useRef<HTMLDivElement>(null);
-  const captureWorkspacePreview = useCallback(async (tabId: WorkspaceTabId) => {
+  const captureWorkspacePreview = useCallback(async (tabId: WorkspaceTabId, options?: { nativeOnly?: boolean }) => {
     const desktop = getElectronDesktop();
     const scene = workspaceSceneRef.current?.getBoundingClientRect();
     if (!desktop?.taskView || !scene || scene.width < 2 || scene.height < 2) return false;
     try {
-      // This is a capture of the existing rendered tool, before occluding its
-      // native view. It preserves scroll, editor contents, and loaded state.
+      // Capture the already-rendered tool before Task View occludes the native
+      // browser surface. nativeOnly refreshes page pixels while overview is open.
       const preview = await desktop.taskView.capture({
         bounds: { x: scene.left, y: scene.top, width: scene.width, height: scene.height },
         nativeBrowser: tabId === "browser",
+        nativeOnly: options?.nativeOnly,
       });
-      if (!preview?.src) return false;
+      if (!preview?.ok) return false;
+      if (options?.nativeOnly) {
+        if (!preview.nativeLayer) return false;
+        setTaskViewPreviews((current) => {
+          const previous = current[tabId];
+          if (!previous?.src) return current;
+          return {
+            ...current,
+            [tabId]: { ...previous, nativeLayer: preview.nativeLayer },
+          };
+        });
+        return true;
+      }
+      if (!preview.src) return false;
       setTaskViewPreviews((current) => ({
         ...current,
         [tabId]: { src: preview.src, width: preview.width, height: preview.height, nativeLayer: preview.nativeLayer },
@@ -1983,12 +1997,43 @@ export default function App() {
   const captureDomFallback = useCallback(async (tabId: WorkspaceTabId) => {
     const scene = workspaceSceneRef.current;
     if (!scene || tabId !== activeWorkspaceTab) return false;
-    const width = Math.max(2, Math.round(scene.clientWidth || window.innerWidth * 0.7));
-    const height = Math.max(2, Math.round(scene.clientHeight || window.innerHeight * 0.7));
+    const sceneRect = scene.getBoundingClientRect();
+    const width = Math.max(2, Math.round(sceneRect.width || scene.clientWidth || window.innerWidth * 0.7));
+    const height = Math.max(2, Math.round(sceneRect.height || scene.clientHeight || window.innerHeight * 0.7));
     const scale = Math.min(1, 1400 / width);
     const outW = Math.max(2, Math.round(width * scale));
     const outH = Math.max(2, Math.round(height * scale));
-    const paintFallback = () => {
+
+    const bitmapFrom = (el: HTMLImageElement | HTMLCanvasElement | HTMLVideoElement) => {
+      try {
+        if (el instanceof HTMLImageElement) {
+          if (!el.complete || el.naturalWidth < 1 || el.naturalHeight < 1) return null;
+          const canvas = document.createElement("canvas");
+          canvas.width = el.naturalWidth;
+          canvas.height = el.naturalHeight;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) return null;
+          ctx.drawImage(el, 0, 0);
+          return canvas.toDataURL("image/jpeg", 0.86);
+        }
+        if (el instanceof HTMLVideoElement) {
+          if (el.readyState < 2 || el.videoWidth < 1) return null;
+          const canvas = document.createElement("canvas");
+          canvas.width = el.videoWidth;
+          canvas.height = el.videoHeight;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) return null;
+          ctx.drawImage(el, 0, 0);
+          return canvas.toDataURL("image/jpeg", 0.86);
+        }
+        if (el.width < 1 || el.height < 1) return null;
+        return el.toDataURL("image/jpeg", 0.86);
+      } catch {
+        return null;
+      }
+    };
+
+    const paintMediaComposite = () => {
       const canvas = document.createElement("canvas");
       canvas.width = outW;
       canvas.height = outH;
@@ -1996,20 +2041,83 @@ export default function App() {
       if (!ctx) return null;
       ctx.fillStyle = "#f6f7f7";
       ctx.fillRect(0, 0, outW, outH);
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, outW, Math.round(62 * scale));
-      ctx.fillStyle = "#18212f";
-      ctx.font = `600 ${Math.round(15 * scale)}px ui-sans-serif, system-ui, sans-serif`;
-      ctx.fillText(String(tabId === "browser" ? "AI Browser" : tabId), Math.round(18 * scale), Math.round(36 * scale));
-      ctx.fillStyle = "#8b939e";
-      ctx.font = `${Math.round(12 * scale)}px ui-sans-serif, system-ui, sans-serif`;
-      ctx.fillText("Live workspace preview", Math.round(18 * scale), Math.round(96 * scale));
-      return canvas.toDataURL("image/jpeg", 0.88);
+      ctx.save();
+      ctx.scale(scale, scale);
+      let drew = 0;
+      const media = Array.from(scene.querySelectorAll("img, canvas, video")) as Array<
+        HTMLImageElement | HTMLCanvasElement | HTMLVideoElement
+      >;
+      for (const el of media) {
+        const style = getComputedStyle(el);
+        if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 2 || rect.height < 2) continue;
+        const x = rect.left - sceneRect.left;
+        const y = rect.top - sceneRect.top;
+        try {
+          if (el instanceof HTMLImageElement) {
+            if (!el.complete || el.naturalWidth < 1) continue;
+            ctx.drawImage(el, x, y, rect.width, rect.height);
+            drew += 1;
+          } else if (el instanceof HTMLVideoElement) {
+            if (el.readyState < 2) continue;
+            ctx.drawImage(el, x, y, rect.width, rect.height);
+            drew += 1;
+          } else if (el.width > 0) {
+            ctx.drawImage(el, x, y, rect.width, rect.height);
+            drew += 1;
+          }
+        } catch {
+          // Skip tainted nodes; keep any pixels already painted.
+        }
+      }
+      ctx.restore();
+      if (!drew) {
+        ctx.fillStyle = "#18212f";
+        ctx.font = `600 ${Math.round(15 * scale)}px ui-sans-serif, system-ui, sans-serif`;
+        ctx.fillText(String(tabId === "browser" ? "AI Browser" : tabId), Math.round(18 * scale), Math.round(36 * scale));
+        ctx.fillStyle = "#8b939e";
+        ctx.font = `${Math.round(12 * scale)}px ui-sans-serif, system-ui, sans-serif`;
+        ctx.fillText("Live workspace preview", Math.round(18 * scale), Math.round(96 * scale));
+      }
+      return { src: canvas.toDataURL("image/jpeg", 0.88), drew };
     };
+
     try {
+      // Prefer painting live bitmaps (AI Browser frame, canvases, video) so
+      // Task View never blanks the running tool with gray placeholders.
+      const browserFrame = scene.querySelector("[data-clyra-browser-frame]") as HTMLImageElement | null;
+      if (browserFrame && browserFrame.complete && browserFrame.naturalWidth > 1) {
+        const painted = paintMediaComposite();
+        if (painted?.drew) {
+          setTaskViewPreviews((current) => ({
+            ...current,
+            [tabId]: { src: painted.src, width: outW, height: outH },
+          }));
+          return true;
+        }
+      }
+
       const clone = scene.cloneNode(true) as HTMLElement;
-      clone.querySelectorAll("iframe, video, canvas, img").forEach((node) => {
-        (node as HTMLElement).style.background = "#e8eaef";
+      const liveMedia = Array.from(scene.querySelectorAll("img, canvas, video"));
+      const cloneMedia = Array.from(clone.querySelectorAll("img, canvas, video"));
+      liveMedia.forEach((live, index) => {
+        const cloned = cloneMedia[index] as HTMLElement | undefined;
+        if (!cloned) return;
+        const dataUrl = bitmapFrom(live as HTMLImageElement | HTMLCanvasElement | HTMLVideoElement);
+        if (dataUrl && cloned instanceof HTMLImageElement) {
+          cloned.setAttribute("src", dataUrl);
+          cloned.removeAttribute("srcset");
+        } else if (dataUrl && (cloned instanceof HTMLCanvasElement || cloned.tagName === "VIDEO")) {
+          const img = document.createElement("img");
+          img.setAttribute("src", dataUrl);
+          img.setAttribute("style", cloned.getAttribute("style") || "");
+          img.className = cloned.className;
+          cloned.replaceWith(img);
+        } else {
+          // Leave layout space but do not paint a solid blank over the tool.
+          cloned.style.opacity = "0";
+        }
       });
       const serialized = new XMLSerializer().serializeToString(clone).replace(/#/g, "%23");
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${outW}" height="${outH}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;height:${height}px;transform:scale(${scale});transform-origin:top left;overflow:hidden;background:#f6f7f7">${serialized}</div></foreignObject></svg>`;
@@ -2029,6 +2137,30 @@ export default function App() {
         ctx.fillStyle = "#f6f7f7";
         ctx.fillRect(0, 0, outW, outH);
         ctx.drawImage(image, 0, 0, outW, outH);
+        // Re-draw live media on top so Task View keeps the real running page.
+        ctx.save();
+        ctx.scale(scale, scale);
+        for (const el of liveMedia) {
+          const media = el as HTMLImageElement | HTMLCanvasElement | HTMLVideoElement;
+          const style = getComputedStyle(media);
+          if (style.visibility === "hidden" || style.display === "none") continue;
+          const rect = media.getBoundingClientRect();
+          if (rect.width < 2 || rect.height < 2) continue;
+          const x = rect.left - sceneRect.left;
+          const y = rect.top - sceneRect.top;
+          try {
+            if (media instanceof HTMLImageElement && media.complete && media.naturalWidth > 0) {
+              ctx.drawImage(media, x, y, rect.width, rect.height);
+            } else if (media instanceof HTMLVideoElement && media.readyState >= 2) {
+              ctx.drawImage(media, x, y, rect.width, rect.height);
+            } else if (media instanceof HTMLCanvasElement && media.width > 0) {
+              ctx.drawImage(media, x, y, rect.width, rect.height);
+            }
+          } catch {
+            // ignore tainted nodes
+          }
+        }
+        ctx.restore();
         const src = canvas.toDataURL("image/jpeg", 0.86);
         setTaskViewPreviews((current) => ({ ...current, [tabId]: { src, width: outW, height: outH } }));
         return true;
@@ -2036,10 +2168,16 @@ export default function App() {
         URL.revokeObjectURL(url);
       }
     } catch {
-      const src = paintFallback();
-      if (!src) return false;
-      setTaskViewPreviews((current) => ({ ...current, [tabId]: { src, width: outW, height: outH } }));
-      return true;
+      const painted = paintMediaComposite();
+      if (!painted) return false;
+      let applied = false;
+      setTaskViewPreviews((current) => {
+        // Never replace a good cached preview with an empty title-only frame.
+        if (!painted.drew && current[tabId]?.src) return current;
+        applied = true;
+        return { ...current, [tabId]: { src: painted.src, width: outW, height: outH } };
+      });
+      return applied || painted.drew;
     }
   }, [activeWorkspaceTab]);
 
@@ -2053,7 +2191,7 @@ export default function App() {
     setVisitedWorkspaceTabs((current) =>
       current.includes(activeWorkspaceTab) ? current : [...current, activeWorkspaceTab],
     );
-    // Double-rAF lets layout settle so Electron/DOM capture matches the live tool.
+    // Capture while the live tool (and native browser surface) is still visible.
     await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
     const ok = await captureWorkspacePreview(activeWorkspaceTab);
     if (!ok) await captureDomFallback(activeWorkspaceTab);
@@ -2063,13 +2201,37 @@ export default function App() {
     const desktop = getElectronDesktop();
     return desktop?.taskView.onToggle(() => void openTaskView());
   }, [openTaskView]);
+  // While Task View is open on AI Browser, keep the card's page pixels live so
+  // zoomed-out overview still shows the tool running (agent/demo/navigation).
+  useEffect(() => {
+    if (!isTaskViewOpen || activeWorkspaceTab !== "browser") return;
+    let cancelled = false;
+    const refresh = async () => {
+      if (cancelled) return;
+      const desktop = getElectronDesktop();
+      if (desktop?.taskView) {
+        await captureWorkspacePreview("browser", { nativeOnly: true });
+      } else {
+        await captureDomFallback("browser");
+      }
+    };
+    const timer = window.setInterval(() => {
+      void refresh();
+    }, 700);
+    void refresh();
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeWorkspaceTab, captureDomFallback, captureWorkspacePreview, isTaskViewOpen]);
   useLayoutEffect(() => {
-    if (isAppLauncherOpen || isTaskViewOpen) {
+    const occluded = isAppLauncherOpen || isTaskViewOpen;
+    if (occluded) {
       void getElectronDesktop()?.browser.setSurface({ visible: false });
     }
     window.dispatchEvent(
       new CustomEvent("clyra:native-surface-occlusion", {
-        detail: { occluded: isAppLauncherOpen || isTaskViewOpen },
+        detail: { occluded },
       }),
     );
   }, [isAppLauncherOpen, isTaskViewOpen]);
