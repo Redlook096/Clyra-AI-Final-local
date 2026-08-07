@@ -4,14 +4,11 @@ import net from "node:net";
 import path from "node:path";
 import os from "node:os";
 
-const ADAPTIVE_AGENT_PREFACE = `You are Clyra's coding agent. Work adaptively like Cursor/Codex — not a fixed script.
-Understand intent, investigate the repo, act, inspect results, adapt, and validate until the request is genuinely complete.
-Scale effort to complexity. Read before editing existing code. Prefer production-quality solutions. After edits, run relevant checks and fix failures. Never claim success only because files changed.`;
-
 const DEFAULT_AGENTS_MD = `# Clyra Code Agent
 
 Be an adaptive expert coding agent. Understand intent → investigate → act → inspect → adapt → validate until complete.
 No fixed tool-call quota. Scale effort to the request. Read before editing. Prefer production-quality work. Fix failures after checks.
+For greenfield apps, put index.html at the project root so live preview can start.
 `;
 
 export type ClyraAgentEvent = {
@@ -128,13 +125,13 @@ export class OpenCodeRuntimeManager {
     // Prefer an explicit override, then a usable DeepSeek key, then OpenCode's
     // free coding models so local/cloud agents can still build without secrets.
     const selectedModel = model ?? resolveCodingModel();
+    // Adaptive behaviour is guided via AGENTS.md (OpenCode reads it), not by
+    // injecting preface text into the user turn (which models may echo).
     await this.ensureAgentsGuide(project.projectPath);
     this.publish(project, { type: "session.status", properties: { sessionID: sessionId, status: { type: "busy" } } });
-    // Soft adaptive preface — steers the loop without changing the SSE contract.
-    const steered = `${ADAPTIVE_AGENT_PREFACE}\n\n${text}`;
     const response = await this.client(project.projectPath).session.promptAsync({
       path: { id: sessionId },
-      body: { agent, model: selectedModel, parts: [{ type: "text", text: steered }] },
+      body: { agent, model: selectedModel, parts: [{ type: "text", text }] },
       throwOnError: true,
     });
     void this.reconcileSession(project, sessionId, 0);
