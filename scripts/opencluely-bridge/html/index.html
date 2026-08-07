@@ -199,15 +199,22 @@
       }
       .oc-close .oc-icon-x { opacity: 1; transform: rotate(0deg) scale(1); }
       .oc-close .oc-icon-chevron { opacity: 0; transform: rotate(-90deg) scale(0.7); }
+      /* Chat expanded (Ask / Auto Answer / control chat) → down chevron to collapse */
       .oc-shell.is-chat-open .oc-close .oc-icon-x,
       .oc-shell.is-wide.is-chat-open .oc-close .oc-icon-x,
-      .oc-shell.is-task-prompt .oc-close .oc-icon-x {
+      .oc-shell.is-task-prompt .oc-close .oc-icon-x,
+      .oc-close.is-collapse .oc-icon-x {
         opacity: 0; transform: rotate(90deg) scale(0.7);
       }
       .oc-shell.is-chat-open .oc-close .oc-icon-chevron,
       .oc-shell.is-wide.is-chat-open .oc-close .oc-icon-chevron,
-      .oc-shell.is-task-prompt .oc-close .oc-icon-chevron {
+      .oc-shell.is-task-prompt .oc-close .oc-icon-chevron,
+      .oc-close.is-collapse .oc-icon-chevron {
         opacity: 1; transform: rotate(0deg) scale(1);
+      }
+      .oc-close .oc-icon-chevron {
+        width: 14px;
+        height: 14px;
       }
 
       .oc-actions {
@@ -262,19 +269,18 @@
         border-color: rgba(125, 211, 252, 0.28);
       }
 
-      /* Take Control — navy gradient + cyan target */
+      /* Take Control — same white pill as Ask / Auto on light theme */
       .oc-pill-btn.oc-control {
-        background: var(--oc-control-bg);
-        color: #fff;
-        border-color: rgba(15, 23, 42, 0.35);
-        box-shadow: 0 4px 14px rgba(16, 26, 46, 0.28);
-        padding: 0 16px;
+        background: var(--oc-btn-bg);
+        color: var(--oc-text);
+        border-color: var(--oc-btn-border);
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+        padding: 0 12px;
       }
       .oc-pill-btn.oc-control:hover {
-        filter: brightness(1.08);
-        color: #fff;
+        filter: brightness(1.03);
+        color: var(--oc-text-strong);
       }
-      .oc-pill-btn.oc-control .oc-btn-icon { color: #7dd3fc; }
       .oc-pill-btn.oc-stop {
         background: linear-gradient(180deg, #ef4444 0%, #dc2626 100%);
         color: #fff;
@@ -587,7 +593,7 @@
             <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
           </svg>
           <svg class="oc-icon-chevron" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-            <path d="M2.5 4.2 L6 7.8 L9.5 4.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M2 4 L6 8.2 L10 4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </button>
 
@@ -624,10 +630,17 @@
 
           <button type="button" class="oc-pill-btn oc-control oc-boot-hide" id="ocControlBtn" title="Let OpenCluely control your machine">
             <svg class="oc-btn-icon oc-icon-control" viewBox="0 0 16 16" aria-hidden="true">
-              <circle cx="8" cy="8" r="5.4" fill="none" stroke="#7dd3fc" stroke-width="1.4"/>
-              <circle cx="8" cy="8" r="3.1" fill="none" stroke="#7dd3fc" stroke-width="1.3"/>
-              <circle cx="8" cy="8" r="1.15" fill="#7dd3fc"/>
-              <path d="M11.8 3.4l.55 1.15 1.15.35-1.15.35-.55 1.15-.35-1.15-1.15-.35 1.15-.35.35-1.15z" fill="#a5f3fc"/>
+              <defs>
+                <linearGradient id="ocTarget" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#7c3aed"/>
+                  <stop offset="55%" stop-color="#3b82f6"/>
+                  <stop offset="100%" stop-color="#22d3ee"/>
+                </linearGradient>
+              </defs>
+              <circle cx="8" cy="8" r="5.4" fill="none" stroke="url(#ocTarget)" stroke-width="1.4"/>
+              <circle cx="8" cy="8" r="3.1" fill="none" stroke="url(#ocTarget)" stroke-width="1.3"/>
+              <circle cx="8" cy="8" r="1.15" fill="url(#ocTarget)"/>
+              <path d="M11.8 3.4l.55 1.15 1.15.35-1.15.35-.55 1.15-.35-1.15-1.15-.35 1.15-.35.35-1.15z" fill="url(#ocTarget)"/>
             </svg>
             <svg class="oc-btn-icon oc-icon-stop" viewBox="0 0 16 16" aria-hidden="true">
               <rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.4" fill="#fff"/>

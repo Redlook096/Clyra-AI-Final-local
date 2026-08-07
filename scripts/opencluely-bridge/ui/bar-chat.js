@@ -62,7 +62,9 @@
 
   function updateCloseIcon() {
     if (!closeBtn) return;
-    if (open || taskPromptMode) {
+    const collapseMode = open || taskPromptMode;
+    closeBtn.classList.toggle('is-collapse', collapseMode);
+    if (collapseMode) {
       closeBtn.title = 'Collapse chat';
       closeBtn.setAttribute('aria-label', 'Collapse chat');
     } else {
