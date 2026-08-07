@@ -1,5 +1,5 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
 import { BRAIN_ACTIONS, type BrainAction } from "../../../lib/study-brain/types";
 
@@ -20,6 +20,7 @@ export function BrainNodeView({ data, selected }: NodeProps) {
   const connectedCount = Number(data.connectedCount || 0);
   const onAction = data.onAction as ((action: BrainAction) => void) | undefined;
   const [fanOpen, setFanOpen] = useState(false);
+  const openedByDrag = useRef(false);
 
   const fan = useMemo(() => {
     const radius = 112;
@@ -75,11 +76,13 @@ export function BrainNodeView({ data, selected }: NodeProps) {
         )}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
+          openedByDrag.current = false;
           const startX = event.clientX;
           const startY = event.clientY;
           const onMove = (move: PointerEvent) => {
             const dist = Math.hypot(move.clientX - startX, move.clientY - startY);
             if (dist > 24) {
+              openedByDrag.current = true;
               setFanOpen(true);
               window.removeEventListener("pointermove", onMove);
             }
@@ -91,7 +94,13 @@ export function BrainNodeView({ data, selected }: NodeProps) {
           window.addEventListener("pointermove", onMove);
           window.addEventListener("pointerup", onUp);
         }}
-        onClick={() => setFanOpen((open) => !open)}
+        onClick={() => {
+          if (openedByDrag.current) {
+            openedByDrag.current = false;
+            return;
+          }
+          setFanOpen((open) => !open);
+        }}
         aria-label={`${title} study space`}
       >
         <span
