@@ -70,15 +70,17 @@ export function isBrowserStartPageUrl(url?: string | null) {
   const value = String(url || "").trim();
   if (!value || value === "about:blank") return true;
   if (/\/api\/openbrowser\/new-tab/i.test(value)) return true;
+  if (/^(chrome|edge|devtools|chrome-error|chromewebdata):/i.test(value)) return true;
   try {
     const parsed = new URL(value);
+    if (/^(chrome|edge|devtools|chrome-error|chromewebdata):/i.test(parsed.protocol)) return true;
     const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
     if (host !== "google.com") return false;
     const path = parsed.pathname || "/";
     if (path !== "/" && path !== "/webhp") return false;
     return !parsed.searchParams.get("q");
   } catch {
-    return false;
+    return true;
   }
 }
 

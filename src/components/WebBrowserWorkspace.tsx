@@ -1155,6 +1155,9 @@ export default function WebBrowserWorkspace() {
   };
 
   const handlePreviewKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (showStartPage) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     const supported = event.key.length === 1 || ["Enter", "Backspace", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key);
     if (!supported) return;
