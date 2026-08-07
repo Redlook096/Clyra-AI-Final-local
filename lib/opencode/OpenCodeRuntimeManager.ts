@@ -1,5 +1,8 @@
 import { createOpencode, createOpencodeClient } from "@opencode-ai/sdk";
+import fs from "node:fs";
 import net from "node:net";
+import path from "node:path";
+import os from "node:os";
 
 export type ClyraAgentEvent = {
   id: string;
@@ -248,8 +251,8 @@ export class OpenCodeRuntimeManager {
         const error = (message.info as { error?: { data?: { message?: unknown }; message?: unknown } }).error;
         if (error) {
           const raw = String(error.data?.message || error.message || "OpenCode session failed.");
-          const message = raw.replace(/(?:sk|rk|pk|key)[-_][A-Za-z0-9_-]{8,}/gi, "[redacted credential]").slice(0, 1_500);
-          this.publish(project, { type: "session.error", properties: { sessionID: sessionId, error: { message } } });
+          const messageText = raw.replace(/(?:sk|rk|pk|key)[-_][A-Za-z0-9_-]{8,}/gi, "[redacted credential]").slice(0, 1_500);
+          this.publish(project, { type: "session.error", properties: { sessionID: sessionId, error: { message: messageText } } });
         }
       }
       const fingerprint = JSON.stringify(messages.map((message) => ({
@@ -273,6 +276,22 @@ export class OpenCodeRuntimeManager {
       // first tool action of a multi-step DeepSeek task.
       const quietMs = status?.type === "idle" ? 5_000 : 12_000;
       if ((idleSince && now - idleSince >= quietMs) || attempt >= 600) {
+        // Detect silent provider failures: assistant turn exists but produced
+        // no text and no tool parts (classic OpenCode free-model 401 path).
+        const assistant = [...messages].reverse().find((message) => message.info?.role === "assistant");
+        const parts = assistant?.parts ?? [];
+        const hasText = parts.some((part) => part.type === "text" && String((part as { text?: string }).text || "").trim());
+        const hasTool = parts.some((part) => part.type === "tool" || Boolean(part.tool));
+        const hasErrorPart = parts.some((part) => part.type === "error" || (part.state as { status?: string } | undefined)?.status === "error");
+        if (assistant && !hasText && !hasTool && !hasErrorPart) {
+          const authHint = this.readRecentProviderAuthError();
+          const message = authHint
+            || "The coding model returned an empty response. Set DEEPSEEK_API_KEY (or run `opencode auth login`) so Clyra Code can run agent loops.";
+          this.lastError = message;
+          this.publish(project, { type: "session.error", properties: { sessionID: sessionId, error: { message } } });
+          project.reconciliation.delete(sessionId);
+          return;
+        }
         this.publish(project, { type: "session.idle", properties: { sessionID: sessionId } });
         project.reconciliation.delete(sessionId);
         return;
@@ -281,6 +300,25 @@ export class OpenCodeRuntimeManager {
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
     }
+  }
+
+  /** Best-effort parse of OpenCode's local log for the latest provider 401. */
+  private readRecentProviderAuthError(): string | null {
+    try {
+      const logPath = path.join(os.homedir(), ".local/share/opencode/log/opencode.log");
+      if (!fs.existsSync(logPath)) return null;
+      const text = fs.readFileSync(logPath, "utf8");
+      const lines = text.trim().split("\n").slice(-80);
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        const line = lines[i];
+        if (/\[401\]|Unauthorized|Provider returned error|AI_APICallError/i.test(line)) {
+          return "Coding model auth failed (401). Add DEEPSEEK_API_KEY to the server env, or run `opencode auth login`, then retry.";
+        }
+      }
+    } catch {
+      /* ignore log parse issues */
+    }
+    return null;
   }
 }
 
