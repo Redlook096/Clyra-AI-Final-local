@@ -579,7 +579,8 @@ class ApplicationController {
       return windowManager.getWindowStats();
     });
 
-    ipcMain.handle("resize-window", (event, { width, height }) => {
+    ipcMain.handle("resize-window", async (event, payload = {}) => {
+      const { width, height, recenter } = payload || {};
       const mainWindow = windowManager.getWindow("main");
       if (mainWindow) {
         const minW = 60;
@@ -591,19 +592,45 @@ class ApplicationController {
         } catch (e) {
           mainWindow.setSize(Math.max(1, clampedWidth), Math.max(1, clampedHeight));
         }
+        // recenter: true → pin to top-center; 'x' → keep Y, center horizontally;
+        // false/undefined during height anim → do not move (avoids jank).
         try {
-          windowManager.centerMainWindowAtTop?.();
+          if (recenter === true) {
+            windowManager.centerMainWindowAtTop?.();
+          } else if (recenter === "x") {
+            windowManager.centerMainWindowHorizontally?.();
+          }
         } catch (_) {
           /* ignore */
         }
-        logger.debug("Main window resized (content)", { width: clampedWidth, height: clampedHeight });
+        logger.debug("Main window resized (content)", {
+          width: clampedWidth,
+          height: clampedHeight,
+          recenter: recenter ?? false,
+        });
       }
       return { success: true };
     });
 
-    ipcMain.handle("set-chat-drawer-open", (event, open) => {
-      windowManager.setChatDrawerOpen?.(Boolean(open));
-      return { success: true, open: Boolean(open) };
+    ipcMain.handle("set-chat-drawer-open", (event, payload) => {
+      const open = typeof payload === "object" ? Boolean(payload?.open) : Boolean(payload);
+      const recenter = typeof payload === "object" ? payload?.recenter : undefined;
+      windowManager.setChatDrawerOpen?.(open, { recenter });
+      return { success: true, open };
+    });
+
+    ipcMain.handle("get-desktop-control-status", async () => {
+      try {
+        await desktopControl.initialize();
+        return {
+          ok: true,
+          driver: desktopControl.driver || "none",
+          platform: process.platform,
+          controlling: Boolean(desktopControl.controlling),
+        };
+      } catch (error) {
+        return { ok: false, driver: "none", error: error.message, platform: process.platform };
+      }
     });
 
     ipcMain.handle("move-window", (event, { deltaX, deltaY }) => {
@@ -1292,7 +1319,9 @@ class ApplicationController {
     } finally {
       for (const win of hiddenForCapture) {
         try {
-          if (!win.isDestroyed()) windowManager.showOnCurrentDesktop(win);
+          if (!win.isDestroyed()) {
+            windowManager.showOnCurrentDesktop(win, { focus: false, inactive: true });
+          }
         } catch (_) {
           /* ignore */
         }
@@ -1477,12 +1506,14 @@ class ApplicationController {
       } finally {
         for (const win of hidden) {
           try {
-            if (!win.isDestroyed()) windowManager.showOnCurrentDesktop(win);
+            if (!win.isDestroyed()) {
+              windowManager.showOnCurrentDesktop(win, { focus: false, inactive: true });
+            }
           } catch (_) {
             /* ignore */
           }
         }
-        windowManager.centerMainWindowAtTop?.();
+        // Do not recenter every control step — it makes the bar jump while the AI works.
       }
       await new Promise((r) => setTimeout(r, 450));
     }
@@ -1539,7 +1570,9 @@ class ApplicationController {
       } finally {
         for (const win of hiddenForCapture) {
           try {
-            if (!win.isDestroyed()) windowManager.showOnCurrentDesktop(win);
+            if (!win.isDestroyed()) {
+            windowManager.showOnCurrentDesktop(win, { focus: false, inactive: true });
+          }
           } catch (_) {
             /* ignore */
           }

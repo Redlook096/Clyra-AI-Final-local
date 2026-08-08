@@ -269,7 +269,10 @@ class DesktopControlService {
           8000,
         );
       } else if (process.platform === 'win32') {
-        const downUp = `[M]::mouse_event(0x0002,0,0,0,0); [M]::mouse_event(0x0004,0,0,0,0);`;
+        const isRight = button === 'right';
+        const down = isRight ? 0x0008 : 0x0002; // MOUSEEVENTF_RIGHTDOWN / LEFTDOWN
+        const up = isRight ? 0x0010 : 0x0004; // MOUSEEVENTF_RIGHTUP / LEFTUP
+        const downUp = `[M]::mouse_event(${down},0,0,0,0); [M]::mouse_event(${up},0,0,0,0);`;
         const ps = `
 Add-Type -AssemblyName System.Windows.Forms;
 [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${point.x},${point.y});
@@ -316,12 +319,17 @@ for ($i=0; $i -lt ${count}; $i++) { ${downUp} Start-Sleep -Milliseconds 80 }
       } else if (process.platform === 'darwin') {
         await darwinInput(['scroll', '0', String(amount)], 6000);
       } else if (process.platform === 'win32') {
+        // Real mouse wheel via MOUSEEVENTF_WHEEL (0x0800), not Page Up/Down.
+        const wheelDelta = amount >= 0 ? 120 : -120;
+        const reps = Math.max(1, Math.abs(amount));
         const ps = `
 Add-Type -AssemblyName System.Windows.Forms;
 [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${this.lastPoint.x},${this.lastPoint.y});
-for ($i=0; $i -lt ${Math.abs(amount)}; $i++) {
-  [System.Windows.Forms.SendKeys]::SendWait('${amount >= 0 ? '{PGUP}' : '{PGDN}'}')
-}
+Add-Type @"
+using System; using System.Runtime.InteropServices;
+public class M { [DllImport("user32.dll")] public static extern void mouse_event(int f,int a,int b,int c,int d); }
+"@;
+for ($i=0; $i -lt ${reps}; $i++) { [M]::mouse_event(0x0800, 0, 0, ${wheelDelta}, 0); Start-Sleep -Milliseconds 20 }
 `;
         await execFileAsync('powershell', ['-NoProfile', '-Command', ps], { timeout: 6000 });
       }

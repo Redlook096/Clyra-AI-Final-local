@@ -409,21 +409,34 @@
         background: currentColor;
       }
 
-      /* Chat drawer */
+      /* Chat drawer — animate height (not max-height) for butter-smooth expand-down */
       .chat-drawer {
         width: 100%;
-        max-height: 0;
+        height: 0;
         opacity: 0;
         overflow: hidden;
         pointer-events: none;
         transition:
-          max-height var(--oc-dur-h) var(--oc-ease),
+          height var(--oc-dur-h) var(--oc-ease),
           opacity 320ms var(--oc-ease-soft);
       }
       .oc-shell.is-chat-open .chat-drawer {
-        max-height: var(--oc-drawer-h);
+        height: var(--oc-drawer-h);
         opacity: 1;
         pointer-events: auto;
+      }
+      .oc-shell.is-animating {
+        will-change: width, min-width, border-radius;
+      }
+      .oc-shell.is-animating .chat-drawer {
+        will-change: height, opacity;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .oc-shell,
+        .oc-shell *,
+        .chat-drawer {
+          transition-duration: 0.01ms !important;
+        }
       }
       .chat-drawer-inner {
         height: calc(var(--oc-drawer-h) - 8px);

@@ -1783,7 +1783,7 @@ class WindowManager {
     }
   }
 
-  setChatDrawerOpen(open) {
+  setChatDrawerOpen(open, options = {}) {
     this.chatDrawerOpen = Boolean(open);
     const mainWindow = this.windows.get('main');
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1794,7 +1794,12 @@ class WindowManager {
       } catch (_) {
         /* ignore */
       }
-      this.centerMainWindowAtTop();
+      // Avoid recentering mid CSS/Electron expand — that caused visible jumps.
+      if (options.recenter === true) {
+        this.centerMainWindowAtTop();
+      } else if (options.recenter === 'x') {
+        this.centerMainWindowHorizontally();
+      }
     }
     return this.chatDrawerOpen;
   }
@@ -1805,8 +1810,7 @@ class WindowManager {
     // Never steal focus when chat/LLM updates arrive — that was yanking the
     // user into Clyra/OpenCluely and interrupting their work.
     this.showOnCurrentDesktop(mainWindow, { focus: false, inactive: true });
-    this.centerMainWindowAtTop();
-    this.setChatDrawerOpen(true);
+    this.setChatDrawerOpen(true, { recenter: false });
     try {
       mainWindow.webContents.send('toggle-chat-drawer', { open: true });
     } catch (_) {

@@ -11,6 +11,9 @@
   const EXPANDED_W = 600;
   const COLLAPSED_H = 56;
   const DRAWER_H = 360;
+  // Keep in sync with --oc-dur-w / --oc-dur-h in index.html
+  const DUR_W = 520;
+  const DUR_H = 480;
 
   const shell = document.getElementById('ocShell');
   const tab = document.getElementById('commandTab');
@@ -138,32 +141,95 @@
     document.getElementById('bar-thinking')?.remove();
   }
 
-  function measureAndResize() {
-    if (!window.electronAPI?.resizeWindow) return;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const rect = shell.getBoundingClientRect();
-        const width = Math.max(220, Math.ceil(rect.width));
-        const height = Math.max(COLLAPSED_H, Math.ceil(rect.height));
-        window.electronAPI.resizeWindow(width, height);
-      });
-    });
+  function measureShell() {
+    const rect = shell.getBoundingClientRect();
+    return {
+      width: Math.max(220, Math.ceil(rect.width)),
+      height: Math.max(COLLAPSED_H, Math.ceil(rect.height)),
+    };
   }
 
-  /** Keep Electron window bounds in lockstep with CSS transitions. */
-  function animateWindowWithShell(durationMs) {
-    return new Promise((resolve) => {
-      const start = performance.now();
-      const tick = () => {
-        measureAndResize();
-        if (performance.now() - start < durationMs) {
-          requestAnimationFrame(tick);
-        } else {
-          measureAndResize();
-          resolve();
-        }
-      };
-      requestAnimationFrame(tick);
+  let lastResize = { w: 0, h: 0 };
+  let resizeChain = Promise.resolve();
+
+  // Match CSS --oc-ease: cubic-bezier(0.16, 1, 0.3, 1) so Electron bounds
+  // and drawer height stay locked during expand/collapse.
+  function cubicBezierEase(t, p1x = 0.16, p1y = 1, p2x = 0.3, p2y = 1) {
+    const x = Math.max(0, Math.min(1, t));
+    // Solve Bézier x(u)=x for u via Newton, then evaluate y(u).
+    let u = x;
+    for (let i = 0; i < 6; i++) {
+      const u2 = u * u;
+      const u3 = u2 * u;
+      const cx = 3 * p1x;
+      const bx = 3 * (p2x - p1x) - cx;
+      const ax = 1 - cx - bx;
+      const xu = ax * u3 + bx * u2 + cx * u;
+      const dx = 3 * ax * u2 + 2 * bx * u + cx;
+      if (Math.abs(dx) < 1e-6) break;
+      u -= (xu - x) / dx;
+      u = Math.max(0, Math.min(1, u));
+    }
+    const u2 = u * u;
+    const u3 = u2 * u;
+    const cy = 3 * p1y;
+    const by = 3 * (p2y - p1y) - cy;
+    const ay = 1 - cy - by;
+    return ay * u3 + by * u2 + cy * u;
+  }
+
+  function resizeWindowNow(width, height, { recenter = false } = {}) {
+    if (!window.electronAPI?.resizeWindow) return Promise.resolve();
+    const w = Math.max(60, Math.round(width));
+    const h = Math.max(28, Math.round(height));
+    if (
+      Math.abs(w - lastResize.w) < 1 &&
+      Math.abs(h - lastResize.h) < 1 &&
+      recenter !== true &&
+      recenter !== 'x'
+    ) {
+      return Promise.resolve();
+    }
+    lastResize = { w, h };
+    // Serialize IPC so Electron never applies out-of-order sizes mid-animation.
+    resizeChain = resizeChain
+      .catch(() => {})
+      .then(() => window.electronAPI.resizeWindow(w, h, { recenter }));
+    return resizeChain;
+  }
+
+  async function measureAndResize({ recenter = false } = {}) {
+    await new Promise((r) => requestAnimationFrame(r));
+    const { width, height } = measureShell();
+    await resizeWindowNow(width, height, { recenter });
+  }
+
+  /**
+   * Drive Electron window bounds in lockstep with CSS (single rAF, awaited IPC).
+   * recenter: false | 'x' (keep Y, center horizontally) | true (center at top)
+   */
+  async function animateBounds(fromW, fromH, toW, toH, durationMs, { recenterDuring = false } = {}) {
+    const start = performance.now();
+    // Prefer reduced motion: snap once.
+    const reduce =
+      typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduce || durationMs <= 0) {
+      await resizeWindowNow(toW, toH, { recenter: recenterDuring || Math.abs(toW - fromW) > 2 ? 'x' : false });
+      return;
+    }
+    while (true) {
+      const t = Math.min(1, (performance.now() - start) / durationMs);
+      const e = cubicBezierEase(t);
+      const w = Math.round(fromW + (toW - fromW) * e);
+      const h = Math.round(fromH + (toH - fromH) * e);
+      await resizeWindowNow(w, h, {
+        recenter: recenterDuring === 'x' && Math.abs(toW - fromW) > 2 ? 'x' : false,
+      });
+      if (t >= 1) break;
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+    await resizeWindowNow(toW, toH, {
+      recenter: Math.abs(toW - fromW) > 2 ? 'x' : false,
     });
   }
 
@@ -171,22 +237,32 @@
     if (animating) return;
     animating = true;
     shell.classList.add('is-animating');
-    setModeUI(nextMode);
+    mode = nextMode;
 
-    // 1) Expand width outwards first — keep pill chrome until chat opens
-    wide = true;
-    shell.classList.add('is-wide');
-    notifyDrawer(true);
-    await animateWindowWithShell(520);
+    try {
+      const from = measureShell();
 
-    // 2) Then expand chat smoothly downward (Electron height tracks CSS max-height)
-    open = true;
-    shell.classList.add('is-chat-open');
-    drawer.setAttribute('aria-hidden', 'false');
-    updateCloseIcon();
-    await animateWindowWithShell(500);
-    shell.classList.remove('is-animating');
-    animating = false;
+      // 1) Expand width outwards — keep pill chrome until chat opens
+      wide = true;
+      shell.classList.add('is-wide');
+      notifyDrawer(true, { recenter: false });
+      await animateBounds(from.width, from.height, EXPANDED_W, COLLAPSED_H, DUR_W, {
+        recenterDuring: 'x',
+      });
+
+      // 2) Then expand chat smoothly downward (CSS height + Electron bounds in lockstep)
+      open = true;
+      shell.classList.add('is-chat-open');
+      drawer.setAttribute('aria-hidden', 'false');
+      setModeUI(nextMode);
+      updateCloseIcon();
+      await animateBounds(EXPANDED_W, COLLAPSED_H, EXPANDED_W, COLLAPSED_H + DRAWER_H, DUR_H, {
+        recenterDuring: false,
+      });
+    } finally {
+      shell.classList.remove('is-animating');
+      animating = false;
+    }
 
     if (nextMode === 'ask') {
       setTimeout(() => inputEl?.focus(), 40);
@@ -211,40 +287,48 @@
     askBtn?.classList.remove('is-active');
     autoBtn?.classList.remove('is-active');
 
-    // Exit control compose without leaving a half-open shell
-    if (taskPromptMode) {
-      taskPromptMode = false;
-      shell.classList.remove('is-control-compose', 'is-task-prompt');
-      clearInlineControlInput();
+    try {
+      // Exit control compose without leaving a half-open shell
+      if (taskPromptMode) {
+        taskPromptMode = false;
+        shell.classList.remove('is-control-compose', 'is-task-prompt');
+        clearInlineControlInput();
+        updateCloseIcon();
+      }
+
+      const from = measureShell();
+
+      // 1) Collapse height first — drop is-chat-open so CSS height eases with the window
+      open = false;
+      shell.classList.remove('is-chat-open');
+      drawer.setAttribute('aria-hidden', 'true');
       updateCloseIcon();
-    }
+      await animateBounds(from.width, from.height, EXPANDED_W, COLLAPSED_H, DUR_H, {
+        recenterDuring: false,
+      });
 
-    // 1) Collapse height first
-    open = false;
-    shell.classList.remove('is-chat-open');
-    drawer.setAttribute('aria-hidden', 'true');
-    updateCloseIcon();
-    await animateWindowWithShell(480);
-
-    // 2) Then shrink width back to pill
-    wide = false;
-    shell.classList.remove('is-wide');
-    notifyDrawer(false);
-    await animateWindowWithShell(520);
-    if (tab && window.electronAPI?.resizeWindow) {
-      const rect = tab.getBoundingClientRect();
-      window.electronAPI.resizeWindow(Math.ceil(rect.width), Math.ceil(rect.height));
-    } else {
-      measureAndResize();
+      // 2) Then shrink width back to pill
+      wide = false;
+      shell.classList.remove('is-wide');
+      notifyDrawer(false, { recenter: false });
+      // Measure pill target after width class removed
+      await new Promise((r) => requestAnimationFrame(r));
+      const pill = tab ? tab.getBoundingClientRect() : measureShell();
+      const pillW = Math.max(220, Math.ceil(pill.width || 320));
+      await animateBounds(EXPANDED_W, COLLAPSED_H, pillW, COLLAPSED_H, DUR_W, {
+        recenterDuring: 'x',
+      });
+      await resizeWindowNow(pillW, COLLAPSED_H, { recenter: true });
+      updateCloseIcon();
+    } finally {
+      shell.classList.remove('is-animating');
+      animating = false;
     }
-    updateCloseIcon();
-    shell.classList.remove('is-animating');
-    animating = false;
   }
 
-  function notifyDrawer(openState) {
+  function notifyDrawer(openState, opts = {}) {
     try {
-      window.electronAPI?.setChatDrawerOpen?.(openState);
+      window.electronAPI?.setChatDrawerOpen?.(openState, opts);
     } catch (_) {
       /* ignore */
     }
@@ -356,13 +440,27 @@
     drawer.setAttribute('aria-hidden', 'true');
     updateCloseIcon();
     const el = inlineControlInput();
+    let placeholder = 'What should the AI do on your computer?';
+    try {
+      const status = await window.electronAPI?.getDesktopControlStatus?.();
+      if (status && status.driver === 'none') {
+        placeholder =
+          status.platform === 'linux'
+            ? 'Install xdotool to enable Take Control on Linux'
+            : status.platform === 'darwin'
+              ? 'Enable Accessibility for OpenCluely in System Settings'
+              : 'Desktop control driver unavailable on this system';
+      }
+    } catch (_) {
+      /* ignore */
+    }
     if (el) {
       el.value = '';
-      el.placeholder = 'What should the AI do on your computer?';
+      el.placeholder = placeholder;
       setTimeout(() => el.focus(), 30);
     }
-    notifyDrawer(false);
-    measureAndResize();
+    notifyDrawer(false, { recenter: false });
+    await measureAndResize({ recenter: false });
     await wait(120);
     animating = false;
   }

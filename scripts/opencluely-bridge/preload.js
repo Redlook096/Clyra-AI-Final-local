@@ -19,8 +19,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   disableWindowInteraction: () => ipcRenderer.invoke('disable-window-interaction'),
   switchToChat: () => ipcRenderer.invoke('switch-to-chat'),
   switchToSkills: () => ipcRenderer.invoke('switch-to-skills'),
-  resizeWindow: (width, height) => ipcRenderer.invoke('resize-window', { width, height }),
-  setChatDrawerOpen: (open) => ipcRenderer.invoke('set-chat-drawer-open', open),
+  resizeWindow: (width, height, opts = {}) =>
+    ipcRenderer.invoke('resize-window', {
+      width,
+      height,
+      recenter: opts?.recenter,
+    }),
+  setChatDrawerOpen: (open, opts = {}) =>
+    ipcRenderer.invoke('set-chat-drawer-open', {
+      open: Boolean(typeof open === 'object' ? open?.open : open),
+      recenter: typeof open === 'object' ? open?.recenter : opts?.recenter,
+    }),
   onToggleChatDrawer: (callback) => ipcRenderer.on('toggle-chat-drawer', callback),
   moveWindow: (deltaX, deltaY) => ipcRenderer.invoke('move-window', { deltaX, deltaY }),
   getWindowStats: () => ipcRenderer.invoke('get-window-stats'),
@@ -34,6 +43,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSkillPrompt: (skillName) => ipcRenderer.invoke('get-skill-prompt', skillName),
   startDesktopControl: (task) => ipcRenderer.invoke('start-desktop-control', { task }),
   stopDesktopControl: () => ipcRenderer.invoke('stop-desktop-control'),
+  getDesktopControlStatus: () => ipcRenderer.invoke('get-desktop-control-status'),
   onControlStatus: (callback) => ipcRenderer.on('control-status', callback),
   onResearchStatus: (callback) => ipcRenderer.on('research-status', callback),
   onStealthModeChanged: (callback) => ipcRenderer.on('stealth-mode-changed', callback),
