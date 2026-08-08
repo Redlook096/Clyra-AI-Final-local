@@ -441,22 +441,55 @@ function authorizeCompanion(event) {
 }
 
 async function analyseCompanionVision(imagePath, question = "") {
-  try {
-    const { analyseVisionFrame } = await import("../tools/ollama-vision.mjs");
-    const buffer = await fs.readFile(imagePath);
-    const ext = path.extname(imagePath).toLowerCase() === ".png" ? "png" : "jpeg";
-    const dataUrl = `data:image/${ext};base64,${buffer.toString("base64")}`;
-    return await analyseVisionFrame(dataUrl, String(question || ""));
-  } catch (error) {
-    // Fallback RapidOCR
-    const script = path.join(projectRoot, "tools", "companion-vision.py");
+  const script = path.join(projectRoot, "tools", "companion-vision.py");
+  const runRapidOcr = async () => {
     const { stdout } = await execFileAsync("python3", [script, imagePath, "--question", String(question || "")], {
       timeout: 45_000,
       maxBuffer: 4 * 1024 * 1024,
       env: process.env,
     });
     return JSON.parse(String(stdout || "{}"));
+  };
+
+  // Prefer RapidOCR first (fast, offline). Only call Ollama when OCR is thin so
+  // Companion stay snappy during smoke/guide flows.
+  let rapid = null;
+  try {
+    rapid = await runRapidOcr();
+  } catch (error) {
+    rapid = { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
+
+  const ocrLines = Array.isArray(rapid?.ocr?.lines) ? rapid.ocr.lines.length : 0;
+  const rapidText = String(rapid?.summary || "").trim();
+  const needsVlm = !rapid?.ok || ocrLines < 2 || rapidText.length < 40;
+  if (!needsVlm && rapid?.ok) return rapid;
+
+  try {
+    const { analyseVisionFrame } = await import("../tools/ollama-vision.mjs");
+    const buffer = await fs.readFile(imagePath);
+    const ext = path.extname(imagePath).toLowerCase() === ".png" ? "png" : "jpeg";
+    const dataUrl = `data:image/${ext};base64,${buffer.toString("base64")}`;
+    const ollama = await Promise.race([
+      analyseVisionFrame(dataUrl, String(question || "")),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("ollama vision timed out")), 12_000)),
+    ]);
+    if (ollama && (ollama.ok !== false) && (ollama.summary || ollama.text)) {
+      return {
+        ...rapid,
+        ...ollama,
+        ok: true,
+        summary: String(ollama.summary || ollama.text || rapid?.summary || "").trim(),
+        model: ollama.model || "ollama",
+        ocr: ollama.ocr || rapid?.ocr,
+      };
+    }
+  } catch {
+    /* keep RapidOCR result */
+  }
+
+  if (rapid?.ok) return rapid;
+  throw new Error(rapid?.error || "Companion vision failed");
 }
 
 function companionVisionFallback({ question, visionSummary, ocrText, controlling, guiding, pointer }) {

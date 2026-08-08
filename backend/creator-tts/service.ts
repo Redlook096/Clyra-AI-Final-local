@@ -137,9 +137,33 @@ function wavDurationMs(audio: Buffer, fallbackRate: number) {
   return dataBytes > 0 && sampleRate > 0 ? Math.round(dataBytes / 2 / sampleRate * 1_000) : 0;
 }
 
+function synthesizeLocalPlaceholderVoice(text: string, voice: CreatorVoiceName, sampleRate: number): CachedSpeech {
+  // Offline/dev fallback so Fake Text / Creator exports still finish when Async
+  // voice IDs are not configured (common in cloud agents / local Linux).
+  const words = Math.max(1, text.trim().split(/\s+/).filter(Boolean).length);
+  const durationMs = Math.min(8_000, Math.max(700, Math.round(words * 320)));
+  const samples = Math.max(1, Math.round((sampleRate * durationMs) / 1_000));
+  const pcm = Buffer.alloc(samples * 2);
+  // Soft short tone bursts so the timeline has audible energy without speech.
+  const freq = 220 + (CREATOR_VOICES.indexOf(voice) % 12) * 18;
+  for (let i = 0; i < samples; i += 1) {
+    const t = i / sampleRate;
+    const envelope = Math.sin(Math.PI * Math.min(1, t / (durationMs / 1_000)));
+    const burst = Math.sin(2 * Math.PI * freq * t) * 0.18 * envelope;
+    const value = Math.max(-1, Math.min(1, burst));
+    pcm.writeInt16LE((value * 0x7fff) | 0, i * 2);
+  }
+  return {
+    audio: pcm16Wav(pcm, sampleRate),
+    durationMs,
+    engine: "local-placeholder",
+    warning: `No dedicated hosted voice ID is configured for ${voice}; used a local timing placeholder so export can finish.`,
+  };
+}
+
 async function synthesizeMacSystemVoice(text: string, voice: CreatorVoiceName, sampleRate: number): Promise<CachedSpeech> {
   if (process.platform !== "darwin") {
-    throw new Error(`No dedicated TTS voice is configured for ${voice}. Add CREATOR_TTS_VOICE_${environmentVoiceKey(voice)}_ID.`);
+    return synthesizeLocalPlaceholderVoice(text, voice, sampleRate);
   }
   const directory = await mkdtemp(path.join(tmpdir(), "clyra-creator-tts-"));
   const input = path.join(directory, "speech.txt");
@@ -228,19 +252,26 @@ export function registerCreatorTtsRoutes(app: express.Express) {
     const config = loadVoiceConfig();
     const dedicatedVoices = Object.keys(configuredCreatorVoiceIds());
     const systemFallbackAvailable = process.platform === "darwin";
+    const localPlaceholderAvailable = process.env.CREATOR_TTS_ALLOW_LOCAL_PLACEHOLDER !== "false";
     const baseVoice = String(process.env.ASYNC_VOICE_NAME || "Max").trim() || "Max";
     const availableVoices = CREATOR_VOICES.filter((voice) => (
       (voice === baseVoice && Boolean(config.asyncApiKey && config.asyncVoiceId))
       || dedicatedVoices.includes(voice)
       || systemFallbackAvailable
+      || localPlaceholderAvailable
     ));
     res.json({
       ok: availableVoices.length > 0,
-      engine: config.asyncApiKey ? "async+system-fallback" : "system-fallback",
+      engine: config.asyncApiKey
+        ? "async+system-fallback"
+        : systemFallbackAvailable
+          ? "system-fallback"
+          : "local-placeholder",
       model: config.asyncModel,
       voices: availableVoices,
       dedicatedVoices,
       systemFallbackAvailable,
+      localPlaceholderAvailable,
       queueDepth: pending,
     });
   });
@@ -256,11 +287,17 @@ export function registerCreatorTtsRoutes(app: express.Express) {
     const asyncVoiceId = asyncVoiceIdFor(voice, config.asyncVoiceId);
     const canUseAsync = Boolean(config.asyncApiKey && asyncVoiceId);
     const canUseSystemVoice = process.platform === "darwin" && process.env.CREATOR_TTS_ALLOW_SYSTEM_FALLBACK !== "false";
-    if (!canUseAsync && !canUseSystemVoice) {
+    const canUseLocalPlaceholder = process.env.CREATOR_TTS_ALLOW_LOCAL_PLACEHOLDER !== "false";
+    if (!canUseAsync && !canUseSystemVoice && !canUseLocalPlaceholder) {
       res.status(503).json({ error: `No dedicated Creator voice is configured for ${voice}. Add CREATOR_TTS_VOICE_${environmentVoiceKey(voice)}_ID.` });
       return;
     }
-    const cacheKey = `${voice}\u0000${canUseAsync ? `async:${asyncVoiceId}` : `system:${SYSTEM_VOICE_BY_CREATOR_VOICE[voice]}`}\u0000${config.asyncModel}\u0000${text}`;
+    const engineKey = canUseAsync
+      ? `async:${asyncVoiceId}`
+      : canUseSystemVoice
+        ? `system:${SYSTEM_VOICE_BY_CREATOR_VOICE[voice]}`
+        : "local-placeholder";
+    const cacheKey = `${voice}\u0000${engineKey}\u0000${config.asyncModel}\u0000${text}`;
     const cached = readCachedSpeech(cacheKey);
     if (cached) {
       sendSpeech(res, cached, voice, "HIT");
@@ -311,11 +348,14 @@ export function registerCreatorTtsRoutes(app: express.Express) {
           const durationMs = Math.round(pcm.length / 2 / config.asyncSampleRate * 1_000);
           speech = { audio, durationMs, engine: `async:${response.headers.get("x-async-model") || config.asyncModel}` };
         } catch (error) {
-          if (!canUseSystemVoice) throw error;
-          speech = await synthesizeMacSystemVoice(text, voice, config.asyncSampleRate);
+          if (canUseSystemVoice) speech = await synthesizeMacSystemVoice(text, voice, config.asyncSampleRate);
+          else if (canUseLocalPlaceholder) speech = synthesizeLocalPlaceholderVoice(text, voice, config.asyncSampleRate);
+          else throw error;
         }
-      } else {
+      } else if (canUseSystemVoice) {
         speech = await synthesizeMacSystemVoice(text, voice, config.asyncSampleRate);
+      } else {
+        speech = synthesizeLocalPlaceholderVoice(text, voice, config.asyncSampleRate);
       }
       cacheSpeech(cacheKey, speech);
       sendSpeech(res, speech, voice, "MISS", performance.now() - startedAt);

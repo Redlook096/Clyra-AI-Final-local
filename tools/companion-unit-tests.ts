@@ -9,7 +9,11 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
-const BASE = process.env.CLYRA_SERVICE_URL || "http://127.0.0.1:3000";
+const BASE =
+  process.env.CLYRA_SERVICE_URL ||
+  process.env.CLYRA_API_BASE ||
+  process.env.CLYRA_URL ||
+  "http://127.0.0.1:31415";
 
 async function makeFixture() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clyra-companion-test-"));

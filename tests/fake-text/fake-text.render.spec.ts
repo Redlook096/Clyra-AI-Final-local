@@ -101,7 +101,8 @@ test("AI-written Fake Text story renders a 1080p 60fps MP4", async ({ page, requ
   // The desktop bundle is allowed to ship FFmpeg without ffprobe.  Inspect
   // the actual finished MP4 through the same trusted FFmpeg binary used by
   // the transcode route rather than making this test environment-dependent.
-  const ffmpeg = process.env.FFMPEG_PATH || path.join(homedir(), ".local", "bin", "ffmpeg");
+  const bundledFfmpeg = path.join(homedir(), ".local", "bin", "ffmpeg");
+  const ffmpeg = process.env.FFMPEG_PATH || (existsSync(bundledFfmpeg) ? bundledFfmpeg : "ffmpeg");
   let mediaInfo = "";
   try {
     execFileSync(ffmpeg, ["-hide_banner", "-i", outputPath], { encoding: "utf8", stdio: "pipe" });

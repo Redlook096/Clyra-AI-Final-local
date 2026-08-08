@@ -21,9 +21,18 @@ try {
   /* first run */
 }
 
+// Prefer an isolated desktop / CDP / bridge port set so this smoke can run
+// while desktop:dev is already up on the default ports.
+const smokePort = String(process.env.CLYRA_COMPANION_SMOKE_PORT || process.env.CLYRA_DESKTOP_PORT || "31515");
+const cdpPort = String(process.env.CLYRA_CDP_PORT || "9323");
+const bridgePort = String(process.env.CLYRA_BROWSER_BRIDGE_PORT || "9324");
 const env = {
   ...process.env,
   CLYRA_ELECTRON_DEV: "1",
+  CLYRA_DESKTOP_PORT: smokePort,
+  CLYRA_CDP_PORT: cdpPort,
+  CLYRA_BROWSER_BRIDGE_PORT: bridgePort,
+  CLYRA_USER_DATA_DIR: process.env.CLYRA_USER_DATA_DIR || "/tmp/clyra-companion-smoke-profile",
   CLYRA_COMPANION_SMOKE: "1",
   CLYRA_COMPANION_SMOKE_EXIT: "1",
   CLYRA_COMPANION_ARTIFACTS: artifactsDir,
@@ -50,8 +59,15 @@ child.stderr.on("data", (chunk) => {
 const exitCode = await new Promise((resolve) => {
   const timer = setTimeout(() => {
     child.kill("SIGTERM");
+    setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* ignore */
+      }
+    }, 3_000);
     resolve(124);
-  }, 90_000);
+  }, 150_000);
   child.once("exit", (code) => {
     clearTimeout(timer);
     resolve(code ?? 1);

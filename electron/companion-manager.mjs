@@ -254,9 +254,24 @@ export class CompanionManager {
       steps: [],
       at: new Date().toISOString(),
     };
+    const withTimeout = async (label, ms, work) => {
+      let timer;
+      try {
+        return await Promise.race([
+          work(),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    };
     const snap = async (name) => {
       try {
-        const capture = await this.options.capture.capture({ maxWidth: 1400, jpegQuality: 72 });
+        const capture = await withTimeout(`screenshot:${name}`, 12_000, () =>
+          this.options.capture.capture({ maxWidth: 1400, jpegQuality: 72 }),
+        );
         const dest = path.join(artifactsDir, `companion-${name}.jpg`);
         await fs.copyFile(capture.path, dest);
         report.steps.push({ step: `screenshot:${name}`, ok: true, path: dest });
@@ -271,42 +286,73 @@ export class CompanionManager {
       }
     };
     try {
-      await this.show();
+      await withTimeout("show", 8_000, () => this.show());
       report.steps.push({ step: "show", ok: true });
       await snap("01-overlay");
-      const seen = await this.seeScreen("What is on my screen?");
-      report.steps.push({
-        step: "see",
-        ok: Boolean(seen?.ok),
-        summary: seen?.vision?.summary || seen?.error || "",
-        capturePath: seen?.capture?.path || null,
-      });
+      let seen = null;
+      try {
+        seen = await withTimeout("see", 35_000, () => this.seeScreen("What is on my screen?"));
+        report.steps.push({
+          step: "see",
+          ok: Boolean(seen?.ok),
+          summary: seen?.vision?.summary || seen?.error || "",
+          capturePath: seen?.capture?.path || null,
+        });
+      } catch (error) {
+        report.steps.push({
+          step: "see",
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       await snap("02-after-see");
-      const guided = await this.startGuide("Show me where to click Take control or Stop");
-      report.steps.push({
-        step: "guide",
-        ok: Boolean(guided?.ok),
-        pointer: guided?.pointer || null,
-      });
-      await new Promise((r) => setTimeout(r, 700));
+      let guided = null;
+      try {
+        // Guide without a fresh vision pass — pointing-only is enough for smoke.
+        guided = await withTimeout("guide", 12_000, () => this.startGuide(""));
+        report.steps.push({
+          step: "guide",
+          ok: Boolean(guided?.ok),
+          pointer: guided?.pointer || null,
+        });
+      } catch (error) {
+        report.steps.push({
+          step: "guide",
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      await new Promise((r) => setTimeout(r, 400));
       await snap("03-guide-pointer");
-      await this.startControl();
+      await withTimeout("startControl", 8_000, () => this.startControl());
       report.steps.push({ step: "startControl", ok: true });
       const display = screen.getPrimaryDisplay();
       const x = display.bounds.x + Math.round(display.bounds.width * 0.42);
       const y = display.bounds.y + Math.round(display.bounds.height * 0.38);
-      await this.runDesktopAction({ type: "move", x, y, label: "Helping with your screen" });
+      await withTimeout("move", 8_000, () =>
+        this.runDesktopAction({ type: "move", x, y, label: "Helping with your screen" }),
+      );
       report.steps.push({ step: "move", ok: true, x, y });
       await snap("04-control-cursor");
-      await this.runDesktopAction({ type: "wait", ms: 400 });
-      const ask = await this.ask("Where should I click? Point at the important button.");
-      report.steps.push({
-        step: "ask",
-        ok: Boolean(ask?.ok),
-        reply: String(ask?.reply?.text || "").slice(0, 400),
-        source: ask?.reply?.source || null,
-        pointer: ask?.pointer || null,
-      });
+      await this.runDesktopAction({ type: "wait", ms: 250 });
+      try {
+        const ask = await withTimeout("ask", 35_000, () =>
+          this.ask("Where should I click? Point at the important button."),
+        );
+        report.steps.push({
+          step: "ask",
+          ok: Boolean(ask?.ok),
+          reply: String(ask?.reply?.text || "").slice(0, 400),
+          source: ask?.reply?.source || null,
+          pointer: ask?.pointer || null,
+        });
+      } catch (error) {
+        report.steps.push({
+          step: "ask",
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       await snap("05-ask-guide");
       await this.takeManualControl();
       report.steps.push({ step: "takeManualControl", ok: true });

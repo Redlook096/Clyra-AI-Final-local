@@ -47,12 +47,20 @@ async function jsonFetch(url, opts = {}, timeoutMs = 60000) {
   }
 }
 
-function runNpm(script, timeoutMs = 180000) {
+function runNpm(script, timeoutMs = 180000, extraEnv = {}) {
   return new Promise((resolve) => {
     const started = Date.now();
     const child = spawn("npm", ["run", script, "--silent"], {
       cwd: ROOT,
-      env: { ...process.env, FORCE_COLOR: "0" },
+      env: {
+        ...process.env,
+        FORCE_COLOR: "0",
+        CLYRA_URL: CLYRA,
+        CLYRA_API_BASE: CLYRA,
+        CLYRA_SERVICE_URL: CLYRA,
+        SHOT_DIR: OUT,
+        ...extraEnv,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
@@ -142,10 +150,13 @@ async function main() {
     fs.writeFileSync(path.join(OUT, "e2e-browser.log"), r.out || "(empty)");
   }
 
-  // Companion electron smoke
+  // Companion electron smoke (isolated port so it won't collide with desktop:dev)
   log("running test:companion:electron");
   {
-    const r = await runNpm("test:companion:electron", 240000);
+    const r = await runNpm("test:companion:electron", 240000, {
+      CLYRA_COMPANION_SMOKE_PORT: "31515",
+      CLYRA_DESKTOP_PORT: "31515",
+    });
     record("e2e:companion-electron", r.code === 0, `exit=${r.code} ${r.ms}ms ${r.out.slice(-280)}`);
     fs.writeFileSync(path.join(OUT, "e2e-companion-electron.log"), r.out || "(empty)");
   }
@@ -185,11 +196,23 @@ async function main() {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question: "What is photosynthesis in one sentence?", context: "Biology basics" }),
+      body: JSON.stringify({
+        question: "What is photosynthesis in one sentence?",
+        context: [
+          {
+            title: "Biology basics",
+            body: "Photosynthesis is the process by which green plants use sunlight to synthesize foods from carbon dioxide and water.",
+          },
+        ],
+      }),
     },
     90000,
   ).catch((e) => ({ status: 0, body: { error: e.message } }));
-  record("api:study-ask", studyAsk.status < 500, JSON.stringify(studyAsk.body).slice(0, 240));
+  record(
+    "api:study-ask",
+    studyAsk.status < 500 && Boolean(studyAsk.body?.ok || studyAsk.body?.answer),
+    JSON.stringify(studyAsk.body).slice(0, 240),
+  );
 
   const creatorGen = await jsonFetch(
     `${CLYRA}/api/creator/generate`,
@@ -197,21 +220,40 @@ async function main() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        kind: "fake_text",
-        prompt: "Two friends texting about weekend plans. Keep it to 4 messages.",
+        kind: "fake_text_story",
+        prompt: "Two friends texting about weekend plans.",
+        count: 4,
+        tone: "funny",
       }),
     },
     120000,
   ).catch((e) => ({ status: 0, body: { error: e.message } }));
-  record("api:creator-fake-text", creatorGen.status < 500, JSON.stringify(creatorGen.body).slice(0, 300));
-
-  const vibeHealth = await jsonFetch(`${CLYRA}/api/vibe/health`, {}, 10000).catch(() =>
-    jsonFetch(`${CLYRA}/api/opencode/health`, {}, 10000).catch(() => ({ status: 0, body: {} })),
+  record(
+    "api:creator-fake-text",
+    creatorGen.status < 500 && creatorGen.body?.ok === true && Array.isArray(creatorGen.body?.data?.messages),
+    JSON.stringify(creatorGen.body).slice(0, 300),
   );
-  record("api:vibe-health", vibeHealth.status > 0 && vibeHealth.status < 500, JSON.stringify(vibeHealth.body || vibeHealth).slice(0, 240));
 
-  const clipperHealth = await jsonFetch(`${CLYRA}/api/clipper/health`, {}, 10000).catch(() => ({ status: 0, body: {} }));
-  record("api:clipper-health", clipperHealth.status > 0 && clipperHealth.status < 500, JSON.stringify(clipperHealth.body).slice(0, 240));
+  const vibeHealth = await jsonFetch(`${CLYRA}/api/vibe/projects`, {}, 15000).catch(() => ({ status: 0, body: {} }));
+  record(
+    "api:vibe-projects",
+    vibeHealth.status > 0 &&
+      vibeHealth.status < 500 &&
+      !String(vibeHealth.body?.raw || "").includes("<!doctype html>"),
+    JSON.stringify(vibeHealth.body || vibeHealth).slice(0, 240),
+  );
+
+  const clipperHealth = await jsonFetch(`${CLYRA}/api/clipper/autoclip/status`, {}, 15000).catch(() => ({
+    status: 0,
+    body: {},
+  }));
+  record(
+    "api:clipper-status",
+    clipperHealth.status > 0 &&
+      clipperHealth.status < 500 &&
+      !String(clipperHealth.body?.raw || "").includes("<!doctype html>"),
+    JSON.stringify(clipperHealth.body).slice(0, 240),
+  );
 
   const voiceConfig = await jsonFetch(`${CLYRA}/api/voice/config`, {}, 10000).catch(() => ({ status: 0, body: {} }));
   record("api:voice-config", voiceConfig.status > 0 && voiceConfig.status < 500, JSON.stringify(voiceConfig.body).slice(0, 240));

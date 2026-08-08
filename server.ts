@@ -1493,16 +1493,55 @@ async function startServer() {
 
   app.post("/api/creator/generate", async (req, res) => {
     const apiKey = process.env.DEEPSEEK_API_KEY;
-    if (!apiKey) {
-      res.status(503).json({ ok: false, error: "Creator intelligence is unavailable on this server" });
-      return;
-    }
-    const kind = req.body?.kind === "fake_text_story" ? "fake_text_story" : req.body?.kind === "story_video" ? "story_video" : "would_rather";
+    const kind = req.body?.kind === "fake_text_story" || req.body?.kind === "fake_text"
+      ? "fake_text_story"
+      : req.body?.kind === "story_video"
+        ? "story_video"
+        : "would_rather";
     const prompt = String(req.body?.prompt || "").trim().slice(0, 2_000);
     const count = Math.max(1, Math.min(12, Number(req.body?.count) || 5));
     const tone = String(req.body?.tone || "engaging").trim().slice(0, 80);
     if (!prompt) {
       res.status(400).json({ ok: false, error: "A premise or topic is required" });
+      return;
+    }
+    // Offline deterministic scripts so Fake Text / WYR stay usable without DeepSeek.
+    if (!apiKey) {
+      if (kind === "fake_text_story") {
+        const hook = prompt.replace(/\s+/g, " ").slice(0, 72);
+        const messages = Array.from({ length: count }, (_, i) => {
+          if (i === 0) return { side: "left" as const, text: `Hey — about ${hook}${hook.length >= 72 ? "…" : ""}` };
+          if (i === count - 1) return { side: "right" as const, text: "Haha yes, I'm in!" };
+          return { side: (i % 2 === 0 ? "left" : "right") as const, text: i % 2 === 0 ? "Wait, really?" : "Totally." };
+        });
+        res.json({
+          ok: true,
+          source: "local-fallback",
+          data: { title: "Text story", contactName: "Alex", messages, tone },
+        });
+        return;
+      }
+      if (kind === "would_rather") {
+        res.json({
+          ok: true,
+          source: "local-fallback",
+          data: {
+            title: "Would You Rather",
+            rounds: Array.from({ length: count }, (_, i) => ({
+              question: `Would you rather… (${prompt.slice(0, 48)}) #${i + 1}?`,
+              left: "Option A",
+              right: "Option B",
+              leftPercent: 52,
+            })),
+          },
+        });
+        return;
+      }
+      res.json({
+        ok: true,
+        source: "local-fallback",
+        data: { title: "Story beat", body: `A short narrated story inspired by: ${prompt}` },
+      });
       return;
     }
     const schema = kind === "would_rather"
@@ -1583,13 +1622,14 @@ async function startServer() {
 
   app.post("/api/study/ask", async (req, res) => {
     const apiKey = process.env.DEEPSEEK_API_KEY;
-    if (!apiKey) {
-      res.status(503).json({ ok: false, error: "Study intelligence is unavailable on this server" });
-      return;
-    }
     const question = String(req.body?.question || "").trim().slice(0, 4_000);
     const mode = ["answer", "summary", "flashcards", "quiz", "plan"].includes(req.body?.mode) ? req.body.mode : "answer";
-    const context = (Array.isArray(req.body?.context) ? req.body.context : []).slice(0, 32).map((item: Record<string, unknown>, index: number) => ({
+    const rawContext = Array.isArray(req.body?.context)
+      ? req.body.context
+      : typeof req.body?.context === "string" && req.body.context.trim()
+        ? [{ title: "Notes", body: String(req.body.context) }]
+        : [];
+    const context = rawContext.slice(0, 32).map((item: Record<string, unknown>, index: number) => ({
       id: String(item?.id || `source-${index + 1}`).slice(0, 100),
       title: String(item?.title || `Source ${index + 1}`).slice(0, 180),
       source: String(item?.source || item?.title || `Source ${index + 1}`).slice(0, 300),
@@ -1601,6 +1641,27 @@ async function startServer() {
     }
     if (!context.length) {
       res.status(400).json({ ok: false, error: "Add or select at least one source before asking Study Brain" });
+      return;
+    }
+    if (!apiKey) {
+      const evidence = context
+        .map((item, index) => `[S${index + 1}] ${item.title}: ${item.body.replace(/\s+/g, " ").trim().slice(0, 280)}`)
+        .join("\n");
+      const answer =
+        mode === "summary"
+          ? `Summary grounded in your sources:\n${evidence}`
+          : mode === "flashcards"
+            ? context
+                .slice(0, 4)
+                .map((item, index) => `${index + 1}. Front: ${item.title}\n   Back: ${item.body.replace(/\s+/g, " ").trim().slice(0, 160) || "Review this source."}`)
+                .join("\n")
+            : `Based on [S1] ${context[0]!.title}: ${context[0]!.body.replace(/\s+/g, " ").trim().slice(0, 360) || "Source text is thin — add more notes for a deeper answer."}\n\nQuestion: ${question}`;
+      res.json({
+        ok: true,
+        answer,
+        citations: context.map((item) => String(item.source || item.title)),
+        source: "local-fallback",
+      });
       return;
     }
     const modeInstruction = mode === "flashcards"

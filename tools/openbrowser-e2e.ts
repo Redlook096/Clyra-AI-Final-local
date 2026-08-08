@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { normalizeDecisionAction } from "../lib/openbrowser/browser-runtime";
 
-const appBase = process.env.CLYRA_URL || "http://127.0.0.1:3000";
+const appBase =
+  process.env.CLYRA_URL ||
+  process.env.CLYRA_API_BASE ||
+  process.env.CLYRA_SERVICE_URL ||
+  "http://127.0.0.1:31415";
 const fixturePort = Number(process.env.CLYRA_BROWSER_FIXTURE_PORT || 43119);
 const fixtureUrl = `http://127.0.0.1:${fixturePort}/catalogue`;
 
