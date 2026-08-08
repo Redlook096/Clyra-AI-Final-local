@@ -151,6 +151,7 @@
 
   let lastResize = { w: 0, h: 0 };
   let resizeChain = Promise.resolve();
+  let queuedResize = null;
 
   // Match CSS --oc-ease: cubic-bezier(0.16, 1, 0.3, 1) so Electron bounds
   // and drawer height stay locked during expand/collapse.
@@ -182,19 +183,26 @@
     if (!window.electronAPI?.resizeWindow) return Promise.resolve();
     const w = Math.max(60, Math.round(width));
     const h = Math.max(28, Math.round(height));
-    if (
-      Math.abs(w - lastResize.w) < 1 &&
-      Math.abs(h - lastResize.h) < 1 &&
-      recenter !== true &&
-      recenter !== 'x'
-    ) {
-      return Promise.resolve();
-    }
-    lastResize = { w, h };
-    // Serialize IPC so Electron never applies out-of-order sizes mid-animation.
+    // Coalesce: keep only the latest size so rAF never waits on a backlog of IPC.
+    queuedResize = { w, h, recenter };
     resizeChain = resizeChain
       .catch(() => {})
-      .then(() => window.electronAPI.resizeWindow(w, h, { recenter }));
+      .then(async () => {
+        while (queuedResize) {
+          const job = queuedResize;
+          queuedResize = null;
+          if (
+            Math.abs(job.w - lastResize.w) < 1 &&
+            Math.abs(job.h - lastResize.h) < 1 &&
+            job.recenter !== true &&
+            job.recenter !== 'x'
+          ) {
+            continue;
+          }
+          lastResize = { w: job.w, h: job.h };
+          await window.electronAPI.resizeWindow(job.w, job.h, { recenter: job.recenter });
+        }
+      });
     return resizeChain;
   }
 
@@ -210,26 +218,30 @@
    */
   async function animateBounds(fromW, fromH, toW, toH, durationMs, { recenterDuring = false } = {}) {
     const start = performance.now();
-    // Prefer reduced motion: snap once.
+    const dw = Math.abs(toW - fromW);
+    const dh = Math.abs(toH - fromH);
+    // Prefer reduced motion or no-op deltas: snap once.
     const reduce =
       typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (reduce || durationMs <= 0) {
-      await resizeWindowNow(toW, toH, { recenter: recenterDuring || Math.abs(toW - fromW) > 2 ? 'x' : false });
+    if (reduce || durationMs <= 0 || (dw < 2 && dh < 2)) {
+      await resizeWindowNow(toW, toH, {
+        recenter: recenterDuring === 'x' || dw > 2 ? 'x' : false,
+      });
       return;
     }
+    // rAF-driven; coalesce IPC to latest size. Recenter only on the final frame
+    // so we don't pay centerMainWindowHorizontally on every tick.
     while (true) {
       const t = Math.min(1, (performance.now() - start) / durationMs);
       const e = cubicBezierEase(t);
       const w = Math.round(fromW + (toW - fromW) * e);
       const h = Math.round(fromH + (toH - fromH) * e);
-      await resizeWindowNow(w, h, {
-        recenter: recenterDuring === 'x' && Math.abs(toW - fromW) > 2 ? 'x' : false,
-      });
+      void resizeWindowNow(w, h, { recenter: false });
       if (t >= 1) break;
       await new Promise((r) => requestAnimationFrame(r));
     }
     await resizeWindowNow(toW, toH, {
-      recenter: Math.abs(toW - fromW) > 2 ? 'x' : false,
+      recenter: recenterDuring === 'x' || dw > 2 ? 'x' : false,
     });
   }
 
@@ -271,6 +283,13 @@
 
   async function collapse(opts = {}) {
     const hideIfAlreadyCollapsed = Boolean(opts.hideIfAlreadyCollapsed);
+    // Wait briefly if an expand is mid-flight so close isn't dropped
+    if (animating) {
+      const start = performance.now();
+      while (animating && performance.now() - start < 1600) {
+        await wait(32);
+      }
+    }
     if (animating) return;
     if (!open && !wide && !taskPromptMode && !controlling) {
       if (hideIfAlreadyCollapsed) {
@@ -428,6 +447,13 @@
   }
 
   async function enterTaskPrompt() {
+    if (controlling) return;
+    if (animating) {
+      const start = performance.now();
+      while (animating && performance.now() - start < 1600) {
+        await wait(32);
+      }
+    }
     if (animating || controlling) return;
     animating = true;
     setModeUI('control');
