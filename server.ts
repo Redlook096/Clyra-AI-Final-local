@@ -2226,11 +2226,18 @@ async function startServer() {
           .filter(Boolean)
           .slice(0, 6)
           .join(" · ");
-        const bits = [
-          visionSummary || (ocrPreview ? `I can read: ${ocrPreview}` : "I am ready to help with what is on your screen."),
-          "Talk to me while you work — or open the Electron overlay (⌘⇧J) so I can take control with the Atlas cursor.",
-        ];
-        return bits.join(" ");
+        // When OpenCluely/vision already supplied a real summary, return it as-is.
+        // Only add the overlay tip for empty/placeholder fallbacks.
+        if (visionSummary && visionSummary.trim().length > 40) {
+          return visionSummary.trim();
+        }
+        const base =
+          visionSummary ||
+          (ocrPreview ? `I can read: ${ocrPreview}` : "I am ready to help with what is on your screen.");
+        if (ocrPreview || !visionSummary) {
+          return `${base} Talk to me while you work — or open the Electron overlay (⌘⇧J) so I can take control with the Atlas cursor.`;
+        }
+        return base;
       };
 
       // Prefer the shared Clyra chat API (same provider stack as voice / chat).

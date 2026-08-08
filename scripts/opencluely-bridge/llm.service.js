@@ -66,9 +66,14 @@ function sanitizeModelText(text) {
   out = out.replace(/\b(\w+)(?:\s+\1){3,}\b/gi, '$1');
   // Collapse repeated 4–12 word phrases
   out = out.replace(/((?:\b\w+\b[\s,.-]*){4,12})\1{2,}/gi, '$1');
+  // Strip Clyra companion overlay pitch that pollutes OpenCluely vision replies
+  out = out.replace(/\s*Talk to me while you work[^.?!]*[.?!]/gi, ' ').trim();
+  out = out.replace(/\s*(?:open the Electron overlay|⌘\s*⇧\s*J|Atlas cursor)[^.?!]*[.?!]?/gi, ' ').trim();
+  // Fix empty numbered labels from VLMs: "1.  : The Google logo" → "1. The Google logo"
+  out = out.replace(/(\d+)\.\s*:\s*/g, '$1. ');
   // Hard cap extremely long garbled replies
   if (out.length > 1200) out = `${out.slice(0, 1100).trim()}…`;
-  return out.trim();
+  return out.replace(/\s+/g, ' ').trim();
 }
 
 class LLMService {
@@ -146,7 +151,8 @@ class LLMService {
         'Use your initiative: if there is a visible question, quiz, exam problem, coding challenge, interview prompt, form, error message, or task the user likely needs solved — answer or solve it directly and helpfully.',
         'Quote key on-screen text literally when relevant.',
         'If there is no clear question, briefly describe what is on screen and suggest the most useful next step.',
-        'Do not invent apps, sites, or text that are not visible. Be concise. No stealth.',
+        'Write in short plain prose or a clean numbered list like "1. Item" — never empty labels like "1. :".',
+        'Do not invent apps, sites, or text that are not visible. Be concise. Do not mention overlays, shortcuts, or Atlas.',
       ].join(' ');
     }
     if (skill === 'general' || skill === 'screen') {
@@ -417,13 +423,29 @@ class LLMService {
       let source = this.model;
       try {
         const refined = await this.callClyraAsk({
-          question: `${instruction}\n\nVision model saw:\n${visionText}\n\nGive a short helpful answer for the user. Do not repeat yourself.`,
+          question: `${instruction}\n\nVision model saw:\n${visionText}\n\nRewrite into a short helpful answer for the user. Keep facts from the vision notes. Do not mention Electron overlays, keyboard shortcuts, or Atlas. Do not repeat yourself.`,
           visionSummary: visionText,
           ocrText: visionText,
         });
         if (refined.text) {
-          finalText = sanitizeModelText(refined.text);
-          source = `${this.model}+${refined.source}`;
+          const cleaned = sanitizeModelText(refined.text);
+          // vision-local often just echoes vision + marketing pitch — keep pure vision then.
+          const sourceName = String(refined.source || '');
+          const addsSubstance =
+            cleaned &&
+            cleaned.length >= Math.min(48, visionText.length) &&
+            cleaned !== visionText &&
+            !/^I am ready to help/i.test(cleaned);
+          if (addsSubstance && sourceName !== 'vision-local') {
+            finalText = cleaned;
+            source = `${this.model}+${sourceName}`;
+          } else if (addsSubstance && cleaned.length > visionText.length + 20) {
+            finalText = cleaned;
+            source = `${this.model}+${sourceName}`;
+          } else {
+            finalText = visionText;
+            source = this.model;
+          }
         }
       } catch (refineError) {
         logger.warn('Clyra refine skipped; using vision only', { error: refineError.message });
