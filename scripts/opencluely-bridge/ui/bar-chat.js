@@ -501,19 +501,42 @@
     await enterTaskPrompt();
   });
 
-  const toggleStealth = () => {
+  const toggleStealth = (e) => {
+    try {
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
+    } catch (_) {
+      /* ignore */
+    }
+    // Ignore non-primary buttons; avoid double-toggle from nested bubble.
+    if (e?.button != null && e.button !== 0) return;
     applyStealthUI(!stealthOn);
     measureAndResize();
   };
-  stealthSwitch?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    toggleStealth();
-  });
-  stealthWrap?.addEventListener('click', (e) => {
-    if (e.target === stealthSwitch) return;
-    e.stopPropagation();
-    toggleStealth();
-  });
+  // Single pointerup on the wrap only — pointerdown+click on wrap+switch
+  // was double-firing and cancelling the toggle (looked "broken").
+  stealthWrap?.addEventListener('pointerup', toggleStealth);
+  try {
+    if (stealthWrap) {
+      stealthWrap.style.pointerEvents = 'auto';
+      stealthWrap.style.webkitAppRegion = 'no-drag';
+    }
+    if (stealthSwitch) {
+      stealthSwitch.style.pointerEvents = 'auto';
+      stealthSwitch.style.webkitAppRegion = 'no-drag';
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  // After boot, force interactive hit-targets even if a boot class was left behind.
+  shell.classList.add('is-boot-reveal');
+  for (const el of shell.querySelectorAll('.oc-boot-hide, .oc-stealth-wrap, .oc-actions, .oc-close')) {
+    try {
+      el.style.pointerEvents = 'auto';
+    } catch (_) {
+      /* ignore */
+    }
+  }
 
   closeBtn?.addEventListener('click', async (e) => {
     e.stopPropagation();

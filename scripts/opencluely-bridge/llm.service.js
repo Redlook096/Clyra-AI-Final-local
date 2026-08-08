@@ -59,6 +59,18 @@ function httpJson(url, { method = 'GET', headers = {}, body, timeoutMs = 60000 }
   });
 }
 
+function sanitizeModelText(text) {
+  let out = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!out) return out;
+  // Collapse runaway token loops like "the the the..." or repeated phrases
+  out = out.replace(/\b(\w+)(?:\s+\1){3,}\b/gi, '$1');
+  // Collapse repeated 4–12 word phrases
+  out = out.replace(/((?:\b\w+\b[\s,.-]*){4,12})\1{2,}/gi, '$1');
+  // Hard cap extremely long garbled replies
+  if (out.length > 1200) out = `${out.slice(0, 1100).trim()}…`;
+  return out.trim();
+}
+
 class LLMService {
   constructor() {
     this.client = { provider: 'clyra+qwen2.5vl' };
@@ -193,7 +205,7 @@ class LLMService {
         if (!response.ok) {
           throw new Error(`Vision failed (${response.status}): ${String(response.text || '').slice(0, 200)}`);
         }
-        const text = String(response.json?.response || '').trim();
+        const text = sanitizeModelText(String(response.json?.response || '').trim());
         if (text) return text;
 
         const chatRes = await httpJson(`${this.ollamaBase}/api/chat`, {
@@ -206,7 +218,7 @@ class LLMService {
           }),
           timeoutMs: 120000,
         });
-        const chatText = String(chatRes.json?.message?.content || '').trim();
+        const chatText = sanitizeModelText(String(chatRes.json?.message?.content || '').trim());
         if (chatText) return chatText;
         lastError = new Error('Vision model returned an empty reply');
       } catch (error) {
@@ -400,17 +412,17 @@ class LLMService {
     this.requestCount += 1;
     const instruction = this.formatImageInstruction(activeSkill, programmingLanguage, visionMode);
     try {
-      const visionText = await this.callVision(imageBuffer, instruction);
+      const visionText = sanitizeModelText(await this.callVision(imageBuffer, instruction));
       let finalText = visionText;
       let source = this.model;
       try {
         const refined = await this.callClyraAsk({
-          question: `${instruction}\n\nVision model saw:\n${visionText}\n\nGive a short helpful answer for the user.`,
+          question: `${instruction}\n\nVision model saw:\n${visionText}\n\nGive a short helpful answer for the user. Do not repeat yourself.`,
           visionSummary: visionText,
           ocrText: visionText,
         });
         if (refined.text) {
-          finalText = refined.text;
+          finalText = sanitizeModelText(refined.text);
           source = `${this.model}+${refined.source}`;
         }
       } catch (refineError) {
