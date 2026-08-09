@@ -755,10 +755,18 @@
       /* ignore */
     }
     try {
-      inputEl?.focus({ preventScroll: true });
+      window.electronAPI?.focusMainWindow?.();
     } catch (_) {
-      inputEl?.focus();
+      /* ignore */
     }
+    // Focus after main process activates the BrowserWindow.
+    setTimeout(() => {
+      try {
+        inputEl?.focus({ preventScroll: true });
+      } catch (_) {
+        inputEl?.focus();
+      }
+    }, 30);
   };
   inputEl?.addEventListener('pointerdown', focusComposer);
   document.querySelector('.oc-composer')?.addEventListener('pointerdown', focusComposer);

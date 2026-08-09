@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   hideAllWindows: () => ipcRenderer.invoke('hide-all-windows'),
   enableWindowInteraction: () => ipcRenderer.invoke('enable-window-interaction'),
   disableWindowInteraction: () => ipcRenderer.invoke('disable-window-interaction'),
+  focusMainWindow: () => ipcRenderer.invoke('focus-main-window'),
   switchToChat: () => ipcRenderer.invoke('switch-to-chat'),
   switchToSkills: () => ipcRenderer.invoke('switch-to-skills'),
   resizeWindow: (width, height, opts = {}) =>

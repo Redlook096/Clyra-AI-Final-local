@@ -578,6 +578,31 @@ class ApplicationController {
       return windowManager.getWindowStats();
     });
 
+    ipcMain.handle("focus-main-window", () => {
+      const mainWindow = windowManager.getWindow("main");
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        try {
+          windowManager.setInteractive(true);
+          mainWindow.setIgnoreMouseEvents(false);
+        } catch (_) {
+          /* ignore */
+        }
+        try {
+          if (mainWindow.isMinimized?.()) mainWindow.restore();
+        } catch (_) {
+          /* ignore */
+        }
+        try {
+          mainWindow.show();
+          mainWindow.focus();
+          mainWindow.webContents?.focus?.();
+        } catch (_) {
+          /* ignore */
+        }
+      }
+      return { success: true };
+    });
+
     ipcMain.handle("switch-to-chat", () => {
       windowManager.switchToWindow("chat");
       return windowManager.getWindowStats();
@@ -2799,6 +2824,27 @@ class ApplicationController {
               windowManager.openChatDrawer?.();
             }
             send(200, { ok: true, action: "show" });
+            return;
+          }
+          if (req.method === "POST" && req.url === "/expand") {
+            windowManager.showAllWindows();
+            windowManager.hideLLMResponse?.();
+            windowManager.hideChatWindow?.();
+            windowManager.openChatDrawer?.();
+            const mainWindow = windowManager.getWindow("main");
+            try {
+              mainWindow?.show?.();
+              mainWindow?.focus?.();
+            } catch (_) {
+              /* ignore */
+            }
+            send(200, { ok: true, action: "expand" });
+            return;
+          }
+          if (req.method === "POST" && req.url === "/collapse") {
+            windowManager.closeChatDrawer?.();
+            windowManager.centerMainWindowAtTop?.();
+            send(200, { ok: true, action: "collapse" });
             return;
           }
           if (req.method === "POST" && req.url === "/hide") {
