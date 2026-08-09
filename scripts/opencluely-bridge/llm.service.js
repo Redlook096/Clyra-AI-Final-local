@@ -143,8 +143,20 @@ class LLMService {
     }
   }
 
-  formatImageInstruction(activeSkill, programmingLanguage, visionMode = null) {
+  formatImageInstruction(activeSkill, programmingLanguage, visionMode = null, userQuestion = null) {
     const skill = activeSkill || 'general';
+    const asked = String(userQuestion || '').trim();
+    if (visionMode === 'screen-ask' || asked) {
+      return [
+        "Look at this screenshot of the user's screen carefully.",
+        asked ? `The user asked: "${asked.slice(0, 400)}"` : 'Describe what is visible on screen.',
+        'Answer that question using only what is actually visible.',
+        'Read on-screen text literally. Quote key titles/headings when relevant.',
+        'Say which app or website is open if the window chrome or URL bar is visible.',
+        'Do not invent apps, sites, books, chats, or text that are not in the image.',
+        'Be concise and practical. Do not mention overlays, shortcuts, Electron, or Atlas.',
+      ].join(' ');
+    }
     if (visionMode === 'auto' || skill === 'auto') {
       return [
         "Look at this screenshot of the user's screen carefully.",
@@ -255,21 +267,47 @@ class LLMService {
   }
 
   /**
-   * Same heuristic as Clyra chat tool — when true, run /api/research/web-search first.
+   * Tight web-search heuristic — only fire when the user clearly wants research.
+   * Avoids treating screen/local questions ("what's on my screen", "what is 2+2")
+   * as web searches.
    */
   looksLikeWebSearchQuery(text) {
     const raw = String(text || '').trim();
     if (!raw) return false;
-    const t = raw.replace(/^\/search\s+/i, '').trim() || raw;
     if (/^\/search\b/i.test(raw)) return true;
-    return (
-      /^(?:search|look\s*up|find|research|google)\b/i.test(t) ||
+    const t = raw.replace(/^\/search\s+/i, '').trim() || raw;
+    // Never web-search screen / local / math / coding help phrasing.
+    if (
+      /\b(on (my )?screen|my (screen|desktop|window|display)|screenshot|what do you see|can you see|looking at|read (the )?page)\b/i.test(
+        t,
+      )
+    ) {
+      return false;
+    }
+    if (/^[\d\s.+\-*/()^=%]+$/.test(t)) return false;
+    if (
+      /^(?:how (?:do|can|to)|help me|explain|write|fix|debug|refactor)\b/i.test(t) &&
+      !/\b(?:online|web|internet|latest|news)\b/i.test(t)
+    ) {
+      return false;
+    }
+    if (
+      /^(?:search|look\s*up|research|google)\b/i.test(t) ||
       /\b(?:search the web|look online|from the (?:web|internet)|web search)\b/i.test(t) ||
       /\b(?:latest|current|today'?s|this week'?s|breaking)\b.+\b(?:news|price|score|release|update|headline)s?\b/i.test(
         t,
-      ) ||
-      /^(?:what(?:'| i)?s|who is|when (?:did|is|was)|how many)\b.+/i.test(t)
-    );
+      )
+    ) {
+      return true;
+    }
+    // Factual lookups only — exclude UI-help phrasing.
+    if (
+      /^(?:who is|when (?:did|was)|how many)\b.+/i.test(t) &&
+      !/\b(button|click|menu|tab|field|screen|window|app)\b/i.test(t)
+    ) {
+      return true;
+    }
+    return false;
   }
 
   normalizeSearchQuery(text) {
@@ -294,11 +332,21 @@ class LLMService {
     });
     const payload = response.json || {};
     if (!response.ok || payload.ok === false) {
-      throw new Error(payload.error || `Web search failed (${response.status})`);
+      const errObj = payload.error;
+      const errMsg =
+        typeof errObj === 'string'
+          ? errObj
+          : errObj?.message || `Web search failed (${response.status})`;
+      throw new Error(errMsg);
     }
+    const urls = Array.isArray(payload.urls)
+      ? payload.urls
+      : Array.isArray(payload.results)
+        ? payload.results.map((r) => r.url || r.href).filter(Boolean)
+        : [];
     return {
       query: q,
-      urls: Array.isArray(payload.urls) ? payload.urls : [],
+      urls,
       pages: Array.isArray(payload.pages) ? payload.pages : [],
       analysisPrompt: String(payload.analysisPrompt || '').trim(),
       source: 'clyra-web-search',
@@ -409,21 +457,42 @@ class LLMService {
     return result;
   }
 
-  async processImageWithSkill(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null, visionMode = null) {
+  async processImageWithSkill(
+    imageBuffer,
+    mimeType,
+    activeSkill,
+    sessionMemory = [],
+    programmingLanguage = null,
+    visionMode = null,
+    userQuestion = null,
+  ) {
     if (!this.isInitialized) throw new Error('LLM service not initialized');
     if (!imageBuffer || !Buffer.isBuffer(imageBuffer)) {
       throw new Error('Invalid image buffer provided to processImageWithSkill');
     }
     const startTime = Date.now();
     this.requestCount += 1;
-    const instruction = this.formatImageInstruction(activeSkill, programmingLanguage, visionMode);
+    const instruction = this.formatImageInstruction(
+      activeSkill,
+      programmingLanguage,
+      visionMode,
+      userQuestion,
+    );
     try {
       const visionText = sanitizeModelText(await this.callVision(imageBuffer, instruction));
       let finalText = visionText;
       let source = this.model;
       try {
+        const asked = String(userQuestion || '').trim();
         const refined = await this.callClyraAsk({
-          question: `${instruction}\n\nVision model saw:\n${visionText}\n\nRewrite into a short helpful answer for the user. Keep facts from the vision notes. Do not mention Electron overlays, keyboard shortcuts, or Atlas. Do not repeat yourself.`,
+          question: [
+            instruction,
+            asked ? `User question: ${asked}` : '',
+            `Vision model saw:\n${visionText}`,
+            'Rewrite into a short helpful answer for the user. Keep facts from the vision notes. Do not mention Electron overlays, keyboard shortcuts, or Atlas. Do not repeat yourself.',
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
           visionSummary: visionText,
           ocrText: visionText,
         });
@@ -471,7 +540,16 @@ class LLMService {
     }
   }
 
-  async processImageWithSkillStream(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta, visionMode = null) {
+  async processImageWithSkillStream(
+    imageBuffer,
+    mimeType,
+    activeSkill,
+    sessionMemory = [],
+    programmingLanguage = null,
+    onDelta,
+    visionMode = null,
+    userQuestion = null,
+  ) {
     const result = await this.processImageWithSkill(
       imageBuffer,
       mimeType,
@@ -479,6 +557,7 @@ class LLMService {
       sessionMemory,
       programmingLanguage,
       visionMode,
+      userQuestion,
     );
     if (typeof onDelta === 'function' && result.response) onDelta(result.response);
     return result;

@@ -20,11 +20,13 @@
         --oc-drag: #8b95a5;
         --oc-input-bg: rgba(255, 255, 255, 0.92);
         --oc-msg-bg: rgba(255, 255, 255, 0.86);
-        --oc-ease: cubic-bezier(0.16, 1, 0.3, 1);
+        --oc-ease: cubic-bezier(0.22, 1, 0.36, 1);
         --oc-ease-soft: cubic-bezier(0.33, 1, 0.68, 1);
-        --oc-dur-w: 520ms;
-        --oc-dur-h: 480ms;
-        --oc-dur-fast: 220ms;
+        --oc-dur-w: 340ms;
+        --oc-dur-h: 320ms;
+        --oc-dur-fast: 160ms;
+        --oc-accent: #4a7cff;
+        --oc-accent-soft: rgba(74, 124, 255, 0.35);
         --oc-expanded-w: 600px;
         --oc-bar-h: 56px;
         --oc-drawer-h: 360px;
@@ -33,7 +35,8 @@
         --oc-stealth-accent: #7dd3fc;
       }
 
-      html.oc-stealth {
+      html.oc-stealth,
+      html.oc-dark {
         --oc-glass: rgba(22, 27, 34, 0.86);
         --oc-glass-open: rgba(17, 24, 39, 0.94);
         --oc-border: rgba(148, 163, 184, 0.14);
@@ -47,6 +50,27 @@
         --oc-drag: #94a3b8;
         --oc-input-bg: rgba(15, 23, 42, 0.9);
         --oc-msg-bg: rgba(30, 41, 59, 0.9);
+        --oc-accent: #7aa2ff;
+        --oc-accent-soft: rgba(122, 162, 255, 0.4);
+      }
+      @media (prefers-color-scheme: dark) {
+        html:not(.oc-force-light) {
+          --oc-glass: rgba(22, 27, 34, 0.86);
+          --oc-glass-open: rgba(17, 24, 39, 0.94);
+          --oc-border: rgba(148, 163, 184, 0.14);
+          --oc-text: #cbd5e1;
+          --oc-text-strong: #f1f5f9;
+          --oc-shadow: 0 14px 36px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.28);
+          --oc-btn-bg: rgba(30, 41, 59, 0.88);
+          --oc-btn-border: rgba(148, 163, 184, 0.14);
+          --oc-close-bg: rgba(30, 41, 59, 0.96);
+          --oc-close-fg: #e2e8f0;
+          --oc-drag: #94a3b8;
+          --oc-input-bg: rgba(15, 23, 42, 0.9);
+          --oc-msg-bg: rgba(30, 41, 59, 0.9);
+          --oc-accent: #7aa2ff;
+          --oc-accent-soft: rgba(122, 162, 255, 0.4);
+        }
       }
 
       * { box-sizing: border-box; }
@@ -64,7 +88,9 @@
         color-scheme: light;
         transition: color-scheme 420ms ease;
       }
-      html.oc-stealth, html.oc-stealth body { color-scheme: dark; }
+      html.oc-stealth, html.oc-stealth body,
+      html.oc-dark, html.oc-dark body { color-scheme: dark; }
+      html.oc-force-light, html.oc-force-light body { color-scheme: light; }
 
       .oc-shell {
         display: flex;
@@ -262,14 +288,20 @@
         height: 16px;
         flex-shrink: 0;
         display: block;
+        transition: transform 280ms var(--oc-ease), opacity 200ms ease;
       }
       .oc-pill-btn .oc-btn-label { line-height: 1; }
       .oc-pill-btn:hover {
-        filter: brightness(1.03);
+        filter: brightness(1.04);
         color: var(--oc-text-strong);
-        transform: translateY(-0.5px);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.1);
+      }
+      .oc-pill-btn:hover .oc-btn-icon {
+        transform: scale(1.08) translateY(-0.5px);
       }
       .oc-pill-btn:active { transform: translateY(0); }
+      .oc-pill-btn:active .oc-btn-icon { transform: scale(0.96); }
       .oc-pill-btn.is-active {
         background: rgba(243, 244, 246, 0.95);
         color: var(--oc-text-strong);
@@ -409,16 +441,17 @@
         background: currentColor;
       }
 
-      /* Chat drawer — animate height (not max-height) for butter-smooth expand-down */
+      /* Chat drawer — height only (expand down). No vertical recentering. */
       .chat-drawer {
         width: 100%;
         height: 0;
         opacity: 0;
         overflow: hidden;
         pointer-events: none;
+        transform-origin: top center;
         transition:
           height var(--oc-dur-h) var(--oc-ease),
-          opacity 320ms var(--oc-ease-soft);
+          opacity 200ms var(--oc-ease-soft);
       }
       .oc-shell.is-chat-open .chat-drawer {
         height: var(--oc-drawer-h);
@@ -430,6 +463,56 @@
       }
       .oc-shell.is-animating .chat-drawer {
         will-change: height, opacity;
+      }
+
+      /* Thinking: subtle blue glow line traveling around the shell border */
+      .oc-shell.is-thinking.is-chat-open,
+      .oc-shell.is-thinking.is-wide {
+        position: relative;
+      }
+      .oc-shell.is-thinking.is-chat-open::before,
+      .oc-shell.is-thinking.is-wide::before {
+        content: "";
+        pointer-events: none;
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        padding: 1.5px;
+        background: conic-gradient(
+          from var(--oc-glow-angle, 0deg),
+          transparent 0%,
+          transparent 62%,
+          rgba(255, 255, 255, 0.05) 72%,
+          var(--oc-accent-soft) 82%,
+          rgba(225, 238, 255, 0.85) 88%,
+          var(--oc-accent-soft) 94%,
+          transparent 100%
+        );
+        -webkit-mask:
+          linear-gradient(#000 0 0) content-box,
+          linear-gradient(#000 0 0);
+        -webkit-mask-composite: xor;
+        mask-composite: exclude;
+        animation: oc-border-glow 1.8s linear infinite;
+        opacity: 0.9;
+        z-index: 8;
+      }
+      @property --oc-glow-angle {
+        syntax: "<angle>";
+        inherits: false;
+        initial-value: 0deg;
+      }
+      @keyframes oc-border-glow {
+        to { --oc-glow-angle: 360deg; }
+      }
+      @supports not (background: conic-gradient(red, blue)) {
+        .oc-shell.is-thinking.is-chat-open::before,
+        .oc-shell.is-thinking.is-wide::before {
+          animation: none;
+          box-shadow: 0 0 0 1px var(--oc-accent-soft), 0 0 18px var(--oc-accent-soft);
+          background: transparent;
+          padding: 0;
+        }
       }
       @media (prefers-reduced-motion: reduce) {
         .oc-shell,
@@ -470,51 +553,76 @@
       .chat-messages .message {
         max-width: 92%;
         margin-bottom: 0;
-        padding: 9px 11px;
-        border-radius: 12px;
-        border-left: none;
-        font-size: 12.5px;
-        line-height: 1.45;
+        padding: 0;
+        border-radius: 0;
+        border: none;
+        font-size: 13px;
+        line-height: 1.5;
         color: var(--oc-text-strong) !important;
-        background: var(--oc-msg-bg) !important;
-        border: 1px solid var(--oc-border);
-        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-        backdrop-filter: none;
+        background: transparent !important;
+        box-shadow: none;
         text-shadow: none;
       }
-      .chat-messages .message.user {
+      /* User bubble — Clyra chat tool style (scaled) */
+      .chat-messages .message.user.oc-user-bubble {
         align-self: flex-end;
-        background: #e8eef8 !important;
-        border-color: rgba(55, 65, 81, 0.12);
+        max-width: min(78%, 420px);
+        padding: 9px 12px !important;
+        border-radius: 14px !important;
+        background: #eef2f7 !important;
+        border: 1px solid rgba(148, 163, 184, 0.28) !important;
+        color: #172033 !important;
+        transform-origin: bottom right;
+        animation: oc-user-bubble-appear 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
       }
-      html.oc-stealth .chat-messages .message.user {
-        background: rgba(125, 211, 252, 0.14) !important;
-        border-color: rgba(125, 211, 252, 0.22);
+      .chat-messages .message.user.oc-user-bubble--first {
+        animation-name: oc-user-bubble-first;
+        animation-duration: 0.85s;
       }
-      .chat-messages .message.assistant,
-      .chat-messages .message.system,
-      .chat-messages .message.transcription {
+      html.oc-stealth .chat-messages .message.user.oc-user-bubble,
+      html.oc-dark .chat-messages .message.user.oc-user-bubble {
+        background: rgba(74, 124, 255, 0.16) !important;
+        border-color: rgba(122, 162, 255, 0.28) !important;
+        color: #f1f5f9 !important;
+      }
+      @keyframes oc-user-bubble-appear {
+        from { opacity: 0; transform: translateY(10px) scale(0.96); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+      }
+      @keyframes oc-user-bubble-first {
+        0% { opacity: 0; transform: translateY(48px) scale(0.94); filter: blur(8px); }
+        55% { opacity: 1; transform: translateY(-3px) scale(1.01); filter: blur(0); }
+        100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+      }
+      /* Assistant print — no bubble, like Clyra chat tool */
+      .chat-messages .message.assistant.oc-print,
+      .chat-messages .message.system {
         align-self: flex-start;
-        background: rgba(255, 255, 255, 0.9) !important;
+        max-width: 96%;
+        padding: 2px 2px 6px !important;
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        animation: oc-print-in 280ms var(--oc-ease) both;
+      }
+      @keyframes oc-print-in {
+        from { opacity: 0; transform: translateY(4px); }
+        to { opacity: 1; transform: none; }
       }
       .chat-messages .message.error {
         align-self: flex-start;
+        padding: 8px 10px !important;
+        border-radius: 10px !important;
         background: #fef2f2 !important;
-        border-color: rgba(239, 68, 68, 0.2);
+        border: 1px solid rgba(239, 68, 68, 0.2) !important;
         color: #991b1b !important;
       }
-      .chat-messages .message-time {
-        font-size: 10px;
-        color: #8b95a5 !important;
-        margin-bottom: 3px;
-        font-weight: 500;
-      }
       .chat-messages .message-text {
-        color: var(--oc-text-strong) !important;
+        color: inherit !important;
         text-shadow: none !important;
-        font-size: 12.5px;
-        line-height: 1.45;
-        white-space: normal;
+        font-size: 13px;
+        line-height: 1.5;
+        white-space: pre-wrap;
       }
       .chat-messages .message-text code {
         background: rgba(15, 23, 42, 0.06) !important;
@@ -522,6 +630,11 @@
         padding: 1px 4px;
         border-radius: 4px;
         font-size: 11px;
+      }
+      html.oc-stealth .chat-messages .message-text code,
+      html.oc-dark .chat-messages .message-text code {
+        background: rgba(255, 255, 255, 0.08) !important;
+        color: #e2e8f0 !important;
       }
       .thinking-dots .dot {
         display: inline-block;
@@ -536,50 +649,80 @@
         50% { opacity: 1; transform: translateY(-1px); }
       }
 
+      /* Composer — Clyra chat input, scaled to bar (no command palette) */
       .chat-input-row {
         display: flex;
-        gap: 8px;
-        padding: 10px 12px 12px;
-        border-top: 1px solid rgba(15, 23, 42, 0.06);
+        gap: 0;
+        padding: 8px 10px 10px;
+        border-top: 1px solid var(--oc-border);
         align-items: flex-end;
+      }
+      .chat-input-row .oc-composer {
+        flex: 1;
+        display: flex;
+        align-items: flex-end;
+        gap: 8px;
+        min-height: 44px;
+        padding: 6px 8px 6px 12px;
+        border-radius: 14px;
+        border: 1px solid #dfe4e9;
+        background: #fff;
+        box-shadow: 0 6px 16px rgba(24, 33, 47, 0.06);
+        transition: border-color 180ms ease, box-shadow 180ms ease;
+      }
+      html.oc-stealth .chat-input-row .oc-composer,
+      html.oc-dark .chat-input-row .oc-composer {
+        border-color: rgba(148, 163, 184, 0.22);
+        background: rgba(15, 23, 42, 0.92);
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
+      }
+      .chat-input-row .oc-composer:focus-within {
+        border-color: #b8c7d8;
+        box-shadow: 0 0 0 3px rgba(73, 106, 149, 0.11), 0 6px 16px rgba(24, 33, 47, 0.06);
+      }
+      html.oc-stealth .chat-input-row .oc-composer:focus-within,
+      html.oc-dark .chat-input-row .oc-composer:focus-within {
+        border-color: rgba(122, 162, 255, 0.45);
+        box-shadow: 0 0 0 3px rgba(74, 124, 255, 0.14);
       }
       #barChatInput {
         flex: 1;
         resize: none;
-        min-height: 38px;
-        max-height: 96px;
-        background: var(--oc-input-bg);
-        border: 1px solid var(--oc-border);
-        border-radius: 12px;
+        min-height: 28px;
+        max-height: 88px;
+        background: transparent;
+        border: none;
+        border-radius: 0;
         color: var(--oc-text-strong);
-        padding: 9px 11px;
-        font-size: 13px;
+        padding: 6px 0;
+        font-size: 13.5px;
+        line-height: 1.45;
         font-family: inherit;
         outline: none;
-        box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.03);
+        box-shadow: none;
       }
-      #barChatInput::placeholder { color: var(--oc-drag); }
-      #barChatInput:focus {
-        border-color: rgba(55, 65, 81, 0.28);
-        box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.06);
-      }
-      html.oc-stealth #barChatInput:focus {
-        border-color: rgba(125, 211, 252, 0.4);
-        box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.12);
-      }
+      #barChatInput::placeholder { color: #8b96a5; }
       #barChatSend {
-        width: 38px;
-        height: 38px;
-        border-radius: 12px;
-        border: 1px solid var(--oc-border);
-        background: var(--oc-btn-bg);
+        width: 34px;
+        height: 34px;
+        border-radius: 10px;
+        border: none;
+        background: transparent;
         color: var(--oc-text-strong);
         cursor: pointer;
         display: grid;
         place-items: center;
-        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+        flex-shrink: 0;
+        transition: transform 180ms var(--oc-ease), color 160ms ease, background 160ms ease;
       }
-      #barChatSend:hover { filter: brightness(1.06); transform: scale(1.04); }
+      #barChatSend:hover {
+        background: rgba(15, 23, 42, 0.06);
+        transform: scale(1.05);
+      }
+      html.oc-stealth #barChatSend:hover,
+      html.oc-dark #barChatSend:hover {
+        background: rgba(255, 255, 255, 0.08);
+      }
       #barChatSend svg { width: 15px; height: 15px; }
 
       .oc-shell.is-task-prompt {
@@ -757,12 +900,14 @@
           </div>
           <div class="chat-messages" id="barChatMessages"></div>
           <div class="chat-input-row">
-            <textarea id="barChatInput" rows="1" placeholder="Type a message… (Shift+Enter for newline)"></textarea>
-            <button type="button" id="barChatSend" title="Send" aria-label="Send">
-              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M4 12h12M13 6l7 6-7 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </button>
+            <div class="oc-composer">
+              <textarea id="barChatInput" rows="1" placeholder="Ask anything…"></textarea>
+              <button type="button" id="barChatSend" title="Send" aria-label="Send">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M4 12h12M13 6l7 6-7 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
       </div>

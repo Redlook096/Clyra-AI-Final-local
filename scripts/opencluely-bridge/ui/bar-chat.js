@@ -11,9 +11,9 @@
   const EXPANDED_W = 600;
   const COLLAPSED_H = 56;
   const DRAWER_H = 360;
-  // Keep in sync with --oc-dur-w / --oc-dur-h in index.html
-  const DUR_W = 520;
-  const DUR_H = 480;
+  // Keep in sync with --oc-dur-w / --oc-dur-h in index.html — lighter + snappier
+  const DUR_W = 340;
+  const DUR_H = 320;
 
   const shell = document.getElementById('ocShell');
   const tab = document.getElementById('commandTab');
@@ -44,6 +44,18 @@
   let taskPromptMode = false;
   let stealthOn = false;
   const STEALTH_KEY = 'opencluely_stealth_v1';
+
+  // Sync light/dark with OS (and stealth) so chat bubbles/composer match Clyra.
+  function syncThemeClass() {
+    try {
+      const dark =
+        typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches;
+      document.documentElement.classList.toggle('oc-dark', Boolean(dark) || stealthOn);
+      document.documentElement.classList.toggle('oc-force-light', !dark && !stealthOn);
+    } catch (_) {
+      /* ignore */
+    }
+  }
 
   const AUTO_PROMPT =
     "Look at what's on my screen right now. Use your initiative: if there is a question, quiz, problem, coding prompt, form field, or anything the user likely needs answered or solved, answer it directly and helpfully. If there is no clear question, briefly say what you see and the most useful next step. Read text literally; do not invent content that is not visible.";
@@ -108,15 +120,22 @@
       lastAssistantAt = now;
     }
     const messageDiv = document.createElement('div');
-    messageDiv.className = `message ${type}`;
-    const timeDiv = document.createElement('div');
-    timeDiv.className = 'message-time';
-    timeDiv.textContent = new Date().toLocaleTimeString();
+    // Assistant: plain print (no bubble) like Clyra chat tool.
+    // User: animated bubble matching Clyra chat entry.
+    if (type === 'assistant') {
+      messageDiv.className = 'message assistant oc-print';
+    } else if (type === 'user') {
+      messageDiv.className = 'message user oc-user-bubble';
+      if (!messagesEl.querySelector('.message.user')) {
+        messageDiv.classList.add('oc-user-bubble--first');
+      }
+    } else {
+      messageDiv.className = `message ${type}`;
+    }
     const textDiv = document.createElement('div');
     textDiv.className = 'message-text';
-    if (type === 'assistant') textDiv.innerHTML = formatMarkdown(t);
+    if (type === 'assistant' || type === 'system') textDiv.innerHTML = formatMarkdown(t);
     else textDiv.textContent = t;
-    messageDiv.appendChild(timeDiv);
     messageDiv.appendChild(textDiv);
     messagesEl.appendChild(messageDiv);
     messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -128,17 +147,19 @@
 
   function showThinking() {
     hideThinking();
+    shell.classList.add('is-thinking');
     const thinkingDiv = document.createElement('div');
-    thinkingDiv.className = 'message assistant thinking';
+    thinkingDiv.className = 'message assistant oc-print thinking';
     thinkingDiv.id = 'bar-thinking';
     thinkingDiv.innerHTML =
-      '<div class="message-time">…</div><div class="message-text thinking-dots"><span class="dot">•</span><span class="dot">•</span><span class="dot">•</span></div>';
+      '<div class="message-text thinking-dots"><span class="dot">•</span><span class="dot">•</span><span class="dot">•</span></div>';
     messagesEl.appendChild(thinkingDiv);
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
   function hideThinking() {
     document.getElementById('bar-thinking')?.remove();
+    shell.classList.remove('is-thinking');
   }
 
   function measureShell() {
@@ -179,12 +200,12 @@
     return ay * u3 + by * u2 + cy * u;
   }
 
-  function resizeWindowNow(width, height, { recenter = false } = {}) {
+  function resizeWindowNow(width, height, { recenter = false, growFromTopCenter = false } = {}) {
     if (!window.electronAPI?.resizeWindow) return Promise.resolve();
     const w = Math.max(60, Math.round(width));
     const h = Math.max(28, Math.round(height));
     // Coalesce: keep only the latest size so rAF never waits on a backlog of IPC.
-    queuedResize = { w, h, recenter };
+    queuedResize = { w, h, recenter, growFromTopCenter };
     resizeChain = resizeChain
       .catch(() => {})
       .then(async () => {
@@ -195,12 +216,16 @@
             Math.abs(job.w - lastResize.w) < 1 &&
             Math.abs(job.h - lastResize.h) < 1 &&
             job.recenter !== true &&
-            job.recenter !== 'x'
+            job.recenter !== 'x' &&
+            !job.growFromTopCenter
           ) {
             continue;
           }
           lastResize = { w: job.w, h: job.h };
-          await window.electronAPI.resizeWindow(job.w, job.h, { recenter: job.recenter });
+          await window.electronAPI.resizeWindow(job.w, job.h, {
+            recenter: job.recenter,
+            growFromTopCenter: job.growFromTopCenter,
+          });
         }
       });
     return resizeChain;
@@ -216,7 +241,7 @@
    * Drive Electron window bounds in lockstep with CSS (single rAF, awaited IPC).
    * recenter: false | 'x' (keep Y, center horizontally) | true (center at top)
    */
-  async function animateBounds(fromW, fromH, toW, toH, durationMs, { recenterDuring = false } = {}) {
+  async function animateBounds(fromW, fromH, toW, toH, durationMs, { growFromTopCenter = true } = {}) {
     const start = performance.now();
     const dw = Math.abs(toW - fromW);
     const dh = Math.abs(toH - fromH);
@@ -224,25 +249,20 @@
     const reduce =
       typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (reduce || durationMs <= 0 || (dw < 2 && dh < 2)) {
-      await resizeWindowNow(toW, toH, {
-        recenter: recenterDuring === 'x' || dw > 2 ? 'x' : false,
-      });
+      await resizeWindowNow(toW, toH, { growFromTopCenter });
       return;
     }
-    // rAF-driven; coalesce IPC to latest size. Recenter only on the final frame
-    // so we don't pay centerMainWindowHorizontally on every tick.
+    // Grow from top-center every frame: width L/R equally, height only downward.
     while (true) {
       const t = Math.min(1, (performance.now() - start) / durationMs);
       const e = cubicBezierEase(t);
       const w = Math.round(fromW + (toW - fromW) * e);
       const h = Math.round(fromH + (toH - fromH) * e);
-      void resizeWindowNow(w, h, { recenter: false });
+      void resizeWindowNow(w, h, { growFromTopCenter: true });
       if (t >= 1) break;
       await new Promise((r) => requestAnimationFrame(r));
     }
-    await resizeWindowNow(toW, toH, {
-      recenter: recenterDuring === 'x' || dw > 2 ? 'x' : false,
-    });
+    await resizeWindowNow(toW, toH, { growFromTopCenter: true });
   }
 
   async function expandToChat(nextMode) {
@@ -254,22 +274,23 @@
     try {
       const from = measureShell();
 
-      // 1) Expand width outwards — keep pill chrome until chat opens
+      // 1) Expand width from center — keep pill chrome until chat opens
       wide = true;
       shell.classList.add('is-wide');
       notifyDrawer(true, { recenter: false });
       await animateBounds(from.width, from.height, EXPANDED_W, COLLAPSED_H, DUR_W, {
-        recenterDuring: 'x',
+        growFromTopCenter: true,
       });
 
-      // 2) Then expand chat smoothly downward (CSS height + Electron bounds in lockstep)
+      // 2) Expand chat downward only (Y locked via growFromTopCenter)
       open = true;
       shell.classList.add('is-chat-open');
       drawer.setAttribute('aria-hidden', 'false');
       setModeUI(nextMode);
       updateCloseIcon();
+      // No delay — fade/height start immediately with the bounds anim
       await animateBounds(EXPANDED_W, COLLAPSED_H, EXPANDED_W, COLLAPSED_H + DRAWER_H, DUR_H, {
-        recenterDuring: false,
+        growFromTopCenter: true,
       });
     } finally {
       shell.classList.remove('is-animating');
@@ -277,7 +298,7 @@
     }
 
     if (nextMode === 'ask') {
-      setTimeout(() => inputEl?.focus(), 40);
+      requestAnimationFrame(() => inputEl?.focus());
     }
   }
 
@@ -323,10 +344,10 @@
       drawer.setAttribute('aria-hidden', 'true');
       updateCloseIcon();
       await animateBounds(from.width, from.height, EXPANDED_W, COLLAPSED_H, DUR_H, {
-        recenterDuring: false,
+        growFromTopCenter: true,
       });
 
-      // 2) Then shrink width back to pill
+      // 2) Then shrink width back to pill (symmetric L/R)
       wide = false;
       shell.classList.remove('is-wide');
       notifyDrawer(false, { recenter: false });
@@ -335,9 +356,9 @@
       const pill = tab ? tab.getBoundingClientRect() : measureShell();
       const pillW = Math.max(220, Math.ceil(pill.width || 320));
       await animateBounds(EXPANDED_W, COLLAPSED_H, pillW, COLLAPSED_H, DUR_W, {
-        recenterDuring: 'x',
+        growFromTopCenter: true,
       });
-      await resizeWindowNow(pillW, COLLAPSED_H, { recenter: true });
+      await resizeWindowNow(pillW, COLLAPSED_H, { growFromTopCenter: true });
       updateCloseIcon();
     } finally {
       shell.classList.remove('is-animating');
@@ -374,6 +395,7 @@
   function applyStealthUI(enabled, { persist = true, notifyMain = true } = {}) {
     stealthOn = Boolean(enabled);
     document.documentElement.classList.toggle('oc-stealth', stealthOn);
+    syncThemeClass();
     stealthWrap?.classList.toggle('is-on', stealthOn);
     if (stealthSwitch) {
       stealthSwitch.setAttribute('aria-checked', stealthOn ? 'true' : 'false');
@@ -562,6 +584,18 @@
     inputEl.value = '';
     autoGrow();
     showThinking();
+    // Kick Visual Intelligence scan immediately for screen questions (main also starts).
+    if (
+      /\b(what('?s| is) on (my )?screen|on my screen|see (my )?screen|look at (my )?screen|what do you see|screenshot|describe (the |my )?(screen|desktop))\b/i.test(
+        text,
+      )
+    ) {
+      try {
+        void window.electronAPI?.startVisualScan?.({ reason: 'screen-ask' });
+      } catch (_) {
+        /* ignore */
+      }
+    }
     try {
       await window.electronAPI?.sendChatMessage?.(text);
     } catch (error) {
@@ -574,6 +608,12 @@
     await expandToChat('auto');
     addMessage('Auto Answer — reading your screen…', 'system');
     showThinking();
+    // One-shot Visual Intelligence scan while capturing
+    try {
+      void window.electronAPI?.startVisualScan?.({ reason: 'auto-answer' });
+    } catch (_) {
+      /* ignore */
+    }
     try {
       // Prefer dedicated control endpoint when available
       const res = await fetch('http://127.0.0.1:3847/auto-answer', {
@@ -608,12 +648,13 @@
       inputEl?.focus();
       return;
     }
-    await expandToChat('ask');
+    // Immediate expand-down — no artificial delay
+    void expandToChat('ask');
   });
 
   autoBtn?.addEventListener('click', async (e) => {
     e.stopPropagation();
-    await runAutoAnswer();
+    void runAutoAnswer();
   });
 
   controlBtn?.addEventListener('click', async (e) => {
@@ -807,6 +848,11 @@
     stealthOn = false;
   }
   applyStealthUI(stealthOn, { persist: false, notifyMain: true });
+  try {
+    matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', syncThemeClass);
+  } catch (_) {
+    /* ignore */
+  }
 
   (async () => {
     await runBootAnimation();

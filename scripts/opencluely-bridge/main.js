@@ -104,6 +104,7 @@ const captureService = require("./src/services/capture.service");
 const speechService = require("./src/services/speech.service");
 const llmService = require("./src/services/llm.service");
 const desktopControl = require("./src/services/desktop-control.service");
+const { VisualScanService } = require("./src/services/visual-scan/visual-scan.service");
 
 // Managers
 const windowManager = require("./src/managers/window.manager");
@@ -118,6 +119,8 @@ class ApplicationController {
   this.codingLanguage = "cpp";
     this.speechAvailable = false;
     this.stealthEnabled = false;
+    this.visualScan = new VisualScanService({ logger });
+    this._pendingScreenQuestion = null;
 
     // Utterance coalescing: VAD emits a transcript per natural pause, but a
     // single spoken question can still arrive as a few fragments (mid-thought
@@ -586,7 +589,7 @@ class ApplicationController {
     });
 
     ipcMain.handle("resize-window", async (event, payload = {}) => {
-      const { width, height, recenter } = payload || {};
+      const { width, height, recenter, growFromTopCenter } = payload || {};
       const mainWindow = windowManager.getWindow("main");
       if (mainWindow) {
         const minW = 60;
@@ -594,17 +597,37 @@ class ApplicationController {
         const clampedWidth = Math.max(minW, Math.min(maxW, Math.round(width || minW)));
         const clampedHeight = Math.max(28, Math.min(900, Math.round(height || 28)));
         try {
-          mainWindow.setContentSize(Math.max(1, clampedWidth), Math.max(1, clampedHeight));
-        } catch (e) {
-          mainWindow.setSize(Math.max(1, clampedWidth), Math.max(1, clampedHeight));
-        }
-        // recenter: true → pin to top-center; 'x' → keep Y, center horizontally;
-        // false/undefined during height anim → do not move (avoids jank).
-        try {
-          if (recenter === true) {
-            windowManager.centerMainWindowAtTop?.();
-          } else if (recenter === "x") {
-            windowManager.centerMainWindowHorizontally?.();
+          if (growFromTopCenter) {
+            // Anchor top-center: width expands equally left/right; height only down.
+            const bounds = mainWindow.getBounds();
+            const nextX = Math.round(bounds.x + (bounds.width - clampedWidth) / 2);
+            const nextY = Math.round(bounds.y);
+            mainWindow.setBounds(
+              {
+                x: nextX,
+                y: nextY,
+                width: Math.max(1, clampedWidth),
+                height: Math.max(1, clampedHeight),
+              },
+              false,
+            );
+          } else {
+            try {
+              mainWindow.setContentSize(Math.max(1, clampedWidth), Math.max(1, clampedHeight));
+            } catch (e) {
+              mainWindow.setSize(Math.max(1, clampedWidth), Math.max(1, clampedHeight));
+            }
+            // recenter: true → pin to top-center; 'x' → keep Y, center horizontally;
+            // false/undefined during height anim → do not move (avoids jank).
+            try {
+              if (recenter === true) {
+                windowManager.centerMainWindowAtTop?.();
+              } else if (recenter === "x") {
+                windowManager.centerMainWindowHorizontally?.();
+              }
+            } catch (_) {
+              /* ignore */
+            }
           }
         } catch (_) {
           /* ignore */
@@ -613,9 +636,33 @@ class ApplicationController {
           width: clampedWidth,
           height: clampedHeight,
           recenter: recenter ?? false,
+          growFromTopCenter: Boolean(growFromTopCenter),
         });
       }
       return { success: true };
+    });
+
+    ipcMain.handle("visual-scan:start", async (_event, opts = {}) => {
+      try {
+        return await this.visualScan.start(opts || {});
+      } catch (error) {
+        logger.warn("Visual scan start failed", { error: error.message });
+        return { ok: false, error: error.message };
+      }
+    });
+    ipcMain.handle("visual-scan:stop", async () => {
+      try {
+        return await this.visualScan.stop();
+      } catch (error) {
+        return { ok: false, error: error.message };
+      }
+    });
+    ipcMain.handle("visual-scan:available", async () => {
+      return {
+        ok: true,
+        available: Boolean(this.visualScan?.isAvailable?.()),
+        platform: process.platform,
+      };
     });
 
     ipcMain.handle("set-chat-drawer-open", (event, payload) => {
@@ -690,7 +737,11 @@ class ApplicationController {
           // If the user asks about the screen/page, run the real screenshot vision path
           // so chat uses the same capture pipeline as ⌘⇧S (not text-only Clyra).
           if (this._isScreenQuestion(text)) {
-            await this.triggerScreenshotOCR();
+            await this.triggerScreenshotOCR({
+              userQuestion: text,
+              visionMode: "screen-ask",
+              visualScan: true,
+            });
             return;
           }
           const sessionHistory = sessionManager.getOptimizedHistory();
@@ -1280,7 +1331,12 @@ class ApplicationController {
     windowManager.openChatDrawer();
     this._visionMode = "auto";
     try {
-      await this.triggerScreenshotOCR();
+      await this.triggerScreenshotOCR({
+        visionMode: "auto",
+        visualScan: true,
+        userQuestion:
+          "Look at what's on my screen right now. Use your initiative: if there is a question or problem, answer it; otherwise briefly describe what you see.",
+      });
     } finally {
       this._visionMode = null;
     }
@@ -1598,19 +1654,40 @@ class ApplicationController {
     return { ok: true };
   }
 
-  async triggerScreenshotOCR() {
+  async triggerScreenshotOCR(opts = {}) {
     if (!this.isReady) {
       logger.warn("Screenshot requested before application ready");
       return;
     }
 
     const startTime = Date.now();
+    const userQuestion =
+      opts.userQuestion != null
+        ? String(opts.userQuestion)
+        : this._pendingScreenQuestion
+          ? String(this._pendingScreenQuestion)
+          : null;
+    this._pendingScreenQuestion = null;
+    const visionMode = opts.visionMode || this._visionMode || (userQuestion ? "screen-ask" : null);
+    const wantScan = opts.visualScan !== false;
 
     try {
       windowManager.showLLMLoading();
 
+      // Visual Intelligence scan once — before hide/capture so the wave is visible.
+      if (wantScan) {
+        try {
+          void this.visualScan.start({ reason: visionMode || "screenshot" });
+          // Let the centre pulse + first wave frames paint before we hide the bar.
+          await new Promise((r) => setTimeout(r, 160));
+        } catch (scanError) {
+          logger.warn("Visual scan failed to start", { error: scanError.message });
+        }
+      }
+
       // Hide OpenCluely overlays briefly so capture sees the real app (Chrome),
       // not our own glass windows — otherwise vision hallucinates.
+      // Keep the visual-scan overlay (separate BrowserWindow) visible.
       const hiddenForCapture = [];
       try {
         for (const [type, win] of windowManager.windows.entries()) {
@@ -1622,14 +1699,14 @@ class ApplicationController {
             }
           }
         }
-        await new Promise((r) => setTimeout(r, 120));
+        await new Promise((r) => setTimeout(r, 100));
       } catch (_) {
         /* ignore */
       }
 
       let capture;
       try {
-        capture = await captureService.captureAndProcess();
+        capture = await captureService.captureAndProcess({ fullScreen: true });
       } finally {
         for (const win of hiddenForCapture) {
           try {
@@ -1675,7 +1752,8 @@ class ApplicationController {
             delta
           });
         },
-        this._visionMode || null,
+        visionMode,
+        userQuestion,
       );
       llmResult.metadata = { ...llmResult.metadata, messageId };
 
@@ -2667,7 +2745,11 @@ class ApplicationController {
             }
             // Mirror IPC: screen questions use capture vision path
             if (this._isScreenQuestion(text)) {
-              await this.triggerScreenshotOCR();
+              await this.triggerScreenshotOCR({
+                userQuestion: text,
+                visionMode: "screen-ask",
+                visualScan: true,
+              });
               send(200, { ok: true, action: "chat-via-screenshot", text });
               return;
             }
