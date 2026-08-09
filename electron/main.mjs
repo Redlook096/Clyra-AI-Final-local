@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import dotenv from "dotenv";
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeTheme, session, shell, WebContentsView } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeTheme, session, shell, systemPreferences, WebContentsView } from "electron";
 import { ChromiumBrowserManager } from "./browser-manager.mjs";
 import { ChromiumSurfaceManager } from "./surface-manager.mjs";
 import { DictationManager } from "./dictation-manager.mjs";
@@ -411,19 +411,20 @@ function startLocalService() {
   );
 }
 
-async function waitForService(timeoutMs = 45_000) {
+async function waitForService(timeoutMs = 180_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (serviceLaunchError) {
       throw new Error(`Clyra's local service could not start: ${serviceLaunchError.message}`);
     }
     try {
-      const response = await fetch(`http://127.0.0.1:${appPort}/api/health`, { signal: AbortSignal.timeout(700) });
+      // Cold tsx/Electron boots can take several seconds before /api/health answers.
+      const response = await fetch(`http://127.0.0.1:${appPort}/api/health`, { signal: AbortSignal.timeout(5_000) });
       if (response.ok) return;
     } catch {
       // The service is still booting.
     }
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error("Clyra's local service did not become ready.");
 }
@@ -911,6 +912,9 @@ async function createWindow() {
   uiView.webContents.on("did-finish-load", () => {
     mainWindow?.show();
     mainWindow?.focus();
+    // Register Clyra under System Settings → Privacy (Microphone / Camera).
+    // Only prompt when macOS has never asked for this bundle identity.
+    void primeMacOsMediaAccess();
   });
   await uiView.webContents.loadURL(`http://127.0.0.1:${appPort}`);
   return mainWindow;
@@ -920,6 +924,24 @@ async function createWindow() {
     return await createWindowPromise;
   } finally {
     createWindowPromise = null;
+  }
+}
+
+/**
+ * Ask macOS for mic/camera once so "Clyra" appears in Privacy settings.
+ * Skips when already granted/denied (does not spam System Settings).
+ */
+async function primeMacOsMediaAccess() {
+  if (process.platform !== "darwin") return;
+  for (const kind of ["microphone", "camera"]) {
+    try {
+      const status = systemPreferences.getMediaAccessStatus(kind);
+      if (status !== "not-determined" && status !== "unknown") continue;
+      const granted = await systemPreferences.askForMediaAccess(kind);
+      console.log(`[privacy] ${kind} access → ${granted ? "granted" : "denied"} (was ${status})`);
+    } catch (error) {
+      console.warn(`[privacy] could not request ${kind} access:`, error?.message || error);
+    }
   }
 }
 

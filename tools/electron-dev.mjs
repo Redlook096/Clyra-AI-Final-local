@@ -6,7 +6,17 @@ import { patchClyraElectron } from "./patch-electron-macos-privacy.mjs";
 try {
   const patched = patchClyraElectron();
   if (patched?.ok) {
-    console.log(`[electron-dev] macOS privacy identity → ${patched.bundleName} (${patched.bundleId})`);
+    const signNote =
+      process.env.CLYRA_ELECTRON_CODESIGN === "1"
+        ? ` signed=${patched.signed ? "yes" : "no"}`
+        : " (plist identity only; set CLYRA_ELECTRON_CODESIGN=1 to ad-hoc resign)";
+    console.log(
+      `[electron-dev] macOS privacy identity → ${patched.bundleName} (${patched.bundleId})` +
+        ` helpers=${patched.helpers ?? 0}${signNote}`,
+    );
+    if (patched.signError && process.env.CLYRA_ELECTRON_CODESIGN === "1") {
+      console.warn(`[electron-dev] codesign warning: ${patched.signError}`);
+    }
   }
 } catch (error) {
   console.warn("[electron-dev] could not patch Electron Info.plist:", error?.message || error);

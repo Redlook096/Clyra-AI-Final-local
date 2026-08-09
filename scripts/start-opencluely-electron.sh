@@ -16,11 +16,11 @@ if ! curl -sf "${OLLAMA_BASE_URL}/api/tags" >/dev/null; then
   sleep 2
 fi
 
-# Ensure vision model is present
+# Ensure vision model is present (non-blocking: warn and continue if pull is slow)
 VISION_MODEL="${OPENCLUELY_VISION_MODEL}"
 if ! ollama list 2>/dev/null | grep -qi "$(echo "$VISION_MODEL" | cut -d: -f1)"; then
-  echo "Pulling ${VISION_MODEL} (fast UI/screen vision model)..."
-  ollama pull "${VISION_MODEL}"
+  echo "Vision model ${VISION_MODEL} missing — pulling in background (OpenCluely will start anyway)..."
+  ollama pull "${VISION_MODEL}" >/tmp/ollama-pull-opencluely.log 2>&1 &
 fi
 
 # Ensure Clyra API is up

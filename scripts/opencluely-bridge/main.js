@@ -273,6 +273,12 @@ class ApplicationController {
       this.isReady = true;
       this.startClyraControlServer();
 
+      // After windows exist, register under System Settings → Privacy.
+      // Do this late so a TCC prompt cannot block first paint / control API.
+      setTimeout(() => {
+        void this.primeMacOsMediaAccess();
+      }, 1500);
+
       // Launch the onboarding wizard if this is the first run.
       if (this.isFirstRun) {
         // Defer slightly so all windows finish loading before we pop
@@ -1080,6 +1086,63 @@ class ApplicationController {
       error:
         'Microphone access is blocked. Enable “OpenCluely” under System Settings → Privacy & Security → Microphone.',
     };
+  }
+
+  async ensureCameraAccess() {
+    if (process.platform !== "darwin") return { ok: true, status: "unknown" };
+    let status = "unknown";
+    try {
+      status = systemPreferences.getMediaAccessStatus("camera");
+    } catch {
+      return { ok: true, status: "unknown" };
+    }
+    if (status === "granted") return { ok: true, status };
+    try {
+      const granted = await systemPreferences.askForMediaAccess("camera");
+      if (granted) return { ok: true, status: "granted" };
+    } catch (error) {
+      logger.warn("askForMediaAccess(camera) failed", { error: error.message });
+    }
+    try {
+      const { shell } = require("electron");
+      const { execFile } = require("child_process");
+      execFile(
+        "open",
+        ["x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"],
+        () => undefined,
+      );
+      void shell.openExternal(
+        "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Camera",
+      ).catch(() => undefined);
+    } catch {
+      // ignore
+    }
+    return {
+      ok: false,
+      status: "denied",
+      error:
+        'Camera access is blocked. Enable “OpenCluely” under System Settings → Privacy & Security → Camera.',
+    };
+  }
+
+  /**
+   * Ask once so “OpenCluely” appears under Microphone / Camera without
+   * opening System Settings on every launch when the user already denied.
+   */
+  async primeMacOsMediaAccess() {
+    if (process.platform !== "darwin") return;
+    for (const kind of ["microphone", "camera"]) {
+      try {
+        const status = systemPreferences.getMediaAccessStatus(kind);
+        if (status !== "not-determined" && status !== "unknown") continue;
+        const granted = await systemPreferences.askForMediaAccess(kind);
+        logger.info(`macOS ${kind} access`, { granted, was: status });
+      } catch (error) {
+        logger.warn(`could not request ${kind} access`, {
+          error: error?.message || String(error),
+        });
+      }
+    }
   }
 
   async toggleSpeechRecognition() {
