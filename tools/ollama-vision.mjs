@@ -1,6 +1,6 @@
 /**
  * Shared OpenCluely-style Ollama vision helper for Clyra server + voice calls.
- * Uses OPENCLUELY_VISION_MODEL / OLLAMA_VISION_MODEL (default qwen2.5vl:3b).
+ * Uses OPENCLUELY_VISION_MODEL / OLLAMA_VISION_MODEL (default gemma3:4b).
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -14,7 +14,7 @@ export function visionModelName() {
   return (
     process.env.OPENCLUELY_VISION_MODEL ||
     process.env.OLLAMA_VISION_MODEL ||
-    "qwen2.5vl:3b"
+    "gemma3:4b"
   );
 }
 

@@ -2240,7 +2240,7 @@ async function startServer() {
     }
   });
 
-  // Voice-call camera / screenshare frames → OpenCluely Ollama VLM (llava-phi3), RapidOCR fallback.
+  // Voice-call camera / screenshare frames → OpenCluely Ollama VLM (gemma3:4b), RapidOCR fallback.
   app.post("/api/companion/vision-frame", async (req, res) => {
     try {
       const image = String(req.body?.image || "").trim();

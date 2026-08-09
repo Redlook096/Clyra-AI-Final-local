@@ -1,6 +1,6 @@
 /**
  * Clyra-bridged LLM service for OpenCluely.
- * - Vision: local open VLM via Ollama (default qwen2.5vl:3b — fast + sharp on UI)
+ * - Vision: local open VLM via Ollama (default gemma3:4b — lightweight ~3GB)
  * - Text / chat: Clyra /api/companion/ask (project DeepSeek stack)
  * Uses Node http (not Electron fetch) so localhost calls stay reliable.
  * Stealth / Gemini are intentionally not used.
@@ -78,7 +78,7 @@ function sanitizeModelText(text) {
 
 class LLMService {
   constructor() {
-    this.client = { provider: 'clyra+qwen2.5vl' };
+    this.client = { provider: 'clyra+gemma3' };
     this.model = null;
     this.isInitialized = false;
     this.requestCount = 0;
@@ -87,7 +87,7 @@ class LLMService {
   }
 
   initializeClient() {
-    this.model = config.get('llm.vision.model') || process.env.OPENCLUELY_VISION_MODEL || 'qwen2.5vl:3b';
+    this.model = config.get('llm.vision.model') || process.env.OPENCLUELY_VISION_MODEL || 'gemma3:4b';
     this.clyraBase = String(
       process.env.CLYRA_API_BASE || config.get('llm.clyra.baseUrl') || 'http://127.0.0.1:31415',
     ).replace(/\/$/, '');

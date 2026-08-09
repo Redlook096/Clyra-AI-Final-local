@@ -6,7 +6,7 @@
 | --- | --- |
 | App | Fresh clone of [TechyCSR/OpenCluely](https://github.com/TechyCSR/OpenCluely.git) → `apps/opencluely` |
 | UI | **Original** OpenCluely glass UI (`index.html`, `chat.html`, `llm-response.html`, settings) |
-| Vision | **llava-phi3** via Ollama — free open-source VLM, fits ~8GB RAM (default). Override with `OPENCLUELY_VISION_MODEL`. |
+| Vision | **gemma3:4b** via Ollama — lightweight local model (~3GB). Override with `OPENCLUELY_VISION_MODEL`. |
 | Capture | Native per OS: Linux ImageMagick, macOS `screencapture`, Windows PowerShell — fallback `desktopCapturer` |
 | Text / chat | Clyra `/api/companion/ask` (project DeepSeek stack) |
 | Stealth | **Rejected** — no content-protection, no Terminal disguise |
@@ -15,7 +15,7 @@
 
 ```bash
 ollama serve &
-ollama pull llava-phi3
+ollama pull gemma3:4b
 
 bash scripts/clone-opencluely.sh   # wipe + fresh clone + apply bridge
 bash scripts/start-opencluely-electron.sh

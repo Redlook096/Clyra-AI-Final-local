@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Start OpenCluely Electron with Clyra API + fast local vision (qwen2.5vl:3b).
+# Start OpenCluely Electron with Clyra API + lightweight local vision (gemma3:4b).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="${ROOT}/apps/opencluely"
 export CLYRA_API_BASE="${CLYRA_API_BASE:-http://127.0.0.1:31415}"
 export OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
-export OPENCLUELY_VISION_MODEL="${OPENCLUELY_VISION_MODEL:-qwen2.5vl:3b}"
+export OPENCLUELY_VISION_MODEL="${OPENCLUELY_VISION_MODEL:-gemma3:4b}"
 export CLYRA_CONTROL_PORT="${CLYRA_CONTROL_PORT:-3847}"
 export ELECTRON_DISABLE_SECURITY_WARNINGS=1
 

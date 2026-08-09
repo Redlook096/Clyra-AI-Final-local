@@ -15,7 +15,7 @@ const YT = process.env.OPENCLUELY_YT || "https://youtu.be/fhs7voB2eJQ?si=XQs0CCi
 const CLYRA = process.env.CLYRA_API_BASE || "http://127.0.0.1:31415";
 const OC = process.env.CLYRA_CONTROL_BASE || "http://127.0.0.1:3847";
 const OLLAMA = process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434";
-const VISION = process.env.OPENCLUELY_VISION_MODEL || "qwen2.5vl:3b";
+const VISION = process.env.OPENCLUELY_VISION_MODEL || "gemma3:4b";
 
 fs.mkdirSync(OUT, { recursive: true });
 fs.mkdirSync("/opt/cursor/artifacts/screenshots", { recursive: true });
