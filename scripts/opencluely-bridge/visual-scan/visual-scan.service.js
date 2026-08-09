@@ -3,11 +3,12 @@
  * Precomputes window geometry, then renders a transparent always-on-top overlay
  * with a centre-out radial wave + contour traces (Apple Visual Intelligence feel).
  */
-const { BrowserWindow, screen } = require("electron");
+const { BrowserWindow, screen, desktopCapturer, nativeImage } = require("electron");
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 const path = require("node:path");
 const fs = require("node:fs");
+const os = require("node:os");
 
 const execFileAsync = promisify(execFile);
 
@@ -17,6 +18,7 @@ class VisualScanService {
     this.overlay = null;
     this.running = false;
     this._ttlTimer = null;
+    this._backdropTmp = null;
   }
 
   isAvailable() {
@@ -74,7 +76,6 @@ class VisualScanService {
       }
     }
 
-    // Minimal fallback: one desktop-sized contour so the wave still has structure.
     const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
     const b = display.bounds;
     return [
@@ -92,7 +93,6 @@ class VisualScanService {
     const { x, y, w, h } = frame;
     if (w < 120 || h < 100) return els;
 
-    // Title / toolbar strip
     els.push({
       role: "toolbar",
       frame: { x: x + 8, y: y + 8, w: Math.max(40, w - 16), h: Math.min(44, Math.round(h * 0.08)) },
@@ -101,8 +101,7 @@ class VisualScanService {
       cornerRadius: 8,
     });
 
-    // Omnibox / search field approximation for browsers
-    if (/safari|chrome|firefox|edge|brave|arc/i.test(app || "")) {
+    if (/safari|chrome|firefox|edge|brave|arc|example/i.test(app || "")) {
       const barH = Math.min(32, Math.round(h * 0.05));
       const barW = Math.min(w * 0.55, Math.max(160, w - 180));
       els.push({
@@ -117,7 +116,6 @@ class VisualScanService {
         hierarchyDepth: 2,
         cornerRadius: 8,
       });
-      // Tab strip
       els.push({
         role: "tabs",
         frame: { x: x + 12, y: y + 48, w: Math.max(80, w - 24), h: 28 },
@@ -127,7 +125,6 @@ class VisualScanService {
       });
     }
 
-    // Sidebar for editor / finder-like apps
     if (/code|cursor|finder|terminal|slack|notion|figma/i.test(app || "") && w > 420) {
       els.push({
         role: "sidebar",
@@ -159,7 +156,12 @@ class VisualScanService {
   }
 
   async start(opts = {}) {
-    if (this.running) return { ok: true, already: true };
+    if (this.running && !opts.force) {
+      return { ok: true, already: true };
+    }
+    if (this.running && opts.force) {
+      await this.stop();
+    }
     this.running = true;
     const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
     const bounds = display.bounds;
@@ -235,6 +237,7 @@ class VisualScanService {
       if (filtered.length >= 120) break;
     }
 
+    const needsBackdrop = process.platform === "linux" || opts.forceBackdrop === true;
     const scene = {
       width: bounds.width,
       height: bounds.height,
@@ -244,11 +247,15 @@ class VisualScanService {
       maxRadius: Math.hypot(bounds.width / 2, bounds.height / 2) * 1.05,
       elements: filtered,
       reason: opts.reason || "scan",
+      backdropPath: null,
+      hasBackdrop: false,
+      needsBackdrop,
     };
 
     try {
-      await this.#openOverlay(bounds, scene);
-      return { ok: true, elements: filtered.length };
+      // Do not block the HTTP/IPC caller on renderer animation start.
+      void this.#openOverlay(bounds, scene);
+      return { ok: true, elements: filtered.length, backdrop: needsBackdrop };
     } catch (error) {
       this.running = false;
       return { ok: false, error: error?.message || String(error) };
@@ -261,16 +268,114 @@ class VisualScanService {
     return { ok: true };
   }
 
+  async #captureBackdropFile(bounds) {
+    const tmp = path.join(os.tmpdir(), `oc-scan-backdrop-${process.pid}-${Date.now()}.png`);
+    // On Linux with GPU disabled, desktopCapturer thumbnails are often black.
+    // Prefer scrot/import for a real framebuffer snapshot.
+    if (process.platform === "linux") {
+      try {
+        await execFileAsync("scrot", ["-o", tmp], { timeout: 2500 });
+        if (fs.existsSync(tmp) && fs.statSync(tmp).size > 8000) {
+          this._backdropTmp = tmp;
+          return tmp;
+        }
+      } catch (_) {
+        /* try import */
+      }
+      try {
+        const display = process.env.DISPLAY || ":0";
+        await execFileAsync(
+          "import",
+          ["-window", "root", "-display", display, "-quality", "90", tmp],
+          { timeout: 4000, env: { ...process.env, DISPLAY: display } },
+        );
+        if (fs.existsSync(tmp) && fs.statSync(tmp).size > 8000) {
+          this._backdropTmp = tmp;
+          return tmp;
+        }
+      } catch (_) {
+        /* fall through */
+      }
+    }
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ["screen"],
+        thumbnailSize: {
+          width: Math.max(640, Math.round(bounds.width)),
+          height: Math.max(400, Math.round(bounds.height)),
+        },
+      });
+      const match =
+        sources.find(
+          (s) =>
+            String(s.display_id) ===
+            String(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id),
+        ) || sources[0];
+      if (match?.thumbnail && !match.thumbnail.isEmpty()) {
+        const resized = match.thumbnail.resize({
+          width: Math.round(bounds.width),
+          height: Math.round(bounds.height),
+          quality: "good",
+        });
+        // Reject near-black captures (common when GPU compositing is off).
+        const size = resized.getSize();
+        const sample = resized.crop({
+          x: Math.floor(size.width / 2),
+          y: Math.floor(size.height / 2),
+          width: 8,
+          height: 8,
+        });
+        const avg =
+          sample.toBitmap().reduce((sum, b, i) => (i % 4 === 3 ? sum : sum + b), 0) /
+          (8 * 8 * 3);
+        if (avg > 8) {
+          fs.writeFileSync(tmp, resized.toPNG());
+          this._backdropTmp = tmp;
+          return tmp;
+        }
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    try {
+      fs.unlinkSync(tmp);
+    } catch (_) {
+      /* ignore */
+    }
+    return null;
+  }
+
   async #openOverlay(bounds, scene) {
     this.#closeOverlay();
+    this.running = true;
+
+    if (scene.needsBackdrop) {
+      try {
+        scene.backdropPath = await this.#captureBackdropFile(bounds);
+        scene.hasBackdrop = Boolean(scene.backdropPath);
+      } catch (error) {
+        this.logger.warn?.("[visual-scan] backdrop capture failed", error?.message || error);
+      }
+    }
+
     const overlayPath = path.join(__dirname, "overlay.html");
+    const useBackdrop = Boolean(scene.backdropPath || scene.hasBackdrop);
+    this.logger.info?.("[visual-scan] opening overlay", {
+      overlayPath,
+      useBackdrop,
+      elements: scene.elements?.length || 0,
+      w: bounds.width,
+      h: bounds.height,
+    });
+
     this.overlay = new BrowserWindow({
       x: Math.round(bounds.x),
       y: Math.round(bounds.y),
       width: Math.round(bounds.width),
       height: Math.round(bounds.height),
       frame: false,
-      transparent: true,
+      transparent: !useBackdrop,
+      backgroundColor: useBackdrop ? "#111111" : "#00000000",
       resizable: false,
       movable: false,
       focusable: false,
@@ -279,6 +384,7 @@ class VisualScanService {
       alwaysOnTop: true,
       fullscreenable: false,
       show: false,
+      title: "Clyra Visual Scan",
       webPreferences: {
         nodeIntegration: true,
         contextIsolation: false,
@@ -289,31 +395,51 @@ class VisualScanService {
     try {
       this.overlay.setAlwaysOnTop(true, "screen-saver");
     } catch (_) {
-      this.overlay.setAlwaysOnTop(true);
+      try {
+        this.overlay.setAlwaysOnTop(true, "pop-up-menu");
+      } catch (_) {
+        this.overlay.setAlwaysOnTop(true);
+      }
     }
     try {
       this.overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     } catch (_) {
       /* ignore */
     }
+
     const payload = JSON.stringify(scene).replace(/</g, "\\u003c");
-    await this.overlay.loadFile(overlayPath);
-    const run = () => {
+
+    this.overlay.webContents.on("did-finish-load", () => {
       if (!this.overlay || this.overlay.isDestroyed()) return;
       try {
-        this.overlay.showInactive();
-        this.overlay.webContents.executeJavaScript(
-          `window.__runVisualScan && window.__runVisualScan(${payload});`,
-          true,
-        );
-      } catch (_) {
-        /* ignore */
+        if (process.platform === "linux") this.overlay.show();
+        else this.overlay.showInactive();
+        try {
+          this.overlay.moveTop();
+        } catch (_) {
+          /* ignore */
+        }
+        this.overlay.webContents
+          .executeJavaScript(`window.__runVisualScan && window.__runVisualScan(${payload});`, true)
+          .then(() => this.logger.info?.("[visual-scan] animation started"))
+          .catch((error) =>
+            this.logger.warn?.("[visual-scan] run failed", error?.message || error),
+          );
+      } catch (error) {
+        this.logger.warn?.("[visual-scan] show/run failed", error?.message || error);
       }
-    };
-    this.overlay.webContents.once("did-finish-load", run);
-    // Also run if already loaded
-    if (!this.overlay.webContents.isLoading()) run();
-    const ttl = (scene.durationMs || 1650) + 450;
+    });
+
+    try {
+      await this.overlay.loadFile(overlayPath);
+    } catch (error) {
+      this.logger.warn?.("[visual-scan] loadFile failed", error?.message || error);
+      this.#closeOverlay();
+      this.running = false;
+      return;
+    }
+
+    const ttl = (scene.durationMs || 1650) + 500;
     if (this._ttlTimer) clearTimeout(this._ttlTimer);
     this._ttlTimer = setTimeout(() => {
       this.#closeOverlay();
@@ -334,6 +460,14 @@ class VisualScanService {
       }
     }
     this.overlay = null;
+    if (this._backdropTmp) {
+      try {
+        fs.unlinkSync(this._backdropTmp);
+      } catch (_) {
+        /* ignore */
+      }
+      this._backdropTmp = null;
+    }
   }
 }
 

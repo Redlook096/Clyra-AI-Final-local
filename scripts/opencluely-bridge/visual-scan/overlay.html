@@ -20,9 +20,19 @@
       height: 100%;
       pointer-events: none;
     }
+    #backdrop {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      pointer-events: none;
+      display: none;
+    }
   </style>
 </head>
 <body>
+  <img id="backdrop" alt="" />
   <canvas id="c"></canvas>
   <script>
     const canvas = document.getElementById("c");
@@ -47,6 +57,26 @@
 
     window.__runVisualScan = function runVisualScan(scene) {
       cancelAnimationFrame(raf);
+      const backdrop = document.getElementById("backdrop");
+      const hasBackdrop = Boolean(scene.backdropPath || scene.backdropDataUrl);
+      if (hasBackdrop && backdrop) {
+        try {
+          if (scene.backdropPath && typeof require === "function") {
+            const fs = require("fs");
+            const buf = fs.readFileSync(scene.backdropPath);
+            backdrop.src = "data:image/png;base64," + buf.toString("base64");
+          } else if (scene.backdropDataUrl) {
+            backdrop.src = scene.backdropDataUrl;
+          }
+          backdrop.style.display = "block";
+        } catch (e) {
+          console.warn("backdrop load failed", e);
+          backdrop.style.display = "none";
+        }
+      } else if (backdrop) {
+        backdrop.removeAttribute("src");
+        backdrop.style.display = "none";
+      }
       const dpr = Math.min(window.devicePixelRatio || scene.scale || 1, 2);
       const W = scene.width;
       const H = scene.height;
@@ -91,22 +121,26 @@
           ctx.fill();
         }
 
-        // Narrow luminous radial band (not a thick radar ring)
+        // Narrow luminous radial band (not a thick radar / concentric HUD)
         if (!reduce && elapsed > 90) {
-          for (let i = 0; i < 2; i++) {
-            const rr = Math.max(0.5, radius - i * 1.1);
-            ctx.beginPath();
-            ctx.arc(origin.x, origin.y, rr, 0, Math.PI * 2);
-            ctx.strokeStyle = `rgba(235,242,255,${0.1 - i * 0.035})`;
-            ctx.lineWidth = 1.2 + i * 1.6;
-            ctx.stroke();
-          }
+          const bandBoost = hasBackdrop ? 1.35 : 1;
+          // Single sharp core + one soft feather — avoid double rings
+          ctx.beginPath();
+          ctx.arc(origin.x, origin.y, Math.max(0.5, radius), 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(245,248,255,${0.14 * bandBoost})`;
+          ctx.lineWidth = 1.15;
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(origin.x, origin.y, Math.max(0.5, radius - 1.2), 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(225,238,255,${0.06 * bandBoost})`;
+          ctx.lineWidth = 3.5;
+          ctx.stroke();
           // Optional micro-ripple ~50ms behind
-          const r2 = Math.max(0.5, radius - maxRadius * 0.035);
+          const r2 = Math.max(0.5, radius - maxRadius * 0.04);
           ctx.beginPath();
           ctx.arc(origin.x, origin.y, r2, 0, Math.PI * 2);
-          ctx.strokeStyle = "rgba(195,220,255,0.035)";
-          ctx.lineWidth = 10;
+          ctx.strokeStyle = `rgba(195,220,255,${0.03 * bandBoost})`;
+          ctx.lineWidth = 8;
           ctx.stroke();
         }
 
@@ -155,14 +189,16 @@
           roundedRectPath(ctx, f.x, f.y, f.w, f.h, el.cornerRadius || 10);
           ctx.setLineDash([el.peri]);
           ctx.lineDashOffset = el.peri * (1 - drawT);
-          ctx.strokeStyle = `rgba(255,255,255,${Math.min(0.52, opacity + waveBoost)})`;
-          ctx.lineWidth = 1.05;
-          ctx.shadowColor = `rgba(195,220,255,${0.14 * opacity})`;
-          ctx.shadowBlur = 5;
+          // Slightly stronger on Linux snapshot path so the effect reads on busy wallpapers.
+          const boost = hasBackdrop ? 1.25 : 1;
+          ctx.strokeStyle = `rgba(255,255,255,${Math.min(0.62, (opacity + waveBoost) * boost)})`;
+          ctx.lineWidth = 1.15;
+          ctx.shadowColor = `rgba(195,220,255,${0.22 * opacity * boost})`;
+          ctx.shadowBlur = 7;
           ctx.stroke();
           ctx.shadowBlur = 0;
-          ctx.strokeStyle = `rgba(225,238,255,${0.1 * opacity})`;
-          ctx.lineWidth = 2.8;
+          ctx.strokeStyle = `rgba(225,238,255,${0.14 * opacity * boost})`;
+          ctx.lineWidth = 3.2;
           ctx.stroke();
           ctx.restore();
         }

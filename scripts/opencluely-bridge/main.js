@@ -644,6 +644,7 @@ class ApplicationController {
 
     ipcMain.handle("visual-scan:start", async (_event, opts = {}) => {
       try {
+        logger.info("Visual scan IPC start", { reason: opts?.reason || "ipc" });
         return await this.visualScan.start(opts || {});
       } catch (error) {
         logger.warn("Visual scan start failed", { error: error.message });
@@ -1677,9 +1678,12 @@ class ApplicationController {
       // Visual Intelligence scan once — before hide/capture so the wave is visible.
       if (wantScan) {
         try {
-          void this.visualScan.start({ reason: visionMode || "screenshot" });
+          await this.visualScan.start({
+            reason: visionMode || "screenshot",
+            force: true,
+          });
           // Let the centre pulse + first wave frames paint before we hide the bar.
-          await new Promise((r) => setTimeout(r, 160));
+          await new Promise((r) => setTimeout(r, 180));
         } catch (scanError) {
           logger.warn("Visual scan failed to start", { error: scanError.message });
         }
@@ -2680,6 +2684,15 @@ class ApplicationController {
           if (req.method === "POST" && req.url === "/auto-answer") {
             await this.triggerAutoAnswer();
             send(200, { ok: true, action: "auto-answer" });
+            return;
+          }
+          if (req.method === "POST" && req.url === "/visual-scan") {
+            const body = await readBody().catch(() => ({}));
+            const result = await this.visualScan.start({
+              reason: String(body.reason || "http"),
+              force: body.force !== false,
+            });
+            send(200, { ok: true, action: "visual-scan", ...result });
             return;
           }
           if (req.method === "POST" && req.url === "/control/start") {

@@ -165,7 +165,7 @@
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 0 10px 0 8px;
+        padding: 0 12px 0 10px;
         width: max-content;
         min-width: 420px;
         background: var(--oc-glass);
@@ -222,9 +222,12 @@
         cursor: pointer;
         box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
         -webkit-app-region: no-drag;
+        app-region: no-drag;
         transition: transform 180ms var(--oc-ease), background 220ms ease, color 220ms ease;
         flex-shrink: 0;
         position: relative;
+        z-index: 20;
+        pointer-events: auto;
       }
       html.oc-stealth .oc-close { box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35); }
       .oc-close:hover { filter: brightness(1.04); transform: scale(1.04); }
@@ -550,18 +553,22 @@
         flex-direction: column;
         gap: 8px;
       }
-      .chat-messages .message {
+      .chat-messages .message,
+      #barChatMessages .message {
         max-width: 92%;
-        margin-bottom: 0;
-        padding: 0;
-        border-radius: 0;
-        border: none;
+        margin-bottom: 0 !important;
+        padding: 0 !important;
+        border-radius: 0 !important;
+        border: none !important;
+        border-left: none !important;
         font-size: 13px;
         line-height: 1.5;
         color: var(--oc-text-strong) !important;
         background: transparent !important;
-        box-shadow: none;
-        text-shadow: none;
+        box-shadow: none !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+        text-shadow: none !important;
       }
       /* User bubble — Clyra chat tool style (scaled) */
       .chat-messages .message.user.oc-user-bubble {
@@ -594,16 +601,29 @@
         55% { opacity: 1; transform: translateY(-3px) scale(1.01); filter: blur(0); }
         100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
       }
-      /* Assistant print — no bubble, like Clyra chat tool */
+      /* Assistant print — no bubble, like Clyra chat tool (override common.css) */
+      #barChatMessages .message.assistant.oc-print,
+      #barChatMessages .message.system,
       .chat-messages .message.assistant.oc-print,
       .chat-messages .message.system {
         align-self: flex-start;
         max-width: 96%;
+        margin-bottom: 4px !important;
         padding: 2px 2px 6px !important;
         background: transparent !important;
         border: none !important;
+        border-left: none !important;
+        border-radius: 0 !important;
         box-shadow: none !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
         animation: oc-print-in 280ms var(--oc-ease) both;
+      }
+      #barChatMessages .message.assistant.oc-print .message-text,
+      #barChatMessages .message.system .message-text {
+        color: var(--oc-text-strong) !important;
+        text-shadow: none !important;
+        background: transparent !important;
       }
       @keyframes oc-print-in {
         from { opacity: 0; transform: translateY(4px); }
@@ -656,6 +676,10 @@
         padding: 8px 10px 10px;
         border-top: 1px solid var(--oc-border);
         align-items: flex-end;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+        position: relative;
+        z-index: 12;
       }
       .chat-input-row .oc-composer {
         flex: 1;
@@ -669,6 +693,8 @@
         background: #fff;
         box-shadow: 0 6px 16px rgba(24, 33, 47, 0.06);
         transition: border-color 180ms ease, box-shadow 180ms ease;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
       }
       html.oc-stealth .chat-input-row .oc-composer,
       html.oc-dark .chat-input-row .oc-composer {
@@ -700,6 +726,9 @@
         font-family: inherit;
         outline: none;
         box-shadow: none;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+        pointer-events: auto;
       }
       #barChatInput::placeholder { color: #8b96a5; }
       #barChatSend {

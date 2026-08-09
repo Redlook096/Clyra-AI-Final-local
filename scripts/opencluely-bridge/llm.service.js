@@ -190,7 +190,7 @@ class LLMService {
       const tmpIn = path.join(os.tmpdir(), `oc-vision-in-${process.pid}.png`);
       const tmpOut = path.join(os.tmpdir(), `oc-vision-out-${process.pid}.png`);
       fs.writeFileSync(tmpIn, imageBuffer);
-      execFileSync('convert', [tmpIn, '-resize', '1024x1024>', '-quality', '90', tmpOut], {
+      execFileSync('convert', [tmpIn, '-resize', '768x768>', '-quality', '85', tmpOut], {
         timeout: 15000,
       });
       buffer = fs.readFileSync(tmpOut);
@@ -218,7 +218,7 @@ class LLMService {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
-          timeoutMs: 120000,
+          timeoutMs: 180000,
         });
         if (!response.ok) {
           throw new Error(`Vision failed (${response.status}): ${String(response.text || '').slice(0, 200)}`);
@@ -234,7 +234,7 @@ class LLMService {
             messages: [{ role: 'user', content: body.prompt, images: [base64] }],
             stream: false,
           }),
-          timeoutMs: 120000,
+          timeoutMs: 180000,
         });
         const chatText = sanitizeModelText(String(chatRes.json?.message?.content || '').trim());
         if (chatText) return chatText;

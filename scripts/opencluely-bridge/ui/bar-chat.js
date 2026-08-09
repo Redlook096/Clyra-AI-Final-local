@@ -307,11 +307,12 @@
     // Wait briefly if an expand is mid-flight so close isn't dropped
     if (animating) {
       const start = performance.now();
-      while (animating && performance.now() - start < 1600) {
-        await wait(32);
+      while (animating && performance.now() - start < 900) {
+        await wait(24);
       }
     }
-    if (animating) return;
+    // Force through even if a stuck expand left animating=true
+    if (animating) animating = false;
     if (!open && !wide && !taskPromptMode && !controlling) {
       if (hideIfAlreadyCollapsed) {
         try {
@@ -703,8 +704,13 @@
     }
   }
 
-  closeBtn?.addEventListener('click', async (e) => {
-    e.stopPropagation();
+  async function handleCloseClick(e) {
+    try {
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
+    } catch (_) {
+      /* ignore */
+    }
     if (taskPromptMode) {
       taskPromptMode = false;
       shell.classList.remove('is-control-compose', 'is-task-prompt', 'is-wide', 'is-fading-in', 'is-fading-out');
@@ -729,7 +735,9 @@
     }
     // Fully collapsed X → hide overlay
     await collapse({ hideIfAlreadyCollapsed: true });
-  });
+  }
+  // pointerup only — click + pointerup double-fires and can cancel collapse.
+  closeBtn?.addEventListener('pointerup', handleCloseClick);
 
   sendBtn?.addEventListener('click', () => sendCurrent());
   inputEl?.addEventListener('input', autoGrow);
@@ -739,6 +747,21 @@
       sendCurrent();
     }
   });
+  // Ensure Electron window can receive keystrokes when clicking the composer.
+  const focusComposer = () => {
+    try {
+      window.electronAPI?.enableWindowInteraction?.();
+    } catch (_) {
+      /* ignore */
+    }
+    try {
+      inputEl?.focus({ preventScroll: true });
+    } catch (_) {
+      inputEl?.focus();
+    }
+  };
+  inputEl?.addEventListener('pointerdown', focusComposer);
+  document.querySelector('.oc-composer')?.addEventListener('pointerdown', focusComposer);
 
   const inlineEl = inlineControlInput();
   inlineEl?.addEventListener('keydown', (e) => {
@@ -756,8 +779,16 @@
   // Main-process open/close (single listener — avoid double collapse/hide)
   function onDrawerToggle(_event, payload) {
     if (payload && typeof payload.open === 'boolean') {
-      if (payload.open) expandToChat(mode || 'ask');
-      else collapse({ hideIfAlreadyCollapsed: false });
+      if (payload.open) {
+        // Already expanded — do not re-run expand animation (race with showLLMLoading).
+        if (open && wide) {
+          setModeUI(mode || 'ask');
+          return;
+        }
+        void expandToChat(mode || 'ask');
+      } else {
+        void collapse({ hideIfAlreadyCollapsed: false });
+      }
     }
   }
   if (window.electronAPI?.onToggleChatDrawer) {
