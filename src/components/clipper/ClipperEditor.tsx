@@ -45,9 +45,30 @@ import {
   suggestZoomEnd,
   type ZoomPinEffect,
 } from "../../lib/clipZoomEffect";
+import {
+  CLIP_SFX_ASSETS,
+  clampSfxSpeed,
+  clampSfxVolume,
+  createSfxClip,
+  isSfxActiveAt,
+  normalizeSfxClips,
+  sfxEnd,
+  sfxSourceTimeAt,
+  sfxTimelineDuration,
+  type ClipSfxAssetId,
+  type ClipSfxClip,
+} from "../../lib/clipSfxTimeline";
 import SubtitleOverlay, { type CaptionStyle, type OverlayWord } from "./SubtitleOverlay";
 import { CLIP_EDITOR, CLIP_EDITOR_FONT, CLIP_EDITOR_MONO, formatEditorTime } from "./tokens";
 import { useLiveFaceTrack } from "./useLiveFaceTrack";
+
+const SFX_DRAG_MIME = "application/x-clyra-clipper-sfx";
+const SFX_BLOCK_COLORS: Record<ClipSfxAssetId, { fill: string; border: string; text: string }> = {
+  thud: { fill: "rgba(245, 158, 11, 0.22)", border: "rgba(217, 119, 6, 0.55)", text: "#B45309" },
+  sus: { fill: "rgba(14, 165, 233, 0.20)", border: "rgba(2, 132, 199, 0.55)", text: "#0369A1" },
+  fahh_long: { fill: "rgba(16, 185, 129, 0.20)", border: "rgba(5, 150, 105, 0.55)", text: "#047857" },
+  fahh_short: { fill: "rgba(244, 63, 94, 0.18)", border: "rgba(225, 29, 72, 0.5)", text: "#BE123C" },
+};
 
 /** Structural clip shape the editor needs; AIClipper's ClipResult satisfies it. */
 export type EditorClip = {
@@ -79,6 +100,7 @@ type TimelineSnapshot = {
   sections: Array<{ id: string; start: number; end: number }>;
   keyframes: Array<{ id: string; time: number }>;
   zoomEffects: ZoomPinEffect[];
+  sfxClips: ClipSfxClip[];
 };
 
 function EditorTimeline({
@@ -113,6 +135,7 @@ function EditorTimeline({
   const [sections, setSections] = useState(() => [{ id: "source", start: 0, end: duration }]);
   const [keyframes, setKeyframes] = useState(() => cropKeyframes.map((keyframe, index) => ({ id: `${keyframe.timeMs}-${index}`, time: keyframe.timeMs / 1000 })));
   const [zoomEffects, setZoomEffects] = useState<ZoomPinEffect[]>([]);
+  const [sfxClips, setSfxClips] = useState<ClipSfxClip[]>([]);
   const [selectedItem, setSelectedItem] = useState<string>("source");
   const [history, setHistory] = useState<TimelineSnapshot[]>([]);
   const [future, setFuture] = useState<TimelineSnapshot[]>([]);
@@ -121,10 +144,12 @@ function EditorTimeline({
   const [waveState, setWaveState] = useState<"loading" | "ready">("loading");
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const waveCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const sfxAudioRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const dragRef = useRef<
     | { kind: "playhead" }
     | { kind: "keyframe"; id: string }
     | { kind: "zoom-pin"; effectId: string; pin: "start" | "end" }
+    | { kind: "sfx-move"; id: string; grabOffset: number }
     | null
   >(null);
   const thumbCacheRef = useRef<Map<string, string[]>>(new Map());
@@ -142,15 +167,18 @@ function EditorTimeline({
     let sectionsNext: TimelineSnapshot["sections"] = [{ id: "source", start: 0, end: duration }];
     let keyframesNext: TimelineSnapshot["keyframes"] = cropKeyframes.map((keyframe, index) => ({ id: `${keyframe.timeMs}-${index}`, time: keyframe.timeMs / 1000 }));
     let zoomEffectsNext: ZoomPinEffect[] = [];
+    let sfxClipsNext: ClipSfxClip[] = [];
     try {
       const saved = JSON.parse(localStorage.getItem(`clyra.timeline.${clipId}`) || "null");
       if (Array.isArray(saved?.sections) && saved.sections.length) sectionsNext = saved.sections;
       if (Array.isArray(saved?.keyframes) && saved.keyframes.length) keyframesNext = saved.keyframes;
       if (Array.isArray(saved?.zoomEffects)) zoomEffectsNext = saved.zoomEffects;
+      if (Array.isArray(saved?.sfxClips)) sfxClipsNext = normalizeSfxClips(saved.sfxClips, duration);
     } catch { /* Ignore an older draft. */ }
     setSections(sectionsNext);
     setKeyframes(keyframesNext);
     setZoomEffects(zoomEffectsNext);
+    setSfxClips(sfxClipsNext);
     setHistory([]);
     setFuture([]);
     setSelectedItem("source");
@@ -158,16 +186,16 @@ function EditorTimeline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clipId, cropKeyframes]);
   useEffect(() => {
-    localStorage.setItem(`clyra.timeline.${clipId}`, JSON.stringify({ sections, keyframes, zoomEffects }));
-  }, [clipId, sections, keyframes, zoomEffects]);
+    localStorage.setItem(`clyra.timeline.${clipId}`, JSON.stringify({ sections, keyframes, zoomEffects, sfxClips }));
+  }, [clipId, sections, keyframes, zoomEffects, sfxClips]);
   useEffect(() => {
     onZoomEffectsChange?.(zoomEffects);
   }, [zoomEffects, onZoomEffectsChange]);
 
   const snapshot = useCallback(() => {
-    setHistory((value) => [...value.slice(-24), { sections, keyframes, zoomEffects }]);
+    setHistory((value) => [...value.slice(-24), { sections, keyframes, zoomEffects, sfxClips }]);
     setFuture([]);
-  }, [sections, keyframes, zoomEffects]);
+  }, [sections, keyframes, zoomEffects, sfxClips]);
 
   const seek = useCallback((time: number) => {
     const next = Math.max(0, Math.min(duration, time));
@@ -332,6 +360,12 @@ function EditorTimeline({
           setSelectedItem("source");
           return;
         }
+        if (sfxClips.some((clip) => clip.id === selectedItem)) {
+          snapshot();
+          setSfxClips((value) => value.filter((clip) => clip.id !== selectedItem));
+          setSelectedItem("source");
+          return;
+        }
         if (selectedItem.startsWith("key")) {
           snapshot();
           setKeyframes((value) => value.filter((keyframe) => keyframe.id !== selectedItem));
@@ -344,7 +378,7 @@ function EditorTimeline({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [currentTime, onTogglePlay, seek, selectedItem, snapshot, zoomEffects]);
+  }, [currentTime, onTogglePlay, seek, selectedItem, snapshot, sfxClips, zoomEffects]);
 
   const split = () => {
     const target = sections.find((section) => currentTime > section.start + 0.15 && currentTime < section.end - 0.15);
@@ -362,6 +396,12 @@ function EditorTimeline({
       setSelectedItem("source");
       return;
     }
+    if (sfxClips.some((clip) => clip.id === selectedItem)) {
+      snapshot();
+      setSfxClips((value) => value.filter((clip) => clip.id !== selectedItem));
+      setSelectedItem("source");
+      return;
+    }
     if (!selectedItem.startsWith("key")) return;
     snapshot();
     setKeyframes((value) => value.filter((keyframe) => keyframe.id !== selectedItem));
@@ -369,21 +409,31 @@ function EditorTimeline({
   const undo = () => {
     const previous = history.at(-1);
     if (!previous) return;
-    setFuture((value) => [...value, { sections, keyframes, zoomEffects }]);
+    setFuture((value) => [...value, { sections, keyframes, zoomEffects, sfxClips }]);
     setSections(previous.sections);
     setKeyframes(previous.keyframes);
     setZoomEffects(previous.zoomEffects || []);
+    setSfxClips(previous.sfxClips || []);
     setHistory((value) => value.slice(0, -1));
   };
   const redo = () => {
     const next = future.at(-1);
     if (!next) return;
-    setHistory((value) => [...value, { sections, keyframes, zoomEffects }]);
+    setHistory((value) => [...value, { sections, keyframes, zoomEffects, sfxClips }]);
     setSections(next.sections);
     setKeyframes(next.keyframes);
     setZoomEffects(next.zoomEffects || []);
+    setSfxClips(next.sfxClips || []);
     setFuture((value) => value.slice(0, -1));
   };
+
+  const placeSfxAt = useCallback((assetId: ClipSfxAssetId, atTime: number) => {
+    snapshot();
+    const clip = createSfxClip({ assetId, start: atTime });
+    setSfxClips((value) => [...value, clip]);
+    setSelectedItem(clip.id);
+    seek(atTime);
+  }, [seek, snapshot]);
 
   const addZoomAtPlayhead = (direction: "in" | "out") => {
     snapshot();
@@ -428,9 +478,97 @@ function EditorTimeline({
           : { ...effect, end: Math.max(time, effect.start + 0.05) };
         return normalizeZoomEffect(next, duration);
       }));
+      return;
+    }
+    if (drag.kind === "sfx-move") {
+      const nextStart = Math.max(0, Math.min(duration, time - drag.grabOffset));
+      setSfxClips((value) => value.map((clip) => (clip.id === drag.id
+        ? { ...clip, start: snapping ? Math.round(nextStart * 10) / 10 : nextStart }
+        : clip)));
     }
   };
   const onTrackPointerUp = () => { dragRef.current = null; };
+
+  /* Keep HTMLAudioElements in sync with the main video for editor preview. */
+  useEffect(() => {
+    const pool = sfxAudioRef.current;
+    const liveIds = new Set(sfxClips.map((clip) => clip.id));
+    for (const [id, audio] of pool) {
+      if (!liveIds.has(id)) {
+        audio.pause();
+        audio.src = "";
+        pool.delete(id);
+      }
+    }
+    for (const clip of sfxClips) {
+      const asset = CLIP_SFX_ASSETS.find((item) => item.id === clip.assetId);
+      if (!asset) continue;
+      let audio = pool.get(clip.id);
+      if (!audio) {
+        audio = new Audio(asset.url);
+        audio.preload = "auto";
+        pool.set(clip.id, audio);
+      } else if (!audio.src.includes(asset.file)) {
+        audio.src = asset.url;
+      }
+      audio.playbackRate = clampSfxSpeed(clip.speed);
+      audio.volume = Math.min(1, clampSfxVolume(clip.volume));
+    }
+  }, [sfxClips]);
+
+  useEffect(() => {
+    const media = video.current;
+    if (!media) return;
+    let raf = 0;
+    const sync = () => {
+      const t = media.currentTime || 0;
+      const isPlaying = !media.paused && !media.ended;
+      for (const clip of sfxClips) {
+        const audio = sfxAudioRef.current.get(clip.id);
+        if (!audio) continue;
+        const active = isSfxActiveAt(clip, t);
+        if (!active || !isPlaying) {
+          if (!audio.paused) audio.pause();
+          continue;
+        }
+        const sourceTime = sfxSourceTimeAt(clip, t);
+        if (Math.abs(audio.currentTime - sourceTime) > 0.12) {
+          try { audio.currentTime = sourceTime; } catch { /* ignore seek race */ }
+        }
+        audio.playbackRate = clampSfxSpeed(clip.speed);
+        audio.volume = Math.min(1, clampSfxVolume(clip.volume));
+        if (audio.paused) void audio.play().catch(() => undefined);
+      }
+      raf = requestAnimationFrame(sync);
+    };
+    const kick = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(sync); };
+    const stopAll = () => {
+      for (const audio of sfxAudioRef.current.values()) {
+        if (!audio.paused) audio.pause();
+      }
+    };
+    media.addEventListener("play", kick);
+    media.addEventListener("pause", stopAll);
+    media.addEventListener("seeked", kick);
+    media.addEventListener("ended", stopAll);
+    if (!media.paused) kick();
+    return () => {
+      cancelAnimationFrame(raf);
+      media.removeEventListener("play", kick);
+      media.removeEventListener("pause", stopAll);
+      media.removeEventListener("seeked", kick);
+      media.removeEventListener("ended", stopAll);
+      stopAll();
+    };
+  }, [sfxClips, video, videoSrc]);
+
+  useEffect(() => () => {
+    for (const audio of sfxAudioRef.current.values()) {
+      audio.pause();
+      audio.src = "";
+    }
+    sfxAudioRef.current.clear();
+  }, []);
 
   const transportButton = "grid h-8 w-8 place-items-center rounded-[8px] transition-colors duration-150 hover:bg-[#F4F7FB] disabled:opacity-30";
   const transportGroup = "flex items-center gap-[5px]";
@@ -445,6 +583,7 @@ function EditorTimeline({
   const trackHeights = { ruler: 40, video: 58, captions: 42, audio: 66, zoom: 72 } as const;
   const rowSeparator = { borderBottom: `1px solid ${CLIP_EDITOR.separator}` } as const;
   const selectedZoom = zoomEffects.find((effect) => effect.id === selectedItem);
+  const selectedSfx = sfxClips.find((clip) => clip.id === selectedItem);
 
   return (
     <section
@@ -527,6 +666,45 @@ function EditorTimeline({
             Fit
           </button>
         </div>
+      </div>
+
+      {/* Sound FX palette — drag onto the Audio track or click to drop at playhead */}
+      <div
+        className="flex shrink-0 items-center gap-2 overflow-x-auto px-3 py-2"
+        style={{ borderBottom: `1px solid ${CLIP_EDITOR.separator}`, background: "#F8FAFD" }}
+        aria-label="Sound effects"
+      >
+        <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide" style={{ color: CLIP_EDITOR.textMuted }}>
+          Sound FX
+        </span>
+        {CLIP_SFX_ASSETS.map((asset) => {
+          const colors = SFX_BLOCK_COLORS[asset.id];
+          return (
+            <button
+              key={asset.id}
+              type="button"
+              draggable
+              title={`${asset.label}: ${asset.hint}. Drag onto Audio or click to place at playhead.`}
+              onDragStart={(event) => {
+                event.dataTransfer.setData(SFX_DRAG_MIME, asset.id);
+                event.dataTransfer.effectAllowed = "copy";
+              }}
+              onClick={() => placeSfxAt(asset.id, snapping ? Math.round(currentTime * 10) / 10 : currentTime)}
+              className="flex h-[30px] shrink-0 items-center gap-1.5 rounded-[8px] px-2.5 text-[11px] font-semibold transition-colors duration-150 hover:brightness-[0.98]"
+              style={{
+                background: colors.fill,
+                color: colors.text,
+                boxShadow: `inset 0 0 0 1px ${colors.border}`,
+              }}
+            >
+              <AudioLines size={13} strokeWidth={ICON_STROKE} />
+              {asset.label}
+            </button>
+          );
+        })}
+        <span className="ml-1 shrink-0 text-[10.5px]" style={{ color: CLIP_EDITOR.textMuted }}>
+          Drag onto Audio · customise speed below
+        </span>
       </div>
 
       {/* Track labels + tracks */}
@@ -620,8 +798,25 @@ function EditorTimeline({
               })}
             </div>
 
-            {/* Audio waveform */}
-            <div className="relative flex items-center bg-white" style={{ height: trackHeights.audio, ...rowSeparator }}>
+            {/* Audio waveform + draggable sound FX clips */}
+            <div
+              className="relative flex items-center bg-white"
+              style={{ height: trackHeights.audio, ...rowSeparator }}
+              onDragOver={(event) => {
+                if (event.dataTransfer.types.includes(SFX_DRAG_MIME)) {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "copy";
+                }
+              }}
+              onDrop={(event) => {
+                const assetId = event.dataTransfer.getData(SFX_DRAG_MIME) as ClipSfxAssetId;
+                if (!CLIP_SFX_ASSETS.some((asset) => asset.id === assetId)) return;
+                event.preventDefault();
+                event.stopPropagation();
+                const at = snapping ? Math.round(timeAtClientX(event.clientX) * 10) / 10 : timeAtClientX(event.clientX);
+                placeSfxAt(assetId, at);
+              }}
+            >
               {waveState === "ready" ? (
                 <canvas ref={waveCanvasRef} className="pointer-events-none block w-full" />
               ) : (
@@ -631,6 +826,48 @@ function EditorTimeline({
                   ))}
                 </span>
               )}
+              {sfxClips.map((clip) => {
+                const asset = CLIP_SFX_ASSETS.find((item) => item.id === clip.assetId);
+                if (!asset || duration <= 0) return null;
+                const colors = SFX_BLOCK_COLORS[clip.assetId];
+                const left = (clip.start / duration) * 100;
+                const width = (sfxTimelineDuration(clip) / duration) * 100;
+                const active = selectedItem === clip.id;
+                return (
+                  <button
+                    key={clip.id}
+                    type="button"
+                    title={`${asset.label} · ${clip.speed.toFixed(2)}× · ${formatEditorTime(clip.start)}`}
+                    onClick={(event) => { event.stopPropagation(); setSelectedItem(clip.id); seek(clip.start); }}
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                      snapshot();
+                      setSelectedItem(clip.id);
+                      const grab = Math.max(0, timeAtClientX(event.clientX) - clip.start);
+                      dragRef.current = { kind: "sfx-move", id: clip.id, grabOffset: grab };
+                      scrollerRef.current?.setPointerCapture(event.pointerId);
+                    }}
+                    className="absolute top-1/2 z-[5] flex h-[34px] -translate-y-1/2 items-center overflow-hidden rounded-[7px] px-2 text-left text-[10px] font-semibold"
+                    style={{
+                      left: `${left}%`,
+                      width: `${Math.max(width, 1.2)}%`,
+                      minWidth: 28,
+                      background: colors.fill,
+                      color: colors.text,
+                      boxShadow: active ? `inset 0 0 0 1.5px ${colors.border}, 0 1px 4px rgba(15,23,42,0.12)` : `inset 0 0 0 1px ${colors.border}`,
+                      cursor: "grab",
+                    }}
+                    aria-label={`${asset.label} sound effect at ${formatEditorTime(clip.start)}`}
+                  >
+                    <span className="truncate">{asset.label} · {clip.speed.toFixed(2)}×</span>
+                  </button>
+                );
+              })}
+              {!sfxClips.length ? (
+                <span className="pointer-events-none absolute left-3 top-2 z-[1] text-[10.5px]" style={{ color: CLIP_EDITOR.textMuted }}>
+                  Drag a Sound FX here
+                </span>
+              ) : null}
             </div>
 
             {/* Zoom pins: start → end band; drag pins to set duration/speed */}
@@ -772,6 +1009,65 @@ function EditorTimeline({
               aria-label="Zoom intensity"
             />
           </label>
+        </div>
+      ) : null}
+      {selectedSfx ? (
+        <div
+          className="flex h-9 shrink-0 items-center gap-3 px-3 text-[11px]"
+          style={{ borderTop: `1px solid ${CLIP_EDITOR.separator}`, color: CLIP_EDITOR.textSecondary, background: "#F8FAFD" }}
+        >
+          <span className="font-semibold" style={{ color: SFX_BLOCK_COLORS[selectedSfx.assetId].text }}>
+            {CLIP_SFX_ASSETS.find((asset) => asset.id === selectedSfx.assetId)?.label || "SFX"}
+          </span>
+          <span className="tabular-nums" style={{ fontFamily: CLIP_EDITOR_MONO }}>
+            {formatEditorTime(selectedSfx.start)} → {formatEditorTime(sfxEnd(selectedSfx))}
+          </span>
+          <label className="flex items-center gap-2">
+            <span>Speed {selectedSfx.speed.toFixed(2)}×</span>
+            <input
+              type="range"
+              min="0.5"
+              max="2"
+              step="0.05"
+              value={selectedSfx.speed}
+              onChange={(event) => {
+                const speed = clampSfxSpeed(Number(event.target.value));
+                snapshot();
+                setSfxClips((value) => value.map((clip) => (clip.id === selectedSfx.id ? { ...clip, speed } : clip)));
+              }}
+              className="clipper-zoom-slider w-[110px]"
+              aria-label="Sound effect speed"
+            />
+          </label>
+          <label className="flex items-center gap-2">
+            <span>Volume</span>
+            <input
+              type="range"
+              min="0"
+              max="1.5"
+              step="0.05"
+              value={selectedSfx.volume}
+              onChange={(event) => {
+                const volume = clampSfxVolume(Number(event.target.value));
+                snapshot();
+                setSfxClips((value) => value.map((clip) => (clip.id === selectedSfx.id ? { ...clip, volume } : clip)));
+              }}
+              className="clipper-zoom-slider w-[90px]"
+              aria-label="Sound effect volume"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => {
+              snapshot();
+              setSfxClips((value) => value.filter((clip) => clip.id !== selectedSfx.id));
+              setSelectedItem("source");
+            }}
+            className="ml-auto text-[11px] font-medium transition-opacity hover:opacity-80"
+            style={{ color: CLIP_EDITOR.blue }}
+          >
+            Remove
+          </button>
         </div>
       ) : null}
     </section>

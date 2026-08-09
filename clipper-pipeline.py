@@ -3004,8 +3004,24 @@ def export_subtitled_clip(cfg):
     if not os.path.exists(output_path) or os.path.getsize(output_path) <= 1024:
         fail("Subtitle export did not produce a playable MP4")
 
+    sfx_tracks = cfg.get("sfx_tracks") or cfg.get("sfxTracks") or cfg.get("sfxClips") or meta.get("sfx_tracks") or []
+    if isinstance(sfx_tracks, list) and sfx_tracks:
+        emit("render", "running", message="Mixing editor sound effects into the export...", overall=96)
+        try:
+            mix_sfx_into_clip(output_path, sfx_tracks, render_quality=render_quality)
+        except Exception as error:
+            emit("render", "running", message=f"Sound effect mix skipped: {error}", overall=96)
+
     write_json(os.path.join(artifact_dir, "words.json"), words)
-    write_json(os.path.join(artifact_dir, "meta.json"), {**meta, "last_export": output_name, "words_edited": bool(edited_words)})
+    write_json(
+        os.path.join(artifact_dir, "meta.json"),
+        {
+            **meta,
+            "last_export": output_name,
+            "words_edited": bool(edited_words),
+            "sfx_tracks": normalize_sfx_tracks(sfx_tracks) if isinstance(sfx_tracks, list) else [],
+        },
+    )
 
     result = {
         "id": meta.get("clip_id") or "candidate-1",
@@ -3024,6 +3040,141 @@ def export_subtitled_clip(cfg):
     emit("render", "complete", message="Subtitled export ready", overall=98)
     emit("complete", "complete", message="Export complete", results=[result], output=result["output"], title=result["title"], clip_duration=result["clip_duration"], file_size=result["file_size"], overall=100)
     print(json.dumps({"type": "clip_result", "step": "result", "status": "complete", "message": "Subtitled export ready", "overall": 100, "result": result}), flush=True)
+
+
+def resolve_clipper_sfx_dir():
+    """Locate bundled Clipper sound-effect MP3s for FFmpeg mixing."""
+    candidates = []
+    explicit = (os.environ.get("CLYRA_CLIPPER_SFX_DIR") or "").strip()
+    if explicit:
+        candidates.append(explicit)
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates.extend([
+        os.path.join(here, "public", "media", "clipper-sfx"),
+        os.path.join(os.getcwd(), "public", "media", "clipper-sfx"),
+        os.path.join(here, "media", "clipper-sfx"),
+    ])
+    resource_root = (os.environ.get("CLYRA_RESOURCE_ROOT") or "").strip()
+    if resource_root:
+        candidates.append(os.path.join(resource_root, "public", "media", "clipper-sfx"))
+    for path in candidates:
+        if path and os.path.isdir(path):
+            return path
+    return candidates[0] if candidates else os.path.join(os.getcwd(), "public", "media", "clipper-sfx")
+
+
+def _atempo_chain(speed):
+    """Build chained atempo filters (each stage must stay within 0.5–2.0)."""
+    rate = max(0.5, min(2.0, float(speed or 1.0)))
+    # Keep a single stage for the editor's 0.5–2× range.
+    return f"atempo={rate:.4f}"
+
+
+def normalize_sfx_tracks(raw_tracks):
+    tracks = []
+    if not isinstance(raw_tracks, list):
+        return tracks
+    allowed = {"thud", "sus", "fahh_long", "fahh_short"}
+    for index, row in enumerate(raw_tracks):
+        if not isinstance(row, dict):
+            continue
+        asset_id = str(row.get("assetId") or row.get("asset_id") or "").strip()
+        file_name = str(row.get("file") or "").strip()
+        if asset_id and asset_id not in allowed:
+            continue
+        if asset_id:
+            file_name = f"{asset_id}.mp3"
+        file_name = os.path.basename(file_name or "")
+        if not file_name.endswith(".mp3"):
+            continue
+        try:
+            start = max(0.0, float(row.get("start") or 0.0))
+            speed = max(0.5, min(2.0, float(row.get("speed") or 1.0)))
+            volume = max(0.0, min(1.5, float(row.get("volume") or 1.0)))
+        except (TypeError, ValueError):
+            continue
+        tracks.append({
+            "id": str(row.get("id") or f"sfx-{index}"),
+            "assetId": asset_id or os.path.splitext(file_name)[0],
+            "file": file_name,
+            "start": start,
+            "speed": speed,
+            "volume": volume,
+        })
+    return tracks
+
+
+def mix_sfx_into_clip(clip_path, sfx_tracks, render_quality="premium"):
+    """Mix editor sound FX onto an already-rendered clip (video stream copied).
+
+    Returns True when a mix pass ran, False when there was nothing to do.
+    """
+    tracks = normalize_sfx_tracks(sfx_tracks)
+    if not tracks or not clip_path or not os.path.isfile(clip_path):
+        return False
+    sfx_dir = resolve_clipper_sfx_dir()
+    resolved = []
+    for track in tracks:
+        path = os.path.join(sfx_dir, track["file"])
+        if os.path.isfile(path):
+            resolved.append({**track, "path": path})
+    if not resolved:
+        return False
+
+    profile = RENDER_QUALITY_PROFILES[normalise_render_quality(render_quality)]
+    tmp_out = clip_path + ".sfx-mix.mp4"
+    cmd = ["-y", "-i", clip_path]
+    for track in resolved:
+        cmd += ["-i", track["path"]]
+
+    filters = []
+    mix_labels = ["[0:a]"]
+    for index, track in enumerate(resolved):
+        input_index = index + 1
+        delay_ms = int(round(float(track["start"]) * 1000))
+        label = f"s{index}"
+        # adelay needs one value per channel for stereo output.
+        filters.append(
+            f"[{input_index}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+            f"{_atempo_chain(track['speed'])},"
+            f"volume={track['volume']:.3f},"
+            f"adelay={delay_ms}|{delay_ms},"
+            f"apad[{label}]"
+        )
+        mix_labels.append(f"[{label}]")
+    mix_inputs = "".join(mix_labels)
+    filters.append(
+        f"{mix_inputs}amix=inputs={len(mix_labels)}:duration=first:dropout_transition=0:normalize=0[aout]"
+    )
+    cmd += [
+        "-filter_complex",
+        ";".join(filters),
+        "-map", "0:v:0",
+        "-map", "[aout]",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", profile["audio_bitrate"],
+        "-ar", "48000",
+        "-ac", "2",
+        "-movflags", "+faststart",
+        "-shortest",
+        tmp_out,
+    ]
+    try:
+        run_ffmpeg(cmd, timeout=max(120, int(probe_duration(clip_path) * 4 + 30)))
+    except Exception:
+        if os.path.isfile(tmp_out):
+            try:
+                os.remove(tmp_out)
+            except OSError:
+                pass
+        raise
+    if not os.path.isfile(tmp_out) or os.path.getsize(tmp_out) <= 1024:
+        if os.path.isfile(tmp_out):
+            os.remove(tmp_out)
+        return False
+    os.replace(tmp_out, clip_path)
+    return True
 
 
 def apply_editor_zoom_effects(crop_plan, zoom_effects, clip_duration):
@@ -3276,6 +3427,10 @@ def refine_clip(cfg):
     # subtitle pass that could make captions appear soft or move with a crop.
     shutil.copy2(clean_clip_path, output_path)
 
+    # Preview playback mixes SFX in the editor; keep refine outputs clean so
+    # live preview audio is never doubled. Export burns SFX once into the MP4.
+    sfx_tracks = cfg.get("sfx_tracks") or cfg.get("sfxTracks") or cfg.get("sfxClips") or []
+
     crop_plan = persist_clip_artifacts(
         artifact_dir,
         words=words,
@@ -3288,6 +3443,7 @@ def refine_clip(cfg):
             "caption_collision_mode": collision_mode,
             "captions_enabled": effective_captions_enabled,
             "caption_position": effective_caption_position,
+            "sfx_tracks": normalize_sfx_tracks(sfx_tracks) if isinstance(sfx_tracks, list) else [],
             "caption_x": caption_x,
             "caption_y": caption_y,
             "render_quality": render_quality,

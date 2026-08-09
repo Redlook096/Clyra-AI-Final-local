@@ -1577,6 +1577,15 @@ export default function AIClipper({
               return [];
             }
           })(),
+          // Sound FX clips dragged onto the Audio timeline (mixed into final AAC).
+          sfxTracks: (() => {
+            try {
+              const saved = JSON.parse(localStorage.getItem(`clyra.timeline.${selected.id}`) || "null");
+              return Array.isArray(saved?.sfxClips) ? saved.sfxClips : [];
+            } catch {
+              return [];
+            }
+          })(),
         }),
       });
       if (!response.ok) {
@@ -1704,6 +1713,14 @@ export default function AIClipper({
           captionY: style?.caption_y ?? draft.captionY,
           subtitleStyle: style?.subtitle_style ?? draft.subtitleStyle,
           renderQuality: draft.renderQuality,
+          sfxTracks: (() => {
+            try {
+              const saved = JSON.parse(localStorage.getItem(`clyra.timeline.${selected.id}`) || "null");
+              return Array.isArray(saved?.sfxClips) ? saved.sfxClips : [];
+            } catch {
+              return [];
+            }
+          })(),
         }),
       });
       if (!response.ok) {

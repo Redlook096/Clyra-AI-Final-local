@@ -3513,6 +3513,8 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
       // Editor pin-zoom effects: ease-in/out zoom that must NOT scale burned captions
       // (ASS is applied after crop). Preview keeps SubtitleOverlay as a sibling of <video>.
       zoom_effects: body.zoomEffects || body.zoom_effects || [],
+      // Editor sound FX clips (dragged onto the Audio timeline); mixed in after encode.
+      sfx_tracks: body.sfxTracks || body.sfx_tracks || body.sfxClips || body.sfx_clips || [],
     };
     spawnClipperPipeline(["--refine", JSON.stringify(cfg)], res, "Refining crop and captions...");
   });
