@@ -2223,8 +2223,7 @@ async function startServer() {
     res.json({ ok: true });
   });
 
-  // Screen Companion — OpenCluely-inspired helper that talks + sees the screen.
-  // Vision uses RapidOCR ONNX (8GB-safe). Desktop takeover stays in Electron.
+  // Screen Companion — vision via Gemini (GEMINI_API_KEY required).
   app.post("/api/companion/vision", async (req, res) => {
     try {
       const imagePath = String(req.body?.path || "").trim();
@@ -2236,7 +2235,7 @@ async function startServer() {
       const fs = await import("node:fs/promises");
       const buffer = await fs.readFile(imagePath);
       const dataUrl = `data:image/png;base64,${buffer.toString("base64")}`;
-      const { analyseVisionFrame } = await import("./tools/ollama-vision.mjs");
+      const { analyseVisionFrame } = await import("./tools/vision-frame.mjs");
       const result = await analyseVisionFrame(dataUrl, question);
       res.json(result);
     } catch (error) {
@@ -2247,25 +2246,54 @@ async function startServer() {
     }
   });
 
-  // Voice-call camera / screenshare frames → Gemini (preferred) or OpenCluely Ollama VLM.
+  // Voice-call camera / screenshare frames → Gemini vision (GEMINI_API_KEY required).
   app.post("/api/companion/vision-frame", async (req, res) => {
     try {
       const image = String(req.body?.image || "").trim();
       const question = String(req.body?.question || "").trim();
-      const sourceHint = String(req.body?.source || "").trim().toLowerCase();
       if (!image) {
         res.status(400).json({ ok: false, error: "A data-URL image is required." });
         return;
       }
-      const { analyseVisionFrame } = await import("./tools/ollama-vision.mjs");
-      const result = await analyseVisionFrame(image, question, {
-        preferGemini: sourceHint === "camera" || sourceHint === "" || Boolean(process.env.GEMINI_API_KEY),
-      });
+      const { analyseVisionFrame } = await import("./tools/vision-frame.mjs");
+      const result = await analyseVisionFrame(image, question);
       res.json(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Companion vision frame failed";
-      const status = /data-URL|too large/i.test(message) ? (/too large/i.test(message) ? 413 : 400) : 500;
+      const status = /GEMINI_API_KEY|data-URL|too large/i.test(message)
+        ? (/too large/i.test(message) ? 413 : /data-URL/i.test(message) ? 400 : 503)
+        : 500;
       res.status(status).json({ ok: false, error: message });
+    }
+  });
+
+  app.get("/api/companion/vision-health", async (_req, res) => {
+    try {
+      const { geminiApiKey, geminiVisionModel } = await import("./tools/gemini-vision.mjs");
+      if (!geminiApiKey()) {
+        res.status(503).json({ ok: false, error: "GEMINI_API_KEY is not configured." });
+        return;
+      }
+      const { analyseVisionBuffer } = await import("./tools/vision-frame.mjs");
+      const tinyPng = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        "base64",
+      );
+      const probe = await analyseVisionBuffer(tinyPng, "Reply GEMINI_OK only.", {
+        mimeType: "image/png",
+        timeoutMs: 30_000,
+      });
+      res.json({
+        ok: true,
+        model: probe.model || geminiVisionModel(),
+        source: probe.source || "gemini",
+        sample: String(probe.summary || "").slice(0, 80),
+      });
+    } catch (error) {
+      res.status(503).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "Gemini vision health check failed",
+      });
     }
   });
 

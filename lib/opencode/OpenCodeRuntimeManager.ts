@@ -46,7 +46,7 @@ function resolveCodingModel(): { providerID: string; modelID: string } {
     !/test|dummy|example|placeholder/i.test(deepseekKey);
 
   if (deepseekLooksValid) {
-    return { providerID: "deepseek", modelID: model || "deepseek-chat" };
+    return { providerID: "deepseek", modelID: model || "deepseek-v4-flash" };
   }
 
   // Free OpenCode coding model — works without a DeepSeek credential.
@@ -324,7 +324,12 @@ export class OpenCodeRuntimeManager {
   /** Best-effort parse of OpenCode's local log for the latest provider 401. */
   private readRecentProviderAuthError(): string | null {
     try {
-      const logPath = path.join(os.homedir(), ".local/share/opencode/log/opencode.log");
+      const logPath = path.join(
+        process.platform === "win32"
+          ? path.join(os.homedir(), "AppData", "Local", "opencode", "log")
+          : path.join(os.homedir(), ".local", "share", "opencode", "log"),
+        "opencode.log",
+      );
       if (!fs.existsSync(logPath)) return null;
       const text = fs.readFileSync(logPath, "utf8");
       const lines = text.trim().split("\n").slice(-80);

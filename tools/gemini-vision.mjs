@@ -4,7 +4,7 @@
 const DEFAULT_MODEL =
   process.env.GEMINI_VISION_MODEL ||
   process.env.GOOGLE_VISION_MODEL ||
-  "gemini-2.0-flash";
+  "gemini-3.1-flash-lite";
 
 export function geminiApiKey() {
   return (

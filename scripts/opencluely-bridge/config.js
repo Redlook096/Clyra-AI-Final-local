@@ -44,22 +44,21 @@ class ConfigManager {
           baseUrl: process.env.CLYRA_API_BASE || 'http://127.0.0.1:31415',
           askPath: '/api/companion/ask',
         },
-        // Free lightweight open-source vision model for ~8GB RAM
+        // Gemini vision via Clyra server (cross-platform — macOS + Windows)
         vision: {
-          provider: 'ollama',
-          model: process.env.OPENCLUELY_VISION_MODEL || 'gemma3:4b',
-          ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
+          provider: 'gemini',
+          model: process.env.GEMINI_VISION_MODEL || 'gemini-3.1-flash-lite',
+          framePath: '/api/companion/vision-frame',
         },
-        // Legacy Gemini block kept empty — not used (stealth interview path rejected)
         gemini: {
-          model: 'unused',
+          model: process.env.GEMINI_VISION_MODEL || 'gemini-3.1-flash-lite',
           fallbackModels: [],
-          maxRetries: 1,
-          timeout: 30000,
+          maxRetries: 2,
+          timeout: 45000,
           fallbackEnabled: false,
           enableFallbackMethod: false,
           generation: {
-            temperature: 0.3,
+            temperature: 0.2,
             topK: 32,
             topP: 0.9,
             maxOutputTokens: 1024,

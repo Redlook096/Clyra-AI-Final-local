@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
-# Start OpenCluely Electron with Clyra API + lightweight local vision (gemma3:4b).
+# Start OpenCluely Electron with Clyra API + Gemini vision (via Clyra server).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="${ROOT}/apps/opencluely"
 export CLYRA_API_BASE="${CLYRA_API_BASE:-http://127.0.0.1:31415}"
-export OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
-export OPENCLUELY_VISION_MODEL="${OPENCLUELY_VISION_MODEL:-gemma3:4b}"
 export CLYRA_CONTROL_PORT="${CLYRA_CONTROL_PORT:-3847}"
 export ELECTRON_DISABLE_SECURITY_WARNINGS=1
 
-# Ensure Ollama is up
-if ! curl -sf "${OLLAMA_BASE_URL}/api/tags" >/dev/null; then
-  echo "Starting ollama serve..."
-  ollama serve >/tmp/ollama-serve.log 2>&1 &
-  sleep 2
+# Load Clyra env so GEMINI_API_KEY reaches the server OpenCluely calls for vision.
+if [[ -f "${ROOT}/.env.local" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${ROOT}/.env.local"
+  set +a
+elif [[ -f "${ROOT}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${ROOT}/.env"
+  set +a
 fi
 
-# Ensure vision model is present (non-blocking: warn and continue if pull is slow)
-VISION_MODEL="${OPENCLUELY_VISION_MODEL}"
-if ! ollama list 2>/dev/null | grep -qi "$(echo "$VISION_MODEL" | cut -d: -f1)"; then
-  echo "Vision model ${VISION_MODEL} missing — pulling in background (OpenCluely will start anyway)..."
-  ollama pull "${VISION_MODEL}" >/tmp/ollama-pull-opencluely.log 2>&1 &
+if [[ -z "${GEMINI_API_KEY:-}" ]]; then
+  echo "WARN: GEMINI_API_KEY is not set — OpenCluely screen vision requires it on the Clyra server."
 fi
 
-# Ensure Clyra API is up
-if ! curl -sf "${CLYRA_API_BASE}/" >/dev/null; then
+if ! curl -sf "${CLYRA_API_BASE}/" >/dev/null 2>&1; then
   echo "WARN: Clyra API not reachable at ${CLYRA_API_BASE}"
 fi
 
@@ -40,13 +40,11 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   node "${ROOT}/tools/patch-electron-macos-privacy.mjs" opencluely >/dev/null || true
 fi
 
-# Headless-friendly Electron flags
-# On macOS keep GPU enabled so the overlay feels native; Linux headless keeps the safer flags.
 EXTRA_FLAGS=()
-if [[ "$(uname -s)" != "Darwin" ]]; then
+UNAME="$(uname -s)"
+if [[ "${UNAME}" != "Darwin" ]]; then
   EXTRA_FLAGS+=(--no-sandbox --disable-gpu --disable-dev-shm-usage)
 fi
 
-# Bash 3.2 + set -u treats empty "${arr[@]}" as unbound — expand safely.
 exec env -u ELECTRON_RUN_AS_NODE \
   "${ELECTRON_BIN}" . ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"} "$@"

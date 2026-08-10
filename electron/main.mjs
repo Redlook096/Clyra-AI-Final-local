@@ -341,23 +341,46 @@ async function spawnOpenCluelyApp() {
   if (openCluelyProcess && !openCluelyProcess.killed) {
     return { ok: true, alreadyRunning: true };
   }
-  const script = path.join(projectRoot, "scripts", "start-opencluely-electron.sh");
+  const bashScript = path.join(projectRoot, "scripts", "start-opencluely-electron.sh");
+  const psScript = path.join(projectRoot, "scripts", "start-opencluely-electron.ps1");
+  const useWindows = process.platform === "win32";
+  const script = useWindows ? psScript : bashScript;
   if (!existsSync(script)) {
-    return { ok: false, error: "OpenCluely start script is missing. Run scripts/clone-opencluely.sh first." };
+    return {
+      ok: false,
+      error: useWindows
+        ? "OpenCluely PowerShell launcher is missing. Run scripts/clone-opencluely.sh first."
+        : "OpenCluely start script is missing. Run scripts/clone-opencluely.sh first.",
+    };
   }
   if (openCluelyLaunchPromise) return openCluelyLaunchPromise;
   openCluelyLaunchPromise = (async () => {
     try {
-      const child = spawn("bash", [script], {
-        cwd: projectRoot,
-        env: {
-          ...process.env,
-          CLYRA_API_BASE: process.env.CLYRA_API_BASE || `http://127.0.0.1:${appPort}`,
-          CLYRA_CONTROL_PORT: process.env.CLYRA_CONTROL_PORT || "3847",
-        },
-        detached: true,
-        stdio: "ignore",
-      });
+      const child = useWindows
+        ? spawn(
+            "powershell.exe",
+            ["-ExecutionPolicy", "Bypass", "-File", script],
+            {
+              cwd: projectRoot,
+              env: {
+                ...process.env,
+                CLYRA_API_BASE: process.env.CLYRA_API_BASE || `http://127.0.0.1:${appPort}`,
+                CLYRA_CONTROL_PORT: process.env.CLYRA_CONTROL_PORT || "3847",
+              },
+              detached: true,
+              stdio: "ignore",
+            },
+          )
+        : spawn("bash", [script], {
+            cwd: projectRoot,
+            env: {
+              ...process.env,
+              CLYRA_API_BASE: process.env.CLYRA_API_BASE || `http://127.0.0.1:${appPort}`,
+              CLYRA_CONTROL_PORT: process.env.CLYRA_CONTROL_PORT || "3847",
+            },
+            detached: true,
+            stdio: "ignore",
+          });
       child.unref();
       openCluelyProcess = child;
       child.once("exit", () => {
@@ -563,22 +586,22 @@ async function analyseCompanionVision(imagePath, question = "") {
   if (!needsVlm && rapid?.ok) return rapid;
 
   try {
-    const { analyseVisionFrame } = await import("../tools/ollama-vision.mjs");
+    const { analyseVisionFrame } = await import("../tools/vision-frame.mjs");
     const buffer = await fs.readFile(imagePath);
     const ext = path.extname(imagePath).toLowerCase() === ".png" ? "png" : "jpeg";
     const dataUrl = `data:image/${ext};base64,${buffer.toString("base64")}`;
-    const ollama = await Promise.race([
+    const gemini = await Promise.race([
       analyseVisionFrame(dataUrl, String(question || "")),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("ollama vision timed out")), 12_000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("gemini vision timed out")), 20_000)),
     ]);
-    if (ollama && (ollama.ok !== false) && (ollama.summary || ollama.text)) {
+    if (gemini && (gemini.ok !== false) && (gemini.summary || gemini.text)) {
       return {
         ...rapid,
-        ...ollama,
+        ...gemini,
         ok: true,
-        summary: String(ollama.summary || ollama.text || rapid?.summary || "").trim(),
-        model: ollama.model || "ollama",
-        ocr: ollama.ocr || rapid?.ocr,
+        summary: String(gemini.summary || gemini.text || rapid?.summary || "").trim(),
+        model: gemini.model || "gemini",
+        ocr: gemini.ocr || rapid?.ocr,
       };
     }
   } catch {
