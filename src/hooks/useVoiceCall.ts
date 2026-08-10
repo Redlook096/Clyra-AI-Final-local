@@ -991,7 +991,18 @@ export function useVoiceCall(options: {
 
   const startCall = useCallback(async () => {
     if (!options.enabled) return;
-    if (activeRef.current) return;
+    // Allow retry when a previous start left the overlay in error state.
+    if (activeRef.current && statusRef.current !== "error") return;
+    if (statusRef.current === "error") {
+      try {
+        wsRef.current?.close();
+      } catch {
+        /* ignore */
+      }
+      wsRef.current = null;
+      sessionIdRef.current = null;
+      stopMic();
+    }
     // Synchronously guard against double-start (pointerdown + click).
     activeRef.current = true;
     pipelineModeRef.current = false;
@@ -1022,8 +1033,8 @@ export function useVoiceCall(options: {
       setError(message);
       setStatus("error");
       statusRef.current = "error";
-      activeRef.current = false;
-      setActive(false);
+      // Keep overlay open so the user sees the error + can retry / end.
+      openMicrophoneSettingsIfNeeded(message);
       return;
     }
     // This runs synchronously from the user's Start Call gesture. Keeping the
@@ -1383,8 +1394,8 @@ export function useVoiceCall(options: {
       setError(startError instanceof Error ? startError.message : "Voice call failed");
       setStatus("error");
       statusRef.current = "error";
-      activeRef.current = false;
-      setActive(false);
+      // Keep the call overlay visible with the error — closing it looked like
+      // "nothing happened" when Start Call failed.
       stopMic();
     }
   }, [

@@ -676,10 +676,11 @@ class ApplicationController {
       try {
         await desktopControl.initialize();
         return {
-          ok: true,
+          ok: desktopControl.driver !== "none",
           driver: desktopControl.driver || "none",
           platform: process.platform,
           controlling: Boolean(desktopControl.controlling),
+          accessibility: desktopControl.driver !== "none",
         };
       } catch (error) {
         return { ok: false, driver: "none", error: error.message, platform: process.platform };
@@ -1383,12 +1384,17 @@ class ApplicationController {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents
           .executeJavaScript(
-            `document.documentElement.classList.toggle('oc-stealth', ${this.stealthEnabled ? "true" : "false"});
-             const wrap=document.getElementById('ocStealthWrap');
-             const sw=document.getElementById('ocStealthSwitch');
-             if(wrap) wrap.classList.toggle('is-on', ${this.stealthEnabled ? "true" : "false"});
-             if(sw) sw.setAttribute('aria-checked', '${this.stealthEnabled ? "true" : "false"}');
-             true;`,
+            `(function(){
+               const on = ${this.stealthEnabled ? "true" : "false"};
+               document.documentElement.classList.toggle('oc-stealth', on);
+               document.documentElement.classList.toggle('oc-dark', on);
+               document.documentElement.classList.toggle('oc-force-light', !on);
+               const wrap=document.getElementById('ocStealthWrap');
+               const sw=document.getElementById('ocStealthSwitch');
+               if(wrap) wrap.classList.toggle('is-on', on);
+               if(sw) sw.setAttribute('aria-checked', on ? 'true' : 'false');
+               return true;
+             })();`,
             true,
           )
           .catch(() => {});
@@ -1406,7 +1412,7 @@ class ApplicationController {
 
   _isScreenQuestion(text) {
     const t = String(text || "");
-    return /\b(what('?s| is) on (my )?screen|see (my )?screen|look at (my )?screen|on my screen|what (page|site|app|website|article) (am i|is) (on|open|this)|what (am i|is) (looking at|viewing)|main (heading|title|article)|read (the )?(page|screen|heading|title)|quote the (main |page )?(heading|title|article)|interview coding|coding (interview|page)|visible on (the )?screen|describe (the |my )?(screen|page|window|desktop|background)|screenshot|what color|desktop background|background color|what do you see|can you see)\b/i.test(
+    return /\b(what('?s| is|s) on (my )?screen|whats on (my )?screen|see (my )?screen|look at (my )?screen|on my screen|what (page|site|app|website|article) (am i|is) (on|open|this)|what (am i|is) (looking at|viewing)|main (heading|title|article)|read (the )?(page|screen|heading|title)|quote the (main |page )?(heading|title|article)|interview coding|coding (interview|page)|visible on (the )?screen|describe (the |my )?(screen|page|window|desktop|background)|screenshot|what color|desktop background|background color|what do you see|can you see)\b/i.test(
       t
     );
   }
@@ -1422,7 +1428,7 @@ class ApplicationController {
     // Soft-cloak OpenCluely only — never hide() (macOS focus steal) or touch other apps.
     this.#softCloakOpenCluely(true);
     try {
-      await new Promise((r) => setTimeout(r, 40));
+      await new Promise((r) => setTimeout(r, 140));
       return await captureService.captureAndProcess({ fullScreen: true });
     } finally {
       this.#softCloakOpenCluely(false);
@@ -1505,7 +1511,15 @@ class ApplicationController {
     for (let step = 0; step < 12; step++) {
       if (this._controlAbort) break;
       const capture = await this.#captureForAgent();
-      if (!capture?.imageBuffer?.length) break;
+      if (!capture?.imageBuffer?.length) {
+        windowManager.broadcastToAllWindows("control-status", {
+          status: "error",
+          message:
+            "Could not capture the screen for Take Control. Grant Screen Recording + Accessibility to OpenCluely, then try again.",
+        });
+        await desktopControl.stopControl();
+        return { ok: false, error: "capture_failed" };
+      }
 
       const vision = await llmService.callVision(
         capture.imageBuffer,
@@ -1568,17 +1582,10 @@ class ApplicationController {
         action.y = Math.max(4, Math.min(bounds.height - 4, Math.round(Number(action.y) || bounds.height / 2)));
       }
 
-      // Hide overlays while acting so clicks hit the real app
-      const hidden = [];
+      // Soft-cloak OpenCluely while acting so clicks hit the real app (no hide()/focus steal).
       try {
-        for (const [type, win] of windowManager.windows.entries()) {
-          if (!win || win.isDestroyed()) continue;
-          if (["main", "chat", "llmResponse", "settings"].includes(type) && win.isVisible()) {
-            hidden.push(win);
-            win.hide();
-          }
-        }
-        await new Promise((r) => setTimeout(r, 80));
+        this.#softCloakOpenCluely(true);
+        await new Promise((r) => setTimeout(r, 100));
         const result = await desktopControl.runAction(action, task);
         if (result?.blocked) {
           lastSummary = String(result.reason || "Blocked unsafe action");
@@ -1604,15 +1611,7 @@ class ApplicationController {
           result,
         });
       } finally {
-        for (const win of hidden) {
-          try {
-            if (!win.isDestroyed()) {
-              windowManager.showOnCurrentDesktop(win, { focus: false, inactive: true });
-            }
-          } catch (_) {
-            /* ignore */
-          }
-        }
+        this.#softCloakOpenCluely(false);
         // Do not recenter every control step — it makes the bar jump while the AI works.
       }
       await new Promise((r) => setTimeout(r, 450));
@@ -1638,7 +1637,7 @@ class ApplicationController {
   /**
    * Soft-cloak OpenCluely chrome for a live desktop capture without hide().
    * hide() steals macOS focus and can make other apps feel like they vanished.
-   * Never touches non-OpenCluely applications.
+   * Move off-screen + contentProtection + opacity so screencapture never sees OC chrome.
    */
   #softCloakOpenCluely(cloak) {
     const types = ["main", "chat", "llmResponse", "settings"];
@@ -1648,15 +1647,36 @@ class ApplicationController {
       try {
         if (cloak) {
           if (!win.isVisible()) continue;
+          if (win.__clyraPrevBounds == null) {
+            win.__clyraPrevBounds = win.getBounds();
+          }
           if (win.__clyraPrevOpacity == null) {
             win.__clyraPrevOpacity = typeof win.getOpacity === "function" ? win.getOpacity() : 1;
           }
+          if (win.__clyraPrevProtect == null) {
+            win.__clyraPrevProtect = Boolean(this.stealthEnabled);
+          }
+          try {
+            win.setContentProtection?.(true);
+          } catch (_) {
+            /* ignore */
+          }
           if (typeof win.setOpacity === "function") win.setOpacity(0);
-        } else if (win.__clyraPrevOpacity != null) {
+          const b = win.__clyraPrevBounds;
+          win.setBounds({ x: -24000, y: -24000, width: b.width, height: b.height });
+        } else if (win.__clyraPrevBounds != null) {
+          win.setBounds(win.__clyraPrevBounds);
+          win.__clyraPrevBounds = null;
           if (typeof win.setOpacity === "function") {
-            win.setOpacity(win.__clyraPrevOpacity);
+            win.setOpacity(win.__clyraPrevOpacity != null ? win.__clyraPrevOpacity : 1);
           }
           win.__clyraPrevOpacity = null;
+          try {
+            win.setContentProtection?.(Boolean(this.stealthEnabled));
+          } catch (_) {
+            /* ignore */
+          }
+          win.__clyraPrevProtect = null;
         }
       } catch (_) {
         /* ignore */
@@ -1685,7 +1705,8 @@ class ApplicationController {
 
       // Soft-cloak OpenCluely chrome only — never hide()/close other apps.
       this.#softCloakOpenCluely(true);
-      await new Promise((r) => setTimeout(r, 40));
+      // Give the compositor time to settle before screencapture.
+      await new Promise((r) => setTimeout(r, 140));
 
       let capture;
       try {
@@ -1696,7 +1717,16 @@ class ApplicationController {
 
       if (!capture?.imageBuffer || !capture.imageBuffer.length) {
         windowManager.hideLLMResponse();
-        this.broadcastOCRError("Failed to capture screenshot image");
+        this.broadcastOCRError(
+          "Failed to capture screenshot. Grant Screen Recording permission to OpenCluely / Electron in System Settings → Privacy & Security, then try again.",
+        );
+        return;
+      }
+      if (capture.imageBuffer.length < 2500) {
+        windowManager.hideLLMResponse();
+        this.broadcastOCRError(
+          "Screenshot looked empty. Grant Screen Recording for OpenCluely, then ask again.",
+        );
         return;
       }
 

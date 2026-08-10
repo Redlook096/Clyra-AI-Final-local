@@ -22,9 +22,9 @@
         --oc-msg-bg: rgba(255, 255, 255, 0.86);
         --oc-ease: cubic-bezier(0.22, 1, 0.36, 1);
         --oc-ease-soft: cubic-bezier(0.25, 1, 0.5, 1);
-        --oc-dur-w: 260ms;
-        --oc-dur-h: 240ms;
-        --oc-dur-fast: 120ms;
+        --oc-dur-w: 0ms;
+        --oc-dur-h: 0ms;
+        --oc-dur-fast: 0ms;
         --oc-accent: #4a7cff;
         --oc-accent-soft: rgba(74, 124, 255, 0.35);
         --oc-expanded-w: 600px;
@@ -91,6 +91,43 @@
       html.oc-stealth, html.oc-stealth body,
       html.oc-dark, html.oc-dark body { color-scheme: dark; }
       html.oc-force-light, html.oc-force-light body { color-scheme: light; }
+      /* Stealth off must restore light tokens even if OS is dark */
+      html.oc-force-light {
+        --oc-glass: rgba(248, 249, 251, 0.82);
+        --oc-glass-open: rgba(255, 255, 255, 0.90);
+        --oc-border: rgba(15, 23, 42, 0.07);
+        --oc-text: #3d4656;
+        --oc-text-strong: #1f2937;
+        --oc-shadow: 0 12px 32px rgba(15, 23, 42, 0.10), 0 2px 8px rgba(15, 23, 42, 0.05);
+        --oc-btn-bg: rgba(255, 255, 255, 0.72);
+        --oc-btn-border: rgba(15, 23, 42, 0.05);
+        --oc-close-bg: #ffffff;
+        --oc-close-fg: #5b6575;
+        --oc-drag: #8b95a5;
+        --oc-input-bg: rgba(255, 255, 255, 0.92);
+        --oc-msg-bg: rgba(255, 255, 255, 0.86);
+        --oc-accent: #4a7cff;
+        --oc-accent-soft: rgba(74, 124, 255, 0.35);
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: fit-content;
+        height: fit-content;
+        background: transparent !important;
+        overflow: hidden;
+        font-family: "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -webkit-app-region: no-drag;
+        color-scheme: light;
+        transition: none;
+      }
+      html.oc-stealth, html.oc-stealth body,
+      html.oc-dark, html.oc-dark body { color-scheme: dark; }
+      html.oc-force-light, html.oc-force-light body { color-scheme: light; }
 
       .oc-shell {
         display: flex;
@@ -103,13 +140,7 @@
         overflow: hidden;
         opacity: 1;
         transform-origin: center top;
-        transition:
-          width var(--oc-dur-w) var(--oc-ease),
-          min-width var(--oc-dur-w) var(--oc-ease),
-          border-radius var(--oc-dur-h) var(--oc-ease-soft),
-          background 200ms var(--oc-ease-soft),
-          box-shadow 200ms var(--oc-ease-soft),
-          border-color 200ms var(--oc-ease-soft);
+        transition: none;
       }
 
       /* Snap show — no boot expand/squish; chrome is visible immediately */
@@ -119,9 +150,10 @@
         pointer-events: auto;
       }
 
-      .oc-shell.is-wide,
+      /* Chat open: same horizontal size as pill — only grow vertically */
       .oc-shell.is-chat-open {
-        width: var(--oc-expanded-w);
+        width: max-content;
+        min-width: 420px;
         border-radius: 22px;
         background: var(--oc-glass-open);
         border: 1px solid var(--oc-border);
@@ -145,26 +177,12 @@
         backdrop-filter: blur(18px) saturate(1.18);
         -webkit-backdrop-filter: blur(18px) saturate(1.18);
         -webkit-app-region: drag;
-        transition:
-          width var(--oc-dur-w) var(--oc-ease),
-          min-width var(--oc-dur-w) var(--oc-ease),
-          border-radius var(--oc-dur-h) var(--oc-ease-soft),
-          background 420ms var(--oc-ease-soft),
-          box-shadow 420ms var(--oc-ease-soft),
-          border-color 420ms var(--oc-ease-soft),
-          opacity 280ms var(--oc-ease-soft);
+        transition: none;
       }
       html.oc-stealth .command-tab {
         border-color: rgba(148, 163, 184, 0.22);
       }
 
-      .oc-shell.is-wide:not(.is-chat-open) .command-tab {
-        /* Width expands first — keep the rounded pill until chat drops down */
-        width: 100%;
-        min-width: 0;
-        border-radius: 999px;
-      }
-      .oc-shell.is-wide.is-chat-open .command-tab,
       .oc-shell.is-chat-open .command-tab {
         width: 100%;
         min-width: 0;
@@ -174,8 +192,6 @@
         box-shadow: none;
         backdrop-filter: none;
         -webkit-backdrop-filter: none;
-      }
-      .oc-shell.is-chat-open .command-tab {
         border-bottom: 1px solid var(--oc-border);
       }
 
@@ -330,7 +346,7 @@
         cursor: pointer;
         position: relative;
         z-index: 5;
-        transition: background 280ms ease, border-color 280ms ease, box-shadow 280ms ease, color 240ms ease, opacity 360ms var(--oc-ease), transform 420ms var(--oc-ease);
+        transition: none;
       }
       .oc-stealth-wrap.is-on {
         background: var(--oc-stealth-on);
@@ -355,7 +371,7 @@
         padding: 0;
         background: rgba(148, 163, 184, 0.42);
         cursor: pointer;
-        transition: background 240ms ease;
+        transition: none;
         flex-shrink: 0;
         -webkit-app-region: no-drag;
         app-region: no-drag;
@@ -371,7 +387,7 @@
         border-radius: 50%;
         background: #fff;
         box-shadow: 0 1px 3px rgba(15, 23, 42, 0.25);
-        transition: transform 260ms var(--oc-ease), box-shadow 240ms ease;
+        transition: none;
         pointer-events: none;
       }
       .oc-stealth-wrap.is-on .oc-stealth-switch {
@@ -422,9 +438,7 @@
         overflow: hidden;
         pointer-events: none;
         transform-origin: top center;
-        transition:
-          height var(--oc-dur-h) var(--oc-ease),
-          opacity 200ms var(--oc-ease-soft);
+        transition: none;
       }
       .oc-shell.is-chat-open .chat-drawer {
         height: var(--oc-drawer-h);
@@ -503,21 +517,8 @@
         -webkit-backdrop-filter: none !important;
         text-shadow: none !important;
       }
-      /* Message move-up — same glide as Clyra chat `.clyra-user-message-entry` */
-      .chat-messages .message.oc-msg-rise {
-        animation: oc-message-move-up 980ms cubic-bezier(0.22, 1, 0.36, 1) both;
-        will-change: transform, opacity;
-      }
-      .chat-messages .message.oc-msg-rise--assistant {
-        animation-duration: 520ms;
-      }
-      @keyframes oc-message-move-up {
-        0% { opacity: 0; transform: translate3d(0, 26px, 0) scale(0.988); }
-        64% { opacity: 1; transform: translate3d(0, 2px, 0) scale(0.999); }
-        100% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
-      }
-
-      /* User bubble — same as Clyra chat / App Launcher chat tool */
+      /* User bubble — beat #barChatMessages .message transparent !important */
+      #barChatMessages .message.user.oc-user-bubble,
       .chat-messages .message.user.oc-user-bubble {
         align-self: flex-end;
         max-width: min(78%, 420px);
@@ -531,11 +532,26 @@
         transform-origin: bottom right;
         contain: layout paint;
       }
+      html.oc-stealth #barChatMessages .message.user.oc-user-bubble,
+      html.oc-dark #barChatMessages .message.user.oc-user-bubble,
       html.oc-stealth .chat-messages .message.user.oc-user-bubble,
       html.oc-dark .chat-messages .message.user.oc-user-bubble {
-        background: rgba(174, 199, 241, 0.28) !important;
-        border-color: rgba(122, 162, 255, 0.28) !important;
-        color: #f1f5f9 !important;
+        background: rgba(174, 199, 241, 0.42) !important;
+        border-color: rgba(122, 162, 255, 0.35) !important;
+        color: #f8fafc !important;
+      }
+      /* Message move-up */
+      #barChatMessages .message.oc-msg-rise,
+      .chat-messages .message.oc-msg-rise {
+        animation: oc-message-move-up 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
+      #barChatMessages .message.oc-msg-rise--assistant,
+      .chat-messages .message.oc-msg-rise--assistant {
+        animation-duration: 360ms;
+      }
+      @keyframes oc-message-move-up {
+        0% { opacity: 0; transform: translate3d(0, 18px, 0); }
+        100% { opacity: 1; transform: translate3d(0, 0, 0); }
       }
       /* Assistant print — SoftStream-style paint (no bubble) */
       #barChatMessages .message.assistant.oc-print,
@@ -636,19 +652,20 @@
         font-weight: 600;
         letter-spacing: -0.01em;
         line-height: 1;
-        color: #64748b;
-        background-image: linear-gradient(110deg, #64748b 0%, #64748b 35%, #94a3b8 50%, #64748b 75%, #64748b 100%);
-        background-size: 200% 100%;
-        background-position: 200% 0;
-        background-clip: text;
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        animation: oc-thinking-shine 2s linear infinite;
-        will-change: background-position;
+        color: #64748b !important;
+        -webkit-text-fill-color: #64748b !important;
+        background: none !important;
+        background-image: none !important;
+        animation: oc-thinking-pulse 1.4s ease-in-out infinite;
       }
       html.oc-stealth .oc-thinking-wave,
       html.oc-dark .oc-thinking-wave {
-        background-image: linear-gradient(110deg, #94a3b8 0%, #94a3b8 35%, #cbd5e1 50%, #94a3b8 75%, #94a3b8 100%);
+        color: #cbd5e1 !important;
+        -webkit-text-fill-color: #cbd5e1 !important;
+      }
+      @keyframes oc-thinking-pulse {
+        0%, 100% { opacity: 0.55; }
+        50% { opacity: 1; }
       }
       @keyframes oc-thinking-shine {
         from { background-position: 200% 0; }

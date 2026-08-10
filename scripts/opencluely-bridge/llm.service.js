@@ -148,9 +148,10 @@ class LLMService {
     const asked = String(userQuestion || '').trim();
     if (visionMode === 'screen-ask' || asked) {
       return [
-        "Look at this screenshot of the user's screen carefully.",
+        "You are given a real screenshot of the user's live desktop. The image always contains something.",
         asked ? `The user asked: "${asked.slice(0, 400)}"` : 'Describe what is visible on screen.',
-        'Answer that question using only what is actually visible.',
+        'Never say you cannot see the screen, that the image is blank, or that you lack vision — describe what is there.',
+        'Answer using only what is actually visible: apps, windows, text, UI, wallpaper.',
         'Read on-screen text literally. Quote key titles/headings when relevant.',
         'Say which app or website is open if the window chrome or URL bar is visible.',
         'Do not invent apps, sites, books, chats, or text that are not in the image.',

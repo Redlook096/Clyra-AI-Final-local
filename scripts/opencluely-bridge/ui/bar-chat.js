@@ -11,9 +11,9 @@
   const EXPANDED_W = 600;
   const COLLAPSED_H = 56;
   const DRAWER_H = 360;
-  // Keep in sync with --oc-dur-w / --oc-dur-h in index.html — light drawer motion
-  const DUR_W = 260;
-  const DUR_H = 240;
+  // Keep in sync with --oc-dur-w / --oc-dur-h — Ask snaps open vertically only
+  const DUR_W = 0;
+  const DUR_H = 0;
 
   const shell = document.getElementById('ocShell');
   const tab = document.getElementById('commandTab');
@@ -45,13 +45,12 @@
   let stealthOn = false;
   const STEALTH_KEY = 'opencluely_stealth_v1';
 
-  // Sync light/dark with OS (and stealth) so chat bubbles/composer match Clyra.
+  // Stealth = dark chrome. Stealth off = always light (ignore OS dark preference).
   function syncThemeClass() {
     try {
-      const dark =
-        typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches;
-      document.documentElement.classList.toggle('oc-dark', Boolean(dark) || stealthOn);
-      document.documentElement.classList.toggle('oc-force-light', !dark && !stealthOn);
+      document.documentElement.classList.toggle('oc-stealth', stealthOn);
+      document.documentElement.classList.toggle('oc-dark', stealthOn);
+      document.documentElement.classList.toggle('oc-force-light', !stealthOn);
     } catch (_) {
       /* ignore */
     }
@@ -412,32 +411,26 @@
   }
 
   async function expandToChat(nextMode) {
-    if (animating) return;
+    if (animating) {
+      animating = false;
+      shell.classList.remove('is-animating');
+    }
     animating = true;
-    shell.classList.add('is-animating');
     mode = nextMode;
 
     try {
+      // Keep current horizontal size — only open chat downward, instantly.
       const from = measureShell();
-
-      // 1) Expand width from center — keep pill chrome until chat opens
-      wide = true;
-      shell.classList.add('is-wide');
-      notifyDrawer(true, { recenter: false });
-      await animateBounds(from.width, from.height, EXPANDED_W, COLLAPSED_H, DUR_W, {
-        growFromTopCenter: true,
-      });
-
-      // 2) Expand chat downward only (Y locked via growFromTopCenter)
+      const keepW = Math.max(from.width, Math.ceil(tab?.getBoundingClientRect?.()?.width || from.width));
+      wide = false;
       open = true;
+      shell.classList.remove('is-wide');
       shell.classList.add('is-chat-open');
       drawer.setAttribute('aria-hidden', 'false');
       setModeUI(nextMode);
       updateCloseIcon();
-      // No delay — fade/height start immediately with the bounds anim
-      await animateBounds(EXPANDED_W, COLLAPSED_H, EXPANDED_W, COLLAPSED_H + DRAWER_H, DUR_H, {
-        growFromTopCenter: true,
-      });
+      notifyDrawer(true, { recenter: false });
+      await resizeWindowNow(keepW, COLLAPSED_H + DRAWER_H, { growFromTopCenter: true });
     } finally {
       shell.classList.remove('is-animating');
       animating = false;
@@ -450,14 +443,6 @@
 
   async function collapse(opts = {}) {
     const hideIfAlreadyCollapsed = Boolean(opts.hideIfAlreadyCollapsed);
-    // Wait briefly if an expand is mid-flight so close isn't dropped
-    if (animating) {
-      const start = performance.now();
-      while (animating && performance.now() - start < 900) {
-        await wait(24);
-      }
-    }
-    // Force through even if a stuck expand left animating=true
     if (animating) animating = false;
     if (!open && !wide && !taskPromptMode && !controlling) {
       if (hideIfAlreadyCollapsed) {
@@ -470,12 +455,10 @@
       return;
     }
     animating = true;
-    shell.classList.add('is-animating');
     askBtn?.classList.remove('is-active');
     autoBtn?.classList.remove('is-active');
 
     try {
-      // Exit control compose without leaving a half-open shell
       if (taskPromptMode) {
         taskPromptMode = false;
         shell.classList.remove('is-control-compose', 'is-task-prompt');
@@ -484,27 +467,16 @@
       }
 
       const from = measureShell();
-
-      // 1) Collapse height first — drop is-chat-open so CSS height eases with the window
       open = false;
-      shell.classList.remove('is-chat-open');
+      wide = false;
+      shell.classList.remove('is-chat-open', 'is-wide');
       drawer.setAttribute('aria-hidden', 'true');
       updateCloseIcon();
-      await animateBounds(from.width, from.height, EXPANDED_W, COLLAPSED_H, DUR_H, {
-        growFromTopCenter: true,
-      });
-
-      // 2) Then shrink width back to pill (symmetric L/R)
-      wide = false;
-      shell.classList.remove('is-wide');
       notifyDrawer(false, { recenter: false });
-      // Measure pill target after width class removed
+
       await new Promise((r) => requestAnimationFrame(r));
       const pill = tab ? tab.getBoundingClientRect() : measureShell();
-      const pillW = Math.max(220, Math.ceil(pill.width || 320));
-      await animateBounds(EXPANDED_W, COLLAPSED_H, pillW, COLLAPSED_H, DUR_W, {
-        growFromTopCenter: true,
-      });
+      const pillW = Math.max(220, Math.ceil(pill.width || from.width || 320));
       await resizeWindowNow(pillW, COLLAPSED_H, { growFromTopCenter: true });
       updateCloseIcon();
     } finally {
@@ -608,14 +580,9 @@
 
   async function enterTaskPrompt() {
     if (controlling) return;
-    if (animating) {
-      const start = performance.now();
-      while (animating && performance.now() - start < 1600) {
-        await wait(32);
-      }
-    }
-    if (animating || controlling) return;
-    animating = true;
+    // Never soft-fail Take Control because an expand left animating=true.
+    animating = false;
+    shell.classList.remove('is-animating');
     setModeUI('control');
     // Stay on the original collapsed pill — hide buttons, reveal type space.
     taskPromptMode = true;
@@ -629,26 +596,22 @@
     let placeholder = 'What should the AI do on your computer?';
     try {
       const status = await window.electronAPI?.getDesktopControlStatus?.();
-      if (status && status.driver === 'none') {
+      if (status && (status.driver === 'none' || status.ok === false || status.accessibility === false)) {
         placeholder =
           status.platform === 'linux'
             ? 'Install xdotool to enable Take Control on Linux'
             : status.platform === 'darwin'
               ? 'Enable Accessibility for OpenCluely in System Settings'
-              : 'Desktop control driver unavailable on this system';
+              : 'Desktop control is unavailable on this machine';
       }
     } catch (_) {
       /* ignore */
     }
     if (el) {
-      el.value = '';
       el.placeholder = placeholder;
-      setTimeout(() => el.focus(), 30);
+      el.focus();
     }
-    notifyDrawer(false, { recenter: false });
     await measureAndResize({ recenter: false });
-    await wait(120);
-    animating = false;
   }
 
   async function exitTaskPromptToControl(task) {
@@ -931,7 +894,8 @@
   const api = window.electronAPI;
   if (api) {
     api.onTranscriptionLlmResponseStart?.((_e, data) => {
-      if (!open) expandToChat(mode || 'ask');
+      // Ask / Auto open drawer immediately; show Thinking (not a spinner).
+      if (!open) void expandToChat(mode || 'ask');
       clearStreamMessage();
       showThinking();
     });
@@ -984,22 +948,28 @@
       saveHistory();
     });
     api.onControlStatus?.((_e, data) => {
-      hideThinking();
+      // Do not clear Thinking on every step tick — only when control ends/errors.
       const status = document.getElementById('ocControlStatus');
       if (data?.status === 'running') {
+        hideThinking();
         setControlButtonState(true);
         if (status) status.textContent = data.message || 'AI controlling…';
       } else if (data?.status === 'step' && data.message) {
         if (status) status.textContent = String(data.message).slice(0, 72);
       } else if (data?.status === 'done') {
+        hideThinking();
         setControlButtonState(false);
         if (status) status.textContent = '';
+        if (data.message) addMessage(String(data.message), 'system');
       } else if (data?.status === 'stopped') {
+        hideThinking();
         setControlButtonState(false);
         if (status) status.textContent = '';
       } else if (data?.status === 'error') {
+        hideThinking();
         setControlButtonState(false);
         if (status) status.textContent = String(data.message || 'Control error').slice(0, 72);
+        addMessage(String(data.message || 'Take Control failed'), 'error');
       }
     });
     api.onResearchStatus?.((_e, data) => {

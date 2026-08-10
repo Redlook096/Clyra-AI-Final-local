@@ -129,6 +129,8 @@ class DesktopControlService {
         try {
           await darwinInput(['move', '0', '0'], 3000);
         } catch (error) {
+          this.driver = 'none';
+          this.accessibilityOk = false;
           logger.warn('macOS Quartz input probe failed — enable Accessibility for OpenCluely', {
             error: error.message,
           });

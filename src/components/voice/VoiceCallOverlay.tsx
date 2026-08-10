@@ -226,6 +226,7 @@ export function VoiceCallOverlay({
   orbColorTheme,
   onToggleMute,
   onEnd,
+  onRetry,
   onSendText,
   onUpdateUserMessage,
   onResendUserMessage,
@@ -241,6 +242,7 @@ export function VoiceCallOverlay({
   orbColorTheme: OrbColorTheme;
   onToggleMute: () => void;
   onEnd: () => void;
+  onRetry?: () => void;
   onSendText: (text: string) => boolean | void;
   onUpdateUserMessage: (id: string, content: string) => void;
   onResendUserMessage: (id: string, contentOverride?: string) => boolean | void;
@@ -670,15 +672,24 @@ export function VoiceCallOverlay({
             <div className="mt-4 w-full min-h-[4.5rem]">
               <AnimatePresence mode="wait">
                 {error ? (
-                  <motion.p
+                  <motion.div
                     key="err"
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -4 }}
-                    className="text-center text-[13px] font-medium text-rose-500"
+                    className="flex flex-col items-center gap-3"
                   >
-                    {error}
-                  </motion.p>
+                    <p className="text-center text-[13px] font-medium text-rose-500">
+                      {error}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => onRetry?.()}
+                      className="rounded-full border border-[#dfe4e9] bg-white px-4 py-2 text-[13px] font-semibold text-[#18212f] shadow-sm transition hover:bg-[#f8fafc]"
+                    >
+                      Try again
+                    </button>
+                  </motion.div>
                 ) : displayAssistant ? (
                   <motion.div
                     key={`ai-${displayAssistant.slice(0, 24)}`}

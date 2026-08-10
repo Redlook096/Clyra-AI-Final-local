@@ -6167,6 +6167,7 @@ Please analyze the code you just wrote and fix this error.`;
         orbColorTheme={orbColorTheme}
         onToggleMute={voiceCall.toggleMute}
         onEnd={voiceCall.endCall}
+        onRetry={() => void voiceCall.startCall()}
         onSendText={voiceCall.sendTextMessage}
         onUpdateUserMessage={voiceCall.updateUserMessage}
         onResendUserMessage={voiceCall.resendUserMessage}
