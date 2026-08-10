@@ -47,5 +47,6 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   EXTRA_FLAGS+=(--no-sandbox --disable-gpu --disable-dev-shm-usage)
 fi
 
+# Bash 3.2 + set -u treats empty "${arr[@]}" as unbound — expand safely.
 exec env -u ELECTRON_RUN_AS_NODE \
-  "${ELECTRON_BIN}" . "${EXTRA_FLAGS[@]}" "$@"
+  "${ELECTRON_BIN}" . ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"} "$@"

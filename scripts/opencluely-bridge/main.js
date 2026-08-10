@@ -1700,23 +1700,9 @@ class ApplicationController {
     try {
       windowManager.showLLMLoading();
 
-      // Visual Intelligence scan once — before hide/capture so the wave is visible.
-      if (wantScan) {
-        try {
-          await this.visualScan.start({
-            reason: visionMode || "screenshot",
-            force: true,
-          });
-          // Let the centre pulse + first wave frames paint before we hide the bar.
-          await new Promise((r) => setTimeout(r, 180));
-        } catch (scanError) {
-          logger.warn("Visual scan failed to start", { error: scanError.message });
-        }
-      }
-
-      // Hide OpenCluely overlays briefly so capture sees the real app (Chrome),
-      // not our own glass windows — otherwise vision hallucinates.
-      // Keep the visual-scan overlay (separate BrowserWindow) visible.
+      // Hide OpenCluely overlays before the liquid-wave backdrop capture + OCR shot
+      // so neither freezes our chrome into the desktop texture nor confuses vision.
+      // The visual-scan overlay is a separate BrowserWindow and stays visible.
       const hiddenForCapture = [];
       try {
         for (const [type, win] of windowManager.windows.entries()) {
@@ -1728,9 +1714,23 @@ class ApplicationController {
             }
           }
         }
-        await new Promise((r) => setTimeout(r, 100));
+        await new Promise((r) => setTimeout(r, 80));
       } catch (_) {
         /* ignore */
+      }
+
+      // Visual Intelligence scan — NameDrop liquid warp + perfect circular front.
+      if (wantScan) {
+        try {
+          await this.visualScan.start({
+            reason: visionMode || "screenshot",
+            force: true,
+          });
+          // Let the centre pressure + first wave frames paint before OCR capture.
+          await new Promise((r) => setTimeout(r, 200));
+        } catch (scanError) {
+          logger.warn("Visual scan failed to start", { error: scanError.message });
+        }
       }
 
       let capture;

@@ -1,9 +1,10 @@
 /**
  * Visual Intelligence Scan — Electron main-process orchestrator (CJS).
- * Precomputes window geometry, then renders a transparent always-on-top overlay
- * with a centre-out radial wave + contour traces (Apple Visual Intelligence feel).
+ * Precomputes window geometry, captures one desktop backdrop, then renders a
+ * transparent/opaque always-on-top overlay with a centre-out radial wave,
+ * NameDrop-style liquid-glass deformation (GPU), and optional contour traces.
  */
-const { BrowserWindow, screen, desktopCapturer, nativeImage } = require("electron");
+const { BrowserWindow, screen, desktopCapturer } = require("electron");
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 const path = require("node:path");
@@ -19,6 +20,8 @@ class VisualScanService {
     this.running = false;
     this._ttlTimer = null;
     this._backdropTmp = null;
+    this._startedAt = 0;
+    this._durationMs = 2000;
   }
 
   isAvailable() {
@@ -156,13 +159,19 @@ class VisualScanService {
   }
 
   async start(opts = {}) {
+    // Interrupt policy: finish quietly if almost done; otherwise restart.
     if (this.running && !opts.force) {
       return { ok: true, already: true };
     }
     if (this.running && opts.force) {
+      const remaining = this._durationMs - (Date.now() - this._startedAt);
+      if (remaining > 0 && remaining < 300) {
+        return { ok: true, already: true, finishing: true };
+      }
       await this.stop();
     }
     this.running = true;
+    this._startedAt = Date.now();
     const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
     const bounds = display.bounds;
     const scale = display.scaleFactor || 1;
@@ -237,25 +246,39 @@ class VisualScanService {
       if (filtered.length >= 120) break;
     }
 
-    const needsBackdrop = process.platform === "linux" || opts.forceBackdrop === true;
+    // Liquid NameDrop warp needs a one-shot desktop texture on every platform.
+    // Linux also needs it for reliable compositing. Opt out with liquidWarp:false.
+    const liquidWarp = opts.liquidWarp !== false;
+    const needsBackdrop =
+      liquidWarp || process.platform === "linux" || opts.forceBackdrop === true;
+    const durationMs = Number(opts.durationMs) > 0 ? Number(opts.durationMs) : 2000;
+    this._durationMs = durationMs;
+
     const scene = {
       width: bounds.width,
       height: bounds.height,
       scale,
-      durationMs: 1650,
+      durationMs,
       origin: { x: originX, y: originY },
-      maxRadius: Math.hypot(bounds.width / 2, bounds.height / 2) * 1.05,
+      maxRadius: Math.hypot(bounds.width / 2, bounds.height / 2) * 1.08,
       elements: filtered,
       reason: opts.reason || "scan",
       backdropPath: null,
       hasBackdrop: false,
       needsBackdrop,
+      liquidWarp,
     };
 
     try {
       // Do not block the HTTP/IPC caller on renderer animation start.
       void this.#openOverlay(bounds, scene);
-      return { ok: true, elements: filtered.length, backdrop: needsBackdrop };
+      return {
+        ok: true,
+        elements: filtered.length,
+        backdrop: needsBackdrop,
+        liquidWarp,
+        durationMs,
+      };
     } catch (error) {
       this.running = false;
       return { ok: false, error: error?.message || String(error) };
@@ -270,6 +293,42 @@ class VisualScanService {
 
   async #captureBackdropFile(bounds) {
     const tmp = path.join(os.tmpdir(), `oc-scan-backdrop-${process.pid}-${Date.now()}.png`);
+    const scale =
+      screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).scaleFactor || 1;
+    const physW = Math.max(640, Math.round(bounds.width * scale));
+    const physH = Math.max(400, Math.round(bounds.height * scale));
+
+    // macOS: native screencapture is sharp and includes the full display.
+    if (process.platform === "darwin") {
+      const displays = screen.getAllDisplays();
+      const nearest = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+      const idx = Math.max(0, displays.findIndex((d) => d.id === nearest.id));
+      const attempts = [
+        // Prefer explicit display when multi-monitor; -D is 1-based.
+        ["-x", `-D${idx + 1}`, tmp],
+        // Fallback: full interactive capture of main/current display.
+        ["-x", tmp],
+      ];
+      for (const args of attempts) {
+        try {
+          await execFileAsync("screencapture", args, { timeout: 5000 });
+          if (fs.existsSync(tmp) && fs.statSync(tmp).size > 8000) {
+            this._backdropTmp = tmp;
+            this.logger.info?.("[visual-scan] macOS backdrop captured", {
+              bytes: fs.statSync(tmp).size,
+              args: args.slice(0, -1).join(" "),
+            });
+            return tmp;
+          }
+        } catch (error) {
+          this.logger.warn?.("[visual-scan] screencapture attempt failed", {
+            args: args.slice(0, -1).join(" "),
+            error: error?.message || String(error),
+          });
+        }
+      }
+    }
+
     // On Linux with GPU disabled, desktopCapturer thumbnails are often black.
     // Prefer scrot/import for a real framebuffer snapshot.
     if (process.platform === "linux") {
@@ -297,12 +356,40 @@ class VisualScanService {
         /* fall through */
       }
     }
+
+    // Windows (and fallback): PowerShell virtual-screen capture when available.
+    if (process.platform === "win32") {
+      try {
+        const ps = `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$b = [System.Windows.Forms.Screen]::FromPoint([System.Windows.Forms.Cursor]::Position).Bounds
+$bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+$g = [System.Drawing.Graphics]::FromImage($bmp)
+$g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+$bmp.Save('${tmp.replace(/'/g, "''")}', [System.Drawing.Imaging.ImageFormat]::Png)
+$g.Dispose(); $bmp.Dispose()
+`;
+        await execFileAsync(
+          "powershell",
+          ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+          { timeout: 5000 },
+        );
+        if (fs.existsSync(tmp) && fs.statSync(tmp).size > 8000) {
+          this._backdropTmp = tmp;
+          return tmp;
+        }
+      } catch (_) {
+        /* fall through */
+      }
+    }
+
     try {
       const sources = await desktopCapturer.getSources({
         types: ["screen"],
         thumbnailSize: {
-          width: Math.max(640, Math.round(bounds.width)),
-          height: Math.max(400, Math.round(bounds.height)),
+          width: physW,
+          height: physH,
         },
       });
       const match =
@@ -313,8 +400,8 @@ class VisualScanService {
         ) || sources[0];
       if (match?.thumbnail && !match.thumbnail.isEmpty()) {
         const resized = match.thumbnail.resize({
-          width: Math.round(bounds.width),
-          height: Math.round(bounds.height),
+          width: Math.round(bounds.width * scale),
+          height: Math.round(bounds.height * scale),
           quality: "good",
         });
         // Reject near-black captures (common when GPU compositing is off).
@@ -363,9 +450,12 @@ class VisualScanService {
     this.logger.info?.("[visual-scan] opening overlay", {
       overlayPath,
       useBackdrop,
+      hasBackdropPath: Boolean(scene.backdropPath),
+      liquidWarp: Boolean(scene.liquidWarp),
       elements: scene.elements?.length || 0,
       w: bounds.width,
       h: bounds.height,
+      durationMs: scene.durationMs,
     });
 
     this.overlay = new BrowserWindow({
@@ -374,8 +464,10 @@ class VisualScanService {
       width: Math.round(bounds.width),
       height: Math.round(bounds.height),
       frame: false,
+      // Liquid warp paints a full-screen desktop texture; use opaque surface then.
+      // Without a backdrop, stay transparent so the live desktop shows through.
       transparent: !useBackdrop,
-      backgroundColor: useBackdrop ? "#111111" : "#00000000",
+      backgroundColor: useBackdrop ? "#000000" : "#00000000",
       resizable: false,
       movable: false,
       focusable: false,
@@ -389,6 +481,9 @@ class VisualScanService {
         nodeIntegration: true,
         contextIsolation: false,
         sandbox: false,
+        // Keep WebGL available for the liquid deformation pass.
+        webgl: true,
+        offscreen: false,
       },
     });
     this.overlay.setIgnoreMouseEvents(true, { forward: true });
@@ -439,7 +534,7 @@ class VisualScanService {
       return;
     }
 
-    const ttl = (scene.durationMs || 1650) + 500;
+    const ttl = (scene.durationMs || 2000) + 600;
     if (this._ttlTimer) clearTimeout(this._ttlTimer);
     this._ttlTimer = setTimeout(() => {
       this.#closeOverlay();
