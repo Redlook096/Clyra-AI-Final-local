@@ -447,6 +447,7 @@
         .oc-thinking-wave,
         .oc-thinking-dots i,
         .oc-stream-paint__caret,
+        .chat-messages .message.oc-msg-rise,
         .chat-messages .message.user.oc-user-bubble {
           animation: none !important;
         }
@@ -502,6 +503,20 @@
         -webkit-backdrop-filter: none !important;
         text-shadow: none !important;
       }
+      /* Message move-up — same glide as Clyra chat `.clyra-user-message-entry` */
+      .chat-messages .message.oc-msg-rise {
+        animation: oc-message-move-up 980ms cubic-bezier(0.22, 1, 0.36, 1) both;
+        will-change: transform, opacity;
+      }
+      .chat-messages .message.oc-msg-rise--assistant {
+        animation-duration: 520ms;
+      }
+      @keyframes oc-message-move-up {
+        0% { opacity: 0; transform: translate3d(0, 26px, 0) scale(0.988); }
+        64% { opacity: 1; transform: translate3d(0, 2px, 0) scale(0.999); }
+        100% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+      }
+
       /* User bubble — same as Clyra chat / App Launcher chat tool */
       .chat-messages .message.user.oc-user-bubble {
         align-self: flex-end;
@@ -514,21 +529,13 @@
         color: #18212f !important;
         box-shadow: none !important;
         transform-origin: bottom right;
-        animation: oc-user-bubble-appear 180ms var(--oc-ease) both;
         contain: layout paint;
-      }
-      .chat-messages .message.user.oc-user-bubble--first {
-        animation-duration: 220ms;
       }
       html.oc-stealth .chat-messages .message.user.oc-user-bubble,
       html.oc-dark .chat-messages .message.user.oc-user-bubble {
         background: rgba(174, 199, 241, 0.28) !important;
         border-color: rgba(122, 162, 255, 0.28) !important;
         color: #f1f5f9 !important;
-      }
-      @keyframes oc-user-bubble-appear {
-        from { opacity: 0; transform: translateY(6px) scale(0.98); }
-        to { opacity: 1; transform: translateY(0) scale(1); }
       }
       /* Assistant print — SoftStream-style paint (no bubble) */
       #barChatMessages .message.assistant.oc-print,

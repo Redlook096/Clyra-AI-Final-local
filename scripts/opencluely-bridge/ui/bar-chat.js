@@ -179,7 +179,7 @@
       return streamState;
     }
     const messageDiv = document.createElement('div');
-    messageDiv.className = 'message assistant oc-print is-streaming';
+    messageDiv.className = 'message assistant oc-print is-streaming oc-msg-rise oc-msg-rise--assistant';
     messageDiv.id = 'bar-streaming';
     const paint = document.createElement('div');
     paint.className = 'message-text oc-stream-paint';
@@ -267,16 +267,16 @@
     }
     const messageDiv = document.createElement('div');
     // Assistant: plain print (no bubble) like Clyra chat tool.
-    // User: App Launcher / Clyra chat bubble (#aec7f1).
+    // User: App Launcher / Clyra chat bubble (#aec7f1) + move-up entry.
     if (type === 'assistant') {
-      messageDiv.className = 'message assistant oc-print';
+      messageDiv.className = 'message assistant oc-print oc-msg-rise oc-msg-rise--assistant';
     } else if (type === 'user') {
-      messageDiv.className = 'message user oc-user-bubble';
+      messageDiv.className = 'message user oc-user-bubble oc-msg-rise';
       if (!messagesEl.querySelector('.message.user')) {
         messageDiv.classList.add('oc-user-bubble--first');
       }
     } else {
-      messageDiv.className = `message ${type}`;
+      messageDiv.className = `message ${type} oc-msg-rise oc-msg-rise--assistant`;
     }
     const textDiv = document.createElement('div');
     textDiv.className = 'message-text';

@@ -5788,6 +5788,16 @@ body,
   .clyra-command-palette { width: 100% !important; max-height: min(258px, 46vh) !important; }
 }
 
+/* Voice transcript sheets reuse chat move-up without requiring .clyra-chat-page */
+.clyra-voice-transcript-sheet .clyra-user-message-entry {
+  animation: clyra-user-message-entry 980ms cubic-bezier(.22, 1, .36, 1) both;
+  will-change: transform, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clyra-voice-transcript-sheet .clyra-user-message-entry { animation: none; }
+}
+
 /* A row-level entry is independent of message streaming and scroll renders.
    It starts below its final place, then uses a long ease-out to settle like a
    native conversation bubble rather than snapping into the chat rail. */
@@ -5965,42 +5975,63 @@ body,
 
 .clyra-voice-waveform {
   display: flex;
-  min-height: 42px;
+  min-height: 44px;
   align-items: center;
   justify-content: center;
-  gap: 2.5px;
+  gap: 2.25px;
+  contain: layout paint;
 }
 
 .clyra-voice-waveform--compact {
   min-height: 32px;
-  gap: 2px;
+  gap: 1.75px;
   flex: 1;
   min-width: 0;
 }
 
 .clyra-voice-waveform__bar {
-  width: 3px;
-  min-height: 4px;
+  width: 2.75px;
+  height: 36px;
   border-radius: 999px;
-  background: linear-gradient(180deg, #7eb0ff 0%, #0052fb 58%, #0040c8 100%);
-  box-shadow: 0 0 8px rgba(0, 82, 251, 0.18);
-  transform: translateZ(0);
-  will-change: height, opacity;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(160, 198, 255, 0.95) 0%,
+      #3b82f6 42%,
+      #0052fb 72%,
+      #0039b8 100%
+    );
+  box-shadow:
+    0 0 10px rgba(0, 82, 251, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  transform: scaleY(0.12);
+  transform-origin: center center;
+  backface-visibility: hidden;
+  will-change: transform, opacity;
 }
 
 .clyra-voice-waveform--compact .clyra-voice-waveform__bar {
-  width: 2.5px;
-  box-shadow: 0 0 6px rgba(0, 82, 251, 0.14);
+  width: 2.25px;
+  height: 26px;
+  box-shadow:
+    0 0 7px rgba(0, 82, 251, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
 .clyra-voice-waveform--muted .clyra-voice-waveform__bar {
-  background: linear-gradient(180deg, #c5ccd6 0%, #94a3b8 100%);
+  background: linear-gradient(180deg, #d4dae3 0%, #a8b2c1 55%, #8b96a8 100%);
   box-shadow: none;
 }
 
 .clyra-voice-call-waveform {
-  width: min(360px, 78vw);
+  width: min(380px, 82vw);
   margin-top: 18px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clyra-voice-waveform__bar {
+    will-change: auto;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

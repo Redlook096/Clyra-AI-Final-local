@@ -90,10 +90,17 @@ function MessageBubble({
   return (
     <motion.article
       layout
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-      className={cn("flex w-full", isYou ? "justify-end" : "justify-start")}
+      initial={isYou ? false : { opacity: 0, y: 0, scale: 0.994 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{
+        type: "tween",
+        ease: [0.22, 1, 0.36, 1],
+        duration: isYou ? 0.88 : 0.52,
+      }}
+      className={cn(
+        "flex w-full",
+        isYou ? "justify-end clyra-user-message-entry" : "justify-start",
+      )}
     >
       <div
         className={cn(
@@ -432,9 +439,10 @@ export function VoiceTranscriptPanel({
 
               {liveUser ? (
                 <motion.div
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="flex justify-end"
+                  initial={{ opacity: 0, y: 26, scale: 0.988 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  transition={{ duration: 0.88, ease: [0.22, 1, 0.36, 1] }}
+                  className="flex justify-end clyra-user-message-entry"
                 >
                   <div className="max-w-[88%] rounded-[14px] rounded-br-md bg-[#aec7f1] px-3.5 py-2.5 text-[14px] leading-[1.55] text-[#18212f]">
                     <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#18212f]/55">
@@ -447,8 +455,9 @@ export function VoiceTranscriptPanel({
 
               {liveAssistant ? (
                 <motion.div
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
+                  initial={{ opacity: 0, y: 18, scale: 0.994 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  transition={{ duration: 0.52, ease: [0.22, 1, 0.36, 1] }}
                   className="flex justify-start"
                 >
                   <div className="max-w-[88%] px-1 py-1 text-[14px] leading-[1.55] text-[#18212f]">
