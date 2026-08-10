@@ -1338,6 +1338,16 @@ export default function WebBrowserWorkspace() {
   const showStartPage =
     !showAgentChrome &&
     (!browserState || isBrowserStartPageUrl(activeTab?.url || browserState?.url || ""));
+
+  // The Electron browser is a native sibling view rather than a DOM child.
+  // Ensure it is explicitly hidden while Clyra owns the new-tab welcome
+  // surface; otherwise an async surface update from the prior web page can
+  // briefly leave a white Chromium layer above this React view.
+  useEffect(() => {
+    if (!desktopChromium || !showStartPage) return;
+    const desktop = getElectronDesktop();
+    void desktop?.browser.setSurface({ visible: false });
+  }, [desktopChromium, showStartPage]);
   const aiInControl = agentDemo
     || (["planning", "observing", "executing", "verifying", "recovering"].includes(agentPhase) && !browserState?.agent.manualControl);
 
