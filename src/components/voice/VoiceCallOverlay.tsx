@@ -257,8 +257,14 @@ export function VoiceCallOverlay({
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mediaPreviewRef = useRef<HTMLVideoElement>(null);
   const mediaRequestIdRef = useRef(0);
+  const mediaModeRef = useRef<CallMediaMode>("none");
   const autoVisionKeyRef = useRef<string>("");
   const desktop = getElectronDesktop();
+
+  const setCallMediaMode = (mode: CallMediaMode) => {
+    mediaModeRef.current = mode;
+    setMediaMode(mode);
+  };
 
   const meterActive =
     !muted &&
@@ -290,7 +296,7 @@ export function VoiceCallOverlay({
       mediaPreviewRef.current.srcObject = null;
       mediaPreviewRef.current.removeAttribute("src");
     }
-    setMediaMode("none");
+    setCallMediaMode("none");
     setMediaError(null);
     setScreenHint(null);
     setSeeingScreen(false);
@@ -298,14 +304,15 @@ export function VoiceCallOverlay({
 
   const analyseSharedScreen = useCallback(async (question?: string) => {
     setSeeingScreen(true);
+    const activeMode = mediaModeRef.current;
     try {
       const ask =
         question ||
-        (mediaMode === "camera"
+        (activeMode === "camera"
           ? "What do you see on my camera? Answer helpfully about what is visible."
           : "What is on my shared screen? Help briefly.");
 
-      // Wait for a real camera/screenshare frame, then send to OpenCluely Ollama VLM.
+      // Wait for a real camera/screenshare frame, then send to Gemini / OpenCluely vision.
       await waitForVideoFrame(mediaPreviewRef.current);
       let dataUrl = await captureFrameDataUrl(mediaPreviewRef.current);
       // One short retry — webcams often need an extra frame after play().
@@ -322,12 +329,12 @@ export function VoiceCallOverlay({
         const response = await fetch("/api/companion/vision-frame", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image: dataUrl, question: ask, source: mediaMode }),
+          body: JSON.stringify({ image: dataUrl, question: ask, source: activeMode }),
         });
         const payload = await response.json().catch(() => ({}));
         visionText = String(payload?.summary || payload?.text || payload?.error || "").trim();
         source = String(payload?.source || payload?.model || "vision-frame");
-      } else if (mediaMode === "screen" && (desktop?.seeScreen || desktop?.companion?.seeScreen)) {
+      } else if (activeMode === "screen" && (desktop?.seeScreen || desktop?.companion?.seeScreen)) {
         // Screen-share only: fall back to Electron OS capture. Never use this for camera.
         const seen = await (desktop.seeScreen || desktop.companion!.seeScreen!)(ask);
         visionText = String(seen?.vision?.summary || seen?.vision?.text || seen?.error || "").trim();
@@ -335,14 +342,14 @@ export function VoiceCallOverlay({
       }
 
       if (visionText) {
-        const label = mediaMode === "camera" ? "Camera" : "Screen share";
+        const label = activeMode === "camera" ? "Camera" : "Screen share";
         setScreenHint(`${visionText.slice(0, 220)}${source ? ` · ${source}` : ""}`);
         onSendText(`[${label}] ${ask}\n\nVisible: ${visionText.slice(0, 1200)}`);
       } else {
         setScreenHint(
-          mediaMode === "camera"
-            ? "Camera is on, but no frame was ready yet — try See camera again in a moment."
-            : "Share your screen first, then ask what you’re looking at.",
+          activeMode === "camera"
+            ? "Camera is on, but no frame was ready yet — looking again shortly."
+            : "OpenCluely is ready — ask what’s on your screen from the overlay.",
         );
       }
     } catch (cause) {
@@ -350,7 +357,7 @@ export function VoiceCallOverlay({
     } finally {
       setSeeingScreen(false);
     }
-  }, [desktop, mediaMode, onSendText]);
+  }, [desktop, onSendText]);
 
   const attachStream = (stream: MediaStream, mode: Exclude<CallMediaMode, "none">, hint: string) => {
     mediaStreamRef.current = stream;
@@ -364,7 +371,7 @@ export function VoiceCallOverlay({
         { once: true },
       );
     }
-    setMediaMode(mode);
+    setCallMediaMode(mode);
     setMenu("closed");
     setScreenHint(hint);
     requestAnimationFrame(() => {
@@ -386,7 +393,7 @@ export function VoiceCallOverlay({
       const desktopPermission = await getElectronDesktop()?.dictation.ensureCamera?.().catch(() => null);
       if (desktopPermission && desktopPermission.ok === false) {
         setMediaError(String(desktopPermission.error || "Camera permission was not granted."));
-        setMediaMode("none");
+        setCallMediaMode("none");
         return;
       }
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -407,8 +414,12 @@ export function VoiceCallOverlay({
       attachStream(
         stream,
         "camera",
-        "Camera on — ask what’s visible, or tap See camera. Uses OpenCluely vision.",
+        "Camera on — Gemini is reading your camera automatically.",
       );
+      // Auto-capture once the preview has a live frame — no manual "See camera" step.
+      window.setTimeout(() => {
+        void analyseSharedScreen("What do you see on my camera right now? Describe it clearly.");
+      }, 350);
     } catch (cause) {
       if (requestId !== mediaRequestIdRef.current) return;
       const name = cause instanceof DOMException ? cause.name : "";
@@ -420,7 +431,7 @@ export function VoiceCallOverlay({
           ? "Camera permission was not granted. Enable “Clyra” under System Settings → Privacy & Security → Camera."
           : "Could not start the camera.",
       );
-      setMediaMode("none");
+      setCallMediaMode("none");
     }
   };
 
@@ -432,8 +443,27 @@ export function VoiceCallOverlay({
       track.enabled = false;
       track.stop();
     }
+    mediaStreamRef.current = null;
     try {
-      // Prefer live screenshare frame so voice can feed OpenCluely vision continuously.
+      // Share screen → open the OpenCluely overlay system (spawn if needed).
+      if (desktop?.openCluely?.ensure) {
+        setScreenHint("Opening OpenCluely…");
+        const ensured = await desktop.openCluely.ensure({ expand: true });
+        if (requestId !== mediaRequestIdRef.current) return;
+        if (ensured?.ok) {
+          setCallMediaMode("screen");
+          setMenu("closed");
+          setScreenHint("OpenCluely is open — use Ask / Auto Answer / Take Control there.");
+          // Kick a desktop vision pass so the call also gets screen context.
+          if (desktop.seeScreen || desktop.companion?.seeScreen) {
+            void analyseSharedScreen("What is on my screen right now?");
+          }
+          return;
+        }
+        setMediaError(String(ensured?.error || "Could not open OpenCluely."));
+      }
+
+      // Browser / fallback path when Electron OpenCluely bridge is unavailable.
       if (navigator.mediaDevices?.getDisplayMedia) {
         const stream = await navigator.mediaDevices.getDisplayMedia({
           video: {
@@ -452,14 +482,16 @@ export function VoiceCallOverlay({
         attachStream(
           stream,
           "screen",
-          "Screen shared — ask what’s on screen, or tap See screen. Uses OpenCluely vision.",
+          "Screen shared — analysing what’s visible.",
         );
+        window.setTimeout(() => {
+          void analyseSharedScreen("What is on my shared screen right now?");
+        }, 280);
         return;
       }
-      // Electron fallback without getDisplayMedia: OS capture via Companion/OpenCluely path.
       if (desktop?.seeScreen || desktop?.companion?.seeScreen) {
-        setMediaMode("screen");
-        setScreenHint("Desktop vision ready — ask what’s on your screen (OpenCluely models).");
+        setCallMediaMode("screen");
+        setScreenHint("Desktop vision ready — ask what’s on your screen.");
         setMenu("closed");
         void analyseSharedScreen("What is on my screen right now?");
         return;
@@ -468,9 +500,8 @@ export function VoiceCallOverlay({
     } catch (cause) {
       if (requestId !== mediaRequestIdRef.current) return;
       const name = cause instanceof DOMException ? cause.name : "";
-      // Last resort: Electron OS capture
       if (desktop?.seeScreen || desktop?.companion?.seeScreen) {
-        setMediaMode("screen");
+        setCallMediaMode("screen");
         setScreenHint("Using desktop capture — ask what’s on your screen.");
         return;
       }
@@ -479,7 +510,7 @@ export function VoiceCallOverlay({
           ? "Screen sharing permission was not granted."
           : "Could not start screen sharing.",
       );
-      setMediaMode("none");
+      setCallMediaMode("none");
     }
   };
 
@@ -597,19 +628,7 @@ export function VoiceCallOverlay({
                   )}
                   <div className="clyra-call-media-preview__sheen" />
                 </div>
-                <div className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-between gap-2 p-2">
-                  <button
-                    type="button"
-                    onClick={() => void analyseSharedScreen()}
-                    disabled={seeingScreen}
-                    className="rounded-full border border-white/40 bg-[#18212f]/72 px-2.5 py-1 text-[10.5px] font-semibold text-white backdrop-blur-md disabled:opacity-60"
-                  >
-                    {seeingScreen
-                      ? "Seeing…"
-                      : mediaMode === "camera"
-                        ? "See camera"
-                        : "See screen"}
-                  </button>
+                <div className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-end gap-2 p-2">
                   <button
                     type="button"
                     onClick={stopMedia}

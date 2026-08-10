@@ -80,6 +80,10 @@ export type ClyraDesktopBridge = {
     vision?: { summary?: string; text?: string; ocrText?: string; model?: string; source?: string };
     error?: string;
   }>;
+  openCluely?: {
+    ensure?: (payload?: { expand?: boolean }) => Promise<{ ok: boolean; error?: string; port?: number; action?: string }>;
+    show?: (payload?: { expand?: boolean }) => Promise<{ ok: boolean; error?: string; port?: number; action?: string }>;
+  };
   google: {
     status: () => Promise<{ connected: boolean; email?: string }>;
     signIn: () => Promise<{ ok: boolean; pending?: boolean; error?: string }>;

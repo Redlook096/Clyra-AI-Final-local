@@ -1,12 +1,14 @@
 /**
- * Shared OpenCluely-style Ollama vision helper for Clyra server + voice calls.
- * Uses OPENCLUELY_VISION_MODEL / OLLAMA_VISION_MODEL (default gemma3:4b).
+ * Shared vision helper for Clyra server + voice calls.
+ * Prefers Gemini when GEMINI_API_KEY is set; otherwise OpenCluely Ollama VLM
+ * (OPENCLUELY_VISION_MODEL / OLLAMA_VISION_MODEL, default gemma3:4b).
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { callGeminiVision, geminiApiKey } from "./gemini-vision.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -93,18 +95,45 @@ export async function callOllamaVision(imageBuffer, prompt, opts = {}) {
 }
 
 /**
- * Analyse a data-URL frame with OpenCluely vision, falling back to RapidOCR script.
+ * Analyse a data-URL frame with Gemini (preferred), then OpenCluely Ollama, then RapidOCR.
  */
-export async function analyseVisionFrame(dataUrl, question = "") {
+export async function analyseVisionFrame(dataUrl, question = "", opts = {}) {
   const match = /^data:image\/(png|jpeg|jpg|webp);base64,(.+)$/i.exec(String(dataUrl || ""));
   if (!match) throw new Error("A data-URL image is required.");
   const ext = match[1].toLowerCase() === "png" ? "png" : "jpg";
+  const mimeType =
+    match[1].toLowerCase() === "png"
+      ? "image/png"
+      : match[1].toLowerCase() === "webp"
+        ? "image/webp"
+        : "image/jpeg";
   const buffer = Buffer.from(match[2], "base64");
   if (buffer.byteLength > 8 * 1024 * 1024) throw new Error("Frame too large.");
 
   const prompt =
     question ||
     "What is visible in this camera or screen share? Answer any question the user is asking about it. Be concise and helpful.";
+  const preferGemini = opts.preferGemini !== false;
+
+  if (preferGemini && geminiApiKey()) {
+    try {
+      const gemini = await callGeminiVision(buffer, prompt, { mimeType });
+      return {
+        ok: true,
+        summary: gemini.summary,
+        text: gemini.summary,
+        ocrText: gemini.summary,
+        model: gemini.model,
+        source: "gemini",
+        engine: "gemini",
+      };
+    } catch (geminiError) {
+      console.warn(
+        "[vision] Gemini failed, falling back to Ollama:",
+        geminiError instanceof Error ? geminiError.message : geminiError,
+      );
+    }
+  }
 
   try {
     const vlm = await callOllamaVision(buffer, prompt);

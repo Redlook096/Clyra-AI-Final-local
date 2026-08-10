@@ -2788,7 +2788,7 @@ export default function App() {
       (chunk, reasoning) => { if (!reasoning) summary += chunk; },
       0.2,
       480,
-      "deepseek-chat",
+      "deepseek-v4-flash",
     );
     if (!summary.trim()) throw new Error("The summary was empty.");
     return summary.trim();
@@ -2801,7 +2801,7 @@ export default function App() {
       (chunk, reasoning) => { if (!reasoning) draft += chunk; },
       0.35,
       420,
-      "deepseek-chat",
+      "deepseek-v4-flash",
     );
     if (!draft.trim()) throw new Error("The draft was empty.");
     return draft.trim();
@@ -4192,7 +4192,7 @@ Request details: ${userPrompt}`,
         },
       ];
 
-      // Use deepseek-chat (non-reasoning) for the structured agent stream so the model spends
+      // Use deepseek-v4-flash (non-thinking) for the structured agent stream so the model spends
       // its entire output budget on the delimited timeline (thinking + analyze + code + ...)
       // instead of burning tokens on internal reasoning that we discard anyway.
       const vibeAbort = new AbortController();
@@ -4222,7 +4222,7 @@ Request details: ${userPrompt}`,
             },
             0.6,
             8000,
-            "deepseek-chat",
+            "deepseek-v4-flash",
             vibeAbort.signal,
           ),
           new Promise<never>((_, reject) => {
@@ -4514,7 +4514,7 @@ Please analyze the code you just wrote and fix this error.`;
             },
             0.35,
             700,
-            "deepseek-chat",
+            "deepseek-v4-flash",
           );
 
           const cleanedReplacement = replacement
@@ -4889,7 +4889,7 @@ Please analyze the code you just wrote and fix this error.`;
             },
             0.2,
             48,
-            "deepseek-chat",
+            "deepseek-v4-flash",
           )
             .then(() => {
               const newTitle = generatedTitle.trim().replace(/^"|"$/g, "");
@@ -4994,7 +4994,7 @@ Please analyze the code you just wrote and fix this error.`;
             },
             0.25,
             4200,
-            "deepseek-chat",
+            "deepseek-v4-flash",
           );
           setMessages((current) => current.map((message) => message.id === aiMsgId ? { ...message, content:accumulatedText || "Research completed, but the final synthesis was unavailable.", isThinking:false, isStreaming:false, thinkingMode:"search", searchSources:(result.sources || []).map((source)=>source.url) } : message));
           return;
@@ -5539,7 +5539,7 @@ Please analyze the code you just wrote and fix this error.`;
               },
               0.5,
               1800,
-              "deepseek-chat",
+              "deepseek-v4-flash",
             );
           } catch (analysisError) {
             console.error("YouTube/search analysis stream failed:", analysisError);
@@ -8318,7 +8318,7 @@ export async function streamOpenAI(
   onChunk: (text: string, isReasoning?: boolean) => void,
   temperature: number = 0.7,
   maxTokens: number = 8000,
-  model: string = "deepseek-reasoner",
+  model: string = "deepseek-v4-flash",
   signal?: AbortSignal,
 ) {
   const formattedMessages = systemInstruction
@@ -8337,6 +8337,7 @@ export async function streamOpenAI(
       temperature,
       stream: true,
       max_tokens: maxTokens,
+      thinking: { type: "disabled" },
     }),
   });
 

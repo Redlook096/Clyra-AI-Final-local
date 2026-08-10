@@ -18,6 +18,7 @@ import {
   parseVoiceClientMessage,
   type VoiceServerMessage,
 } from "./voice-stream-protocol";
+import { prepareDeepseekChatBody } from "../../../lib/deepseek-models";
 
 type ActiveSocket = {
   ws: WebSocket;
@@ -54,7 +55,9 @@ const sockets = new Map<string, ActiveSocket>();
 /** User must talk continuously this long before interrupting the assistant. */
 const BARGE_HOLD_MS = Number(process.env.VOICE_BARGE_HOLD_MS ?? 480);
 /** Flush TTS sooner so first audio arrives faster. */
-const TTS_FLUSH_MS = Number(process.env.VOICE_TTS_FLUSH_MS ?? 72);
+const TTS_FLUSH_MS = Number(process.env.VOICE_TTS_FLUSH_MS ?? 48);
+/** End Async ASR turn after this much trailing silence. */
+const ASYNC_STT_SILENCE_MS = Number(process.env.VOICE_ASYNC_STT_SILENCE_MS ?? 420);
 
 let pipelineHealthCache: { ok: boolean; at: number } = { ok: false, at: 0 };
 
@@ -66,9 +69,9 @@ function send(ws: WebSocket, message: VoiceServerMessage) {
 
 function nextSpeakable(full: string, from: number) {
   return nextSemanticPhrase(full, from, {
-    minWords: 5,
-    preferredWords: 11,
-    maxWords: 22,
+    minWords: 3,
+    preferredWords: 8,
+    maxWords: 16,
   });
 }
 
@@ -88,26 +91,27 @@ async function streamLlmReply(
   const systemPrompt =
     session?.systemPrompt?.trim() || buildVoiceSystemPrompt();
   const temperature = session?.temperature ?? config.temperature;
+  const llmBody = prepareDeepseekChatBody({
+    model: config.llmModel,
+    temperature,
+    max_tokens: Math.min(Math.max(config.maxTokens, 64), 180),
+    stream: true,
+    messages: [
+      { role: "system", content: systemPrompt },
+      ...history.slice(-16).map((msg) => ({
+        role: msg.role,
+        content: msg.content,
+      })),
+      { role: "user", content: prompt },
+    ],
+  });
   const response = await fetch(`${config.llmBaseUrl.replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${config.llmApiKey}`,
     },
-    body: JSON.stringify({
-      model: config.llmModel,
-      temperature,
-      max_tokens: Math.min(Math.max(config.maxTokens, 80), 220),
-      stream: true,
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...history.slice(-20).map((msg) => ({
-          role: msg.role,
-          content: msg.content,
-        })),
-        { role: "user", content: prompt },
-      ],
-    }),
+    body: JSON.stringify(llmBody),
     signal,
   });
   if (!response.ok) {
@@ -219,7 +223,7 @@ async function speakText(
     // phrases to the same provider context.  Forcing every partial phrase can
     // make Flash finalise a context mid-answer and truncate playback.
     await active.asyncVoice.sendText(contextId, spoken, active.phraseSeq === 0);
-    if (await active.asyncVoice.waitForFirstAudio(contextId)) {
+    if (await active.asyncVoice.waitForFirstAudio(contextId, 900)) {
       active.phraseSeq += 1;
       return true;
     }
@@ -515,6 +519,11 @@ function attachAsyncStt(active: ActiveSocket, config: ReturnType<typeof loadVoic
       resetAsyncStt(active);
       active.pendingAudio = [];
       void handleFinalTranscript(active.sessionId, active.ws, text);
+      // Prepare the next Async ASR turn as soon as this utterance commits.
+      // Without this, later mic frames fall through with no STT session.
+      if (!active.asyncSttProviderUnavailable) {
+        active.asyncStt = createTurn();
+      }
     },
     onError: (message) => {
       if (!active.busy) console.warn("[voice] Async STT:", message);
@@ -678,6 +687,15 @@ function attachSocketHandlers(sessionId: string, ws: WebSocket) {
       if (current.playbackHold || current.busy) {
         return;
       }
+      // Recreate a hosted ASR turn if the previous one closed after a final.
+      if (
+        !current.asyncStt &&
+        !current.asyncSttProviderUnavailable &&
+        config.asyncSttEnabled &&
+        config.asyncApiKey
+      ) {
+        attachAsyncStt(current, config);
+      }
       if (current.asyncStt) {
         current.pendingAudio.push({ data: message.data, seq: message.seq });
         // Bound a pathological open mic to roughly 24 seconds at a 20ms
@@ -697,7 +715,7 @@ function attachSocketHandlers(sessionId: string, ws: WebSocket) {
               resetAsyncStt(current);
               return replayPendingAudioToPipeline(current).catch(() => undefined);
             });
-          }, 620);
+          }, ASYNC_STT_SILENCE_MS);
         }
         void current.asyncStt.sendPcm(message.data).catch((error) => {
           // A provider handshake can fail while several 20ms mic packets are

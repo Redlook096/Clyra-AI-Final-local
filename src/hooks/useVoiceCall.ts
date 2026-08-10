@@ -62,9 +62,9 @@ type SpeechRecognitionEventLike = {
   }>;
 };
 
-const ENDPOINT_SILENCE_MIN_MS = 420;
-const ENDPOINT_SILENCE_MAX_MS = 900;
-const ENDPOINT_SILENCE_DEFAULT_MS = 620;
+const ENDPOINT_SILENCE_MIN_MS = 320;
+const ENDPOINT_SILENCE_MAX_MS = 720;
+const ENDPOINT_SILENCE_DEFAULT_MS = 480;
 const VAD_SILENCE_LEVEL = 0.045;
 const VAD_SPEECH_LEVEL = 0.08;
 /** Continuous user speech required before interrupting the assistant (noise immunity). */

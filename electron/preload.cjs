@@ -53,6 +53,10 @@ contextBridge.exposeInMainWorld("clyraDesktop", {
     ask: (text) => ipcRenderer.invoke("companion:ask", { text }),
   },
   seeScreen: (question) => ipcRenderer.invoke("desktop:see-screen", { question }),
+  openCluely: {
+    ensure: (payload) => ipcRenderer.invoke("opencluely:ensure", payload || {}),
+    show: (payload) => ipcRenderer.invoke("opencluely:show", payload || {}),
+  },
   google: {
     status: () => ipcRenderer.invoke("google:status"),
     signIn: () => ipcRenderer.invoke("google:sign-in"),

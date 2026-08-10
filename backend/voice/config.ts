@@ -32,7 +32,8 @@ export function loadVoiceConfig(): VoiceConfig {
     (process.env.DEEPSEEK_API_KEY ? "https://api.deepseek.com" : "https://api.openai.com/v1");
   const llmModel =
     process.env.MY_LLM_MODEL ||
-    (process.env.DEEPSEEK_API_KEY ? "deepseek-chat" : "gpt-4o-mini");
+    process.env.DEEPSEEK_MODEL ||
+    (process.env.DEEPSEEK_API_KEY ? "deepseek-v4-flash" : "gpt-4o-mini");
 
   return {
     enabled: process.env.VOICE_ENABLED !== "false",
@@ -42,8 +43,8 @@ export function loadVoiceConfig(): VoiceConfig {
     vadSensitivity: Number(process.env.VOICE_VAD_SENSITIVITY ?? 0.5),
     sttModel: process.env.VOICE_STT_MODEL ?? "base.en",
     ttsVoice: process.env.VOICE_TTS_VOICE ?? "Ryan",
-    temperature: Number(process.env.VOICE_TEMPERATURE ?? 0.45),
-    maxTokens: Number(process.env.VOICE_MAX_TOKENS ?? 140),
+    temperature: Number(process.env.VOICE_TEMPERATURE ?? 0.4),
+    maxTokens: Number(process.env.VOICE_MAX_TOKENS ?? 120),
     livekitUrl: process.env.LIVEKIT_URL ?? "",
     livekitApiKey: process.env.LIVEKIT_API_KEY ?? "",
     livekitApiSecret: process.env.LIVEKIT_API_SECRET ?? "",
@@ -57,11 +58,9 @@ export function loadVoiceConfig(): VoiceConfig {
     asyncFallbackModel: process.env.ASYNC_TTS_FALLBACK_MODEL ?? "async_flash_v1.5",
     asyncVoiceId: process.env.ASYNC_VOICE_ID ?? "e0f39dc4-f691-4e78-bba5-5c636692cc04",
     asyncSampleRate: Number(process.env.ASYNC_TTS_SAMPLE_RATE ?? 44100),
-    // The local streaming worker is the low-latency default for both native
-    // dictation and calls. Hosted ASR stays opt-in because a partial provider
-    // response followed by a network final can leave a turn waiting behind a
-    // replay fallback; that was noticeably worse on an 8 GB machine.
-    asyncSttEnabled: process.env.ASYNC_STT_ENABLED === "true" && Boolean(process.env.ASYNC_API_KEY),
+    // Prefer Async ASR + Flash TTS whenever the API key is present. Opt out with
+    // ASYNC_STT_ENABLED=false to force the local Faster-Whisper worker.
+    asyncSttEnabled: process.env.ASYNC_STT_ENABLED !== "false" && Boolean(process.env.ASYNC_API_KEY),
     asyncSttModel: process.env.ASYNC_STT_MODEL ?? "async_asr_v1.0",
   };
 }

@@ -304,6 +304,102 @@ async function toggleOpenCluelyOverlay() {
   return null;
 }
 
+let openCluelyProcess = null;
+let openCluelyLaunchPromise = null;
+
+async function probeOpenCluelyHealth() {
+  const ports = [
+    Number(process.env.CLYRA_CONTROL_PORT || 0),
+    3848,
+    3847,
+  ].filter((port, index, all) => Number.isFinite(port) && port > 0 && all.indexOf(port) === index);
+  for (const port of ports) {
+    try {
+      const ok = await new Promise((resolve) => {
+        const req = http.get(
+          { host: "127.0.0.1", port, path: "/health", timeout: 800 },
+          (res) => {
+            res.resume();
+            resolve((res.statusCode || 500) < 400);
+          },
+        );
+        req.on("timeout", () => {
+          req.destroy();
+          resolve(false);
+        });
+        req.on("error", () => resolve(false));
+      });
+      if (ok) return { ok: true, port };
+    } catch {
+      /* try next */
+    }
+  }
+  return { ok: false, port: null };
+}
+
+async function spawnOpenCluelyApp() {
+  if (openCluelyProcess && !openCluelyProcess.killed) {
+    return { ok: true, alreadyRunning: true };
+  }
+  const script = path.join(projectRoot, "scripts", "start-opencluely-electron.sh");
+  if (!existsSync(script)) {
+    return { ok: false, error: "OpenCluely start script is missing. Run scripts/clone-opencluely.sh first." };
+  }
+  if (openCluelyLaunchPromise) return openCluelyLaunchPromise;
+  openCluelyLaunchPromise = (async () => {
+    try {
+      const child = spawn("bash", [script], {
+        cwd: projectRoot,
+        env: {
+          ...process.env,
+          CLYRA_API_BASE: process.env.CLYRA_API_BASE || `http://127.0.0.1:${appPort}`,
+          CLYRA_CONTROL_PORT: process.env.CLYRA_CONTROL_PORT || "3847",
+        },
+        detached: true,
+        stdio: "ignore",
+      });
+      child.unref();
+      openCluelyProcess = child;
+      child.once("exit", () => {
+        if (openCluelyProcess === child) openCluelyProcess = null;
+      });
+      for (let attempt = 0; attempt < 24; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        const health = await probeOpenCluelyHealth();
+        if (health.ok) return { ok: true, spawned: true, port: health.port };
+      }
+      return { ok: false, error: "OpenCluely started but its control API never became ready." };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      openCluelyLaunchPromise = null;
+    }
+  })();
+  return openCluelyLaunchPromise;
+}
+
+/** Show / expand OpenCluely; spawn the app if the control API is down. */
+async function ensureOpenCluely({ expand = true } = {}) {
+  let health = await probeOpenCluelyHealth();
+  if (!health.ok) {
+    const spawned = await spawnOpenCluelyApp();
+    if (!spawned.ok) return spawned;
+    health = await probeOpenCluelyHealth();
+    if (!health.ok) {
+      return { ok: false, error: "OpenCluely did not become reachable after launch." };
+    }
+  }
+  const shown = await postOpenCluelyControl("/show", { windows: expand ? ["chat"] : ["main"] });
+  if (expand) await postOpenCluelyControl("/expand", {});
+  if (!shown?.ok) {
+    const toggled = await toggleOpenCluelyOverlay();
+    if (!toggled?.ok) {
+      return { ok: false, error: "OpenCluely is running but did not accept show/expand." };
+    }
+  }
+  return { ok: true, port: health.port, action: expand ? "expand" : "show" };
+}
+
 function attachLocalService(child, label, { onSpawnError, onUnexpectedExit } = {}) {
   let lastStderr = "";
   reportDesktopLifecycle(`service ${label} spawned pid=${child.pid ?? "unknown"}`);
@@ -691,6 +787,14 @@ function registerIpc() {
   ipcMain.handle("desktop:see-screen", async (event, payload) => {
     authorize(event);
     return companionManager?.seeScreen(String(payload?.question || ""));
+  });
+  ipcMain.handle("opencluely:ensure", async (event, payload = {}) => {
+    authorize(event);
+    return ensureOpenCluely({ expand: payload?.expand !== false });
+  });
+  ipcMain.handle("opencluely:show", async (event, payload = {}) => {
+    authorize(event);
+    return ensureOpenCluely({ expand: Boolean(payload?.expand) });
   });
   ipcMain.handle("companion:start-guide", async (event, payload) => {
     authorizeCompanion(event);

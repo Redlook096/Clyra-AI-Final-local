@@ -93,7 +93,7 @@ export class AsyncSttSession {
   async flush() {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return this.finalText;
     this.socket.send(JSON.stringify({ final: true }));
-    await new Promise((resolve) => setTimeout(resolve, 260));
+    await new Promise((resolve) => setTimeout(resolve, 160));
     return this.finalText;
   }
 

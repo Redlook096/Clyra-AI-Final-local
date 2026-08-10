@@ -1383,7 +1383,7 @@ async function startServer() {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
-          model: process.env.MY_LLM_MODEL || process.env.DEEPSEEK_MODEL || "deepseek-chat",
+          model: process.env.MY_LLM_MODEL || process.env.DEEPSEEK_MODEL || "deepseek-v4-flash",
           temperature: 0.1,
           max_tokens: Math.min(1800, Math.max(120, transcript.length * 2)),
           messages: [
@@ -1424,7 +1424,7 @@ async function startServer() {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
-          model: process.env.MY_LLM_MODEL || process.env.DEEPSEEK_MODEL || "deepseek-chat",
+          model: process.env.MY_LLM_MODEL || process.env.DEEPSEEK_MODEL || "deepseek-v4-flash",
           temperature: 0.2,
           max_tokens: 2_400,
           messages: [{ role: "system", content: system }, { role: "user", content: `SELECTED TEXT:\n${selectedText}\n\nSPOKEN INSTRUCTION:\n${instruction}` }],
@@ -1470,7 +1470,7 @@ async function startServer() {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
-          model: process.env.DEEPSEEK_MODEL || "deepseek-chat",
+          model: process.env.DEEPSEEK_MODEL || "deepseek-v4-flash",
           temperature: 0.35,
           max_tokens: 900,
           messages: [
@@ -1555,7 +1555,7 @@ async function startServer() {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
-          model: process.env.DEEPSEEK_MODEL || "deepseek-chat",
+          model: process.env.DEEPSEEK_MODEL || "deepseek-v4-flash",
           temperature: 0.65,
           max_tokens: 1_800,
           response_format: { type: "json_object" },
@@ -1679,7 +1679,7 @@ async function startServer() {
       const upstream = await fetch(`${String(process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com").replace(/\/$/, "")}/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({ model: process.env.DEEPSEEK_MODEL || "deepseek-chat", temperature: 0.28, max_tokens: 2_200, messages: [{ role: "system", content: system }, { role: "user", content: `Question: ${question}\n\nEvidence:\n${sourceBlock}` }] }),
+        body: JSON.stringify({ model: process.env.DEEPSEEK_MODEL || "deepseek-v4-flash", temperature: 0.28, max_tokens: 2_200, messages: [{ role: "system", content: system }, { role: "user", content: `Question: ${question}\n\nEvidence:\n${sourceBlock}` }] }),
         signal: AbortSignal.timeout(45_000),
       });
       const payload = await upstream.json();
@@ -1711,7 +1711,7 @@ async function startServer() {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
-        model: process.env.DEEPSEEK_MODEL || "deepseek-chat",
+        model: process.env.DEEPSEEK_MODEL || "deepseek-v4-flash",
         temperature: 0.35,
         max_tokens: maxTokens,
         response_format: { type: "json_object" },
@@ -1887,6 +1887,13 @@ async function startServer() {
       return;
     }
     try {
+      const { prepareDeepseekChatBody } = await import("./lib/deepseek-models");
+      const requestBody = prepareDeepseekChatBody(
+        (req.body && typeof req.body === "object" ? req.body : {}) as Record<
+          string,
+          unknown
+        >,
+      );
       const baseUrl = String(
         process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com",
       ).replace(/\/$/, "");
@@ -1898,7 +1905,7 @@ async function startServer() {
             "Content-Type": "application/json",
             Authorization: `Bearer ${apiKey}`,
           },
-          body: JSON.stringify(req.body),
+          body: JSON.stringify(requestBody),
         },
       );
 
@@ -1981,7 +1988,7 @@ async function startServer() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: String(process.env.OPENPENCIL_MODEL || "deepseek-chat"),
+          model: String(process.env.OPENPENCIL_MODEL || "deepseek-v4-flash"),
           skills: [],
           user: prompt,
           max_output_tokens: 8_192,
@@ -2240,17 +2247,20 @@ async function startServer() {
     }
   });
 
-  // Voice-call camera / screenshare frames → OpenCluely Ollama VLM (gemma3:4b), RapidOCR fallback.
+  // Voice-call camera / screenshare frames → Gemini (preferred) or OpenCluely Ollama VLM.
   app.post("/api/companion/vision-frame", async (req, res) => {
     try {
       const image = String(req.body?.image || "").trim();
       const question = String(req.body?.question || "").trim();
+      const sourceHint = String(req.body?.source || "").trim().toLowerCase();
       if (!image) {
         res.status(400).json({ ok: false, error: "A data-URL image is required." });
         return;
       }
       const { analyseVisionFrame } = await import("./tools/ollama-vision.mjs");
-      const result = await analyseVisionFrame(image, question);
+      const result = await analyseVisionFrame(image, question, {
+        preferGemini: sourceHint === "camera" || sourceHint === "" || Boolean(process.env.GEMINI_API_KEY),
+      });
       res.json(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Companion vision frame failed";
@@ -2324,7 +2334,7 @@ async function startServer() {
             Authorization: `Bearer ${apiKey}`,
           },
           body: JSON.stringify({
-            model: process.env.DEEPSEEK_MODEL || process.env.MY_LLM_MODEL || "deepseek-chat",
+            model: process.env.DEEPSEEK_MODEL || process.env.MY_LLM_MODEL || "deepseek-v4-flash",
             messages: [
               { role: "system", content: system },
               { role: "user", content: user },
@@ -2641,7 +2651,7 @@ async function startServer() {
     // immediate and the M1 runtime revises it after real inspection.
     if (apiKey && process.env.CLYRA_ENABLE_LEGACY_PLAN_MODEL === "true") {
       try {
-            console.log("Generating an inspected Vibe Coder plan via deepseek-reasoner...");
+            console.log("Generating an inspected Vibe Coder plan via deepseek-v4-flash...");
         const response = await fetch("https://api.deepseek.com/chat/completions", {
           method: "POST",
           headers: {
@@ -2649,7 +2659,8 @@ async function startServer() {
             Authorization: `Bearer ${apiKey}`,
           },
           body: JSON.stringify({
-            model: "deepseek-reasoner",
+            model: "deepseek-v4-flash",
+            thinking: { type: "enabled" },
             messages: [
               {
                 role: "system",
