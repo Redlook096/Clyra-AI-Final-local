@@ -7,3 +7,7 @@ SPEECH_PROVIDER=whisper
 WHISPER_MODEL=tiny
 # Gemini unused — local VLM + Clyra DeepSeek text
 GEMINI_API_KEY=unused-clyra-vision
+# Optional: enables Taskhomie-compatible Anthropic Computer Use for Take Control.
+# Keep this in .env.local or the system keychain in deployed environments, not in source control.
+# ANTHROPIC_API_KEY=
+# ANTHROPIC_COMPUTER_MODEL=claude-sonnet-4-5

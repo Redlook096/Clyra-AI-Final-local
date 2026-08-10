@@ -115,6 +115,13 @@ function startBrowserBridge() {
       const body = request.method === "GET" ? {} : await readJson(request);
       if (request.method === "GET" && url.pathname === "/state") {
         sendJson(response, 200, { ok: true, state: browserManager?.getState() });
+      } else if (request.method === "GET" && url.pathname === "/frame") {
+        const frame = await browserManager.captureFrame();
+        response.writeHead(200, {
+          "content-type": "image/jpeg",
+          "cache-control": "no-store, max-age=0",
+        });
+        response.end(frame);
       } else if (request.method === "POST" && url.pathname === "/tabs") {
         const tab = await browserManager.createTab(body.url, { activate: body.activate !== false });
         sendJson(response, 200, { ok: true, tabId: tab.id, state: browserManager.getState() });
@@ -326,6 +333,21 @@ async function toggleOpenCluelyOverlay() {
   return null;
 }
 
+/** Open the companion from Clyra and immediately analyse the visible screen.
+ * This is intentionally separate from the companion's own toggle shortcut:
+ * Clyra's ⌘/ is an "open and help me" action, not an empty chat launcher.
+ */
+async function openOpenCluelyWithAutoAnswer() {
+  const opened = await ensureOpenCluely({ expand: true });
+  if (!opened?.ok) return opened;
+  // Do not await model completion in the shortcut handler. The companion keeps
+  // its drawer visible and paints the answer in place as it arrives.
+  void postOpenCluelyControl("/auto-answer", {}, 75_000).then((result) => {
+    if (!result?.ok) console.warn("[opencluely] Auto Answer did not complete after ⌘/.");
+  });
+  return { ...opened, action: "open-and-auto-answer" };
+}
+
 function syncOpenCluelyBridgeFromRepo() {
   const bridge = path.join(projectRoot, "scripts", "opencluely-bridge");
   const app = path.join(projectRoot, "apps", "opencluely");
@@ -336,6 +358,16 @@ function syncOpenCluelyBridgeFromRepo() {
     ["window.manager.js", "src/managers/window.manager.js"],
     ["config.js", "src/core/config.js"],
     ["capture.service.js", "src/services/capture.service.js"],
+    ["desktop-control.service.js", "src/services/desktop-control.service.js"],
+    ["control-safety.js", "src/services/control-safety.js"],
+    ["macos-input.py", "src/services/macos-input.py"],
+    ["macos-input.swift", "src/services/macos-input.swift"],
+    ["computer-agent.service.js", "computer-agent.service.js"],
+    ["computer-agent-bash.js", "computer-agent-bash.js"],
+    ["computer-agent-api.mjs", "computer-agent-api.mjs"],
+    ["preload.js", "preload.js"],
+    ["ui/bar-chat.js", "src/ui/bar-chat.js"],
+    ["html/index.html", "index.html"],
   ];
   for (const [srcName, destName] of copies) {
     const from = path.join(bridge, srcName);
@@ -1053,7 +1085,7 @@ async function createWindow() {
   // ⌘/ — activate OpenCluely overlay (show/hide via local control API).
   try {
     const registered = globalShortcut.register("CommandOrControl+/", () => {
-      void toggleOpenCluelyOverlay();
+      void openOpenCluelyWithAutoAnswer();
     });
     if (!registered) {
       console.warn("[opencluely] Cmd+/ is already owned by another app (OpenCluely may handle it).");

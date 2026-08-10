@@ -1927,6 +1927,19 @@ export function getManagedBrowserObservation() {
 }
 
 export function getManagedBrowserFrame(fresh = false) {
+  if (USE_ELECTRON_BROWSER) {
+    return serializeOperation(async () => {
+      const response = await fetch(`${ELECTRON_BROWSER_BRIDGE}/frame${fresh ? "?fresh=1" : ""}`, {
+        headers: { authorization: `Bearer ${ELECTRON_BROWSER_TOKEN}` },
+        signal: AbortSignal.timeout(12_000),
+      });
+      if (!response.ok) throw new Error(`Native Chromium frame capture failed (${response.status}).`);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (!buffer.length) throw new Error("Native Chromium returned an empty frame.");
+      frameVersion += 1;
+      return { buffer, version: frameVersion };
+    });
+  }
   return serializeOperation(async () => {
     const activePage = await ensurePage();
     if (fresh || !frameBuffer) await captureFrame(activePage);
@@ -2183,6 +2196,8 @@ async function runElectronBrowserAgent(task: string, apiKey: string, options: { 
   const completedCriteria = new Set<number>();
   const attempted = new Map<string, number>();
   const actionRepeats = new Map<string, number>();
+  const visitedUrls = new Set<string>();
+  const visitedDetailUrls = new Set<string>();
   let consecutiveFailures = 0;
   let identicalPageSteps = 0;
   let lastFingerprint = "";
@@ -2207,6 +2222,10 @@ async function runElectronBrowserAgent(task: string, apiKey: string, options: { 
       await waitWhilePaused(taskAbort.signal, emit);
       if (taskAbort.signal.aborted) throw new DOMException("Task cancelled", "AbortError");
       const observation = await serializeOperation(getElectronObservation);
+      if (/^https?:\/\//i.test(observation.page.url)) {
+        visitedUrls.add(observation.page.url);
+        if (isLikelyDetailPage(observation.page.url)) visitedDetailUrls.add(observation.page.url);
+      }
       agentStatus = "observing";
       emit({ phase: "observing", message: `Reading ${observation.page.title || "the current page"}`, step, completedCriteria: completedCriteria.size, totalCriteria: plan.successCriteria.length, facts: facts.length });
       if (observation.page.fingerprint === lastFingerprint) identicalPageSteps += 1;
@@ -2270,7 +2289,14 @@ async function runElectronBrowserAgent(task: string, apiKey: string, options: { 
       if (decision.done || doneAction) {
         if (doneAction?.summary) finalMessage = doneAction.summary;
         const complete = completedCriteria.size >= plan.successCriteria.length;
-        const evidence = localPageTask || !isResearchTask(task) || new Set(facts.map((fact) => fact.sourceUrl)).size >= researchRequirements(task).minimumSources;
+        const requirements = researchRequirements(task);
+        const evidenceUrls = new Set(facts
+          .filter((fact) => /^https?:\/\//i.test(fact.sourceUrl))
+          .map((fact) => fact.sourceUrl));
+        const evidence = localPageTask || !isResearchTask(task) || (
+          evidenceUrls.size >= requirements.minimumSources
+          && visitedDetailUrls.size >= requirements.minimumDetailPages
+        );
         if (complete && evidence && (!requiresVisibleProgress || verifiedActions > 0)) {
           agentStatus = "completed";
           const doneEvidence = completionEvidence(observation, plan, completedCriteria);
@@ -2312,6 +2338,10 @@ async function runElectronBrowserAgent(task: string, apiKey: string, options: { 
           agentStatus = "executing";
           emit({ phase: "executing", kind: "action", message: decision.nextGoal || decision.reasoningSummary || `Running ${action.type}`, step, action, cursor, actionIndex: actionIndex + 1, actionCount: actions.length, completedCriteria: completedCriteria.size, totalCriteria: plan.successCriteria.length, facts: facts.length });
           const result = await serializeOperation(() => runElectronAction(action, before, "agent"));
+          if (/^https?:\/\//i.test(result.observation.page.url)) {
+            visitedUrls.add(result.observation.page.url);
+            if (isLikelyDetailPage(result.observation.page.url)) visitedDetailUrls.add(result.observation.page.url);
+          }
           const verification = await verifyAction(action, before, result.observation);
           history.push(`Step ${step}: ${JSON.stringify(action)} -> ${verification.summary}${verification.ok ? " [verified]" : " [not verified]"}`);
           if (!verification.ok) {

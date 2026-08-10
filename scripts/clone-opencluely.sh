@@ -18,6 +18,9 @@ if [[ -d "${BRIDGE}" ]]; then
   cp "${BRIDGE}/llm.service.js" "${DEST}/src/services/llm.service.js"
   cp "${BRIDGE}/capture.service.js" "${DEST}/src/services/capture.service.js"
   cp "${BRIDGE}/desktop-control.service.js" "${DEST}/src/services/desktop-control.service.js"
+  cp "${BRIDGE}/computer-agent.service.js" "${DEST}/computer-agent.service.js"
+  cp "${BRIDGE}/computer-agent-bash.js" "${DEST}/computer-agent-bash.js"
+  cp "${BRIDGE}/computer-agent-api.mjs" "${DEST}/computer-agent-api.mjs"
   cp "${BRIDGE}/control-safety.js" "${DEST}/src/services/control-safety.js"
   if [[ -f "${BRIDGE}/macos-input.py" ]]; then
     cp "${BRIDGE}/macos-input.py" "${DEST}/src/services/macos-input.py"

@@ -211,6 +211,15 @@
   display: none;
 }
 
+@keyframes vibe-dot-pulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.25); }
+  50% { transform: scale(1.12); box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
+}
+
+html, body, #root {
+  height: 100%;
+}
+
 .clyra-workflow-tabs--vertical .clyra-workflow-tab {
   width: 40px;
   height: 40px;

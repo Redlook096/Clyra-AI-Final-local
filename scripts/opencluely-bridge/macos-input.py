@@ -54,6 +54,20 @@ def click(x: float, y: float, button: str = "left", count: int = 1) -> None:
         time.sleep(0.05)
 
 
+def mouse_button(direction: str, x: float, y: float, button: str = "left") -> None:
+    Q = _quartz()
+    btn = Q.kCGMouseButtonLeft
+    event_type = Q.kCGEventLeftMouseDown if direction == "down" else Q.kCGEventLeftMouseUp
+    if button == "right":
+        btn = Q.kCGMouseButtonRight
+        event_type = Q.kCGEventRightMouseDown if direction == "down" else Q.kCGEventRightMouseUp
+    elif button == "middle":
+        btn = Q.kCGMouseButtonCenter
+        event_type = Q.kCGEventOtherMouseDown if direction == "down" else Q.kCGEventOtherMouseUp
+    event = Q.CGEventCreateMouseEvent(None, event_type, (x, y), btn)
+    Q.CGEventPost(Q.kCGHIDEventTap, event)
+
+
 def scroll(dx: int, dy: int) -> None:
     Q = _quartz()
     # Quartz wheel delta: positive Y scrolls up
@@ -167,6 +181,14 @@ def main(argv: list[str]) -> int:
         button = argv[4] if len(argv) > 4 else "left"
         count = int(argv[5]) if len(argv) > 5 else 1
         click(float(argv[2]), float(argv[3]), button, count)
+        return 0
+    if cmd in ("mouse_down", "mouse_up") and len(argv) >= 4:
+        mouse_button(
+            "down" if cmd == "mouse_down" else "up",
+            float(argv[2]),
+            float(argv[3]),
+            argv[4] if len(argv) > 4 else "left",
+        )
         return 0
     if cmd == "scroll" and len(argv) >= 4:
         scroll(int(argv[2]), int(argv[3]))

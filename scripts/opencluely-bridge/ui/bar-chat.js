@@ -8,7 +8,9 @@
 (function () {
   const HISTORY_KEY = 'opencluely_bar_chat_v2';
   const GREETING = 'Hi, how can I help you?';
-  const EXPANDED_W = 600;
+  // Keep the native window target independent of its current viewport. Using
+  // window.innerWidth here made a clipped bar measure itself as clipped.
+  const BAR_W = 700;
   const COLLAPSED_H = 56;
   const DRAWER_H = 360;
   // Keep in sync with --oc-dur-w / --oc-dur-h — Ask snaps open vertically only
@@ -314,7 +316,9 @@
     const contentW = Math.ceil(Math.max(rect.width, tabRect?.width || 0, shell.scrollWidth || 0));
     const contentH = Math.ceil(Math.max(rect.height, shell.scrollHeight || 0, COLLAPSED_H));
     return {
-      width: Math.max(220, contentW),
+      // Keep the controls fully inside the visible work area. CSS supplies the
+      // same limit; this protects the native Electron resize path as well.
+      width: Math.max(BAR_W, contentW),
       height: Math.max(COLLAPSED_H, contentH),
     };
   }
@@ -414,6 +418,14 @@
   }
 
   async function expandToChat(nextMode) {
+    // IPC updates can arrive while a reply is streaming. Re-sizing an already
+    // open drawer is visually equivalent to hiding it for a frame, so update
+    // the mode in place instead.
+    if (open && !taskPromptMode) {
+      setModeUI(nextMode || mode || 'ask');
+      updateCloseIcon();
+      return;
+    }
     if (animating) {
       animating = false;
       shell.classList.remove('is-animating');
@@ -424,7 +436,7 @@
     try {
       // Keep current horizontal size — only open chat downward, instantly.
       const from = measureShell();
-      const keepW = Math.max(from.width, Math.ceil(tab?.getBoundingClientRect?.()?.width || from.width));
+      const keepW = Math.max(BAR_W, from.width, Math.ceil(tab?.getBoundingClientRect?.()?.width || from.width));
       wide = false;
       open = true;
       shell.classList.remove('is-wide');
@@ -479,7 +491,7 @@
 
       await new Promise((r) => requestAnimationFrame(r));
       const pill = tab ? tab.getBoundingClientRect() : measureShell();
-      const pillW = Math.max(220, Math.ceil(pill.width || from.width || 320));
+      const pillW = Math.max(BAR_W, Math.ceil(pill.width || from.width || BAR_W));
       await resizeWindowNow(pillW, COLLAPSED_H, { growFromTopCenter: true });
       updateCloseIcon();
     } finally {
@@ -634,7 +646,8 @@
     if (status) status.textContent = 'AI controlling…';
     measureAndResize();
     try {
-      await window.electronAPI?.startDesktopControl?.(task);
+      const result = await window.electronAPI?.startDesktopControl?.(task);
+      if (result && result.ok === false) throw new Error(result.error || 'Desktop control could not start.');
     } catch (error) {
       setControlButtonState(false);
       if (status) status.textContent = '';
@@ -876,7 +889,7 @@
     if (payload && typeof payload.open === 'boolean') {
       if (payload.open) {
         // Already expanded — do not re-run expand animation (race with showLLMLoading).
-        if (open && wide) {
+        if (open) {
           setModeUI(mode || 'ask');
           return;
         }
@@ -950,28 +963,70 @@
       history = [{ type: 'assistant', text: GREETING }];
       saveHistory();
     });
+    function controlIcon(kind) {
+      const icons = {
+        eye: '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/>',
+        cursor: '<path d="m5 3 13 8-6 1.5L10.5 19 8 8.5 5 3Z"/>',
+        keyboard: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M6 10h.01M9 10h.01M12 10h.01M15 10h.01M18 10h.01M7 14h7M17 14h1"/>',
+        scroll: '<path d="M12 3v18M7 8l5-5 5 5M17 16l-5 5-5-5"/>',
+        terminal: '<path d="m5 7 4 4-4 4M11 15h8"/>',
+        check: '<path d="m5 12 4.2 4L19 6"/>',
+        alert: '<path d="M12 3 2.8 20h18.4L12 3Z"/><path d="M12 9v4M12 17h.01"/>',
+      };
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[kind] || icons.eye}</svg>`;
+    }
+
+    function renderControlStatus(data) {
+      const status = document.getElementById('ocControlStatus');
+      if (!status) return;
+      const action = String(data?.action?.action || '').toLowerCase();
+      const kind = data?.status === 'error' || data?.status === 'blocked'
+        ? 'alert'
+        : data?.status === 'done'
+          ? 'check'
+          : data?.status === 'bash'
+            ? 'terminal'
+            : action === 'type' || action === 'key'
+              ? 'keyboard'
+              : action === 'scroll'
+                ? 'scroll'
+                : action.includes('click') || action === 'mouse_move'
+                  ? 'cursor'
+                  : 'eye';
+      status.className = `oc-control-status is-${kind}`;
+      status.replaceChildren();
+      const glyph = document.createElement('span');
+      glyph.className = 'oc-control-status__icon';
+      glyph.innerHTML = controlIcon(kind);
+      const label = document.createElement('span');
+      label.className = 'oc-control-status__text';
+      label.textContent = String(data?.message || 'AI is observing your screen…').slice(0, 96);
+      status.append(glyph, label);
+    }
+
     api.onControlStatus?.((_e, data) => {
       // Do not clear Thinking on every step tick — only when control ends/errors.
-      const status = document.getElementById('ocControlStatus');
       if (data?.status === 'running') {
         hideThinking();
         setControlButtonState(true);
-        if (status) status.textContent = data.message || 'AI controlling…';
+        renderControlStatus(data);
       } else if (data?.status === 'step' && data.message) {
-        if (status) status.textContent = String(data.message).slice(0, 72);
+        renderControlStatus(data);
+      } else if (['action', 'thinking', 'response', 'bash', 'blocked'].includes(data?.status)) {
+        renderControlStatus(data);
       } else if (data?.status === 'done') {
         hideThinking();
         setControlButtonState(false);
-        if (status) status.textContent = '';
+        document.getElementById('ocControlStatus')?.replaceChildren();
         if (data.message) addMessage(String(data.message), 'system');
       } else if (data?.status === 'stopped') {
         hideThinking();
         setControlButtonState(false);
-        if (status) status.textContent = '';
+        document.getElementById('ocControlStatus')?.replaceChildren();
       } else if (data?.status === 'error') {
         hideThinking();
         setControlButtonState(false);
-        if (status) status.textContent = String(data.message || 'Control error').slice(0, 72);
+        renderControlStatus(data);
         addMessage(String(data.message || 'Take Control failed'), 'error');
       }
     });

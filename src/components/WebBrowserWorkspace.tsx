@@ -726,6 +726,16 @@ export default function WebBrowserWorkspace() {
     });
   }, []);
 
+  const focusOmnibox = useCallback(() => {
+    setOmniboxFocused(true);
+    setAddress(browserState?.url || address);
+    window.requestAnimationFrame(() => {
+      const input = document.querySelector<HTMLInputElement>("[data-browser-omnibox]");
+      input?.focus({ preventScroll: true });
+      input?.select();
+    });
+  }, [address, browserState?.url]);
+
   const applyState = useCallback((state: BrowserState) => {
     const previousActive = previousActiveTabRef.current;
     previousActiveTabRef.current = state.activeTabId || previousActive;
@@ -858,16 +868,14 @@ export default function WebBrowserWorkspace() {
     const desktop = getElectronDesktop();
     if (!desktop) return;
     const stopState = desktop.browser.onState((state) => applyState(state as BrowserState));
-    const stopAddress = desktop.browser.onFocusAddress(() => {
-      document.querySelector<HTMLInputElement>("[data-browser-omnibox]")?.focus();
-    });
+    const stopAddress = desktop.browser.onFocusAddress(focusOmnibox);
     const stopFind = desktop.browser.onFocusFind(() => setSideView("history"));
     return () => {
       stopState();
       stopAddress();
       stopFind();
     };
-  }, [applyState]);
+  }, [applyState, focusOmnibox]);
 
   useEffect(() => {
     window.localStorage.setItem(BROWSER_CHAT_STORAGE, JSON.stringify(messages));
@@ -1250,7 +1258,7 @@ export default function WebBrowserWorkspace() {
       const typing = target?.matches("input, textarea, [contenteditable='true']");
       if (modifier && event.key.toLowerCase() === "l") {
         event.preventDefault();
-        document.querySelector<HTMLInputElement>("[data-browser-omnibox]")?.focus();
+        focusOmnibox();
       } else if (modifier && event.key.toLowerCase() === "t") {
         event.preventDefault();
         void performAction({ type: "open_tab" });
@@ -1276,7 +1284,7 @@ export default function WebBrowserWorkspace() {
     };
     window.addEventListener("keydown", onShortcut);
     return () => window.removeEventListener("keydown", onShortcut);
-  }, [browserState?.activeTabId, performAction]);
+  }, [browserState?.activeTabId, focusOmnibox, performAction]);
 
   const settings = browserState?.settings || defaultSettings;
 

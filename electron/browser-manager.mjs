@@ -241,7 +241,19 @@ export class ChromiumBrowserManager {
     if (activate) this.activateTab(id, { persist: false });
     if (persist) this.scheduleSave();
     this.emitState();
+    // Native WebContentsView activation steals focus from the React chrome.
+    // A new tab is an explicit request to type, so return focus to Clyra's
+    // omnibox after Chromium has completed that activation turn.
+    if (activate) this.focusAddressSoon();
     return tab;
+  }
+
+  focusAddressSoon() {
+    setTimeout(() => {
+      if (!this.destroyed && this.uiView?.webContents && !this.uiView.webContents.isDestroyed()) {
+        this.uiView.webContents.send("browser:focus-address");
+      }
+    }, 32);
   }
 
   wireTab(tab) {
@@ -468,8 +480,9 @@ export class ChromiumBrowserManager {
       }
       const headings = Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,h6,[role='heading']")).filter(visible).slice(0, 40).map((heading) => ({ level: Number(heading.getAttribute("aria-level") || heading.tagName.slice(1) || 2), text: clean(heading.innerText, 240) })).filter((heading) => heading.text);
       const lines = Array.from(document.querySelectorAll("main p,main li,main td,main th,article p,article li,[role='main'] p,[role='main'] li,h1,h2,h3,label")).filter(visible).map((node) => clean(node.innerText, 500)).filter(Boolean);
-      const root = document.querySelector("main,article,[role='main']") || document.body;
-      return { url: location.href, title: document.title, loading: document.readyState === "loading", viewport: { width: innerWidth, height: innerHeight, scrollX: scrollX, scrollY: scrollY, pageHeight: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0), zoom: 1 }, headings, elements, visibleText: [...new Set(lines)].slice(0, 160), mainText: clean(root.innerText || "", ${maxChars}), structuredData: [] };
+      const root = document.querySelector("main,article,[role='main']") || document.body || document.documentElement;
+      const pageHeight = Math.max(document.documentElement?.scrollHeight || 0, document.body?.scrollHeight || 0, innerHeight);
+      return { url: location.href, title: document.title, loading: document.readyState === "loading", viewport: { width: innerWidth, height: innerHeight, scrollX: scrollX, scrollY: scrollY, pageHeight, zoom: 1 }, headings, elements, visibleText: [...new Set(lines)].slice(0, 160), mainText: clean(root?.innerText || "", ${maxChars}), structuredData: [] };
     })()`, true);
     const signals = injectionSignals([...page.visibleText, page.mainText]);
     const fingerprint = crypto.createHash("sha1").update(`${page.url}|${page.title}|${page.visibleText.slice(0, 80).join("|")}|${page.elements.map((item) => `${item.id}:${item.value}:${item.checked}`).join("|")}`).digest("hex").slice(0, 16);
@@ -895,6 +908,44 @@ export class ChromiumBrowserManager {
       settings: this.settings,
       agent: this.agent,
     };
+  }
+
+  /**
+   * Capture the actual native Chromium surface for API consumers such as the
+   * AI browser workspace.  This deliberately captures the active WebContents
+   * rather than the host window: the browser remains observable even while
+   * its WebContentsView is temporarily hidden behind another Clyra workspace.
+   */
+  async captureFrame() {
+    const contents = this.activeContents();
+    if (!contents || contents.isDestroyed()) {
+      throw new Error("The active browser tab is unavailable for capture.");
+    }
+    const tab = this.activeTabId ? this.tabs.get(this.activeTabId) : null;
+    // Electron may indefinitely defer capturePage for a hidden WebContentsView.
+    // Briefly composite just this view, without focusing it, then restore its
+    // hidden state. This keeps the browser preview available to the UI/API
+    // while the user is in another Clyra workspace.
+    const restoreHidden = Boolean(tab && !this.surface.visible);
+    if (restoreHidden && tab) {
+      tab.view.setBounds(this.surface.bounds);
+      tab.view.setVisible(true);
+      contents.setBackgroundThrottling(false);
+      await new Promise((resolve) => setTimeout(resolve, 24));
+    }
+    try {
+      const image = await Promise.race([
+        contents.capturePage(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Browser frame capture timed out.")), 8_000)),
+      ]);
+      if (!image || image.isEmpty()) throw new Error("The active browser tab returned an empty frame.");
+      return image.toJPEG(82);
+    } finally {
+      if (restoreHidden && tab && !tab.view.webContents.isDestroyed()) {
+        tab.view.setVisible(false);
+        tab.view.webContents.setBackgroundThrottling(true);
+      }
+    }
   }
 
   emitState() {

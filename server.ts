@@ -2298,6 +2298,84 @@ async function startServer() {
     }
   });
 
+  // The Electron companion never receives the provider secret. This local-only
+  // proxy owns the Taskhomie-compatible Anthropic Computer Use request and
+  // exposes only the model response/tool blocks needed by the native agent.
+  const isLoopbackRequest = (req: express.Request) => {
+    const address = String(req.socket.remoteAddress || req.ip || "");
+    return /^(::1|::ffff:127\.0\.0\.1|127\.0\.0\.1)$/.test(address);
+  };
+  const computerUseKey = () =>
+    String(process.env.ANTHROPIC_API_KEY || process.env.CLYRA_ANTHROPIC_API_KEY || "").trim();
+  const computerUseModel = () =>
+    String(process.env.ANTHROPIC_COMPUTER_MODEL || process.env.CLYRA_ANTHROPIC_MODEL || "claude-sonnet-4-5").trim();
+  const computerUseTools = () => [
+    { type: "computer_20250124", name: "computer", display_width_px: 1280, display_height_px: 800, display_number: 1 },
+    { type: "bash_20250124", name: "bash" },
+    { type: "web_search_20250305", name: "web_search", max_uses: 10 },
+    { type: "web_fetch_20250910", name: "web_fetch", max_uses: 10, max_content_tokens: 50000, cache_control: { type: "ephemeral" } },
+  ];
+
+  app.get("/api/companion/computer-use/health", (req, res) => {
+    if (!isLoopbackRequest(req)) {
+      res.status(403).json({ ok: false, error: "Computer Use is available only from the local companion." });
+      return;
+    }
+    res.json({ ok: true, configured: Boolean(computerUseKey()), model: computerUseModel() });
+  });
+
+  app.post("/api/companion/computer-use", async (req, res) => {
+    if (!isLoopbackRequest(req)) {
+      res.status(403).json({ ok: false, error: "Computer Use is available only from the local companion." });
+      return;
+    }
+    const apiKey = computerUseKey();
+    if (!apiKey) {
+      res.status(503).json({ ok: false, error: "ANTHROPIC_API_KEY is not configured on the Clyra backend." });
+      return;
+    }
+    const messages = req.body?.messages;
+    if (!Array.isArray(messages) || messages.length === 0 || messages.length > 110) {
+      res.status(400).json({ ok: false, error: "A bounded computer-agent message history is required." });
+      return;
+    }
+    try {
+      const upstream = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-beta": "computer-use-2025-01-24,interleaved-thinking-2025-05-14,web-fetch-2025-09-10,context-management-2025-06-27",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: computerUseModel(),
+          max_tokens: 16000,
+          system: [{
+            type: "text",
+            text: "You are Clyra's permissioned desktop computer-control agent. Work on the user's requested task, verify each action visually, and never delete data unless the user explicitly asked. Keep responses concise.",
+            cache_control: { type: "ephemeral" },
+          }],
+          tools: computerUseTools(),
+          messages,
+          stream: false,
+          thinking: { type: "enabled", budget_tokens: 5000 },
+          context_management: {
+            edits: [
+              { type: "clear_thinking_20251015", keep: { type: "thinking_turns", value: 2 } },
+              { type: "clear_tool_uses_20250919", trigger: { type: "input_tokens", value: 80000 }, keep: { type: "tool_uses", value: 5 }, clear_at_least: { type: "input_tokens", value: 10000 }, exclude_tools: ["web_search", "web_fetch"] },
+            ],
+          },
+        }),
+        signal: AbortSignal.timeout(120_000),
+      });
+      const payload = await upstream.json().catch(() => ({}));
+      res.status(upstream.status).json(payload);
+    } catch (error) {
+      res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Computer Use provider request failed." });
+    }
+  });
+
   app.post("/api/companion/ask", async (req, res) => {
     try {
       const question = String(req.body?.question || req.body?.text || "").trim();

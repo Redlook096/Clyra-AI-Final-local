@@ -1,5 +1,5 @@
 /**
- * OpenCluely desktop control — AI cursor, blue control glow, OS automation.
+ * OpenCluely desktop control — direct native OS automation.
  * Linux: xdotool | macOS: cliclick/osascript | Windows: PowerShell
  *
  * Can click / type / key / scroll freely. Destructive file ops are blocked
@@ -8,13 +8,14 @@
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { BrowserWindow, screen } = require('electron');
+const { screen } = require('electron');
 const logger = require('../core/logger').createServiceLogger('DESKTOP-CONTROL');
 const { checkActionSafety } = require('./control-safety');
 
 const execFileAsync = promisify(execFile);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const MACOS_INPUT = path.join(__dirname, 'macos-input.py');
+const MACOS_SWIFT_INPUT = path.join(__dirname, 'macos-input.swift');
 
 async function which(bin) {
   try {
@@ -39,73 +40,21 @@ async function darwinInput(args, timeout = 8000) {
       lastError = error;
     }
   }
+  // Fresh macOS installs commonly do not include PyObjC. The Swift helper uses
+  // native ApplicationServices and requests Accessibility once when needed.
+  try {
+    await execFileAsync('/usr/bin/swift', [MACOS_SWIFT_INPUT, ...args], {
+      timeout: Math.max(timeout, 12000),
+    });
+    return true;
+  } catch (error) {
+    lastError = error;
+  }
   throw lastError || new Error('macOS input helper failed');
 }
 
-const CURSOR_HTML = `<!doctype html>
-<html><head><meta charset="utf-8"/><style>
-html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}
-#cursor{position:absolute;left:0;top:0;pointer-events:none;opacity:0;will-change:left,top,opacity;
-  transition:left .65s cubic-bezier(.22,1,.36,1), top .65s cubic-bezier(.22,1,.36,1), opacity .2s ease}
-#cursor.show{opacity:1}
-#arrow{width:32px;height:32px;filter:drop-shadow(1px 2px 2px rgba(0,0,0,.55)) drop-shadow(0 0 1px rgba(0,0,0,.35))}
-#label{margin-top:4px;margin-left:16px;display:inline-block;max-width:280px;padding:5px 10px;border-radius:8px;
-  background:rgba(15,23,42,.92);color:#fff;font:600 11px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-  letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  box-shadow:0 8px 22px rgba(0,0,0,.28)}
-#cursor.guide #label{background:#1d4ed8}
-</style></head><body>
-<div id="cursor">
-  <!-- Classic OS pointer: black fill, white stroke, soft shadow (matches reference) -->
-  <svg id="arrow" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <path d="M5 3 L5 24 L11.2 18.6 L16.8 28.2 L20.2 26.4 L14.6 16.8 L22 16.8 Z"
-      fill="#000000" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>
-  </svg>
-  <div id="label"></div>
-</div>
-<script>
-window.__ocSetCursor=function(p){
-  var el=document.getElementById('cursor');
-  var label=document.getElementById('label');
-  el.style.left=(p.x||0)+'px';
-  el.style.top=(p.y||0)+'px';
-  label.textContent=p.label||'';
-  el.classList.toggle('guide', !!p.guide || p.kind==='point');
-  el.classList.add('show');
-};
-window.__ocHideCursor=function(){
-  document.getElementById('cursor').classList.remove('show');
-};
-</script></body></html>`;
-
-const GLOW_HTML = `<!doctype html>
-<html><head><meta charset="utf-8"/><style>
-html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;pointer-events:none}
-#glow{position:fixed;inset:0;
-  /* Even transparent light-blue wash across the whole screen */
-  background:rgba(125, 211, 252, 0.22);
-  box-shadow: inset 0 0 0 3px rgba(125, 211, 252, 0.48),
-              inset 0 0 140px rgba(147, 197, 253, 0.28);
-  opacity:0; transition: opacity .45s ease}
-#glow.on{opacity:1}
-#badge{position:fixed;top:18px;left:50%;transform:translateX(-50%);padding:7px 14px;border-radius:999px;
-  background:rgba(56,189,248,.88);color:#fff;font:600 12px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-  letter-spacing:.02em;box-shadow:0 10px 28px rgba(56,189,248,.28);opacity:0;transition:opacity .35s ease}
-#badge.on{opacity:1}
-</style></head><body>
-<div id="glow"></div>
-<div id="badge">AI controlling · OpenCluely</div>
-<script>
-window.__ocSetGlow=function(on){
-  document.getElementById('glow').classList.toggle('on', !!on);
-  document.getElementById('badge').classList.toggle('on', !!on);
-};
-</script></body></html>`;
-
 class DesktopControlService {
   constructor() {
-    this.cursorWindow = null;
-    this.glowWindow = null;
     this.active = false;
     this.controlling = false;
     this.guideOnly = false;
@@ -115,6 +64,7 @@ class DesktopControlService {
     this.lastPoint = { x: 40, y: 40 };
     this.driver = 'none';
     this.currentTask = '';
+    this.pressedButtons = new Set();
   }
 
   async initialize() {
@@ -141,91 +91,20 @@ class DesktopControlService {
     return { ok: true, driver: this.driver };
   }
 
-  async #overlay(kind) {
-    const existing = kind === 'glow' ? this.glowWindow : this.cursorWindow;
-    if (existing && !existing.isDestroyed()) return existing;
-    const display = screen.getPrimaryDisplay();
-    const { x, y, width, height } = display.bounds;
-    const win = new BrowserWindow({
-      width,
-      height,
-      x,
-      y,
-      frame: false,
-      transparent: true,
-      resizable: false,
-      movable: false,
-      focusable: false,
-      skipTaskbar: true,
-      alwaysOnTop: true,
-      hasShadow: false,
-      show: false,
-      webPreferences: { nodeIntegration: false, contextIsolation: true },
-    });
-    win.setIgnoreMouseEvents(true, { forward: true });
-    try {
-      win.setAlwaysOnTop(true, 'screen-saver');
-    } catch {
-      win.setAlwaysOnTop(true);
-    }
-    await win.loadURL(
-      `data:text/html;charset=utf-8,${encodeURIComponent(kind === 'glow' ? GLOW_HTML : CURSOR_HTML)}`,
-    );
-    if (kind === 'glow') this.glowWindow = win;
-    else this.cursorWindow = win;
-    return win;
-  }
-
-  async setGlow(on) {
-    const win = await this.#overlay('glow');
-    if (on) {
-      win.showInactive();
-      await win.webContents.executeJavaScript('window.__ocSetGlow(true); true', true);
-    } else {
-      await win.webContents.executeJavaScript('window.__ocSetGlow(false); true', true).catch(() => {});
-      win.hide();
-    }
-    return { ok: true, on: Boolean(on) };
-  }
-
-  async setCursor(cursor) {
-    if (!cursor) {
-      if (this.cursorWindow && !this.cursorWindow.isDestroyed()) {
-        await this.cursorWindow.webContents
-          .executeJavaScript('window.__ocHideCursor(); true', true)
-          .catch(() => {});
-        this.cursorWindow.hide();
-      }
-      return { ok: true };
-    }
-    const win = await this.#overlay('cursor');
-    const point = {
-      x: Math.round(Number(cursor.x) || 0),
-      y: Math.round(Number(cursor.y) || 0),
-      label: String(cursor.label || ''),
-      kind: String(cursor.kind || 'move'),
-      guide: Boolean(cursor.guide),
-    };
-    this.lastPoint = { x: point.x, y: point.y };
-    win.showInactive();
-    await win.webContents.executeJavaScript(`window.__ocSetCursor(${JSON.stringify(point)}); true`, true);
-    return { ok: true, point };
-  }
-
   async point(x, y, label = 'Look here') {
     this.guideOnly = true;
     const point = { x: Math.round(x), y: Math.round(y) };
     this.lastPoint = point;
-    await this.setCursor({ ...point, label, kind: 'point', guide: true });
-    await wait(420);
+    // Match computer-agent: use the actual system pointer, never a second
+    // decorative cursor or full-screen glow. The bar remains the status UI.
+    await wait(120);
     return { ok: true, point, guide: true };
   }
 
   async move(x, y, label = 'Moving') {
     const point = { x: Math.round(x), y: Math.round(y) };
-    await this.setCursor({ ...point, label, kind: 'move', guide: this.guideOnly });
     if (this.guideOnly) {
-      await wait(380);
+      await wait(120);
       return { ok: true, skipped: 'guide', point };
     }
     try {
@@ -245,7 +124,7 @@ class DesktopControlService {
       logger.warn('Mouse move failed', { error: error.message, driver: this.driver });
     }
     this.lastPoint = point;
-    await wait(280);
+    await wait(80);
     return { ok: true, point };
   }
 
@@ -289,21 +168,14 @@ for ($i=0; $i -lt ${count}; $i++) { ${downUp} Start-Sleep -Milliseconds 80 }
     } catch (error) {
       logger.warn('Click failed', { error: error.message });
     }
-    await this.setCursor({
-      ...point,
-      label: count >= 2 ? 'Double-clicked' : 'Clicked',
-      kind: 'click',
-    });
     return { ok: true, point, clicks: count };
   }
 
   async scroll(deltaY = -3, label = 'Scrolling') {
     if (this.guideOnly) {
-      await this.setCursor({ ...this.lastPoint, label, kind: 'point', guide: true });
       return { ok: true, skipped: 'guide' };
     }
     const amount = Math.max(-20, Math.min(20, Math.round(Number(deltaY) || -3)));
-    await this.setCursor({ ...this.lastPoint, label, kind: 'move' });
     try {
       if (this.xdotool) {
         // positive deltaY => scroll up (button 4); negative => scroll down (button 5)
@@ -343,15 +215,8 @@ for ($i=0; $i -lt ${reps}; $i++) { [M]::mouse_event(0x0800, 0, 0, ${wheelDelta},
 
   async typeText(text, label = 'Typing') {
     if (this.guideOnly) {
-      await this.setCursor({
-        ...this.lastPoint,
-        label: `Type: ${String(text || '').slice(0, 40)}`,
-        kind: 'point',
-        guide: true,
-      });
       return { ok: true, skipped: 'guide' };
     }
-    await this.setCursor({ ...this.lastPoint, label, kind: 'type' });
     const value = String(text || '');
     if (!value) return { ok: true };
     try {
@@ -370,16 +235,15 @@ for ($i=0; $i -lt ${reps}; $i++) { [M]::mouse_event(0x0800, 0, 0, ${wheelDelta},
       }
     } catch (error) {
       logger.warn('Type failed', { error: error.message });
+      return { ok: false, error: error.message };
     }
     return { ok: true };
   }
 
   async key(keyName, label = 'Key') {
     if (this.guideOnly) {
-      await this.setCursor({ ...this.lastPoint, label: `Press ${keyName}`, kind: 'point', guide: true });
       return { ok: true, skipped: 'guide' };
     }
-    await this.setCursor({ ...this.lastPoint, label, kind: 'key' });
     try {
       if (this.xdotool) {
         await execFileAsync(this.xdotool, ['key', '--clearmodifiers', String(keyName)], { timeout: 4000 });
@@ -395,8 +259,156 @@ for ($i=0; $i -lt ${reps}; $i++) { [M]::mouse_event(0x0800, 0, 0, ${wheelDelta},
       }
     } catch (error) {
       logger.warn('Key failed', { error: error.message });
+      return { ok: false, error: error.message };
     }
     return { ok: true };
+  }
+
+  mapFromAiSpace(x, y, screenWidth, screenHeight, aiWidth = 1280, aiHeight = 800) {
+    return {
+      x: Math.max(0, Math.min(screenWidth - 1, Math.round((Number(x) || 0) * screenWidth / aiWidth))),
+      y: Math.max(0, Math.min(screenHeight - 1, Math.round((Number(y) || 0) * screenHeight / aiHeight))),
+    };
+  }
+
+  async mouseButton(direction, button = 'left') {
+    const normalized = button === 'right' ? 'right' : button === 'middle' ? 'middle' : 'left';
+    if (this.guideOnly) return { ok: true, skipped: 'guide' };
+    if (this.xdotool) {
+      const code = normalized === 'right' ? '3' : normalized === 'middle' ? '2' : '1';
+      await execFileAsync(this.xdotool, [direction === 'down' ? 'mousedown' : 'mouseup', code], { timeout: 4000 });
+    } else if (process.platform === 'darwin') {
+      await darwinInput([
+        direction === 'down' ? 'mouse_down' : 'mouse_up',
+        String(this.lastPoint.x),
+        String(this.lastPoint.y),
+        normalized,
+      ], 4000);
+    } else if (process.platform === 'win32') {
+      const flag = direction === 'down'
+        ? (normalized === 'right' ? 0x0008 : normalized === 'middle' ? 0x0020 : 0x0002)
+        : (normalized === 'right' ? 0x0010 : normalized === 'middle' ? 0x0040 : 0x0004);
+      const ps = `Add-Type @\"\nusing System; using System.Runtime.InteropServices; public class ClyraMouse { [DllImport(\"user32.dll\")] public static extern void mouse_event(int f,int a,int b,int c,int d); }\n\"@; [ClyraMouse]::mouse_event(${flag},0,0,0,0)`;
+      await execFileAsync('powershell', ['-NoProfile', '-Command', ps], { timeout: 4000 });
+    } else {
+      throw new Error('Desktop mouse control is unavailable');
+    }
+    if (direction === 'down') this.pressedButtons.add(normalized);
+    else this.pressedButtons.delete(normalized);
+    return { ok: true };
+  }
+
+  async drag(start, end) {
+    await this.move(start.x, start.y, 'Drag start');
+    await this.mouseButton('down', 'left');
+    try {
+      await this.move(end.x, end.y, 'Dragging');
+    } finally {
+      await this.mouseButton('up', 'left');
+    }
+    return { ok: true, start, end };
+  }
+
+  /**
+   * Execute suitedaces/computer-agent ComputerAction format.
+   * @see https://github.com/suitedaces/computer-agent
+   */
+  async performComputerAction(input, task = this.currentTask) {
+    const display = screen.getPrimaryDisplay();
+    const sw = display.bounds?.width || display.workArea?.width || 1920;
+    const sh = display.bounds?.height || display.workArea?.height || 1080;
+    const map = (coord) => {
+      if (!coord || !Array.isArray(coord)) return null;
+      return this.mapFromAiSpace(coord[0], coord[1], sw, sh);
+    };
+
+    const action = String(input?.action || '').toLowerCase();
+    const mapped = { note: action, label: action };
+
+    switch (action) {
+      case 'screenshot':
+      case 'wait':
+        if (action === 'wait') await wait(1000);
+        return { ok: true, type: action };
+      case 'mouse_move':
+      case 'left_click':
+      case 'right_click':
+      case 'middle_click':
+      case 'double_click':
+      case 'triple_click': {
+        const pt = map(input.coordinate);
+        if (pt) {
+          mapped.x = pt.x;
+          mapped.y = pt.y;
+        }
+        if (action === 'mouse_move') mapped.type = 'move';
+        else if (action === 'left_click') mapped.type = 'click';
+        else if (action === 'right_click') {
+          mapped.type = 'click';
+          mapped.button = 'right';
+        } else if (action === 'middle_click') {
+          mapped.type = 'click';
+          mapped.button = 'middle';
+        } else if (action === 'double_click') mapped.type = 'doubleclick';
+        else if (action === 'triple_click') {
+          mapped.type = 'click';
+          mapped.clicks = 3;
+        }
+        break;
+      }
+      case 'left_click_drag': {
+        const start = map(input.start_coordinate);
+        const end = map(input.coordinate);
+        if (start && end) {
+          return this.drag(start, end);
+        }
+        return { ok: true, type: action };
+      }
+      case 'left_mouse_down':
+      case 'left_mouse_up': {
+        const pt = map(input.coordinate);
+        if (pt) await this.move(pt.x, pt.y, action === 'left_mouse_down' ? 'Mouse down' : 'Mouse up');
+        return this.mouseButton(action === 'left_mouse_down' ? 'down' : 'up', 'left');
+      }
+      case 'hold_key':
+        // Holding a modifier across tool turns is not safe/reliable in the Electron bridge.
+        // The model can use a normal key chord (for example cmd+c) instead.
+        throw new Error('hold_key is unsupported; use a complete key chord instead.');
+      case 'type':
+        mapped.type = 'type';
+        mapped.text = String(input.text || '');
+        break;
+      case 'key':
+        mapped.type = 'key';
+        mapped.key = String(input.text || input.key || '');
+        break;
+      case 'scroll': {
+        const pt = map(input.coordinate);
+        if (pt) {
+          mapped.x = pt.x;
+          mapped.y = pt.y;
+        }
+        mapped.type = 'scroll';
+        const dir = String(input.scroll_direction || 'down').toLowerCase();
+        const amount = Number(input.scroll_amount) || 3;
+        mapped.deltaY = dir === 'up' ? amount : dir === 'down' ? -amount : amount;
+        break;
+      }
+      case 'zoom':
+        return { ok: true, type: 'zoom' };
+      default:
+        throw new Error(`Unsupported computer action: ${action}`);
+    }
+
+    if (mapped.type === 'click' && mapped.clicks === 3) {
+      for (let i = 0; i < 3; i += 1) {
+        const r = await this.runAction({ ...mapped, clicks: 1 }, task);
+        if (r?.blocked) return r;
+      }
+      return { ok: true, type: action };
+    }
+
+    return this.runAction(mapped, task);
   }
 
   async runAction(action, task = this.currentTask) {
@@ -464,8 +476,6 @@ for ($i=0; $i -lt ${reps}; $i++) { [M]::mouse_event(0x0800, 0, 0, ${wheelDelta},
     this.controlling = true;
     this.guideOnly = false;
     this.currentTask = String(task || '');
-    await this.setGlow(true);
-    await this.setCursor({ ...this.lastPoint, label: 'Take Control', kind: 'move' });
     return { ok: true, controlling: true, driver: this.driver };
   }
 
@@ -474,22 +484,13 @@ for ($i=0; $i -lt ${reps}; $i++) { [M]::mouse_event(0x0800, 0, 0, ${wheelDelta},
     this.controlling = false;
     this.guideOnly = false;
     this.currentTask = '';
-    await this.setGlow(false);
-    await this.setCursor(null);
+    for (const button of [...this.pressedButtons]) {
+      await this.mouseButton('up', button).catch(() => {});
+    }
     return { ok: true, controlling: false };
   }
 
-  destroy() {
-    for (const win of [this.cursorWindow, this.glowWindow]) {
-      try {
-        if (win && !win.isDestroyed()) win.destroy();
-      } catch {
-        /* ignore */
-      }
-    }
-    this.cursorWindow = null;
-    this.glowWindow = null;
-  }
+  destroy() {}
 }
 
 module.exports = new DesktopControlService();

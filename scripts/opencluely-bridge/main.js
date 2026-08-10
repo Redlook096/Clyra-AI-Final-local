@@ -104,6 +104,7 @@ const captureService = require("./src/services/capture.service");
 const speechService = require("./src/services/speech.service");
 const llmService = require("./src/services/llm.service");
 const desktopControl = require("./src/services/desktop-control.service");
+const { ComputerAgentService } = require("./computer-agent.service");
 
 // Managers
 const windowManager = require("./src/managers/window.manager");
@@ -145,6 +146,14 @@ class ApplicationController {
     // the constructor without polluting main-process startup.
     this._whisperInstaller = null;
     this.isFirstRun = false;
+
+    this.computerAgent = new ComputerAgentService({
+      desktopControl,
+      captureService,
+      llmService,
+      windowManager,
+      softCloakFn: (cloak) => this.#softCloakOpenCluely(cloak),
+    });
 
     // Window configurations for reference
     this.windowConfigs = {
@@ -677,12 +686,14 @@ class ApplicationController {
     ipcMain.handle("get-desktop-control-status", async () => {
       try {
         await desktopControl.initialize();
+        const agentStatus = this.computerAgent?.status?.() || {};
         return {
           ok: desktopControl.driver !== "none",
           driver: desktopControl.driver || "none",
           platform: process.platform,
           controlling: Boolean(desktopControl.controlling),
           accessibility: desktopControl.driver !== "none",
+          computerAgent: agentStatus,
         };
       } catch (error) {
         return { ok: false, driver: "none", error: error.message, platform: process.platform };
@@ -762,18 +773,23 @@ class ApplicationController {
     ipcMain.handle("start-desktop-control", async (event, payload) => {
       const task = String(payload?.task || "").trim();
       if (!task) return { ok: false, error: "A task is required." };
-      this.runDesktopControlAgent(task).catch((error) => {
-        logger.error("Desktop control agent failed", { error: error.message });
-        windowManager.broadcastToAllWindows("control-status", {
-          status: "error",
-          message: error.message,
+      this._controlAbort = false;
+      this.computerAgent.stop();
+      this.computerAgent
+        .run(task, { softCloakFn: (cloak) => this.#softCloakOpenCluely(cloak) })
+        .catch((error) => {
+          logger.error("Computer agent failed", { error: error.message });
+          windowManager.broadcastToAllWindows("control-status", {
+            status: "error",
+            message: error.message,
+          });
         });
-      });
-      return { ok: true, started: true };
+      return { ok: true, started: true, engine: this.computerAgent.status().engine };
     });
 
     ipcMain.handle("stop-desktop-control", async () => {
       this._controlAbort = true;
+      this.computerAgent?.stop?.();
       try {
         await desktopControl.stopControl();
       } catch (_) {
@@ -1489,151 +1505,9 @@ class ApplicationController {
 
   async runDesktopControlAgent(task) {
     this._controlAbort = false;
-    await desktopControl.initialize();
-    await desktopControl.startControl(task);
-    windowManager.broadcastToAllWindows("control-status", {
-      status: "running",
-      message: `Working on: ${task}`,
+    return this.computerAgent.run(task, {
+      softCloakFn: (cloak) => this.#softCloakOpenCluely(cloak),
     });
-
-    // Keep the bar visible but small while controlling so Stop stays reachable
-    try {
-      windowManager.showAllWindows();
-      windowManager.centerMainWindowAtTop?.();
-    } catch (_) {
-      /* ignore */
-    }
-
-    const { screen } = require("electron");
-    const { safetyPromptRules } = require("./src/services/control-safety");
-    const bounds = screen.getPrimaryDisplay().bounds;
-    let lastSummary = "";
-    const safetyRules = safetyPromptRules(task);
-
-    for (let step = 0; step < 12; step++) {
-      if (this._controlAbort) break;
-      const capture = await this.#captureForAgent();
-      if (!capture?.imageBuffer?.length) {
-        windowManager.broadcastToAllWindows("control-status", {
-          status: "error",
-          message:
-            "Could not capture the screen for Take Control. Grant Screen Recording + Accessibility to OpenCluely, then try again.",
-        });
-        await desktopControl.stopControl();
-        return { ok: false, error: "capture_failed" };
-      }
-
-      const vision = await llmService.callVision(
-        capture.imageBuffer,
-        [
-          `You are OpenCluely controlling the user's desktop to complete this task: "${task}".`,
-          `Display is ${bounds.width}x${bounds.height} (origin top-left).`,
-          lastSummary ? `Previous step result: ${lastSummary}` : "",
-          "You CAN click, double-click, type text, press keys, scroll, move, and wait.",
-          "Choose the next ONE action only.",
-          'Reply with ONLY JSON like:',
-          '{"done":false,"action":{"type":"click"|"doubleclick"|"move"|"type"|"key"|"scroll"|"wait"|"point","x":0,"y":0,"text":"","key":"Return","deltaY":-3,"ms":400,"label":"..."},"note":"short status"}',
-          'When the task is finished: {"done":true,"note":"Completed ..."}',
-          "Prefer click/type/key/scroll. Coordinates must be on-screen. Do not invent invisible UI.",
-          "For typing into a field: click it first, then type.",
-          safetyRules,
-        ]
-          .filter(Boolean)
-          .join(" "),
-      );
-
-      const match = String(vision || "").match(/\{[\s\S]*\}/);
-      let plan = null;
-      if (match) {
-        try {
-          plan = JSON.parse(match[0]);
-        } catch (_) {
-          plan = null;
-        }
-      }
-      if (!plan) {
-        lastSummary = "Planner returned invalid JSON";
-        windowManager.broadcastToAllWindows("control-status", {
-          status: "step",
-          message: lastSummary,
-        });
-        continue;
-      }
-
-      if (plan.done) {
-        windowManager.broadcastToAllWindows("control-status", {
-          status: "done",
-          message: String(plan.note || "Task complete."),
-        });
-        await desktopControl.stopControl();
-        return { ok: true, done: true };
-      }
-
-      const action = plan.action || {};
-      // Attach planner note so safety can inspect intent labels
-      if (plan.note && !action.note) action.note = plan.note;
-
-      if (
-        action.type === "click" ||
-        action.type === "doubleclick" ||
-        action.type === "double_click" ||
-        action.type === "move" ||
-        action.type === "point"
-      ) {
-        action.x = Math.max(4, Math.min(bounds.width - 4, Math.round(Number(action.x) || bounds.width / 2)));
-        action.y = Math.max(4, Math.min(bounds.height - 4, Math.round(Number(action.y) || bounds.height / 2)));
-      }
-
-      // Soft-cloak OpenCluely while acting so clicks hit the real app (no hide()/focus steal).
-      try {
-        this.#softCloakOpenCluely(true);
-        await new Promise((r) => setTimeout(r, 100));
-        const result = await desktopControl.runAction(action, task);
-        if (result?.blocked) {
-          lastSummary = String(result.reason || "Blocked unsafe action");
-          windowManager.broadcastToAllWindows("control-status", {
-            status: "step",
-            message: lastSummary,
-            action,
-            result,
-          });
-          // Stop the loop — do not keep retrying the same destructive plan
-          windowManager.broadcastToAllWindows("control-status", {
-            status: "done",
-            message: lastSummary,
-          });
-          await desktopControl.stopControl();
-          return { ok: true, blocked: true, reason: lastSummary };
-        }
-        lastSummary = String(plan.note || action.label || action.type || "step");
-        windowManager.broadcastToAllWindows("control-status", {
-          status: "step",
-          message: lastSummary,
-          action,
-          result,
-        });
-      } finally {
-        this.#softCloakOpenCluely(false);
-        // Do not recenter every control step — it makes the bar jump while the AI works.
-      }
-      await new Promise((r) => setTimeout(r, 450));
-    }
-
-    if (this._controlAbort) {
-      await desktopControl.stopControl();
-      windowManager.broadcastToAllWindows("control-status", {
-        status: "stopped",
-        message: "Control stopped.",
-      });
-      return { ok: true, stopped: true };
-    }
-
-    await desktopControl.stopControl();
-    windowManager.broadcastToAllWindows("control-status", {
-      status: "done",
-      message: lastSummary || "Finished control loop.",
-    });
-    return { ok: true };
   }
 
   /**
@@ -1642,6 +1516,11 @@ class ApplicationController {
    * Move off-screen + contentProtection + opacity so screencapture never sees OC chrome.
    */
   #softCloakOpenCluely(cloak) {
+    // The companion should remain spatially stable while someone asks about
+    // their screen. Hiding/moving it used to visibly flicker the bar and could
+    // interrupt a typed message. Opt into exclusion only for installations
+    // where it is specifically required for a clean capture.
+    if (process.env.CLYRA_HIDE_OVERLAY_DURING_CAPTURE !== "1") return;
     const types = ["main", "chat", "llmResponse", "settings"];
     for (const type of types) {
       const win = windowManager.windows.get(type);
@@ -1689,7 +1568,7 @@ class ApplicationController {
   async triggerScreenshotOCR(opts = {}) {
     if (!this.isReady) {
       logger.warn("Screenshot requested before application ready");
-      return;
+      return { ok: false, error: "OpenCluely is still starting." };
     }
 
     const startTime = Date.now();
@@ -1705,13 +1584,14 @@ class ApplicationController {
     try {
       windowManager.showLLMLoading();
 
-      // Soft-cloak OpenCluely chrome only — never hide()/close other apps.
-      this.#softCloakOpenCluely(true);
-      // Give the compositor time to settle before screencapture.
-      await new Promise((r) => setTimeout(r, 140));
-
       let capture;
       try {
+        // Keep Clyra's bar visible. The capture service is permission-aware
+        // and returns promptly instead of moving the window off screen.
+        this.#softCloakOpenCluely(true);
+        if (process.env.CLYRA_HIDE_OVERLAY_DURING_CAPTURE === "1") {
+          await new Promise((r) => setTimeout(r, 90));
+        }
         capture = await captureService.captureAndProcess({ fullScreen: true });
       } finally {
         this.#softCloakOpenCluely(false);
@@ -1722,14 +1602,14 @@ class ApplicationController {
         this.broadcastOCRError(
           "Failed to capture screenshot. Grant Screen Recording permission to OpenCluely / Electron in System Settings → Privacy & Security, then try again.",
         );
-        return;
+        return { ok: false, error: "Screen Recording permission is required." };
       }
       if (capture.imageBuffer.length < 2500) {
         windowManager.hideLLMResponse();
         this.broadcastOCRError(
           "Screenshot looked empty. Grant Screen Recording for OpenCluely, then ask again.",
         );
-        return;
+        return { ok: false, error: "Screen capture returned an empty image." };
       }
 
       try {
@@ -1795,6 +1675,12 @@ class ApplicationController {
         isImageAnalysis: true,
         messageId,
       });
+      return {
+        ok: true,
+        source: llmResult.metadata?.source || "gemini",
+        model: llmResult.metadata?.model || null,
+        responseLength: String(llmResult.response || "").length,
+      };
     } catch (error) {
       logger.error("Screenshot OCR process failed", {
         error: error.message,
@@ -1812,6 +1698,7 @@ class ApplicationController {
           error: error.message
         }
       });
+      return { ok: false, error: error.message };
     }
   }
 
@@ -2695,8 +2582,8 @@ class ApplicationController {
             return;
           }
           if (req.method === "POST" && req.url === "/screenshot") {
-            await this.triggerScreenshotOCR();
-            send(200, { ok: true, action: "screenshot" });
+            const result = await this.triggerScreenshotOCR();
+            send(result?.ok ? 200 : 503, { ...result, action: "screenshot" });
             return;
           }
           if (req.method === "POST" && req.url === "/auto-answer") {
@@ -2719,12 +2606,22 @@ class ApplicationController {
           }
           if (req.method === "POST" && req.url === "/control/stop") {
             this._controlAbort = true;
+            this.computerAgent?.stop?.();
             await desktopControl.stopControl();
             windowManager.broadcastToAllWindows("control-status", {
               status: "stopped",
               message: "Control stopped.",
             });
             send(200, { ok: true, action: "control-stop" });
+            return;
+          }
+          if (req.method === "GET" && req.url === "/control/status") {
+            send(200, {
+              ok: true,
+              ...this.computerAgent?.status?.(),
+              controlling: Boolean(desktopControl.controlling),
+              driver: desktopControl.driver || "none",
+            });
             return;
           }
           if (req.method === "POST" && req.url === "/stealth") {
@@ -2767,11 +2664,11 @@ class ApplicationController {
             }
             // Mirror IPC: screen questions use capture vision path
             if (this._isScreenQuestion(text)) {
-              await this.triggerScreenshotOCR({
+              const result = await this.triggerScreenshotOCR({
                 userQuestion: text,
                 visionMode: "screen-ask",
               });
-              send(200, { ok: true, action: "chat-via-screenshot", text });
+              send(result?.ok ? 200 : 503, { ...result, action: "chat-via-screenshot", text });
               return;
             }
             const sessionHistory = sessionManager.getOptimizedHistory();

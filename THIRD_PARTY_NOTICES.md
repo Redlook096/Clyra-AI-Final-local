@@ -9,6 +9,7 @@ application in this change.
 | browser-use | `40717057a3f46c403df360206c2784c840da3345` | MIT | Browser agent observation, planning, verification, and chat-card patterns. |
 | PageLM (CaviraOSS) | `736f22b9b1b194fc50d90b29337d04d99ba81172` | PageLM Community License (non-commercial without written permission) | Study-suite capability and prompt reference only; no source copied. Clyra Study Pal is a native rewrite. |
 | OpenCluely | `dffdf1a8f7ccefe895fb8de928b177167df11d58` | Apache-2.0 | Explicit screen-assistant/session design. |
+| suitedaces/computer-agent (Taskhomie) | `b5bf31fa8041461675782dae2c7ec155b323224c` | Apache-2.0 | Computer Use tool contract and agent-loop architecture reference. Clyra uses its own Electron adapter and does not bundle Taskhomie or its Tauri runtime. |
 | Skill-Anything | `4c83b8e73dccd897db6cecc1d5e6bbd987baf80a` | MIT | Permissioned skill lifecycle. |
 | UI-TARS-desktop | `c2ad42e3eb9b27830db41a3e6f51ca7179d9b168` | Apache-2.0 | Desktop action planner design. |
 | PySceneDetect | `d40629d` | BSD-3-Clause (verify before distribution) | Optional shot-boundary adapter. |

@@ -1,9 +1,11 @@
 const { desktopCapturer, screen, nativeImage } = require('electron');
-const { execFileSync } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
+const { promisify } = require('util');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const logger = require('../core/logger').createServiceLogger('CAPTURE');
+const execFileAsync = promisify(execFile);
 
 /**
  * Cross-platform screen capture:
@@ -81,13 +83,25 @@ class CaptureService {
   async captureScreenshot(options = {}) {
     const targetDisplay = this._getTargetDisplay(options.displayId);
 
+    // On macOS, Electron's source capture is both less disruptive and much
+    // more reliable than invoking `screencapture` from the main process. The
+    // latter can block the whole companion while TCC waits for permission.
+    // Keep the native tool only as a short, bounded fallback.
+    if (process.platform === 'darwin') {
+      try {
+        return await this._captureWithDesktopCapturer(targetDisplay, options);
+      } catch (error) {
+        logger.warn('desktopCapturer failed on macOS; trying bounded native capture', {
+          error: error.message,
+        });
+        return this._captureMacNative(targetDisplay);
+      }
+    }
+
     try {
       if (process.platform === 'linux') {
         const linux = this._captureLinuxNative(targetDisplay, options);
         if (linux) return linux;
-      } else if (process.platform === 'darwin') {
-        const mac = this._captureMacNative(targetDisplay);
-        if (mac) return mac;
       } else if (process.platform === 'win32') {
         const win = this._captureWindowsNative(targetDisplay);
         if (win) return win;
@@ -180,9 +194,14 @@ class CaptureService {
     };
   }
 
-  _captureMacNative(targetDisplay) {
+  async _captureMacNative(targetDisplay) {
     const outPath = path.join(os.tmpdir(), `oc-screencapture-${process.pid}-${Date.now()}.png`);
-    execFileSync('screencapture', ['-x', outPath], { timeout: 20000 });
+    try {
+      await execFileAsync('screencapture', ['-x', outPath], { timeout: 5000 });
+    } catch (error) {
+      try { fs.unlinkSync(outPath); } catch (_) { /* ignore */ }
+      throw new Error(`Screen capture is unavailable (${error.message}). Grant Screen Recording to OpenCluely in macOS Privacy & Security.`);
+    }
     const image = this._loadPng(outPath);
     logger.info('Using macOS screencapture', { imageSize: image.getSize() });
     return {
@@ -364,12 +383,19 @@ class CaptureService {
     if (match) source = match;
 
     const image = source.thumbnail;
-    if (!image) throw new Error('Failed to capture screen thumbnail');
+    const imageSize = image?.getSize?.() || { width: 0, height: 0 };
+    // macOS can return a non-null NativeImage with a 0 × 0 thumbnail when
+    // Screen Recording has not produced usable pixels yet. Treat it as a
+    // failed capture so the bounded native fallback runs; never pass a blank
+    // frame to Gemini and let it guess at invisible controls.
+    if (!image || image.isEmpty?.() || imageSize.width < 2 || imageSize.height < 2) {
+      throw new Error('Screen thumbnail contains no pixels');
+    }
 
     logger.info('Screenshot captured via desktopCapturer', {
       platform: process.platform,
       sourceName: source.name,
-      imageSize: image.getSize()
+      imageSize
     });
 
     return {
@@ -417,6 +443,40 @@ class CaptureService {
       });
     }
     return out.toJPEG(Math.max(40, Math.min(90, quality)));
+  }
+
+  /**
+   * Capture for computer-agent (Taskhomie) — fixed 1280×800 JPEG AI space.
+   * @see https://github.com/suitedaces/computer-agent
+   */
+  async captureForComputerAgent(options = {}) {
+    const AI_WIDTH = 1280;
+    const AI_HEIGHT = 800;
+    const { image, metadata } = await this.captureScreenshot(options);
+    let finalImage = image;
+    if (options.area && this._isValidArea(options.area)) {
+      try {
+        finalImage = image.crop(options.area);
+      } catch (_) {
+        /* full image */
+      }
+    }
+    const { width, height } = finalImage.getSize();
+    const resized = finalImage.resize({
+      width: AI_WIDTH,
+      height: AI_HEIGHT,
+      quality: 'good',
+    });
+    const buffer = resized.toJPEG(60);
+    return {
+      imageBuffer: buffer,
+      mimeType: 'image/jpeg',
+      metadata: {
+        ...metadata,
+        aiSpace: { width: AI_WIDTH, height: AI_HEIGHT },
+        sourceDimensions: { width, height },
+      },
+    };
   }
 }
 

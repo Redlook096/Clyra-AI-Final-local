@@ -27,7 +27,7 @@
         --oc-dur-fast: 0ms;
         --oc-accent: #4a7cff;
         --oc-accent-soft: rgba(74, 124, 255, 0.35);
-        --oc-expanded-w: 600px;
+        --oc-expanded-w: 700px;
         --oc-bar-h: 56px;
         --oc-drawer-h: 360px;
         --oc-control-bg: linear-gradient(180deg, #1e2a44 0%, #152038 55%, #101a2e 100%);
@@ -114,8 +114,8 @@
         display: flex;
         flex-direction: column;
         align-items: stretch;
-        width: fit-content;
-        max-width: min(100vw, 720px);
+        width: min(700px, calc(100vw - 24px));
+        max-width: calc(100vw - 24px);
         background: transparent;
         border-radius: 999px;
         overflow: hidden;
@@ -133,8 +133,8 @@
 
       /* Chat open: same horizontal size as pill — only grow vertically */
       .oc-shell.is-chat-open {
-        width: fit-content;
-        max-width: min(100vw, 620px);
+        width: min(700px, calc(100vw - 24px));
+        max-width: calc(100vw - 24px);
         border-radius: 22px;
         background: var(--oc-glass-open);
         border: 1px solid var(--oc-border);
@@ -149,8 +149,9 @@
         align-items: center;
         gap: 10px;
         padding: 0 12px 0 10px;
-        width: fit-content;
-        max-width: min(100vw, 720px);
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
         background: var(--oc-glass);
         border: 1px solid rgba(255, 255, 255, 0.78);
         border-radius: 999px;
@@ -230,7 +231,9 @@
         display: flex;
         align-items: center;
         gap: 6px;
-        margin-left: auto;
+        /* Keep the actions visually attached to Close. The former auto margin
+           left a dead strip of space between the two primary controls. */
+        margin-left: 0;
         -webkit-app-region: no-drag;
         flex-shrink: 1;
         min-width: 0;
@@ -796,7 +799,7 @@
       }
       .oc-control-status {
         display: none;
-        flex: 1;
+        flex: 1 1 auto;
         min-width: 0;
         color: var(--oc-text);
         font-size: 13px;
@@ -806,9 +809,29 @@
         overflow: hidden;
         text-overflow: ellipsis;
         padding: 0 6px;
+        align-items: center;
+        gap: 8px;
         -webkit-app-region: no-drag;
       }
-      .oc-shell.is-controlling .oc-control-status { display: block; }
+      .oc-shell.is-controlling .oc-control-status { display: flex; }
+      .oc-control-status__icon {
+        display: grid;
+        place-items: center;
+        width: 22px;
+        height: 22px;
+        flex: 0 0 22px;
+        border-radius: 999px;
+        color: #3576e8;
+        background: rgba(74, 124, 255, 0.11);
+        animation: oc-control-breathe 1.55s ease-in-out infinite;
+      }
+      .oc-control-status__icon svg { width: 13px; height: 13px; }
+      .oc-control-status__text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .oc-control-status.is-keyboard .oc-control-status__icon { color: #6b5bd2; background: rgba(107, 91, 210, 0.1); }
+      .oc-control-status.is-scroll .oc-control-status__icon { color: #147d71; background: rgba(20, 125, 113, 0.1); }
+      .oc-control-status.is-terminal .oc-control-status__icon { color: #566273; background: rgba(86, 98, 115, 0.1); }
+      .oc-control-status.is-alert .oc-control-status__icon { color: #c05621; background: rgba(192, 86, 33, 0.1); animation: none; }
+      @keyframes oc-control-breathe { 0%,100% { transform: scale(1); opacity: .72; } 50% { transform: scale(1.06); opacity: 1; } }
       .oc-shell.is-controlling .oc-actions .oc-pill-btn:not(#ocControlBtn) { display: none !important; }
       .oc-shell.is-controlling .oc-stealth-wrap,
       .oc-shell.is-controlling .oc-drag,
@@ -816,7 +839,25 @@
         display: none !important;
       }
       .oc-shell.is-controlling .oc-actions {
-        margin-left: auto;
+        margin-left: 0;
+      }
+      /* Preserve every action at narrower desktop widths. Labels yield first;
+         controls stay clickable and never overflow beyond the rounded bar. */
+      @media (max-width: 620px) {
+        .command-tab { gap: 6px; padding-inline: 8px; }
+        .oc-pill-btn { padding-inline: 9px; gap: 5px; }
+        .oc-stealth-wrap { padding-inline: 8px; gap: 6px; }
+        .oc-stealth-switch { width: 34px; }
+        .oc-stealth-wrap.is-on .oc-stealth-switch::after { transform: translateX(10px); }
+      }
+      @media (max-width: 540px) {
+        .oc-btn-label:not(.oc-label-stop), .oc-stealth-label { display: none; }
+        .oc-pill-btn { width: 36px; justify-content: center; padding: 0; }
+        .oc-pill-btn.oc-stop { width: auto; padding-inline: 11px; }
+        .oc-stealth-wrap { width: 42px; justify-content: center; padding: 0; }
+        .oc-stealth-switch { width: 30px; height: 22px; }
+        .oc-stealth-switch::after { width: 16px; height: 16px; }
+        .oc-stealth-wrap.is-on .oc-stealth-switch::after { transform: translateX(8px); }
       }
       .oc-shell.is-shaking { animation: oc-shake 480ms var(--oc-ease); }
       @keyframes oc-shake {

@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "commonjs",
+  "description": "OpenCluely bridge files are copied into the CommonJS Electron companion."
+}

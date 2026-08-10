@@ -33,12 +33,11 @@ const FOCUS_MODE_SCRIPT = String.raw`<script>
   let enabled = false;
   let box = null;
   let labelNode = null;
-  const selector = "a,button,input,textarea,select,[role],h1,h2,h3,nav,main,section,article,[data-testid]";
+  const selector = "*";
 
   function getLabel(el) {
-    const role = el.getAttribute("role") || el.tagName.toLowerCase();
-    const text = (el.getAttribute("aria-label") || el.textContent || el.getAttribute("placeholder") || "").trim().replace(/\s+/g, " ").slice(0, 80);
-    return text ? role + ": " + text : role;
+    const tag = (el.tagName || "div").toLowerCase();
+    return "<" + tag + ">";
   }
 
   function ensureOverlay() {
@@ -46,7 +45,7 @@ const FOCUS_MODE_SCRIPT = String.raw`<script>
     box = document.createElement("div");
     box.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;border:2px solid #2563eb;border-radius:10px;box-shadow:0 0 0 9999px rgba(37,99,235,.035),0 0 24px rgba(37,99,235,.35);transition:all .12s ease;display:none;";
     labelNode = document.createElement("div");
-    labelNode.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;max-width:260px;border-radius:999px;background:#0f172a;color:white;padding:5px 9px;font:600 11px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;box-shadow:0 10px 28px rgba(15,23,42,.22);display:none;";
+    labelNode.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;max-width:240px;border-radius:999px;background:linear-gradient(135deg,#1d4ed8,#2563eb);color:white;padding:6px 10px;font:700 11px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;letter-spacing:.01em;box-shadow:0 10px 30px rgba(37,99,235,.4);display:none;";
     document.body.append(box, labelNode);
   }
 
@@ -58,7 +57,9 @@ const FOCUS_MODE_SCRIPT = String.raw`<script>
   function targetFromEvent(event) {
     const raw = event.target;
     if (!raw || raw === document.documentElement || raw === document.body) return null;
-    return raw.closest?.(selector) || raw;
+    if (raw.nodeType === Node.TEXT_NODE) return raw.parentElement;
+    if (raw instanceof Element) return raw.closest?.(selector) || raw;
+    return null;
   }
 
   function paint(el) {

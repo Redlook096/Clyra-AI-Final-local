@@ -34,15 +34,15 @@ class WindowManager {
     // Window binding properties
     this.bindWindows = false; // Disabled on Linux-friendly Clyra bridge to avoid resize recursion
     this.chatDrawerOpen = false; // Chat expands under the centered main bar (no separate panel)
-    this.mainCollapsedMaxWidth = 720; // Compact frosted pill (+ icons + Stealth + drag)
-    this.mainExpandedWidth = 620; // Ask / Auto Answer expanded shell (matches EXPANDED_W)
+    this.mainCollapsedMaxWidth = 700; // Compact frosted pill (+ icons + Stealth + drag)
+    this.mainExpandedWidth = 700; // Keep the same stable width when the drawer opens.
     this.windowGap = 10; // Small gap between windows
     this.boundWindowsPosition = { x: 0, y: 0 }; // Track position of bound windows
     this.stealthEnabled = false;
     
     this.windowConfigs = {
       main: {
-        width: 680,
+        width: 700,
         height: 56,
         useContentSize: true,
         file: 'index.html',
@@ -1255,8 +1255,8 @@ class WindowManager {
       return;
     }
 
-    // Expand the centered bar chat drawer; broadcast so bar-chat.js renders it
-    this.openChatDrawer();
+    // Expand once, then keep the current surface stable while the reply paints.
+    if (!this.chatDrawerOpen) this.openChatDrawer();
     this.broadcastToAllWindows('transcription-llm-response', {
       response: content,
       text: content,
@@ -1280,7 +1280,7 @@ class WindowManager {
       return;
     }
 
-    this.openChatDrawer();
+    if (!this.chatDrawerOpen) this.openChatDrawer();
     this.broadcastToAllWindows('transcription-llm-response-start', {
       timestamp: new Date().toISOString()
     });
@@ -1739,10 +1739,12 @@ class WindowManager {
   }
 
   getMainMaxWidth() {
+    const display = this.currentDisplay || screen.getPrimaryDisplay();
+    const availableWidth = Math.max(360, Number(display?.workArea?.width || display?.bounds?.width || 720) - 24);
     if (this.chatDrawerOpen) {
-      return Math.max(this.mainExpandedWidth || 580, 520);
+      return Math.min(availableWidth, Math.max(this.mainExpandedWidth || 580, 520));
     }
-    return Math.max(this.mainCollapsedMaxWidth || 720, 360);
+    return Math.min(availableWidth, Math.max(this.mainCollapsedMaxWidth || 720, 360));
   }
 
   centerMainWindowAtTop() {
@@ -1809,7 +1811,11 @@ class WindowManager {
     if (!mainWindow || mainWindow.isDestroyed()) return false;
     // Never steal focus when chat/LLM updates arrive — that was yanking the
     // user into Clyra/OpenCluely and interrupting their work.
-    this.showOnCurrentDesktop(mainWindow, { focus: false, inactive: true });
+    // Avoid re-showing an already visible window for each streamed update:
+    // macOS composites that as a brief hide/show flicker.
+    if (!mainWindow.isVisible()) {
+      this.showOnCurrentDesktop(mainWindow, { focus: false, inactive: true });
+    }
     this.setChatDrawerOpen(true, { recenter: false });
     try {
       mainWindow.webContents.send('toggle-chat-drawer', { open: true });
