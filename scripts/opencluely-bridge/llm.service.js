@@ -190,9 +190,9 @@ class LLMService {
     ].join(' ');
   }
 
-  async callVision(imageBuffer, prompt) {
+  async callVision(imageBuffer, prompt, mimeType = 'image/jpeg') {
     const base64 = imageBuffer.toString('base64');
-    const dataUrl = `data:image/png;base64,${base64}`;
+    const dataUrl = `data:${mimeType};base64,${base64}`;
     const question =
       prompt || 'What is on this screen? Summarise the main title and key text.';
     let lastError = null;

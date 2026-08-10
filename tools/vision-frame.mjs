@@ -20,6 +20,9 @@ export async function analyseVisionBuffer(imageBuffer, prompt, opts = {}) {
     );
   }
   if (!imageBuffer?.length) throw new Error("Image buffer is required");
+  if (imageBuffer.byteLength > 12 * 1024 * 1024) {
+    throw new Error("Frame too large.");
+  }
   const gemini = await callGeminiVision(imageBuffer, prompt, opts);
   return {
     ok: true,
@@ -45,7 +48,7 @@ export async function analyseVisionFrame(dataUrl, question = "") {
         ? "image/webp"
         : "image/jpeg";
   const buffer = Buffer.from(match[2], "base64");
-  if (buffer.byteLength > 8 * 1024 * 1024) throw new Error("Frame too large.");
+  if (buffer.byteLength > 12 * 1024 * 1024) throw new Error("Frame too large.");
 
   const prompt =
     question ||

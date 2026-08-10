@@ -268,7 +268,7 @@ export async function startVibeServer(port = Number(process.env.VIBE_PORT) || 51
   await cleanupOldSessions();
 
   const app = express();
-  app.use(express.json({ limit: "2mb" }));
+  app.use(express.json({ limit: "16mb" }));
   app.use((req, res, next) => {
     const origin = req.headers.origin;
     if (origin && !isAllowedOrigin(origin)) {

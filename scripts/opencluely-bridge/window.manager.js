@@ -42,8 +42,8 @@ class WindowManager {
     
     this.windowConfigs = {
       main: {
-        width: 340,
-        height: 52,
+        width: 680,
+        height: 56,
         useContentSize: true,
         file: 'index.html',
         title: 'OpenCluely'

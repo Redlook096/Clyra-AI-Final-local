@@ -50,9 +50,9 @@ class CaptureService {
         }
       }
 
-      const buffer = finalImage.toPNG();
+      const buffer = this._compressForVision(finalImage);
       try {
-        fs.writeFileSync(path.join(os.tmpdir(), 'oc-last-capture.png'), buffer);
+        fs.writeFileSync(path.join(os.tmpdir(), 'oc-last-capture.jpg'), buffer);
       } catch (_) {
         /* ignore */
       }
@@ -66,7 +66,7 @@ class CaptureService {
 
       return {
         imageBuffer: buffer,
-        mimeType: 'image/png',
+        mimeType: 'image/jpeg',
         metadata: {
           timestamp: new Date().toISOString(),
           source: metadata,
@@ -401,6 +401,22 @@ class CaptureService {
       area.width > 0 &&
       area.height > 0
     );
+  }
+
+  /** Downscale + JPEG encode so vision payloads stay under Express limits. */
+  _compressForVision(image, { maxEdge = 1280, quality = 72 } = {}) {
+    let out = image;
+    const { width, height } = out.getSize();
+    const longest = Math.max(width, height);
+    if (longest > maxEdge) {
+      const scale = maxEdge / longest;
+      out = out.resize({
+        width: Math.max(1, Math.round(width * scale)),
+        height: Math.max(1, Math.round(height * scale)),
+        quality: 'good',
+      });
+    }
+    return out.toJPEG(Math.max(40, Math.min(90, quality)));
   }
 }
 

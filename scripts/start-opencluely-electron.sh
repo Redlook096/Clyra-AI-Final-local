@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="${ROOT}/apps/opencluely"
 export CLYRA_API_BASE="${CLYRA_API_BASE:-http://127.0.0.1:31415}"
 export CLYRA_CONTROL_PORT="${CLYRA_CONTROL_PORT:-3847}"
+export CLYRA_OPENCLUELY_PREWARM="${CLYRA_OPENCLUELY_PREWARM:-}"
 export ELECTRON_DISABLE_SECURITY_WARNINGS=1
 
 # Load Clyra env so GEMINI_API_KEY reaches the server OpenCluely calls for vision.

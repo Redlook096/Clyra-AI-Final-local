@@ -310,9 +310,12 @@
 
   function measureShell() {
     const rect = shell.getBoundingClientRect();
+    const tabRect = tab?.getBoundingClientRect();
+    const contentW = Math.ceil(Math.max(rect.width, tabRect?.width || 0, shell.scrollWidth || 0));
+    const contentH = Math.ceil(Math.max(rect.height, shell.scrollHeight || 0, COLLAPSED_H));
     return {
-      width: Math.max(220, Math.ceil(rect.width)),
-      height: Math.max(COLLAPSED_H, Math.ceil(rect.height)),
+      width: Math.max(220, contentW),
+      height: Math.max(COLLAPSED_H, contentH),
     };
   }
 

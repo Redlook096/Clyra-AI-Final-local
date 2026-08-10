@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import dotenv from "dotenv";
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeTheme, session, shell, systemPreferences, WebContentsView } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, nativeTheme, session, shell, systemPreferences, WebContentsView } from "electron";
 import { ChromiumBrowserManager } from "./browser-manager.mjs";
 import { ChromiumSurfaceManager } from "./surface-manager.mjs";
 import { DictationManager } from "./dictation-manager.mjs";
@@ -307,8 +307,8 @@ async function toggleOpenCluelyOverlay() {
       console.warn("[opencluely] Cmd+/ — could not start OpenCluely:", spawned.error);
       return spawned;
     }
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 400));
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
       health = await probeOpenCluelyHealth();
       if (health.ok) break;
     }
@@ -318,9 +318,9 @@ async function toggleOpenCluelyOverlay() {
     }
   }
 
-  toggled = await postOpenCluelyControl("/toggle", {}, 4_000);
+  toggled = await postOpenCluelyControl("/toggle", {}, 2_000);
   if (toggled?.ok) return toggled;
-  const shown = await postOpenCluelyControl("/show", { windows: ["main"] }, 4_000);
+  const shown = await postOpenCluelyControl("/show", { windows: ["main"] }, 2_000);
   if (shown?.ok) return shown;
   console.warn("[opencluely] Cmd+/ — OpenCluely control API not reachable on 3848/3847");
   return null;
@@ -413,6 +413,7 @@ async function spawnOpenCluelyApp() {
                 ...process.env,
                 CLYRA_API_BASE: process.env.CLYRA_API_BASE || `http://127.0.0.1:${appPort}`,
                 CLYRA_CONTROL_PORT: process.env.CLYRA_CONTROL_PORT || "3847",
+                CLYRA_OPENCLUELY_PREWARM: "1",
               },
               detached: true,
               stdio: "ignore",
@@ -424,6 +425,7 @@ async function spawnOpenCluelyApp() {
               ...process.env,
               CLYRA_API_BASE: process.env.CLYRA_API_BASE || `http://127.0.0.1:${appPort}`,
               CLYRA_CONTROL_PORT: process.env.CLYRA_CONTROL_PORT || "3847",
+              CLYRA_OPENCLUELY_PREWARM: "1",
             },
             detached: true,
             stdio: "ignore",
@@ -635,8 +637,30 @@ async function analyseCompanionVision(imagePath, question = "") {
   try {
     const { analyseVisionFrame } = await import("../tools/vision-frame.mjs");
     const buffer = await fs.readFile(imagePath);
-    const ext = path.extname(imagePath).toLowerCase() === ".png" ? "png" : "jpeg";
-    const dataUrl = `data:image/${ext};base64,${buffer.toString("base64")}`;
+    let visionBuffer = buffer;
+    let ext = path.extname(imagePath).toLowerCase() === ".png" ? "png" : "jpeg";
+    try {
+      const image = nativeImage.createFromBuffer(buffer);
+      if (!image.isEmpty()) {
+        const { width, height } = image.getSize();
+        const maxEdge = 1280;
+        const longest = Math.max(width, height);
+        let resized = image;
+        if (longest > maxEdge) {
+          const scale = maxEdge / longest;
+          resized = image.resize({
+            width: Math.max(1, Math.round(width * scale)),
+            height: Math.max(1, Math.round(height * scale)),
+            quality: "good",
+          });
+        }
+        visionBuffer = resized.toJPEG(72);
+        ext = "jpeg";
+      }
+    } catch {
+      /* use raw buffer */
+    }
+    const dataUrl = `data:image/${ext};base64,${visionBuffer.toString("base64")}`;
     const gemini = await Promise.race([
       analyseVisionFrame(dataUrl, String(question || "")),
       new Promise((_, reject) => setTimeout(() => reject(new Error("gemini vision timed out")), 20_000)),
@@ -941,10 +965,10 @@ async function createWindow() {
 
   createWindowPromise = (async () => {
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
-    minWidth: 1024,
-    minHeight: 700,
+    width: 1280,
+    height: 860,
+    minWidth: 960,
+    minHeight: 680,
     show: false,
     backgroundColor: "#ffffff",
     titleBarStyle: "hidden",
@@ -1091,6 +1115,13 @@ async function createWindow() {
     void primeMacOsMediaAccess();
   });
   await uiView.webContents.loadURL(`http://127.0.0.1:${appPort}`);
+  // Pre-warm OpenCluely in the background so ⌘/ toggles instantly.
+  setTimeout(() => {
+    void spawnOpenCluelyApp().then((result) => {
+      if (result?.ok) console.log("[opencluely] pre-warmed (control API ready for ⌘/)");
+      else console.warn("[opencluely] pre-warm skipped:", result?.error || "unknown");
+    });
+  }, 1200);
   return mainWindow;
   })();
 

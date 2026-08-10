@@ -44,6 +44,7 @@
   position: relative;
   isolation: isolate;
   background: #fff;
+  overflow-x: hidden;
 }
 
 .clyra-app-shell::before {
@@ -6063,8 +6064,8 @@ body,
 .clyra-chat-page .clyra-workspace-card[data-workspace-motion][data-workspace="chat"] {
   left: 50%;
   right: auto;
-  width: 100vw;
-  margin-left: -50vw;
+  width: 100%;
+  margin-left: -50%;
 }
 
 .clyra-chat-page .clyra-workspace-card[data-workspace-motion][data-workspace="chat"] > .text-center:has(.clyra-chat-quick-actions) {

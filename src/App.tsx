@@ -3692,7 +3692,6 @@ export default function App() {
 
   useEffect(() => {
     const handleResize = () => {
-      // Assume base design was for a window around 1200x800, maybe standard laptop.
       const baseWidth = 1200;
       const baseHeight = 800;
       const screenW = window.screen.width;
@@ -3700,23 +3699,24 @@ export default function App() {
       const innerW = window.innerWidth;
       const innerH = window.innerHeight;
 
-      // Check if we are basically fullscreen (allowing for generic UI shells)
-      if (innerW >= screenW - 40 && innerH >= screenH - 120) {
-        // Determine scale while maintaining position ratios
+      const nearFullscreen =
+        innerW >= screenW - 40 && innerH >= screenH - 120;
+
+      let scale = 1;
+      if (nearFullscreen) {
         const scaleW = innerW / baseWidth;
         const scaleH = innerH / baseHeight;
-        // Take the smaller scale to ensure it fits, but don't shrink below 1
-        const newScale = Math.max(1, Math.min(scaleW, scaleH));
-        document.documentElement.style.setProperty(
-          "--app-scale",
-          newScale.toString(),
-        );
-      } else {
-        document.documentElement.style.setProperty("--app-scale", "1");
+        scale = Math.max(1, Math.min(scaleW, scaleH));
+      } else if (innerW < baseWidth) {
+        // Windowed: shrink UI so content does not feel wider than the window.
+        scale = Math.max(0.82, innerW / baseWidth);
       }
+
+      document.documentElement.style.setProperty("--clyra-ui-scale", scale.toString());
+      document.documentElement.style.setProperty("--app-scale", scale.toString());
     };
 
-    handleResize(); // trigger on mount
+    handleResize();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);

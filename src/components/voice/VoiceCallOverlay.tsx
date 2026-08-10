@@ -176,14 +176,14 @@ function StatusChip({
 async function captureFrameDataUrl(video: HTMLVideoElement | null): Promise<string | null> {
   if (!video || video.readyState < 2 || video.videoWidth < 2) return null;
   const canvas = document.createElement("canvas");
-  const maxW = 1280;
+  const maxW = 960;
   const scale = Math.min(1, maxW / video.videoWidth);
   canvas.width = Math.max(2, Math.round(video.videoWidth * scale));
   canvas.height = Math.max(2, Math.round(video.videoHeight * scale));
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL("image/jpeg", 0.72);
+  return canvas.toDataURL("image/jpeg", 0.58);
 }
 
 /** Wait until the live <video> has a drawable frame (camera often needs a beat). */

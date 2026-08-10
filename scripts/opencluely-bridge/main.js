@@ -254,7 +254,9 @@ class ApplicationController {
       }
       const isFirstRun = false;
 
-      await windowManager.initializeWindows({ showMainWindow: !isFirstRun });
+      await windowManager.initializeWindows({
+        showMainWindow: process.env.CLYRA_OPENCLUELY_PREWARM !== "1",
+      });
       this.setupGlobalShortcuts();
       try {
         await desktopControl.initialize();

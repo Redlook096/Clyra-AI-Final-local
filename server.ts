@@ -1299,7 +1299,8 @@ async function startServer() {
   // configured; it never falls back to scraping or client-side credentials.
   const licensedFootage = createLicensedFootageService();
 
-  app.use(express.json({ limit: "2mb" }));
+  // Camera / screen vision posts base64 data-URLs (often 2–8 MB before parse).
+  app.use(express.json({ limit: "16mb" }));
 
   // The restored Vibe Coder runs in Clyra's localhost iframe on :8000. Give
   // only that local surface access to the managed-browser API so its visible
