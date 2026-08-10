@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import crypto from "node:crypto";
-import { existsSync, promises as fs, statSync } from "node:fs";
+import { copyFileSync, existsSync, promises as fs, statSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -244,7 +244,7 @@ function isRunnableFile(candidate) {
 }
 
 /** POST JSON to OpenCluely's local control API; try current + legacy ports. */
-async function postOpenCluelyControl(pathname, body = {}) {
+async function postOpenCluelyControl(pathname, body = {}, timeoutMs = 1_500) {
   const ports = [
     Number(process.env.CLYRA_CONTROL_PORT || 0),
     3848,
@@ -265,7 +265,7 @@ async function postOpenCluelyControl(pathname, body = {}) {
               "Content-Type": "application/json",
               "Content-Length": Buffer.byteLength(payload),
             },
-            timeout: 1_500,
+            timeout: timeoutMs,
           },
           (res) => {
             const chunks = [];
@@ -296,12 +296,58 @@ async function postOpenCluelyControl(pathname, body = {}) {
 }
 
 async function toggleOpenCluelyOverlay() {
-  const toggled = await postOpenCluelyControl("/toggle");
+  let toggled = await postOpenCluelyControl("/toggle");
   if (toggled?.ok) return toggled;
-  const shown = await postOpenCluelyControl("/show", { windows: ["main"] });
+
+  let health = await probeOpenCluelyHealth();
+  if (!health.ok) {
+    syncOpenCluelyBridgeFromRepo();
+    const spawned = await spawnOpenCluelyApp();
+    if (!spawned.ok) {
+      console.warn("[opencluely] Cmd+/ — could not start OpenCluely:", spawned.error);
+      return spawned;
+    }
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      health = await probeOpenCluelyHealth();
+      if (health.ok) break;
+    }
+    if (!health.ok) {
+      console.warn("[opencluely] Cmd+/ — OpenCluely started but control API never became ready.");
+      return { ok: false, error: "OpenCluely control API not ready." };
+    }
+  }
+
+  toggled = await postOpenCluelyControl("/toggle", {}, 4_000);
+  if (toggled?.ok) return toggled;
+  const shown = await postOpenCluelyControl("/show", { windows: ["main"] }, 4_000);
   if (shown?.ok) return shown;
   console.warn("[opencluely] Cmd+/ — OpenCluely control API not reachable on 3848/3847");
   return null;
+}
+
+function syncOpenCluelyBridgeFromRepo() {
+  const bridge = path.join(projectRoot, "scripts", "opencluely-bridge");
+  const app = path.join(projectRoot, "apps", "opencluely");
+  if (!existsSync(app) || !existsSync(bridge)) return false;
+  const copies = [
+    ["main.js", "main.js"],
+    ["llm.service.js", "src/services/llm.service.js"],
+    ["window.manager.js", "src/managers/window.manager.js"],
+    ["config.js", "src/core/config.js"],
+    ["capture.service.js", "src/services/capture.service.js"],
+  ];
+  for (const [srcName, destName] of copies) {
+    const from = path.join(bridge, srcName);
+    const to = path.join(app, destName);
+    if (!existsSync(from)) continue;
+    try {
+      copyFileSync(from, to);
+    } catch (error) {
+      console.warn(`[opencluely] bridge sync skipped ${srcName}:`, error instanceof Error ? error.message : error);
+    }
+  }
+  return true;
 }
 
 let openCluelyProcess = null;
@@ -356,6 +402,7 @@ async function spawnOpenCluelyApp() {
   if (openCluelyLaunchPromise) return openCluelyLaunchPromise;
   openCluelyLaunchPromise = (async () => {
     try {
+      syncOpenCluelyBridgeFromRepo();
       const child = useWindows
         ? spawn(
             "powershell.exe",

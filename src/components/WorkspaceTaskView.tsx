@@ -118,19 +118,15 @@ function rectOf(sceneRef?: RefObject<HTMLElement | null>): Rect {
 }
 
 function transformBetween(from: Rect, to: Rect) {
-  // Uniform scale keeps the FLIP zoom from looking like it stops short and
-  // then "spawns" the remaining stretch when axes disagree.
-  const scale = Math.min(
-    from.width / Math.max(1, to.width),
-    from.height / Math.max(1, to.height),
-  );
-  const scaledW = to.width * scale;
-  const scaledH = to.height * scale;
+  // Independent X/Y scale so the FLIP zoom fills the target rect completely
+  // instead of stopping ~90% short when aspect ratios differ.
+  const scaleX = from.width / Math.max(1, to.width);
+  const scaleY = from.height / Math.max(1, to.height);
   return {
-    x: from.left - to.left + (from.width - scaledW) / 2,
-    y: from.top - to.top + (from.height - scaledH) / 2,
-    scaleX: scale,
-    scaleY: scale,
+    x: from.left - to.left,
+    y: from.top - to.top,
+    scaleX,
+    scaleY,
   };
 }
 
