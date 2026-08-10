@@ -11,9 +11,9 @@
   const EXPANDED_W = 600;
   const COLLAPSED_H = 56;
   const DRAWER_H = 360;
-  // Keep in sync with --oc-dur-w / --oc-dur-h in index.html — lighter + snappier
-  const DUR_W = 280;
-  const DUR_H = 260;
+  // Keep in sync with --oc-dur-w / --oc-dur-h in index.html — light drawer motion
+  const DUR_W = 260;
+  const DUR_H = 240;
 
   const shell = document.getElementById('ocShell');
   const tab = document.getElementById('commandTab');
@@ -108,6 +108,145 @@
 
   let lastAssistantText = '';
   let lastAssistantAt = 0;
+  /** SoftStream-style paint cursor for live LLM chunks */
+  let streamState = null;
+
+  const THINKING_HTML =
+    '<div class="oc-thinking-status" aria-live="polite">' +
+    '<span class="oc-thinking-icon" aria-hidden="true">' +
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>' +
+    '<path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/>' +
+    '<path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/>' +
+    '<path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/>' +
+    '<path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/>' +
+    '<path d="M3.023 10.125a4 4 0 0 0 2.477 1.375"/><path d="M18.5 11.5a4 4 0 0 0 2.477-1.375"/>' +
+    '<path d="M8.5 17.5a3 3 0 0 0 2.5 1"/><path d="M13 18.5a3 3 0 0 0 2.5-1"/>' +
+    '</svg></span>' +
+    '<span class="oc-thinking-wave">Thinking</span>' +
+    '<span class="oc-thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>' +
+    '</div>';
+
+  function stopStreamPaint() {
+    if (streamState?.raf != null) {
+      cancelAnimationFrame(streamState.raf);
+      streamState.raf = null;
+    }
+  }
+
+  function clearStreamMessage({ keepDom = false } = {}) {
+    stopStreamPaint();
+    if (!keepDom && streamState?.el?.isConnected) {
+      streamState.el.remove();
+    }
+    streamState = null;
+  }
+
+  function scheduleStreamPaint() {
+    if (!streamState || streamState.raf != null) return;
+    streamState.raf = requestAnimationFrame(() => {
+      if (!streamState) return;
+      streamState.raf = null;
+      const target = streamState.target;
+      let current = streamState.shown;
+      if (current.length > target.length) {
+        current = target;
+      } else if (current.length < target.length) {
+        let steps = target.length - current.length > 64 ? 4 : 2;
+        while (steps-- > 0 && current.length < target.length) {
+          const rem = target.slice(current.length);
+          const match = rem.match(/^(?:\s*\S{1,18}|\s+|[\s\S]{1,12})/);
+          current += match?.[0] ?? rem.slice(0, 8);
+        }
+      }
+      streamState.shown = current;
+      if (streamState.textEl) {
+        streamState.textEl.textContent = current;
+      }
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      if (streamState.finalizing && current.length >= target.length) {
+        finalizeStreamMessage(target);
+        return;
+      }
+      if (current.length < target.length) scheduleStreamPaint();
+    });
+  }
+
+  function ensureStreamMessage(messageId) {
+    hideThinking();
+    if (streamState?.el?.isConnected) {
+      if (messageId && !streamState.messageId) streamState.messageId = messageId;
+      return streamState;
+    }
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message assistant oc-print is-streaming';
+    messageDiv.id = 'bar-streaming';
+    const paint = document.createElement('div');
+    paint.className = 'message-text oc-stream-paint';
+    const body = document.createElement('span');
+    body.className = 'oc-stream-paint__body';
+    const caret = document.createElement('span');
+    caret.className = 'oc-stream-paint__caret';
+    caret.setAttribute('aria-hidden', 'true');
+    paint.appendChild(body);
+    paint.appendChild(caret);
+    messageDiv.appendChild(paint);
+    messagesEl.appendChild(messageDiv);
+    streamState = {
+      el: messageDiv,
+      textEl: body,
+      caret,
+      target: '',
+      shown: '',
+      raf: null,
+      messageId: messageId || null,
+      finalizing: false,
+    };
+    return streamState;
+  }
+
+  function appendStreamChunk(delta, messageId) {
+    const chunk = String(delta || '');
+    if (!chunk) return;
+    const state = ensureStreamMessage(messageId);
+    state.target += chunk;
+    scheduleStreamPaint();
+  }
+
+  function finalizeStreamMessage(fullText) {
+    const t = String(fullText || streamState?.target || '').trim();
+    stopStreamPaint();
+    if (!t) {
+      clearStreamMessage();
+      return;
+    }
+    const now = Date.now();
+    if (t === lastAssistantText && now - lastAssistantAt < 5000) {
+      clearStreamMessage();
+      return;
+    }
+    lastAssistantText = t;
+    lastAssistantAt = now;
+
+    const el = streamState?.el;
+    if (el?.isConnected) {
+      el.classList.remove('is-streaming');
+      const textDiv = el.querySelector('.message-text') || document.createElement('div');
+      textDiv.className = 'message-text';
+      textDiv.innerHTML = formatMarkdown(t);
+      el.innerHTML = '';
+      el.appendChild(textDiv);
+      streamState?.caret?.remove();
+    } else {
+      addMessage(t, 'assistant');
+      streamState = null;
+      return;
+    }
+    history.push({ type: 'assistant', text: t });
+    saveHistory();
+    streamState = null;
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
 
   function addMessage(text, type = 'user', skipPersist = false) {
     const t = String(text || '').trim();
@@ -118,10 +257,17 @@
       if (t === lastAssistantText && now - lastAssistantAt < 5000) return;
       lastAssistantText = t;
       lastAssistantAt = now;
+      // Prefer finalizing an in-flight stream instead of a second bubble
+      if (streamState?.el?.isConnected) {
+        streamState.target = t;
+        streamState.finalizing = true;
+        scheduleStreamPaint();
+        return;
+      }
     }
     const messageDiv = document.createElement('div');
     // Assistant: plain print (no bubble) like Clyra chat tool.
-    // User: animated bubble matching Clyra chat entry.
+    // User: App Launcher / Clyra chat bubble (#aec7f1).
     if (type === 'assistant') {
       messageDiv.className = 'message assistant oc-print';
     } else if (type === 'user') {
@@ -146,13 +292,14 @@
   }
 
   function showThinking() {
+    // Dots + shimmer only while the model is thinking (before first token).
+    if (streamState?.el?.isConnected) return;
     hideThinking();
     shell.classList.add('is-thinking');
     const thinkingDiv = document.createElement('div');
     thinkingDiv.className = 'message assistant oc-print thinking';
     thinkingDiv.id = 'bar-thinking';
-    thinkingDiv.innerHTML =
-      '<div class="message-text thinking-dots"><span class="dot">•</span><span class="dot">•</span><span class="dot">•</span></div>';
+    thinkingDiv.innerHTML = THINKING_HTML;
     messagesEl.appendChild(thinkingDiv);
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
@@ -416,28 +563,19 @@
     }
   }
 
-  async function runBootAnimation() {
-    // 1) Start squished + invisible (already in HTML)
-    shell.classList.add('is-boot-squish');
-    // Fit Electron window to thin pill first
-    if (window.electronAPI?.resizeWindow) {
-      window.electronAPI.resizeWindow(56, COLLAPSED_H);
+  /** Instant show — no expand/squish boot; drawer expand stays smooth. */
+  async function snapShow() {
+    shell.classList.remove('is-boot-squish', 'is-boot-fade', 'is-boot-expand');
+    for (const el of shell.querySelectorAll('.oc-boot-hide, .oc-stealth-wrap, .oc-actions, .oc-close')) {
+      try {
+        el.style.opacity = '';
+        el.style.transform = '';
+        el.style.pointerEvents = 'auto';
+      } catch (_) {
+        /* ignore */
+      }
     }
-    await wait(40);
-    // 2) Fade in while still thin / compressed
-    shell.classList.add('is-boot-fade');
-    await wait(240);
-    // 3) Expand horizontally into full pill
-    shell.classList.remove('is-boot-squish');
-    shell.classList.add('is-boot-expand');
-    await wait(40);
-    measureAndResize();
-    await wait(300);
-    // 4) Reveal buttons / stealth / drag with stagger
-    shell.classList.add('is-boot-reveal');
-    await wait(280);
-    shell.classList.remove('is-boot-fade', 'is-boot-expand');
-    measureAndResize();
+    await measureAndResize({ recenter: true });
   }
 
   function setControlButtonState(isControlling) {
@@ -580,6 +718,7 @@
     }
     if (!text) return;
     if (!open) await expandToChat('ask');
+    clearStreamMessage();
     addMessage(text, 'user');
     inputEl.value = '';
     autoGrow();
@@ -588,12 +727,14 @@
       await window.electronAPI?.sendChatMessage?.(text);
     } catch (error) {
       hideThinking();
+      clearStreamMessage();
       addMessage(`Failed to send: ${error.message}`, 'error');
     }
   }
 
   async function runAutoAnswer() {
     await expandToChat('auto');
+    clearStreamMessage();
     addMessage('Auto Answer — reading your screen…', 'system');
     showThinking();
     try {
@@ -675,8 +816,7 @@
   } catch (_) {
     /* ignore */
   }
-  // After boot, force interactive hit-targets even if a boot class was left behind.
-  shell.classList.add('is-boot-reveal');
+  // Force interactive hit-targets (legacy boot classes must never block clicks).
   for (const el of shell.querySelectorAll('.oc-boot-hide, .oc-stealth-wrap, .oc-actions, .oc-close')) {
     try {
       el.style.pointerEvents = 'auto';
@@ -790,23 +930,38 @@
   // broadcast llm-response for the same reply, which doubled bubbles).
   const api = window.electronAPI;
   if (api) {
+    api.onTranscriptionLlmResponseStart?.((_e, data) => {
+      if (!open) expandToChat(mode || 'ask');
+      clearStreamMessage();
+      showThinking();
+    });
+    api.onTranscriptionLlmResponseChunk?.((_e, data) => {
+      if (!open) expandToChat(mode || 'ask');
+      appendStreamChunk(data?.delta || data?.chunk || data?.text || '', data?.messageId);
+    });
     api.onTranscriptionLlmResponse?.((_e, data) => {
       hideThinking();
       const text = data?.response || data?.text || '';
       if (text) {
         if (!open) expandToChat(mode || 'ask');
-        addMessage(text, 'assistant');
+        if (streamState?.el?.isConnected || (streamState?.target && streamState.target.length)) {
+          ensureStreamMessage(data?.messageId);
+          streamState.target = text;
+          streamState.finalizing = true;
+          scheduleStreamPaint();
+        } else {
+          addMessage(text, 'assistant');
+        }
         if (modeHint && mode === 'auto') modeHint.textContent = 'Answer ready';
+      } else {
+        clearStreamMessage();
       }
-    });
-    api.onTranscriptionLlmResponseStart?.(() => {
-      if (!open) expandToChat(mode || 'ask');
-      showThinking();
     });
     // Fallback only when transcription channel is unavailable
     if (typeof api.onTranscriptionLlmResponse !== 'function') {
       api.onLlmResponse?.((_e, data) => {
         hideThinking();
+        clearStreamMessage();
         const text = data?.response || data?.text || '';
         if (text) {
           if (!open) expandToChat(mode || 'ask');
@@ -816,9 +971,12 @@
     }
     api.onOcrError?.((_e, data) => {
       hideThinking();
+      clearStreamMessage();
       addMessage(data?.error || 'Screenshot failed', 'error');
     });
     api.onSessionCleared?.(() => {
+      clearStreamMessage();
+      hideThinking();
       history = [];
       messagesEl.innerHTML = '';
       addMessage(GREETING, 'assistant', true);
@@ -849,6 +1007,7 @@
         if (!open) expandToChat(mode || 'ask');
         addMessage(data.message, 'system');
         if (data.phase === 'searching' || data.phase === 'synthesizing') showThinking();
+        else hideThinking();
       }
     });
     api.onStealthModeChanged?.((_e, data) => {
@@ -859,7 +1018,7 @@
     });
   }
 
-  // Fit collapsed pill on load + boot animation + stealth restore
+  // Fit collapsed pill on load — snap show (no expand boot) + stealth restore
   loadHistory();
   setControlButtonState(false);
   try {
@@ -875,7 +1034,7 @@
   }
 
   (async () => {
-    await runBootAnimation();
+    await snapShow();
     window.electronAPI?.setChatDrawerOpen?.(false);
     window.electronAPI?.notifyMainWindowReady?.();
     // Re-apply stealth to main once window is ready (content protection)

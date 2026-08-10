@@ -22,9 +22,9 @@
         --oc-msg-bg: rgba(255, 255, 255, 0.86);
         --oc-ease: cubic-bezier(0.22, 1, 0.36, 1);
         --oc-ease-soft: cubic-bezier(0.25, 1, 0.5, 1);
-        --oc-dur-w: 280ms;
-        --oc-dur-h: 260ms;
-        --oc-dur-fast: 140ms;
+        --oc-dur-w: 260ms;
+        --oc-dur-h: 240ms;
+        --oc-dur-fast: 120ms;
         --oc-accent: #4a7cff;
         --oc-accent-soft: rgba(74, 124, 255, 0.35);
         --oc-expanded-w: 600px;
@@ -107,47 +107,17 @@
           width var(--oc-dur-w) var(--oc-ease),
           min-width var(--oc-dur-w) var(--oc-ease),
           border-radius var(--oc-dur-h) var(--oc-ease-soft),
-          background 280ms var(--oc-ease-soft),
-          box-shadow 280ms var(--oc-ease-soft),
-          border-color 280ms var(--oc-ease-soft),
-          opacity 260ms var(--oc-ease-soft),
-          transform 320ms var(--oc-ease);
+          background 200ms var(--oc-ease-soft),
+          box-shadow 200ms var(--oc-ease-soft),
+          border-color 200ms var(--oc-ease-soft);
       }
 
-      .oc-shell.is-boot-squish {
-        width: 56px !important;
-        min-width: 56px !important;
-        opacity: 0;
-        transform: scaleX(0.22) scaleY(0.92);
-        pointer-events: none;
-      }
-      .oc-shell.is-boot-squish .oc-boot-hide {
-        opacity: 0 !important;
-        transform: translateX(-6px) scale(0.92);
-        pointer-events: none;
-      }
-      .oc-shell.is-boot-fade {
-        opacity: 1;
-        transform: scaleX(0.28) scaleY(0.96);
-      }
-      .oc-shell.is-boot-expand {
-        opacity: 1;
-        transform: scaleX(1) scaleY(1);
-        width: max-content;
-        min-width: 420px;
-      }
-      .oc-shell.is-boot-reveal .oc-boot-hide {
+      /* Snap show — no boot expand/squish; chrome is visible immediately */
+      .oc-shell .oc-boot-hide {
         opacity: 1;
         transform: none;
         pointer-events: auto;
-        transition: opacity 240ms var(--oc-ease), transform 280ms var(--oc-ease);
       }
-      .oc-shell.is-boot-reveal .oc-boot-hide:nth-child(1) { transition-delay: 20ms; }
-      .oc-shell.is-boot-reveal .oc-boot-hide:nth-child(2) { transition-delay: 50ms; }
-      .oc-shell.is-boot-reveal .oc-boot-hide:nth-child(3) { transition-delay: 80ms; }
-      .oc-shell.is-boot-reveal .oc-boot-hide:nth-child(4) { transition-delay: 110ms; }
-      .oc-shell.is-boot-reveal .oc-stealth-wrap { transition-delay: 130ms; }
-      .oc-shell.is-boot-reveal .oc-drag { transition-delay: 150ms; }
 
       .oc-shell.is-wide,
       .oc-shell.is-chat-open {
@@ -223,7 +193,7 @@
         box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
         -webkit-app-region: no-drag;
         app-region: no-drag;
-        transition: transform 180ms var(--oc-ease), background 220ms ease, color 220ms ease;
+        transition: transform 140ms var(--oc-ease), background 140ms ease, color 140ms ease;
         flex-shrink: 0;
         position: relative;
         z-index: 20;
@@ -235,7 +205,7 @@
         width: 12px;
         height: 12px;
         position: absolute;
-        transition: opacity 220ms ease, transform 260ms var(--oc-ease);
+        transition: opacity 140ms ease, transform 160ms var(--oc-ease);
       }
       .oc-close .oc-icon-x { opacity: 1; transform: rotate(0deg) scale(1); }
       .oc-close .oc-icon-chevron { opacity: 0; transform: rotate(-90deg) scale(0.7); }
@@ -283,7 +253,7 @@
         display: inline-flex;
         align-items: center;
         gap: 7px;
-        transition: transform 180ms var(--oc-ease), background 220ms ease, box-shadow 180ms ease, color 220ms ease, border-color 220ms ease, opacity 360ms var(--oc-ease);
+        transition: transform 140ms var(--oc-ease), background 140ms ease, box-shadow 140ms ease, color 140ms ease, border-color 140ms ease, opacity 200ms var(--oc-ease);
         white-space: nowrap;
       }
       .oc-pill-btn .oc-btn-icon {
@@ -291,7 +261,7 @@
         height: 16px;
         flex-shrink: 0;
         display: block;
-        transition: transform 280ms var(--oc-ease), opacity 200ms ease;
+        transition: transform 180ms var(--oc-ease), opacity 140ms ease;
       }
       .oc-pill-btn .oc-btn-label { line-height: 1; }
       .oc-pill-btn:hover {
@@ -462,66 +432,28 @@
         pointer-events: auto;
       }
       .oc-shell.is-animating {
-        will-change: width, min-width, border-radius;
+        will-change: width, height;
       }
       .oc-shell.is-animating .chat-drawer {
         will-change: height, opacity;
       }
 
-      /* Thinking: subtle blue glow line traveling around the shell border */
-      .oc-shell.is-thinking.is-chat-open,
-      .oc-shell.is-thinking.is-wide {
-        position: relative;
-      }
-      .oc-shell.is-thinking.is-chat-open::before,
-      .oc-shell.is-thinking.is-wide::before {
-        content: "";
-        pointer-events: none;
-        position: absolute;
-        inset: 0;
-        border-radius: inherit;
-        padding: 1.5px;
-        background: conic-gradient(
-          from var(--oc-glow-angle, 0deg),
-          transparent 0%,
-          transparent 62%,
-          rgba(255, 255, 255, 0.05) 72%,
-          var(--oc-accent-soft) 82%,
-          rgba(225, 238, 255, 0.85) 88%,
-          var(--oc-accent-soft) 94%,
-          transparent 100%
-        );
-        -webkit-mask:
-          linear-gradient(#000 0 0) content-box,
-          linear-gradient(#000 0 0);
-        -webkit-mask-composite: xor;
-        mask-composite: exclude;
-        animation: oc-border-glow 2.4s linear infinite;
-        opacity: 0.75;
-        z-index: 8;
-      }
-      @property --oc-glow-angle {
-        syntax: "<angle>";
-        inherits: false;
-        initial-value: 0deg;
-      }
-      @keyframes oc-border-glow {
-        to { --oc-glow-angle: 360deg; }
-      }
-      @supports not (background: conic-gradient(red, blue)) {
-        .oc-shell.is-thinking.is-chat-open::before,
-        .oc-shell.is-thinking.is-wide::before {
-          animation: none;
-          box-shadow: 0 0 0 1px var(--oc-accent-soft), 0 0 18px var(--oc-accent-soft);
-          background: transparent;
-          padding: 0;
-        }
-      }
       @media (prefers-reduced-motion: reduce) {
         .oc-shell,
         .oc-shell *,
         .chat-drawer {
           transition-duration: 0.01ms !important;
+        }
+        .oc-thinking-wave,
+        .oc-thinking-dots i,
+        .oc-stream-paint__caret,
+        .chat-messages .message.user.oc-user-bubble {
+          animation: none !important;
+        }
+        .oc-thinking-wave {
+          -webkit-text-fill-color: #64748b;
+          color: #64748b;
+          background: none;
         }
       }
       .chat-drawer-inner {
@@ -570,38 +502,35 @@
         -webkit-backdrop-filter: none !important;
         text-shadow: none !important;
       }
-      /* User bubble — Clyra chat tool style (scaled) */
+      /* User bubble — same as Clyra chat / App Launcher chat tool */
       .chat-messages .message.user.oc-user-bubble {
         align-self: flex-end;
         max-width: min(78%, 420px);
         padding: 9px 12px !important;
         border-radius: 14px !important;
-        background: #eef2f7 !important;
-        border: 1px solid rgba(148, 163, 184, 0.28) !important;
-        color: #172033 !important;
+        border-bottom-right-radius: 6px !important;
+        background: #aec7f1 !important;
+        border: 1px solid rgba(148, 163, 184, 0.22) !important;
+        color: #18212f !important;
+        box-shadow: none !important;
         transform-origin: bottom right;
-        animation: oc-user-bubble-appear 0.38s var(--oc-ease) both;
+        animation: oc-user-bubble-appear 180ms var(--oc-ease) both;
+        contain: layout paint;
       }
       .chat-messages .message.user.oc-user-bubble--first {
-        animation-name: oc-user-bubble-first;
-        animation-duration: 0.48s;
+        animation-duration: 220ms;
       }
       html.oc-stealth .chat-messages .message.user.oc-user-bubble,
       html.oc-dark .chat-messages .message.user.oc-user-bubble {
-        background: rgba(74, 124, 255, 0.16) !important;
+        background: rgba(174, 199, 241, 0.28) !important;
         border-color: rgba(122, 162, 255, 0.28) !important;
         color: #f1f5f9 !important;
       }
       @keyframes oc-user-bubble-appear {
-        from { opacity: 0; transform: translateY(10px) scale(0.96); }
+        from { opacity: 0; transform: translateY(6px) scale(0.98); }
         to { opacity: 1; transform: translateY(0) scale(1); }
       }
-      @keyframes oc-user-bubble-first {
-        0% { opacity: 0; transform: translateY(48px) scale(0.94); filter: blur(8px); }
-        55% { opacity: 1; transform: translateY(-3px) scale(1.01); filter: blur(0); }
-        100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
-      }
-      /* Assistant print — no bubble, like Clyra chat tool (override common.css) */
+      /* Assistant print — SoftStream-style paint (no bubble) */
       #barChatMessages .message.assistant.oc-print,
       #barChatMessages .message.system,
       .chat-messages .message.assistant.oc-print,
@@ -617,17 +546,36 @@
         box-shadow: none !important;
         backdrop-filter: none !important;
         -webkit-backdrop-filter: none !important;
-        animation: oc-print-in 220ms var(--oc-ease) both;
+        animation: none;
       }
       #barChatMessages .message.assistant.oc-print .message-text,
       #barChatMessages .message.system .message-text {
         color: var(--oc-text-strong) !important;
         text-shadow: none !important;
         background: transparent !important;
+        font-weight: 500;
+        line-height: 1.55;
       }
-      @keyframes oc-print-in {
-        from { opacity: 0; transform: translateY(4px); }
-        to { opacity: 1; transform: none; }
+      .oc-stream-paint {
+        contain: content;
+        transform: translateZ(0);
+        backface-visibility: hidden;
+        white-space: pre-wrap;
+      }
+      .oc-stream-paint__caret {
+        display: inline-block;
+        width: 0.085em;
+        height: 0.95em;
+        margin-left: 1px;
+        vertical-align: -0.1em;
+        border-radius: 1px;
+        background: currentColor;
+        opacity: 0.28;
+        animation: oc-stream-caret 1.15s ease-in-out infinite;
+      }
+      @keyframes oc-stream-caret {
+        0%, 100% { opacity: 0.12; }
+        50% { opacity: 0.34; }
       }
       .chat-messages .message.error {
         align-self: flex-start;
@@ -656,20 +604,71 @@
         background: rgba(255, 255, 255, 0.08) !important;
         color: #e2e8f0 !important;
       }
-      .thinking-dots .dot {
-        display: inline-block;
-        animation: oc-pulse 1.25s ease-in-out infinite;
-        margin-right: 2px;
-        color: #8b95a5;
+      /* Thinking — same as Clyra chat tool (only while AI is thinking) */
+      .oc-thinking-status {
+        display: inline-flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        padding: 2px 0 4px;
+        min-height: 22px;
       }
-      .thinking-dots .dot:nth-child(2) { animation-delay: 0.15s; }
-      .thinking-dots .dot:nth-child(3) { animation-delay: 0.3s; }
-      @keyframes oc-pulse {
-        0%, 100% { opacity: 0.35; transform: translateY(0); }
-        50% { opacity: 1; transform: translateY(-1px); }
+      .oc-thinking-icon {
+        display: inline-flex;
+        width: 15px;
+        height: 15px;
+        color: #94a3b8;
+        flex-shrink: 0;
+      }
+      .oc-thinking-icon svg {
+        width: 15px;
+        height: 15px;
+      }
+      .oc-thinking-wave {
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        line-height: 1;
+        color: #64748b;
+        background-image: linear-gradient(110deg, #64748b 0%, #64748b 35%, #94a3b8 50%, #64748b 75%, #64748b 100%);
+        background-size: 200% 100%;
+        background-position: 200% 0;
+        background-clip: text;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        animation: oc-thinking-shine 2s linear infinite;
+        will-change: background-position;
+      }
+      html.oc-stealth .oc-thinking-wave,
+      html.oc-dark .oc-thinking-wave {
+        background-image: linear-gradient(110deg, #94a3b8 0%, #94a3b8 35%, #cbd5e1 50%, #94a3b8 75%, #94a3b8 100%);
+      }
+      @keyframes oc-thinking-shine {
+        from { background-position: 200% 0; }
+        to { background-position: -200% 0; }
+      }
+      .oc-thinking-dots {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        height: 1em;
+      }
+      .oc-thinking-dots i {
+        display: block;
+        width: 3px;
+        height: 3px;
+        border-radius: 999px;
+        background: #a1a1aa;
+        animation: oc-thinking-dot 1.45s ease-in-out infinite;
+      }
+      .oc-thinking-dots i:nth-child(2) { animation-delay: 0.16s; }
+      .oc-thinking-dots i:nth-child(3) { animation-delay: 0.32s; }
+      @keyframes oc-thinking-dot {
+        0%, 65%, 100% { transform: translateY(0); opacity: 0.38; }
+        32% { transform: translateY(-2px); opacity: 0.92; }
       }
 
-      /* Composer — Clyra chat input, scaled to bar (no command palette) */
+      /* Composer — Clyra chat input (no command palette) */
       .chat-input-row {
         display: flex;
         gap: 0;
@@ -692,7 +691,7 @@
         border: 1px solid #dfe4e9;
         background: #fff;
         box-shadow: 0 6px 16px rgba(24, 33, 47, 0.06);
-        transition: border-color 180ms ease, box-shadow 180ms ease;
+        transition: border-color 140ms ease, box-shadow 140ms ease;
         -webkit-app-region: no-drag;
         app-region: no-drag;
       }
@@ -742,7 +741,7 @@
         display: grid;
         place-items: center;
         flex-shrink: 0;
-        transition: transform 180ms var(--oc-ease), color 160ms ease, background 160ms ease;
+        transition: transform 140ms var(--oc-ease), color 120ms ease, background 120ms ease;
       }
       #barChatSend:hover {
         background: rgba(15, 23, 42, 0.06);
@@ -824,21 +823,19 @@
       }
       .oc-shell.is-fading-out {
         opacity: 0;
-        transform: translateY(-6px) scale(0.985);
-        transition: opacity 360ms var(--oc-ease-soft), transform 360ms var(--oc-ease);
+        transform: translateY(-4px);
+        transition: opacity 180ms var(--oc-ease-soft), transform 180ms var(--oc-ease);
+        pointer-events: none;
       }
       .oc-shell.is-fading-in {
         opacity: 1;
         transform: none;
-        transition: opacity 360ms var(--oc-ease-soft), transform 360ms var(--oc-ease);
-      }
-      .oc-shell.is-animating {
-        will-change: width, transform, opacity, height;
+        transition: none;
       }
     </style>
   </head>
   <body data-oc-light-bar="1">
-    <div class="oc-shell is-boot-squish" id="ocShell">
+    <div class="oc-shell" id="ocShell">
       <div class="command-tab" id="commandTab">
         <button type="button" class="oc-close oc-boot-hide" id="ocCloseBtn" title="Close" aria-label="Close">
           <svg class="oc-icon-x" viewBox="0 0 12 12" fill="none" aria-hidden="true">
