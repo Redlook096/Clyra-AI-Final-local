@@ -23,13 +23,6 @@ if [[ -d "${BRIDGE}" ]]; then
     cp "${BRIDGE}/macos-input.py" "${DEST}/src/services/macos-input.py"
     chmod +x "${DEST}/src/services/macos-input.py"
   fi
-  if [[ -d "${BRIDGE}/visual-scan" ]]; then
-    mkdir -p "${DEST}/src/services/visual-scan"
-    cp "${BRIDGE}/visual-scan/"* "${DEST}/src/services/visual-scan/"
-    if [[ -f "${DEST}/src/services/visual-scan/macos-windows.py" ]]; then
-      chmod +x "${DEST}/src/services/visual-scan/macos-windows.py"
-    fi
-  fi
   cp "${BRIDGE}/config.js" "${DEST}/src/core/config.js"
   cp "${BRIDGE}/main.js" "${DEST}/main.js"
   cp "${BRIDGE}/window.manager.js" "${DEST}/src/managers/window.manager.js"

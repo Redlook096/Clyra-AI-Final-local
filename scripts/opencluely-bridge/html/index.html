@@ -21,10 +21,10 @@
         --oc-input-bg: rgba(255, 255, 255, 0.92);
         --oc-msg-bg: rgba(255, 255, 255, 0.86);
         --oc-ease: cubic-bezier(0.22, 1, 0.36, 1);
-        --oc-ease-soft: cubic-bezier(0.33, 1, 0.68, 1);
-        --oc-dur-w: 340ms;
-        --oc-dur-h: 320ms;
-        --oc-dur-fast: 160ms;
+        --oc-ease-soft: cubic-bezier(0.25, 1, 0.5, 1);
+        --oc-dur-w: 280ms;
+        --oc-dur-h: 260ms;
+        --oc-dur-fast: 140ms;
         --oc-accent: #4a7cff;
         --oc-accent-soft: rgba(74, 124, 255, 0.35);
         --oc-expanded-w: 600px;
@@ -86,7 +86,7 @@
         -webkit-font-smoothing: antialiased;
         -webkit-app-region: no-drag;
         color-scheme: light;
-        transition: color-scheme 420ms ease;
+        transition: color-scheme 280ms ease;
       }
       html.oc-stealth, html.oc-stealth body,
       html.oc-dark, html.oc-dark body { color-scheme: dark; }
@@ -107,11 +107,11 @@
           width var(--oc-dur-w) var(--oc-ease),
           min-width var(--oc-dur-w) var(--oc-ease),
           border-radius var(--oc-dur-h) var(--oc-ease-soft),
-          background 420ms var(--oc-ease-soft),
-          box-shadow 420ms var(--oc-ease-soft),
-          border-color 420ms var(--oc-ease-soft),
-          opacity 380ms var(--oc-ease-soft),
-          transform 520ms var(--oc-ease);
+          background 280ms var(--oc-ease-soft),
+          box-shadow 280ms var(--oc-ease-soft),
+          border-color 280ms var(--oc-ease-soft),
+          opacity 260ms var(--oc-ease-soft),
+          transform 320ms var(--oc-ease);
       }
 
       .oc-shell.is-boot-squish {
@@ -140,14 +140,14 @@
         opacity: 1;
         transform: none;
         pointer-events: auto;
-        transition: opacity 360ms var(--oc-ease), transform 420ms var(--oc-ease);
+        transition: opacity 240ms var(--oc-ease), transform 280ms var(--oc-ease);
       }
-      .oc-shell.is-boot-reveal .oc-boot-hide:nth-child(1) { transition-delay: 40ms; }
-      .oc-shell.is-boot-reveal .oc-boot-hide:nth-child(2) { transition-delay: 90ms; }
-      .oc-shell.is-boot-reveal .oc-boot-hide:nth-child(3) { transition-delay: 140ms; }
-      .oc-shell.is-boot-reveal .oc-boot-hide:nth-child(4) { transition-delay: 190ms; }
-      .oc-shell.is-boot-reveal .oc-stealth-wrap { transition-delay: 220ms; }
-      .oc-shell.is-boot-reveal .oc-drag { transition-delay: 260ms; }
+      .oc-shell.is-boot-reveal .oc-boot-hide:nth-child(1) { transition-delay: 20ms; }
+      .oc-shell.is-boot-reveal .oc-boot-hide:nth-child(2) { transition-delay: 50ms; }
+      .oc-shell.is-boot-reveal .oc-boot-hide:nth-child(3) { transition-delay: 80ms; }
+      .oc-shell.is-boot-reveal .oc-boot-hide:nth-child(4) { transition-delay: 110ms; }
+      .oc-shell.is-boot-reveal .oc-stealth-wrap { transition-delay: 130ms; }
+      .oc-shell.is-boot-reveal .oc-drag { transition-delay: 150ms; }
 
       .oc-shell.is-wide,
       .oc-shell.is-chat-open {
@@ -156,8 +156,8 @@
         background: var(--oc-glass-open);
         border: 1px solid var(--oc-border);
         box-shadow: var(--oc-shadow);
-        backdrop-filter: blur(28px) saturate(1.2);
-        -webkit-backdrop-filter: blur(28px) saturate(1.2);
+        backdrop-filter: blur(18px) saturate(1.15);
+        -webkit-backdrop-filter: blur(18px) saturate(1.15);
       }
 
       .command-tab {
@@ -172,8 +172,8 @@
         border: 1px solid rgba(255, 255, 255, 0.78);
         border-radius: 999px;
         box-shadow: var(--oc-shadow);
-        backdrop-filter: blur(28px) saturate(1.25);
-        -webkit-backdrop-filter: blur(28px) saturate(1.25);
+        backdrop-filter: blur(18px) saturate(1.18);
+        -webkit-backdrop-filter: blur(18px) saturate(1.18);
         -webkit-app-region: drag;
         transition:
           width var(--oc-dur-w) var(--oc-ease),
@@ -496,8 +496,8 @@
           linear-gradient(#000 0 0);
         -webkit-mask-composite: xor;
         mask-composite: exclude;
-        animation: oc-border-glow 1.8s linear infinite;
-        opacity: 0.9;
+        animation: oc-border-glow 2.4s linear infinite;
+        opacity: 0.75;
         z-index: 8;
       }
       @property --oc-glow-angle {
@@ -580,11 +580,11 @@
         border: 1px solid rgba(148, 163, 184, 0.28) !important;
         color: #172033 !important;
         transform-origin: bottom right;
-        animation: oc-user-bubble-appear 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+        animation: oc-user-bubble-appear 0.38s var(--oc-ease) both;
       }
       .chat-messages .message.user.oc-user-bubble--first {
         animation-name: oc-user-bubble-first;
-        animation-duration: 0.85s;
+        animation-duration: 0.48s;
       }
       html.oc-stealth .chat-messages .message.user.oc-user-bubble,
       html.oc-dark .chat-messages .message.user.oc-user-bubble {
@@ -617,7 +617,7 @@
         box-shadow: none !important;
         backdrop-filter: none !important;
         -webkit-backdrop-filter: none !important;
-        animation: oc-print-in 280ms var(--oc-ease) both;
+        animation: oc-print-in 220ms var(--oc-ease) both;
       }
       #barChatMessages .message.assistant.oc-print .message-text,
       #barChatMessages .message.system .message-text {
@@ -658,7 +658,7 @@
       }
       .thinking-dots .dot {
         display: inline-block;
-        animation: oc-pulse 1.1s ease-in-out infinite;
+        animation: oc-pulse 1.25s ease-in-out infinite;
         margin-right: 2px;
         color: #8b95a5;
       }

@@ -92,30 +92,24 @@ async function main() {
   await shot("04-collapsed-again");
   record("collapse", true);
 
-  // 5) Visual scan — many frames
+  // 5) Expand / collapse smoothness check (screen scan animation removed)
   await control("/show", { windows: ["main"] });
   await wait(300);
-  const scanP = control("/visual-scan", { reason: "final-tour", force: true }, 10000);
-  await wait(250);
-  for (let i = 1; i <= 16; i++) {
-    await shot(`05-scan-${String(i).padStart(2, "0")}`);
-    await wait(100);
-  }
-  const scan = await scanP;
-  record("visual-scan", scan.ok && scan.json?.ok !== false, JSON.stringify(scan.json).slice(0, 200));
-  await wait(400);
-  await shot("05-scan-after");
-
-  // 6) What's on my screen (vision) — start, capture scan frames, wait for answer
   await control("/expand", {});
-  await wait(500);
+  await wait(400);
+  await shot("05-expanded-smooth");
+  await control("/collapse", {});
+  await wait(350);
+  await shot("05-collapsed-smooth");
+  record("expand-collapse-smooth", true);
+
+  // 6) What's on my screen (vision)
+  await control("/expand", {});
+  await wait(400);
   await shot("06-before-screen-ask");
   const screenP = control("/chat", { text: "what's on my screen?" }, 200000);
-  await wait(280);
-  for (let i = 1; i <= 12; i++) {
-    await shot(`06-screen-scan-${String(i).padStart(2, "0")}`);
-    await wait(120);
-  }
+  await wait(500);
+  await shot("06-screen-ask-mid");
   const screen = await screenP;
   await wait(800);
   await shot("06-screen-answer");

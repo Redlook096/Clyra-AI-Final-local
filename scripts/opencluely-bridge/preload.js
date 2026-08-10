@@ -29,9 +29,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       // and height only expands downward (no vertical jump).
       growFromTopCenter: Boolean(opts?.growFromTopCenter),
     }),
-  startVisualScan: (opts = {}) => ipcRenderer.invoke('visual-scan:start', opts || {}),
-  stopVisualScan: () => ipcRenderer.invoke('visual-scan:stop'),
-  visualScanAvailable: () => ipcRenderer.invoke('visual-scan:available'),
   setChatDrawerOpen: (open, opts = {}) =>
     ipcRenderer.invoke('set-chat-drawer-open', {
       open: Boolean(typeof open === 'object' ? open?.open : open),

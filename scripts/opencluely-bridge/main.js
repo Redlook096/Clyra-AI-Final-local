@@ -104,7 +104,6 @@ const captureService = require("./src/services/capture.service");
 const speechService = require("./src/services/speech.service");
 const llmService = require("./src/services/llm.service");
 const desktopControl = require("./src/services/desktop-control.service");
-const { VisualScanService } = require("./src/services/visual-scan/visual-scan.service");
 
 // Managers
 const windowManager = require("./src/managers/window.manager");
@@ -119,7 +118,6 @@ class ApplicationController {
   this.codingLanguage = "cpp";
     this.speechAvailable = false;
     this.stealthEnabled = false;
-    this.visualScan = new VisualScanService({ logger });
     this._pendingScreenQuestion = null;
 
     // Utterance coalescing: VAD emits a transcript per natural pause, but a
@@ -667,30 +665,6 @@ class ApplicationController {
       return { success: true };
     });
 
-    ipcMain.handle("visual-scan:start", async (_event, opts = {}) => {
-      try {
-        logger.info("Visual scan IPC start", { reason: opts?.reason || "ipc" });
-        return await this.visualScan.start(opts || {});
-      } catch (error) {
-        logger.warn("Visual scan start failed", { error: error.message });
-        return { ok: false, error: error.message };
-      }
-    });
-    ipcMain.handle("visual-scan:stop", async () => {
-      try {
-        return await this.visualScan.stop();
-      } catch (error) {
-        return { ok: false, error: error.message };
-      }
-    });
-    ipcMain.handle("visual-scan:available", async () => {
-      return {
-        ok: true,
-        available: Boolean(this.visualScan?.isAvailable?.()),
-        platform: process.platform,
-      };
-    });
-
     ipcMain.handle("set-chat-drawer-open", (event, payload) => {
       const open = typeof payload === "object" ? Boolean(payload?.open) : Boolean(payload);
       const recenter = typeof payload === "object" ? payload?.recenter : undefined;
@@ -766,7 +740,6 @@ class ApplicationController {
             await this.triggerScreenshotOCR({
               userQuestion: text,
               visionMode: "screen-ask",
-              visualScan: true,
             });
             return;
           }
@@ -1359,7 +1332,6 @@ class ApplicationController {
     try {
       await this.triggerScreenshotOCR({
         visionMode: "auto",
-        visualScan: true,
         userQuestion:
           "Look at what's on my screen right now. Use your initiative: if there is a question or problem, answer it; otherwise briefly describe what you see.",
       });
@@ -1447,30 +1419,13 @@ class ApplicationController {
   }
 
   async #captureForAgent() {
-    const hiddenForCapture = [];
+    // Soft-cloak OpenCluely only — never hide() (macOS focus steal) or touch other apps.
+    this.#softCloakOpenCluely(true);
     try {
-      for (const [type, win] of windowManager.windows.entries()) {
-        if (!win || win.isDestroyed()) continue;
-        if (type === "main" || type === "chat" || type === "llmResponse" || type === "settings") {
-          if (win.isVisible()) {
-            hiddenForCapture.push(win);
-            win.hide();
-          }
-        }
-      }
-      await new Promise((r) => setTimeout(r, 100));
-      // Full-screen capture so vision coordinates match the OS display
+      await new Promise((r) => setTimeout(r, 40));
       return await captureService.captureAndProcess({ fullScreen: true });
     } finally {
-      for (const win of hiddenForCapture) {
-        try {
-          if (!win.isDestroyed()) {
-            windowManager.showOnCurrentDesktop(win, { focus: false, inactive: true });
-          }
-        } catch (_) {
-          /* ignore */
-        }
-      }
+      this.#softCloakOpenCluely(false);
     }
   }
 
@@ -1680,6 +1635,35 @@ class ApplicationController {
     return { ok: true };
   }
 
+  /**
+   * Soft-cloak OpenCluely chrome for a live desktop capture without hide().
+   * hide() steals macOS focus and can make other apps feel like they vanished.
+   * Never touches non-OpenCluely applications.
+   */
+  #softCloakOpenCluely(cloak) {
+    const types = ["main", "chat", "llmResponse", "settings"];
+    for (const type of types) {
+      const win = windowManager.windows.get(type);
+      if (!win || win.isDestroyed()) continue;
+      try {
+        if (cloak) {
+          if (!win.isVisible()) continue;
+          if (win.__clyraPrevOpacity == null) {
+            win.__clyraPrevOpacity = typeof win.getOpacity === "function" ? win.getOpacity() : 1;
+          }
+          if (typeof win.setOpacity === "function") win.setOpacity(0);
+        } else if (win.__clyraPrevOpacity != null) {
+          if (typeof win.setOpacity === "function") {
+            win.setOpacity(win.__clyraPrevOpacity);
+          }
+          win.__clyraPrevOpacity = null;
+        }
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  }
+
   async triggerScreenshotOCR(opts = {}) {
     if (!this.isReady) {
       logger.warn("Screenshot requested before application ready");
@@ -1695,63 +1679,40 @@ class ApplicationController {
           : null;
     this._pendingScreenQuestion = null;
     const visionMode = opts.visionMode || this._visionMode || (userQuestion ? "screen-ask" : null);
-    const wantScan = opts.visualScan !== false;
 
     try {
       windowManager.showLLMLoading();
 
-      // Hide OpenCluely overlays before the liquid-wave backdrop capture + OCR shot
-      // so neither freezes our chrome into the desktop texture nor confuses vision.
-      // The visual-scan overlay is a separate BrowserWindow and stays visible.
-      const hiddenForCapture = [];
-      try {
-        for (const [type, win] of windowManager.windows.entries()) {
-          if (!win || win.isDestroyed()) continue;
-          if (type === "main" || type === "chat" || type === "llmResponse" || type === "settings") {
-            if (win.isVisible()) {
-              hiddenForCapture.push(win);
-              win.hide();
-            }
-          }
-        }
-        await new Promise((r) => setTimeout(r, 80));
-      } catch (_) {
-        /* ignore */
-      }
-
-      // Visual Intelligence scan — NameDrop liquid warp + perfect circular front.
-      if (wantScan) {
-        try {
-          await this.visualScan.start({
-            reason: visionMode || "screenshot",
-            force: true,
-          });
-          // Let the centre pressure + first wave frames paint before OCR capture.
-          await new Promise((r) => setTimeout(r, 200));
-        } catch (scanError) {
-          logger.warn("Visual scan failed to start", { error: scanError.message });
-        }
-      }
+      // Soft-cloak OpenCluely chrome only — never hide()/close other apps.
+      this.#softCloakOpenCluely(true);
+      await new Promise((r) => setTimeout(r, 40));
 
       let capture;
       try {
         capture = await captureService.captureAndProcess({ fullScreen: true });
       } finally {
-        for (const win of hiddenForCapture) {
-          try {
-            if (!win.isDestroyed()) {
-            windowManager.showOnCurrentDesktop(win, { focus: false, inactive: true });
-          }
-          } catch (_) {
-            /* ignore */
-          }
-        }
+        this.#softCloakOpenCluely(false);
       }
 
-      if (!capture.imageBuffer || !capture.imageBuffer.length) {
+      if (!capture?.imageBuffer || !capture.imageBuffer.length) {
         windowManager.hideLLMResponse();
         this.broadcastOCRError("Failed to capture screenshot image");
         return;
+      }
+
+      try {
+        const fs = require("node:fs");
+        const path = require("node:path");
+        const os = require("node:os");
+        const debugPath = path.join(os.tmpdir(), "oc-last-vision-capture.png");
+        fs.writeFileSync(debugPath, capture.imageBuffer);
+        logger.info("Vision capture saved", {
+          path: debugPath,
+          bytes: capture.imageBuffer.length,
+          method: capture.metadata?.source?.method || capture.metadata?.method,
+        });
+      } catch (_) {
+        /* ignore */
       }
 
       this._lastCapture = capture;
@@ -2711,15 +2672,6 @@ class ApplicationController {
             send(200, { ok: true, action: "auto-answer" });
             return;
           }
-          if (req.method === "POST" && req.url === "/visual-scan") {
-            const body = await readBody().catch(() => ({}));
-            const result = await this.visualScan.start({
-              reason: String(body.reason || "http"),
-              force: body.force !== false,
-            });
-            send(200, { ok: true, action: "visual-scan", ...result });
-            return;
-          }
           if (req.method === "POST" && req.url === "/control/start") {
             const body = await readBody();
             const task = String(body.task || body.text || "").trim();
@@ -2786,7 +2738,6 @@ class ApplicationController {
               await this.triggerScreenshotOCR({
                 userQuestion: text,
                 visionMode: "screen-ask",
-                visualScan: true,
               });
               send(200, { ok: true, action: "chat-via-screenshot", text });
               return;

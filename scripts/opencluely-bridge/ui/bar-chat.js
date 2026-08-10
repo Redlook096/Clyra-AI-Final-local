@@ -12,8 +12,8 @@
   const COLLAPSED_H = 56;
   const DRAWER_H = 360;
   // Keep in sync with --oc-dur-w / --oc-dur-h in index.html — lighter + snappier
-  const DUR_W = 340;
-  const DUR_H = 320;
+  const DUR_W = 280;
+  const DUR_H = 260;
 
   const shell = document.getElementById('ocShell');
   const tab = document.getElementById('commandTab');
@@ -174,9 +174,8 @@
   let resizeChain = Promise.resolve();
   let queuedResize = null;
 
-  // Match CSS --oc-ease: cubic-bezier(0.16, 1, 0.3, 1) so Electron bounds
-  // and drawer height stay locked during expand/collapse.
-  function cubicBezierEase(t, p1x = 0.16, p1y = 1, p2x = 0.3, p2y = 1) {
+  // Match CSS --oc-ease so Electron bounds and drawer height stay locked.
+  function cubicBezierEase(t, p1x = 0.22, p1y = 1, p2x = 0.36, p2y = 1) {
     const x = Math.max(0, Math.min(1, t));
     // Solve Bézier x(u)=x for u via Newton, then evaluate y(u).
     let u = x;
@@ -424,19 +423,19 @@
     if (window.electronAPI?.resizeWindow) {
       window.electronAPI.resizeWindow(56, COLLAPSED_H);
     }
-    await wait(60);
+    await wait(40);
     // 2) Fade in while still thin / compressed
     shell.classList.add('is-boot-fade');
-    await wait(360);
+    await wait(240);
     // 3) Expand horizontally into full pill
     shell.classList.remove('is-boot-squish');
     shell.classList.add('is-boot-expand');
-    await wait(50);
+    await wait(40);
     measureAndResize();
-    await wait(520);
+    await wait(300);
     // 4) Reveal buttons / stealth / drag with stagger
     shell.classList.add('is-boot-reveal');
-    await wait(520);
+    await wait(280);
     shell.classList.remove('is-boot-fade', 'is-boot-expand');
     measureAndResize();
   }
@@ -585,18 +584,6 @@
     inputEl.value = '';
     autoGrow();
     showThinking();
-    // Kick Visual Intelligence scan immediately for screen questions (main also starts).
-    if (
-      /\b(what('?s| is) on (my )?screen|on my screen|see (my )?screen|look at (my )?screen|what do you see|screenshot|describe (the |my )?(screen|desktop))\b/i.test(
-        text,
-      )
-    ) {
-      try {
-        void window.electronAPI?.startVisualScan?.({ reason: 'screen-ask' });
-      } catch (_) {
-        /* ignore */
-      }
-    }
     try {
       await window.electronAPI?.sendChatMessage?.(text);
     } catch (error) {
@@ -609,12 +596,6 @@
     await expandToChat('auto');
     addMessage('Auto Answer — reading your screen…', 'system');
     showThinking();
-    // One-shot Visual Intelligence scan while capturing
-    try {
-      void window.electronAPI?.startVisualScan?.({ reason: 'auto-answer' });
-    } catch (_) {
-      /* ignore */
-    }
     try {
       // Prefer dedicated control endpoint when available
       const res = await fetch('http://127.0.0.1:3847/auto-answer', {
