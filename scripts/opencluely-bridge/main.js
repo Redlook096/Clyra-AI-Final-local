@@ -285,11 +285,10 @@ class ApplicationController {
       this.isReady = true;
       this.startClyraControlServer();
 
-      // After windows exist, register under System Settings → Privacy.
-      // Do this late so a TCC prompt cannot block first paint / control API.
-      setTimeout(() => {
-        void this.primeMacOsMediaAccess();
-      }, 1500);
+      // Privacy prompts belong to the feature that requested them. Asking for
+      // microphone/camera access at launch can cover the user's active app and
+      // prevents Take Control from completing a non-voice task. Voice actions
+      // still call ensureMicrophoneAccess / ensureCameraAccess on demand.
 
       // Launch the onboarding wizard if this is the first run.
       if (this.isFirstRun) {

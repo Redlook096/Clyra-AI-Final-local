@@ -1840,7 +1840,9 @@ export default function WebBrowserWorkspace() {
                   className="clyra-browser-agent-cursor pointer-events-none absolute z-20 -translate-x-[2px] -translate-y-[2px]"
                   data-kind={liveCursor.kind}
                 >
-                  <span className="clyra-browser-agent-cursor__arrow" aria-hidden />
+                  <svg className="clyra-browser-agent-cursor__arrow" viewBox="0 0 28 32" aria-hidden="true">
+                    <path d="M4.62 2.72C3.09 1.91 1.57 3.43 2.39 4.96l8.36 16.3c.75 1.47 2.87 1.39 3.5-.13l2.69-6.51 6.51-2.69c1.52-.63 1.6-2.75.13-3.5L4.62 2.72Z" />
+                  </svg>
                   <span className="clyra-browser-agent-cursor__caret" aria-hidden />
                   {settings.showAiActionLabels ? (
                     <span className="clyra-browser-agent-cursor__label">{cursorIntent}</span>
@@ -2588,6 +2590,11 @@ function AskUserCard({ question, reducedMotion }: { question: string; reducedMot
 }
 
 function CompletionCard({ item, reducedMotion }: { item: Extract<RunItem, { kind: "complete" }>; reducedMotion: boolean }) {
+  const conciseSummary = item.message
+    .replace(/\s+/g, " ")
+    .replace(/^(?:Task (?:completed|complete)[:\-]?\s*)/i, "")
+    .trim()
+    .slice(0, 180);
   return (
     <motion.div
       initial={{ opacity: 0, y: 4 }}
@@ -2601,6 +2608,7 @@ function CompletionCard({ item, reducedMotion }: { item: Extract<RunItem, { kind
           <p className={cn("text-[10px] font-semibold", item.success ? "text-emerald-600" : "text-rose-500")}>
             {item.success ? "Task completed" : "Task not completed"}
           </p>
+          {item.success && conciseSummary ? <p className="mt-1 text-[10px] font-medium leading-4 text-[var(--atlas-text-secondary)]"><span className="mr-1 text-[var(--atlas-text-tertiary)]">Summary</span>{conciseSummary}</p> : null}
           {item.message ? <p className="mt-1 whitespace-pre-wrap text-[11px] font-medium leading-4.5 text-[var(--atlas-text-primary)]">{item.message}</p> : null}
           {item.evidence?.url ? (
             <a href={item.evidence.url} target="_blank" rel="noreferrer" className="mt-1.5 flex max-w-full items-center gap-1.5 text-[10px] font-medium text-[var(--atlas-text-secondary)] hover:text-[var(--atlas-text-primary)]">

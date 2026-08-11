@@ -696,7 +696,8 @@ export class ChromiumBrowserManager {
         glow.style.cssText = "position:absolute;left:-13px;top:-13px;width:49px;height:49px;border-radius:999px;background:radial-gradient(circle,rgba(87,151,255,.24),rgba(63,128,255,.11) 39%,transparent 70%);filter:blur(4px);";
         const pointer = document.createElement("div");
         pointer.dataset.part = "pointer";
-        pointer.style.cssText = "position:absolute;left:0;top:0;width:26px;height:31px;background:linear-gradient(142deg,#2a303b 0%,#11141a 36%,#050609 100%);clip-path:polygon(5% 1%,96% 34%,61% 49%,43% 98%);filter:drop-shadow(0 0 1px rgba(235,246,255,.98)) drop-shadow(0 2px 4px rgba(16,24,40,.32)) drop-shadow(0 0 8px rgba(43,128,255,.24));transform-origin:5px 2px;";
+        pointer.style.cssText = "position:absolute;left:0;top:0;width:28px;height:32px;filter:drop-shadow(0 0 1px rgba(255,255,255,.82)) drop-shadow(0 2px 4px rgba(16,24,40,.32)) drop-shadow(0 0 10px rgba(43,128,255,.32));transform-origin:5px 2px;";
+        pointer.innerHTML = '<svg viewBox="0 0 28 32" width="28" height="32" aria-hidden="true"><defs><linearGradient id="clyraNativeCursor" x1="2" y1="2" x2="22" y2="28" gradientUnits="userSpaceOnUse"><stop stop-color="#2b3039"/><stop offset=".42" stop-color="#15181d"/><stop offset="1" stop-color="#07080a"/></linearGradient></defs><path d="M4.62 2.72C3.09 1.91 1.57 3.43 2.39 4.96l8.36 16.3c.75 1.47 2.87 1.39 3.5-.13l2.69-6.51 6.51-2.69c1.52-.63 1.6-2.75.13-3.5L4.62 2.72Z" fill="url(#clyraNativeCursor)" stroke="rgba(255,255,255,.55)" stroke-width=".55" stroke-linejoin="round"/></svg>';
         const caret = document.createElement("div");
         caret.dataset.part = "caret";
         caret.style.cssText = "display:none;position:absolute;left:16px;top:6px;width:2px;height:22px;border-radius:999px;background:#1d1f24;box-shadow:0 0 0 1px rgba(255,255,255,.9),0 1px 5px rgba(52,97,177,.22);";

@@ -5662,12 +5662,18 @@ body,
 
 .clyra-browser-agent-cursor__arrow {
   display: block;
-  width: 26px;
-  height: 31px;
-  background: linear-gradient(142deg, #2a303b 0%, #11141a 36%, #050609 100%);
-  clip-path: polygon(5% 1%, 96% 34%, 61% 49%, 43% 98%);
-  filter: drop-shadow(0 0 1px rgba(235,246,255,.98)) drop-shadow(0 2px 4px rgba(16,24,40,.32)) drop-shadow(0 0 8px rgba(43,128,255,.24));
+  width: 28px;
+  height: 32px;
+  overflow: visible;
+  filter: drop-shadow(0 0 1px rgba(255,255,255,.82)) drop-shadow(0 2px 4px rgba(16,24,40,.32)) drop-shadow(0 0 10px rgba(43,128,255,.32));
   transform-origin: 5px 2px;
+}
+
+.clyra-browser-agent-cursor__arrow path {
+  fill: #15181d;
+  stroke: rgba(255,255,255,.55);
+  stroke-width: .55px;
+  stroke-linejoin: round;
 }
 
 .clyra-browser-agent-cursor__caret {
