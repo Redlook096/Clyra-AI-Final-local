@@ -82,6 +82,10 @@ export function ElectronWebContentsSurface({
     observer.observe(host);
     window.addEventListener("resize", sync);
     window.addEventListener("scroll", sync, true);
+    // Motion controls the adjacent chat-panel width. Forward each animation
+    // frame so the native Chromium view tracks the same geometry rather than
+    // jumping to its final width after the panel has settled.
+    window.addEventListener("clyra:native-surface-layout", sync);
     const handleOcclusion = (event: Event) => {
       occluded = Boolean((event as CustomEvent<{ occluded?: boolean }>).detail?.occluded);
       if (occluded) {
@@ -102,6 +106,7 @@ export function ElectronWebContentsSurface({
       observer.disconnect();
       window.removeEventListener("resize", sync);
       window.removeEventListener("scroll", sync, true);
+      window.removeEventListener("clyra:native-surface-layout", sync);
       window.removeEventListener("clyra:native-surface-occlusion", handleOcclusion);
       document.removeEventListener("visibilitychange", sync);
       if (kind === "browser") void desktop.browser.setSurface({ visible: false });

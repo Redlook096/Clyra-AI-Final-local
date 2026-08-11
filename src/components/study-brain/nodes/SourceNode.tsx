@@ -94,10 +94,10 @@ export function SourceNodeView({ data, selected }: NodeProps) {
   return (
     <div
       className={cn(
-        "study-source-node group relative w-[236px] overflow-hidden rounded-[16px] border bg-white px-3.5 py-3 transition-[box-shadow,border-color,transform] duration-150",
+        "study-source-node group relative w-[222px] overflow-hidden rounded-[13px] border bg-white px-3 py-2.5 transition-[box-shadow,border-color,transform] duration-150",
         selected
-          ? "border-[color:var(--clyra-accent)]/40 shadow-[0_0_0_3px_rgba(0,82,251,0.09),0_14px_28px_rgba(15,23,42,0.08)]"
-          : "border-[color:var(--clyra-border)] shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_20px_rgba(15,23,42,0.04)]",
+          ? "border-[color:var(--clyra-accent)]/45 shadow-[0_0_0_2px_rgba(10,111,242,0.08),0_8px_20px_rgba(15,23,42,0.06)]"
+          : "border-[color:var(--clyra-border)] shadow-[0_1px_2px_rgba(15,23,42,0.03),0_5px_14px_rgba(15,23,42,0.025)]",
         source.connected && !selected && "border-[color:var(--clyra-border-strong)]",
       )}
     >
@@ -107,26 +107,26 @@ export function SourceNodeView({ data, selected }: NodeProps) {
           id={side.id}
           type="source"
           position={side.position}
-          className="study-source-handle !h-2 !w-2 !border-[1.5px] !border-white !bg-[#94a3b8]"
+          className="study-source-handle !h-2 !w-2 !border !border-white !bg-[#9a9a9f]"
         />
       ))}
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-2.5">
         <span
           className={cn(
-            "mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-[12px] border",
+            "mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-[8px] border",
             iconWellTone(source.kind),
           )}
         >
           <KindIcon kind={source.kind} origin={source.origin} />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[13.5px] font-semibold tracking-[-0.025em] text-[color:var(--clyra-text)]">
+          <p className="truncate text-[13px] font-semibold tracking-[-0.02em] text-[color:var(--clyra-text)]">
             {source.title}
           </p>
           <p className="mt-0.5 truncate text-[11px] text-[color:var(--clyra-text-tertiary)]">{kindLabel}</p>
           <p
             className={cn(
-              "mt-2 inline-flex items-center gap-1.5 text-[10.5px] font-medium",
+              "mt-1.5 inline-flex items-center gap-1.5 text-[10.5px] font-medium",
               source.status === "ready" && source.connected && "text-[color:var(--clyra-accent)]",
               source.status === "ready" && !source.connected && "text-[color:var(--clyra-text-tertiary)]",
               source.status === "error" && "text-rose-500",
@@ -134,7 +134,7 @@ export function SourceNodeView({ data, selected }: NodeProps) {
             )}
           >
             {source.status === "ready" && source.connected ? (
-              <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--clyra-accent)]" aria-hidden />
+              <span className="h-[5px] w-[5px] rounded-full bg-[color:var(--clyra-accent)]" aria-hidden />
             ) : null}
             {statusLabel(source)}
           </p>

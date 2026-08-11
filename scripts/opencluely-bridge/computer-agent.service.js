@@ -51,8 +51,9 @@ class ComputerAgentService {
   }
 
   async #captureJpegBase64(softCloak) {
-    const { captureService, softCloakFn } = this.deps;
+    const { captureService, desktopControl, softCloakFn } = this.deps;
     try {
+      desktopControl?.hideAICursor?.();
       if (softCloakFn) softCloakFn(true);
       await new Promise((r) => setTimeout(r, 120));
       const capture = await captureService.captureForComputerAgent({ fullScreen: true });
@@ -71,11 +72,6 @@ class ComputerAgentService {
     this.running = true;
     this.abortController = new AbortController();
 
-    const apiKey = (process.env.ANTHROPIC_API_KEY || process.env.CLYRA_ANTHROPIC_API_KEY || '').trim();
-    const { computerAgentAvailability } = await import('./computer-agent-api.mjs');
-    const backendComputerUse = !apiKey && await computerAgentAvailability();
-    this.engine = apiKey || backendComputerUse ? 'anthropic-computer-use' : 'clyra-gemini-fallback';
-
     await desktopControl.initialize();
     if (desktopControl.driver === 'none') {
       this.running = false;
@@ -87,7 +83,10 @@ class ComputerAgentService {
     windowManager?.showAllWindows?.();
     windowManager?.centerMainWindowAtTop?.();
 
-    this.#emit({ status: 'running', message: `Take Control: ${task}`, engine: this.engine });
+    // Start the native fast path before checking optional remote providers.
+    // This makes simple launch/type requests immediate and never exposes an
+    // irrelevant missing-Anthropic-key status before control actually begins.
+    this.#emit({ status: 'running', message: `Take Control: ${task}`, engine: 'clyra-desktop-control' });
 
     try {
       // The upstream computer-agent uses bash for deterministic local work.
@@ -96,6 +95,12 @@ class ComputerAgentService {
       // guessing dock coordinates from a screenshot.
       const directResult = await this.#runExplicitDesktopShortcut(task);
       if (directResult) return directResult;
+      const apiKey = (process.env.ANTHROPIC_API_KEY || process.env.CLYRA_ANTHROPIC_API_KEY || '').trim();
+      const { computerAgentAvailability } = await import('./computer-agent-api.mjs');
+      // The Clyra-hosted provider is optional. Give its loopback health check a
+      // short budget, then use Clyra's Gemini screen-aware planner immediately.
+      const backendComputerUse = !apiKey && await computerAgentAvailability({ timeoutMs: 450 });
+      this.engine = apiKey || backendComputerUse ? 'anthropic-computer-use' : 'clyra-gemini-fallback';
       if (apiKey || backendComputerUse) {
         return await this.#runAnthropicAgent(task, {
           softCloakFn,
@@ -103,13 +108,7 @@ class ComputerAgentService {
           signal: this.abortController.signal,
         });
       }
-
-      logger.warn('ANTHROPIC_API_KEY not set — using Clyra Gemini vision fallback for Take Control');
-      this.#emit({
-        status: 'step',
-        message: 'Add ANTHROPIC_API_KEY to .env.local for full computer-agent (Taskhomie) control.',
-        engine: this.engine,
-      });
+      this.#emit({ status: 'step', message: 'Reading the screen with Clyra…', engine: this.engine });
       return await this.#runGeminiFallback(task, { softCloakFn });
     } finally {
       if (runId === this.runId) {
@@ -122,11 +121,22 @@ class ComputerAgentService {
 
   async #runExplicitDesktopShortcut(task) {
     const source = String(task || '').trim();
+    const safeMove = /\b(?:move|place)\s+(?:the\s+)?(?:mouse\s+)?(?:cursor|mouse)\b[\s\S]*?\b(?:upper[-\s]?left|top[-\s]?left)\b/i.test(source);
+    if (safeMove && !/\b(?:click|type|scroll|open|launch)\b/i.test(source)) {
+      const { desktopControl } = this.deps;
+      const bounds = screen.getPrimaryDisplay().workArea || screen.getPrimaryDisplay().bounds;
+      const point = { x: bounds.x + 48, y: bounds.y + 96 };
+      await desktopControl.move(point.x, point.y, 'Moving to a safe area');
+      const message = 'Moved the cursor to a safe empty area.';
+      this.#emit({ status: 'done', message, engine: this.engine });
+      return { ok: true, done: true, shortcut: 'safe-cursor-move', point };
+    }
     const appMatch = source.match(/\b(?:open|launch)\s+(google\s+chrome|chrome|safari)\b/i);
-    const addressBarRequested = /\b(?:address|search)\s+bar\b/i.test(source);
-    const typeMatch = source.match(/\btype\s+[“"']?([^“"'.!\n]+?)[”"']?(?:\s+in\s+(?:the\s+)?(?:address|search)\s+bar|\s*$)/i);
+    const typeMatch = source.match(/\btype(?:\s+in)?\s+[“"']?(.+?)[”"']?(?=\s+(?:but\s+)?(?:do\s+not\s+)?(?:press|hit|click)\s+(?:enter|return)|\s+in\s+(?:the\s+)?(?:address|search)\s+bar|\s*$)/i);
     const text = String(typeMatch?.[1] || '').trim();
-    if (!appMatch || !addressBarRequested || !text || text.length > 240) return null;
+    // Opening a browser and asking to type is unambiguous: focus its address
+    // bar even when the user did not explicitly say "address bar".
+    if (!appMatch || !text || text.length > 240) return null;
 
     const { desktopControl } = this.deps;
     const wantsSafari = /safari/i.test(appMatch[1]);
@@ -136,6 +146,11 @@ class ComputerAgentService {
       return { ok: false, error: 'app_unavailable_on_windows', message };
     }
     const appName = wantsSafari ? 'Safari' : 'Google Chrome';
+    await desktopControl.showAICursor?.(
+      screen.getCursorScreenPoint(),
+      `Opening ${appName}`,
+      'launch',
+    );
     this.#emit({ status: 'bash', message: `Opening ${appName}`, engine: this.engine });
     const launchCommand = process.platform === 'darwin'
       ? `open -a "${appName}"`

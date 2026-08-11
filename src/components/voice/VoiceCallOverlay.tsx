@@ -6,6 +6,7 @@ import {
   useState,
   type FormEvent,
   type KeyboardEvent,
+  type MutableRefObject,
   type ReactNode,
 } from "react";
 import { AnimatePresence, motion } from "motion/react";
@@ -27,7 +28,7 @@ import { AiOrb, type OrbColorTheme } from "../AiOrb";
 import { cn } from "../../lib/utils";
 import type { VoiceStatus, VoiceTurn } from "../../hooks/useVoiceCall";
 import { getElectronDesktop } from "../../lib/electron-runtime";
-import { VoiceWaveform } from "./VoiceWaveform";
+import { VoiceWaveform, type VoiceWaveformSignal } from "./VoiceWaveform";
 import { VoiceTranscriptPanel } from "./VoiceTranscriptPanel";
 
 type LeftMenuMode = "closed" | "type" | "summary" | "messages";
@@ -219,6 +220,7 @@ export function VoiceCallOverlay({
   status,
   muted,
   micLevel,
+  waveformSignalRef,
   partialTranscript,
   assistantText,
   error,
@@ -235,6 +237,7 @@ export function VoiceCallOverlay({
   status: VoiceStatus;
   muted: boolean;
   micLevel: number;
+  waveformSignalRef: MutableRefObject<VoiceWaveformSignal>;
   partialTranscript: string;
   assistantText: string;
   error: string | null;
@@ -683,7 +686,14 @@ export function VoiceCallOverlay({
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1], delay: 0.1 }}
             >
-              <VoiceWaveform level={micLevel} muted={muted} active={meterActive} className="clyra-voice-call-waveform" />
+              <VoiceWaveform
+                level={micLevel}
+                signalRef={waveformSignalRef}
+                muted={muted}
+                active={meterActive}
+                state={status}
+                className="clyra-voice-call-waveform"
+              />
             </motion.div>
 
             <StatusChip status={status} muted={muted} />

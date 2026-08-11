@@ -8,7 +8,6 @@ import {
   Grid2X2,
   Heart,
   MessageCircle,
-  MessagesSquare,
 } from "lucide-react";
 import { AnimatePresence, motion, useMotionValue, useReducedMotion, useSpring } from "motion/react";
 import { type PointerEvent, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
@@ -39,7 +38,6 @@ const tools: LauncherTool[] = [
   { id: "vibe", label: "Vibe Coder", shortLabel: "Vibe Coder", detail: "Build and preview production applications", icon: Code2, accent: "#0f172a" },
   { id: "chat", label: "Chat", shortLabel: "Chat", detail: "Think, write and reason with Clyra", icon: MessageCircle, accent: "#1e293b" },
   { id: "clip", label: "AI Clipper", shortLabel: "Clip", detail: "Turn long videos into polished social clips", icon: Clapperboard, accent: "#334155" },
-  { id: "fake-text", label: "Message Story", shortLabel: "Text Story", detail: "Create narrated iMessage story videos", icon: MessagesSquare, accent: "#475569" },
   { id: "study", label: "Study Brain", shortLabel: "Study", detail: "Connect sources to a Study Brain on an infinite canvas", icon: GraduationCap, accent: "#0f172a" },
   { id: "would-rather", label: "Would You Rather", shortLabel: "Would You Rather", detail: "Make narrated choice and poll videos", icon: Heart, accent: "#334155" },
   { id: "browser", label: "AI Browser", shortLabel: "Browser", detail: "Research and act across live websites", icon: Globe2, accent: "#1e293b" },

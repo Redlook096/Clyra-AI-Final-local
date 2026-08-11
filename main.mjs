@@ -102,11 +102,11 @@ function startBrowserBridge() {
       } else if (request.method === "POST" && url.pathname === "/agent") {
         sendJson(response, 200, { ok: true, agent: browserManager.setAgentState(body) });
       } else if (request.method === "GET" && url.pathname === "/observe") {
-        sendJson(response, 200, { ok: true, observation: await browserManager.observe() });
+        sendJson(response, 200, { ok: true, observation: await browserManager.observe(url.searchParams.get("tabId") || undefined) });
       } else if (request.method === "POST" && url.pathname === "/action") {
-        sendJson(response, 200, await browserManager.agentAction(body.action, body.observation, body.source || "agent"));
+        sendJson(response, 200, await browserManager.agentAction(body.action, body.observation, body.source || "agent", body.tabId));
       } else if (request.method === "POST" && url.pathname === "/cursor") {
-        await browserManager.setCursor(body.cursor || null);
+        await browserManager.setCursor(body.cursor || null, body.tabId);
         sendJson(response, 200, { ok: true });
       } else if (request.method === "POST" && url.pathname === "/find") {
         sendJson(response, 200, { ok: true, ...(await browserManager.find(body.text)) });

@@ -361,17 +361,18 @@ async function refreshElectronTabState() {
   return payload.state;
 }
 
-async function getElectronObservation() {
-  const payload = await electronBridgeRequest<{ ok: true; observation: ElectronBrowserBridgeObservation }>("/observe");
+async function getElectronObservation(tabId?: string) {
+  const route = tabId ? `/observe?tabId=${encodeURIComponent(tabId)}` : "/observe";
+  const payload = await electronBridgeRequest<{ ok: true; observation: ElectronBrowserBridgeObservation }>(route);
   return payload.observation;
 }
 
-async function runElectronAction(action: BrowserAction, observation: StructuredObservation, source: "agent" | "user") {
-  return electronBridgeRequest<{ ok: true; state: ManagedBrowserState; observation: StructuredObservation }>("/action", { action, observation, source });
+async function runElectronAction(action: BrowserAction, observation: StructuredObservation, source: "agent" | "user", tabId?: string) {
+  return electronBridgeRequest<{ ok: true; state: ManagedBrowserState; observation: StructuredObservation }>("/action", { action, observation, source, tabId });
 }
 
-async function setElectronCursor(cursor?: BrowserCursorEvent) {
-  await electronBridgeRequest("/cursor", { cursor: cursor || null }).catch(() => undefined);
+async function setElectronCursor(cursor?: BrowserCursorEvent, tabId?: string) {
+  await electronBridgeRequest("/cursor", { cursor: cursor || null, tabId }).catch(() => undefined);
 }
 
 async function identifyElectronPage(candidate: Page) {
@@ -2177,7 +2178,7 @@ export function setManagedBrowserAgentControl(command: "pause" | "resume" | "tak
   return state;
 }
 
-async function runElectronBrowserAgent(task: string, apiKey: string, options: { onEvent?: (event: BrowserAgentEvent) => void; signal?: AbortSignal } = {}) {
+async function runElectronBrowserAgent(task: string, apiKey: string, options: { onEvent?: (event: BrowserAgentEvent) => void; signal?: AbortSignal; tabId?: string } = {}) {
   activeTaskAbort?.abort();
   await loadAgentSession();
   const taskAbort = new AbortController();
@@ -2203,6 +2204,7 @@ async function runElectronBrowserAgent(task: string, apiKey: string, options: { 
   let lastFingerprint = "";
   let lastNudgeStep = 0;
   const localPageTask = taskExplicitlyTargetsLocalPage(task);
+  const lockedTabId = options.tabId || (await refreshElectronTabState())?.activeTabId || electronActiveTabId || undefined;
   const requiresVisibleProgress = /\b(?:search|find|go to|navigate|open|click|fill|submit|compare|research)\b/i.test(task);
   // A summary is a real browser task, but its evidence is the page observation
   // itself. Requiring an unrelated click before it may finish led the native
@@ -2221,7 +2223,7 @@ async function runElectronBrowserAgent(task: string, apiKey: string, options: { 
     for (let step = 1; step <= MAX_AGENT_STEPS; step += 1) {
       await waitWhilePaused(taskAbort.signal, emit);
       if (taskAbort.signal.aborted) throw new DOMException("Task cancelled", "AbortError");
-      const observation = await serializeOperation(getElectronObservation);
+      const observation = await serializeOperation(() => getElectronObservation(lockedTabId));
       if (/^https?:\/\//i.test(observation.page.url)) {
         visitedUrls.add(observation.page.url);
         if (isLikelyDetailPage(observation.page.url)) visitedDetailUrls.add(observation.page.url);
@@ -2327,17 +2329,17 @@ async function runElectronBrowserAgent(task: string, apiKey: string, options: { 
           emit({ phase: "waiting_for_user", message: candidate.question, step });
           return { message: `${candidate.question}\n\n${candidate.reason}`, steps: history, plan, facts, waitingForUser: true, state: await getManagedBrowserState() };
         }
-        const before = await serializeOperation(getElectronObservation);
+        const before = await serializeOperation(() => getElectronObservation(lockedTabId));
         const signature = `${before.page.fingerprint}|${JSON.stringify(candidate)}`;
         if ((attempted.get(signature) || 0) >= 2) continue;
         actionRepeats.set(repeatSignature(candidate), (actionRepeats.get(repeatSignature(candidate)) || 0) + 1);
         try {
           const action = validateBrowserAction(candidate, before, "agent");
           const cursor = cursorForAction(action, before);
-          await setElectronCursor(cursor);
+          await setElectronCursor(cursor, lockedTabId);
           agentStatus = "executing";
           emit({ phase: "executing", kind: "action", message: decision.nextGoal || decision.reasoningSummary || `Running ${action.type}`, step, action, cursor, actionIndex: actionIndex + 1, actionCount: actions.length, completedCriteria: completedCriteria.size, totalCriteria: plan.successCriteria.length, facts: facts.length });
-          const result = await serializeOperation(() => runElectronAction(action, before, "agent"));
+          const result = await serializeOperation(() => runElectronAction(action, before, "agent", lockedTabId));
           if (/^https?:\/\//i.test(result.observation.page.url)) {
             visitedUrls.add(result.observation.page.url);
             if (isLikelyDetailPage(result.observation.page.url)) visitedDetailUrls.add(result.observation.page.url);
@@ -2376,7 +2378,7 @@ async function runElectronBrowserAgent(task: string, apiKey: string, options: { 
         }
       }
       if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-        const lastObservation = await serializeOperation(getElectronObservation).catch(() => null);
+        const lastObservation = await serializeOperation(() => getElectronObservation(lockedTabId)).catch(() => null);
         finalMessage = `I could not complete the task: ${MAX_CONSECUTIVE_FAILURES} browser actions in a row failed. Most recent problem: ${failures[failures.length - 1] || "the page did not respond to any attempted control"}. I stopped instead of looping.`;
         agentStatus = "failed";
         const failEvidence = completionEvidence(lastObservation, plan, completedCriteria);
@@ -2388,7 +2390,7 @@ async function runElectronBrowserAgent(task: string, apiKey: string, options: { 
     }
     finalMessage = `${finalMessage}\n\nI reached the bounded action limit without claiming the task was complete.`;
     agentStatus = "failed";
-    const limitEvidence = completionEvidence(await serializeOperation(getElectronObservation).catch(() => null), plan, completedCriteria);
+    const limitEvidence = completionEvidence(await serializeOperation(() => getElectronObservation(lockedTabId)).catch(() => null), plan, completedCriteria);
     emit({ phase: "failed", kind: "complete", message: finalMessage, plan: plan || undefined, success: false, evidence: limitEvidence, completedCriteria: completedCriteria.size, totalCriteria: plan?.successCriteria.length || 0, facts: facts.length });
     finishAgentSession({ message: finalMessage, steps: history, facts });
     return { message: finalMessage, steps: history, plan: plan || { goal: task, steps: [], successCriteria: [] }, facts, success: false, evidence: limitEvidence, state: await getManagedBrowserState() };
@@ -2410,12 +2412,12 @@ async function runElectronBrowserAgent(task: string, apiKey: string, options: { 
     agentPaused = false;
     manualControl = false;
     wakeAgent();
-    await setElectronCursor(undefined);
+    await setElectronCursor(undefined, lockedTabId);
     if (["completed", "failed", "cancelled"].includes(agentStatus)) setTimeout(() => { if (!activeTask) agentStatus = "idle"; }, 1_000);
   }
 }
 
-export async function runManagedBrowserAgent(task: string, apiKey: string, options: { onEvent?: (event: BrowserAgentEvent) => void; signal?: AbortSignal } = {}) {
+export async function runManagedBrowserAgent(task: string, apiKey: string, options: { onEvent?: (event: BrowserAgentEvent) => void; signal?: AbortSignal; tabId?: string } = {}) {
   if (USE_ELECTRON_BROWSER) return runElectronBrowserAgent(task, apiKey, options);
   activeTaskAbort?.abort();
   await loadAgentSession();

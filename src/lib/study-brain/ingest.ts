@@ -189,11 +189,15 @@ export async function ingestTextFile(file: File): Promise<StudySourceNode> {
 export function ingestPaste(text: string, title = "Pasted notes"): StudySourceNode {
   const body = text.trim();
   if (body.length < 20) throw new Error("Paste a longer note to study.");
+  const id = uid();
   return emptySource({
-    id: uid(),
+    id,
     kind: "note",
     title,
-    origin: "Pasted note",
+    // Pasted notes are user-authored canvas objects, not external files. Give
+    // each one a stable distinct origin so adding a second note never trips
+    // the external-source duplicate protection.
+    origin: `Pasted note ${id}`,
     body: body.slice(0, 120_000),
     status: "ready",
     statusDetail: "Ready",

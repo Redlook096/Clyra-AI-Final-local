@@ -1,11 +1,13 @@
 import { WebSocket } from "ws";
 
 type AsyncSttMessage = {
+  type?: "interim" | "done" | "error";
   transcript?: string;
   text?: string;
   final?: boolean;
   is_final?: boolean;
   error_code?: string;
+  error?: string;
   message?: string;
 };
 
@@ -19,6 +21,10 @@ type AsyncSttSessionOptions = {
 };
 
 const ENDPOINT = "wss://api.async.com/speech_to_text/stream";
+// Hosted ASR final packets occasionally arrive just after the silence turn has
+// been closed. Giving that packet a short grace period avoids unnecessarily
+// replaying the utterance through the slower local fallback.
+const FINAL_GRACE_MS = Math.max(160, Number(process.env.ASYNC_STT_FINAL_GRACE_MS ?? 360));
 
 /**
  * Short-lived, server-owned Async ASR socket. A socket corresponds to one
@@ -30,6 +36,14 @@ export class AsyncSttSession {
   private opening: Promise<void> | null = null;
   private closed = false;
   private finalText = "";
+  private pcmBuffer = Buffer.alloc(0);
+
+  private get minimumPacketBytes() {
+    // Async recommends 250–500ms PCM packets. The application still captures
+    // in 20ms slices for responsive VAD; batching happens only at this hosted
+    // transport boundary and avoids starving the recognizer with tiny frames.
+    return Math.max(4_000, Math.round(this.options.sampleRate * 2 * 0.25));
+  }
 
   constructor(private readonly options: AsyncSttSessionOptions) {}
 
@@ -71,13 +85,13 @@ export class AsyncSttSession {
   private handleMessage(raw: string) {
     let message: AsyncSttMessage;
     try { message = JSON.parse(raw) as AsyncSttMessage; } catch { return; }
-    if (message.error_code) {
-      this.options.onError(message.message || message.error_code);
+    if (message.type === "error" || message.error_code || message.error) {
+      this.options.onError(message.message || message.error || message.error_code || "Async transcription failed.");
       return;
     }
     const text = (message.transcript || message.text || "").trim();
     if (!text) return;
-    if (message.final || message.is_final) {
+    if (message.type === "done" || message.final || message.is_final) {
       this.finalText = text;
       this.options.onFinal(text);
     } else {
@@ -87,13 +101,26 @@ export class AsyncSttSession {
 
   async sendPcm(base64: string) {
     await this.start();
-    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(Buffer.from(base64, "base64"), { binary: true });
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    const chunk = Buffer.from(base64, "base64");
+    if (!chunk.length) return;
+    this.pcmBuffer = this.pcmBuffer.length
+      ? Buffer.concat([this.pcmBuffer, chunk])
+      : chunk;
+    while (this.pcmBuffer.length >= this.minimumPacketBytes) {
+      this.socket.send(this.pcmBuffer.subarray(0, this.minimumPacketBytes), { binary: true });
+      this.pcmBuffer = this.pcmBuffer.subarray(this.minimumPacketBytes);
+    }
   }
 
   async flush() {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return this.finalText;
+    if (this.pcmBuffer.length) {
+      this.socket.send(this.pcmBuffer, { binary: true });
+      this.pcmBuffer = Buffer.alloc(0);
+    }
     this.socket.send(JSON.stringify({ final: true }));
-    await new Promise((resolve) => setTimeout(resolve, 160));
+    await new Promise((resolve) => setTimeout(resolve, FINAL_GRACE_MS));
     return this.finalText;
   }
 
@@ -101,5 +128,6 @@ export class AsyncSttSession {
     this.closed = true;
     this.socket?.close();
     this.socket = null;
+    this.pcmBuffer = Buffer.alloc(0);
   }
 }

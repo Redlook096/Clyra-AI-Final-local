@@ -27,9 +27,14 @@
         --oc-dur-fast: 0ms;
         --oc-accent: #4a7cff;
         --oc-accent-soft: rgba(74, 124, 255, 0.35);
-        --oc-expanded-w: 700px;
+        /* One stable column for both the compact controls and the drawer.
+           The renderer can be narrower on a small display, but it must never
+           re-measure from changing button labels or drawer content. */
+        --oc-bar-width: min(560px, calc(100vw - 24px));
+        --oc-chat-width: var(--oc-bar-width);
         --oc-bar-h: 56px;
         --oc-drawer-h: 360px;
+        --oc-shell-radius: 28px;
         --oc-control-bg: linear-gradient(180deg, #1e2a44 0%, #152038 55%, #101a2e 100%);
         --oc-stealth-on: linear-gradient(180deg, #1e2a44 0%, #152038 55%, #101a2e 100%);
         --oc-stealth-accent: #7dd3fc;
@@ -78,8 +83,8 @@
       html, body {
         margin: 0;
         padding: 0;
-        width: fit-content;
-        height: fit-content;
+        width: 100%;
+        height: 100%;
         background: transparent !important;
         overflow: hidden;
         font-family: "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
@@ -114,11 +119,18 @@
         display: flex;
         flex-direction: column;
         align-items: stretch;
-        width: min(700px, calc(100vw - 24px));
+        width: var(--oc-bar-width);
         max-width: calc(100vw - 24px);
         background: transparent;
-        border-radius: 999px;
+        border-radius: var(--oc-shell-radius);
         overflow: hidden;
+        isolation: isolate;
+        contain: paint;
+        /* Chromium's transparent renderer occasionally lets a material layer
+           bleed one pixel beyond the CSS radius. Clip every child against one
+           authoritative rounded mask. */
+        clip-path: inset(0 round var(--oc-shell-radius));
+        -webkit-mask-image: -webkit-radial-gradient(white, black);
         opacity: 1;
         transform-origin: center top;
         transition: none;
@@ -131,14 +143,17 @@
         pointer-events: auto;
       }
 
-      /* Chat open: same horizontal size as pill — only grow vertically */
+      /* The drawer grows directly below the compact bar without changing its
+         measured width. This keeps the interaction spatially stable. */
       .oc-shell.is-chat-open {
-        width: min(700px, calc(100vw - 24px));
+        width: var(--oc-bar-width);
         max-width: calc(100vw - 24px);
-        border-radius: 22px;
+        --oc-shell-radius: 22px;
+        border-radius: var(--oc-shell-radius);
         background: var(--oc-glass-open);
-        border: 1px solid var(--oc-border);
-        box-shadow: var(--oc-shadow);
+        /* Keep the visual edge inside the masked surface: no exterior halo. */
+        border: none;
+        box-shadow: inset 0 0 0 1px var(--oc-border);
         backdrop-filter: blur(18px) saturate(1.15);
         -webkit-backdrop-filter: blur(18px) saturate(1.15);
       }
@@ -147,15 +162,17 @@
         height: var(--oc-bar-h);
         display: flex;
         align-items: center;
+        justify-content: center;
         gap: 10px;
-        padding: 0 12px 0 10px;
+        padding: 0 10px;
         width: 100%;
         max-width: 100%;
         min-width: 0;
         background: var(--oc-glass);
         border: 1px solid rgba(255, 255, 255, 0.78);
-        border-radius: 999px;
-        box-shadow: var(--oc-shadow);
+        border-radius: var(--oc-shell-radius);
+        overflow: hidden;
+        box-shadow: none;
         backdrop-filter: blur(18px) saturate(1.18);
         -webkit-backdrop-filter: blur(18px) saturate(1.18);
         -webkit-app-region: drag;
@@ -168,9 +185,10 @@
       .oc-shell.is-chat-open .command-tab {
         width: 100%;
         min-width: 0;
-        border-radius: 22px 22px 0 0;
+        border-radius: var(--oc-shell-radius) var(--oc-shell-radius) 0 0;
         background: transparent;
-        border: none;
+        /* Preserve the compact bar's border-box geometry. */
+        border: 1px solid transparent;
         box-shadow: none;
         backdrop-filter: none;
         -webkit-backdrop-filter: none;
@@ -597,8 +615,50 @@
         text-shadow: none !important;
         font-size: 13px;
         line-height: 1.5;
+        white-space: normal;
+      }
+      .chat-messages .message-text p {
+        margin: 0 0 7px;
         white-space: pre-wrap;
       }
+      .chat-messages .message-text p:last-child { margin-bottom: 0; }
+      .chat-messages .message-text h1,
+      .chat-messages .message-text h2,
+      .chat-messages .message-text h3 {
+        color: var(--oc-text-strong);
+        font-weight: 680;
+        letter-spacing: -0.015em;
+        line-height: 1.25;
+        margin: 10px 0 5px;
+      }
+      .chat-messages .message-text h1 { font-size: 17px; }
+      .chat-messages .message-text h2 { font-size: 15px; }
+      .chat-messages .message-text h3 { font-size: 13px; }
+      .chat-messages .message-text ul,
+      .chat-messages .message-text ol {
+        margin: 5px 0 8px;
+        padding-left: 18px;
+      }
+      .chat-messages .message-text li { margin: 2px 0; }
+      .chat-messages .message-text blockquote {
+        margin: 7px 0;
+        padding: 2px 0 2px 10px;
+        border-left: 2px solid rgba(74, 124, 255, 0.42);
+        color: var(--oc-text);
+      }
+      .chat-messages .message-text pre {
+        margin: 8px 0;
+        padding: 9px 10px;
+        overflow-x: auto;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.045);
+        white-space: pre;
+        font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }
+      .chat-messages .message-text strong { font-weight: 680; color: var(--oc-text-strong); }
+      .chat-messages .message-text em { font-style: italic; }
+      .chat-messages .message-text s { color: #8b95a5; }
       .chat-messages .message-text code {
         background: rgba(15, 23, 42, 0.06) !important;
         color: #334155 !important;
@@ -610,6 +670,11 @@
       html.oc-dark .chat-messages .message-text code {
         background: rgba(255, 255, 255, 0.08) !important;
         color: #e2e8f0 !important;
+      }
+      html.oc-stealth .chat-messages .message-text pre,
+      html.oc-dark .chat-messages .message-text pre {
+        border-color: rgba(148, 163, 184, 0.16);
+        background: rgba(255, 255, 255, 0.06);
       }
       /* Thinking — same as Clyra chat tool (only while AI is thinking) */
       .oc-thinking-status {

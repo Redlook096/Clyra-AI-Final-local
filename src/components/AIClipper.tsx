@@ -787,6 +787,46 @@ function SourcePicker({
   );
 }
 
+/** A deliberately neutral dark device frame: this previews caption/layout
+ * decisions without pretending to be the source video before it is rendered. */
+function ClipperMockVideoFrame({
+  aspect,
+  clipCount,
+  quality,
+  captionsEnabled,
+  captionX,
+  captionY,
+  subtitleStyle,
+  font,
+  fontSize,
+  colour,
+  copy = "THIS IS YOUR SUBTITLE",
+}: {
+  aspect: ClipAspect;
+  clipCount?: number;
+  quality?: string;
+  captionsEnabled: boolean;
+  captionX: number;
+  captionY: number;
+  subtitleStyle: SubtitleStyle;
+  font: string;
+  fontSize: number;
+  colour: string;
+  copy?: string;
+}) {
+  return (
+    <div className="relative h-full min-h-0 overflow-hidden rounded-[20px] border border-slate-800 bg-[#050609] shadow-[0_18px_36px_rgba(15,23,42,.18)]" style={{ aspectRatio: aspect.replace(":", "/"), height: "min(390px, calc(100vh - 410px))" }}>
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_48%,rgba(50,61,77,.28),transparent_31%),linear-gradient(180deg,rgba(255,255,255,.035),transparent_26%,rgba(0,0,0,.42))]" />
+      <div className="absolute inset-x-[11%] top-[12%] bottom-[16%] rounded-[15px] border border-dashed border-white/[.12]" />
+      <div className="absolute left-3 top-3 flex items-center gap-1.5 text-[8px] font-semibold uppercase tracking-[.14em] text-white/58"><span className="h-1.5 w-1.5 rounded-full bg-[#ff5f57]" />Preview</div>
+      <div className="absolute right-3 top-3 flex items-center gap-1.5 text-[9px] font-medium text-white/58">{quality || "1080p"}{clipCount ? <span className="rounded border border-white/15 px-1.5 py-0.5 text-white/75">×{clipCount}</span> : <span>{aspect}</span>}</div>
+      <div className="absolute left-1/2 top-1/2 grid h-9 w-9 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-white/15 bg-white/[.08] text-white/70 shadow-sm"><Play className="ml-0.5 h-3.5 w-3.5" fill="currentColor" /></div>
+      {captionsEnabled ? <p className={cn("absolute w-[84%] -translate-x-1/2 -translate-y-1/2 text-center font-black uppercase leading-[1.1]", subtitleStyle === "word" ? "tracking-[.03em]" : "tracking-[-.02em]")} style={{ left: `${captionX}%`, top: `${captionY}%`, fontFamily: font, fontSize: `${Math.min(25, fontSize * .28)}px`, color: colour, textShadow: "0 2px 8px rgba(0,0,0,.88)" }}>{copy}</p> : <p className="absolute left-1/2 top-1/2 mt-9 w-full -translate-x-1/2 text-center text-[10px] font-medium text-white/32">Subtitles off</p>}
+      <div className="absolute inset-x-3 bottom-3 flex items-center gap-2 text-white/65"><span className="grid h-5 w-5 place-items-center rounded-full bg-white/12"><Play className="ml-px h-2.5 w-2.5" fill="currentColor" /></span><div className="h-px flex-1 bg-white/20"><span className="block h-full w-[38%] bg-white/75" /></div><span className="font-mono text-[8px] text-white/60">00:08</span><Volume2 className="h-3 w-3" /><Maximize2 className="h-3 w-3" /></div>
+    </div>
+  );
+}
+
 function PipelineGlyph({ stage, className }: { stage: PipelineStageId; className?: string }) {
   const Icon = stage === "captions"
     ? FileVideo2
@@ -2423,15 +2463,7 @@ export default function AIClipper({
                 </div>
               </div>
               <aside className="flex min-h-0 flex-col items-center justify-start overflow-hidden p-0 lg:-mt-5">
-                <div className="relative w-auto shrink-0 overflow-hidden rounded-[20px] border border-slate-200 bg-[#e9eef5] shadow-[0_18px_36px_rgba(15,23,42,.14)]" style={{ aspectRatio: "9 / 16", height: "min(390px, calc(100vh - 410px))" }}>
-                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_16%,rgba(255,255,255,.95),transparent_22%),linear-gradient(160deg,#cbd8e8,#8ca4bd_55%,#dfe8f1)]" />
-                  <div className="absolute left-[17%] top-[17%] h-[37%] w-[66%] rounded-[48%_48%_30%_30%] border border-white/25 bg-[#718aa5]/55 shadow-[0_18px_25px_rgba(71,85,105,.22)]" />
-                  <div className="absolute inset-x-0 bottom-0 h-[38%] bg-gradient-to-t from-white/80 to-transparent" />
-                  <span className="absolute left-3 top-3 rounded-md border border-white/80 bg-white/75 px-2 py-1 text-[9px] font-semibold text-slate-600">PREVIEW</span>
-                  <span className="absolute right-3 top-3 rounded-md bg-slate-900/12 px-1.5 py-1 text-[9px] font-medium text-slate-600">9:16</span>
-                  {draft.captionsEnabled ? <p className={cn("absolute w-[84%] -translate-x-1/2 -translate-y-1/2 text-center font-black uppercase leading-[1.1]", draft.subtitleStyle === "word" ? "tracking-[.03em]" : "tracking-[-.02em]")} style={{ left: `${draft.captionX}%`, top: `${draft.captionY}%`, fontFamily: draft.font, fontSize: `${Math.min(25, draft.fontSize * .28)}px`, color: draft.colour, textShadow: "0 1px 5px rgba(15,23,42,.28)" }}>THIS IS YOUR SUBTITLE</p> : <p className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[13px] font-medium text-slate-400">Subtitles off</p>}
-                  <div className="absolute inset-x-3 bottom-3 flex items-center gap-2"><span className="grid h-5 w-5 place-items-center rounded-full bg-white/75 text-slate-600"><Play className="ml-px h-2.5 w-2.5" /></span><div className="h-0.5 flex-1 rounded-full bg-slate-900/10"><span className="block h-full w-[38%] rounded-full bg-slate-700/55" /></div><span className="font-mono text-[8px] text-slate-500">00:08</span></div>
-                </div>
+                <ClipperMockVideoFrame aspect="9:16" captionsEnabled={draft.captionsEnabled} captionX={draft.captionX} captionY={draft.captionY} subtitleStyle={draft.subtitleStyle} font={draft.font} fontSize={draft.fontSize} colour={draft.colour} />
                 <p className="mt-2 text-[11px] text-slate-400">Live subtitle preview</p>
               </aside>
               </div>
@@ -2446,12 +2478,7 @@ export default function AIClipper({
                   <label className="block"><span className="mb-2 block text-[12px] font-medium text-slate-600">Render quality</span><select value={draft.renderQuality === "premium" || draft.renderQuality === "master" ? "1080" : "720"} onChange={(event) => updateDraft("renderQuality", event.target.value === "1080" ? "premium" : "balanced")} className="h-11 w-full rounded-xl border border-slate-200/80 bg-white px-3.5 text-[13px] font-medium text-slate-800 outline-none focus:border-blue-400"><option value="1080">1080p · recommended</option><option value="720">720p · faster export</option></select></label>
                 </div>
                 <aside className="flex min-h-0 items-start justify-center p-0">
-                  <div className="relative h-full min-h-0 overflow-hidden rounded-[20px] border border-slate-200 bg-[#e9eef5] shadow-[0_18px_36px_rgba(15,23,42,.14)]" style={{ aspectRatio: draft.aspect.replace(":", "/"), height: "min(390px, calc(100vh - 410px))" }}>
-                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_16%,rgba(255,255,255,.95),transparent_22%),linear-gradient(160deg,#cbd8e8,#8ca4bd_55%,#dfe8f1)]" /><div className="absolute left-[17%] top-[17%] h-[37%] w-[66%] rounded-[48%_48%_30%_30%] border border-white/25 bg-[#718aa5]/55 shadow-[0_18px_25px_rgba(71,85,105,.22)]" /><div className="absolute inset-x-0 bottom-0 h-[38%] bg-gradient-to-t from-white/80 to-transparent" />
-                    <span className="absolute right-3 top-3 rounded-md border border-white/80 bg-white/75 px-2 py-1 text-[10px] font-semibold text-slate-600">×{draft.clipCount}</span><span className="absolute left-3 top-3 text-[10px] font-medium text-slate-500">{draft.renderQuality === "balanced" ? "720p" : "1080p"}</span>
-                    {draft.captionsEnabled ? <p className="absolute left-1/2 w-[84%] -translate-x-1/2 -translate-y-1/2 text-center font-black uppercase leading-[1.1]" style={{top:`${draft.captionY}%`,fontFamily:draft.font,fontSize:`${Math.min(23,draft.fontSize*.26)}px`,color:draft.colour,textShadow:"0 1px 5px rgba(15,23,42,.28)"}}>YOUR CLIP STARTS HERE</p> : null}
-                    <div className="absolute inset-x-3 bottom-3 flex items-center gap-2"><span className="grid h-5 w-5 place-items-center rounded-full bg-white/75 text-slate-600"><Play className="ml-px h-2.5 w-2.5" /></span><div className="h-0.5 flex-1 rounded-full bg-slate-900/10"><span className="block h-full w-[42%] rounded-full bg-slate-700/55" /></div><span className="font-mono text-[8px] text-slate-500">00:08</span></div>
-                  </div>
+                  <ClipperMockVideoFrame aspect={draft.aspect} clipCount={draft.clipCount} quality={draft.renderQuality === "balanced" ? "720p" : "1080p"} captionsEnabled={draft.captionsEnabled} captionX={draft.captionX} captionY={draft.captionY} subtitleStyle={draft.subtitleStyle} font={draft.font} fontSize={draft.fontSize} colour={draft.colour} copy="YOUR CLIP STARTS HERE" />
                 </aside>
               </div>
             ) : null}

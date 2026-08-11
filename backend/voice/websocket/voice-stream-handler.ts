@@ -58,6 +58,8 @@ const BARGE_HOLD_MS = Number(process.env.VOICE_BARGE_HOLD_MS ?? 480);
 const TTS_FLUSH_MS = Number(process.env.VOICE_TTS_FLUSH_MS ?? 48);
 /** End Async ASR turn after this much trailing silence. */
 const ASYNC_STT_SILENCE_MS = Number(process.env.VOICE_ASYNC_STT_SILENCE_MS ?? 420);
+/** Briefly wait for warm Async Flash PCM before falling back to the local path. */
+const ASYNC_TTS_FIRST_AUDIO_MS = Math.max(900, Number(process.env.ASYNC_TTS_FIRST_AUDIO_MS ?? 1_500));
 
 let pipelineHealthCache: { ok: boolean; at: number } = { ok: false, at: 0 };
 
@@ -223,7 +225,7 @@ async function speakText(
     // phrases to the same provider context.  Forcing every partial phrase can
     // make Flash finalise a context mid-answer and truncate playback.
     await active.asyncVoice.sendText(contextId, spoken, active.phraseSeq === 0);
-    if (await active.asyncVoice.waitForFirstAudio(contextId, 900)) {
+    if (await active.asyncVoice.waitForFirstAudio(contextId, ASYNC_TTS_FIRST_AUDIO_MS)) {
       active.phraseSeq += 1;
       return true;
     }
@@ -522,14 +524,33 @@ function attachAsyncStt(active: ActiveSocket, config: ReturnType<typeof loadVoic
       // Prepare the next Async ASR turn as soon as this utterance commits.
       // Without this, later mic frames fall through with no STT session.
       if (!active.asyncSttProviderUnavailable) {
-        active.asyncStt = createTurn();
+        primeTurn();
       }
     },
     onError: (message) => {
       if (!active.busy) console.warn("[voice] Async STT:", message);
     },
   });
-  active.asyncStt = createTurn();
+  const primeTurn = () => {
+    const turn = createTurn();
+    active.asyncStt = turn;
+    // Establish the hosted ASR socket before the first microphone packet. This
+    // removes a network handshake from the first spoken word while retaining
+    // the existing local-pipeline recovery path if the provider is unavailable.
+    void turn.start().catch((error) => {
+      if (active.asyncStt !== turn || active.busy || active.asyncSttFallbackInProgress) return;
+      active.asyncSttFallbackInProgress = true;
+      active.asyncSttProviderUnavailable = true;
+      console.warn("[voice] Async STT warmup failed:", error instanceof Error ? error.message : String(error));
+      resetAsyncStt(active);
+      void replayPendingAudioToPipeline(active)
+        .catch(() => undefined)
+        .finally(() => { active.asyncSttFallbackInProgress = false; });
+    });
+  };
+  // Keep the first turn live from connection time, not from the first input
+  // frame. Later turns are primed in the same way after every final transcript.
+  primeTurn();
   return true;
 }
 

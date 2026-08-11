@@ -1430,8 +1430,17 @@ class ApplicationController {
 
   _isScreenQuestion(text) {
     const t = String(text || "");
-    return /\b(what('?s| is|s) on (my )?screen|whats on (my )?screen|see (my )?screen|look at (my )?screen|on my screen|what (page|site|app|website|article) (am i|is) (on|open|this)|what (am i|is) (looking at|viewing)|main (heading|title|article)|read (the )?(page|screen|heading|title)|quote the (main |page )?(heading|title|article)|interview coding|coding (interview|page)|visible on (the )?screen|describe (the |my )?(screen|page|window|desktop|background)|screenshot|what color|desktop background|background color|what do you see|can you see)\b/i.test(
-      t
+    const explicitScreenQuestion = /\b(what('?s| is|s) on (my )?screen|whats on (my )?screen|see (my )?screen|look at (my )?screen|on my screen|what (page|site|app|website|article) (am i|is) (on|open|this)|what (am i|is) (looking at|viewing)|main (heading|title|article)|read (the )?(page|screen|heading|title)|quote the (main |page )?(heading|title|article)|interview coding|coding (interview|page)|visible on (the )?screen|describe (the |my )?(screen|page|window|desktop|background)|screenshot|what color|desktop background|background color|what do you see|can you see)\b/i;
+    if (explicitScreenQuestion.test(t)) return true;
+
+    // Treat ordinary human variations and light typing slips as screen asks.
+    // For example, "whats oon my screen" should never silently become a text
+    // chat request just because the user held a key for one extra character.
+    const asksAboutVisibleContent = /\b(?:what|what's|whats|describe|read|tell|see|look|show|analyse|analyze|identify|colour|color)\b/i;
+    const hasScreenContext = /\b(?:screen|screenshot|desktop|display|current\s+(?:window|page|tab)|visible\s+(?:here|there|now))\b/i;
+    return (
+      /\bwhat'?s?\s+o+n+\s+(?:my\s+)?screen\b/i.test(t) ||
+      (asksAboutVisibleContent.test(t) && hasScreenContext.test(t))
     );
   }
 
@@ -2573,11 +2582,15 @@ class ApplicationController {
 
         try {
           if (req.method === "GET" && req.url === "/health") {
+            const windowStats = windowManager.getWindowStats();
             send(200, {
               ok: true,
               ready: this.isReady,
               skill: this.activeSkill,
-              windows: Object.keys(windowManager.getWindowStats().windows || {}),
+              windows: Object.keys(windowStats.windows || {}),
+              // Useful for visual-regression and automation checks. It lets a
+              // caller assert that opening the chat drawer changes only height.
+              mainWindow: windowStats.windows?.main || null,
             });
             return;
           }

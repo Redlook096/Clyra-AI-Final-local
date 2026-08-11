@@ -26,7 +26,7 @@ const DEFAULT_SETTINGS = {
   showBookmarksBar: false,
   showAiCursor: true,
   showAiActionLabels: true,
-  aiCursorSpeed: "fast",
+  aiCursorSpeed: "natural",
   reducedMotion: false,
   performanceMode: "quality",
   privateMode: false,
@@ -324,6 +324,10 @@ export class ChromiumBrowserManager {
     return this.activeTabId ? this.tabs.get(this.activeTabId)?.view.webContents : null;
   }
 
+  contentsFor(tabId = this.activeTabId) {
+    return tabId ? this.tabs.get(tabId)?.view.webContents : null;
+  }
+
   activateTab(id, { persist = true } = {}) {
     const next = this.tabs.get(id);
     if (!next) throw new Error("That browser tab no longer exists.");
@@ -404,8 +408,8 @@ export class ChromiumBrowserManager {
     this.emitState();
   }
 
-  async navigate(target) {
-    const contents = this.activeContents();
+  async navigate(target, tabId = this.activeTabId) {
+    const contents = this.contentsFor(tabId);
     if (!contents) throw new Error("No active browser tab.");
     const destination = normalizeInput(target, this.settings.defaultSearchEngine);
     try {
@@ -445,10 +449,10 @@ export class ChromiumBrowserManager {
     return { state: this.getState() };
   }
 
-  async observe() {
-    const contents = this.activeContents();
-    if (!contents || contents.isDestroyed()) throw new Error("No active browser tab.");
-    const tab = this.activeTabId ? this.tabs.get(this.activeTabId) : null;
+  async observe(tabId = this.activeTabId) {
+    const contents = this.contentsFor(tabId);
+    if (!contents || contents.isDestroyed()) throw new Error("The requested browser tab is no longer available.");
+    const tab = tabId ? this.tabs.get(tabId) : null;
     const maxChars = 30_000;
     const page = await contents.executeJavaScript(`(() => {
       const clean = (value, max = 220) => String(value || "").replace(/\\s+/g, " ").trim().slice(0, max);
@@ -501,9 +505,13 @@ export class ChromiumBrowserManager {
     };
   }
 
-  async agentAction(action, observation, source = "agent") {
-    const contents = this.activeContents();
-    if (!contents || contents.isDestroyed()) throw new Error("No active browser tab.");
+  async agentAction(action, observation, source = "agent", tabId = this.activeTabId) {
+    const contents = this.contentsFor(tabId);
+    if (!contents || contents.isDestroyed()) throw new Error("The requested browser tab is no longer available.");
+    // An agent run may continue in a tab the user has left. Keep that renderer
+    // responsive without stealing focus or changing the visible tab.
+    contents.setBackgroundThrottling(false);
+    const tabIsVisible = this.surface.visible && tabId === this.activeTabId;
     const elements = observation?.elements || [];
     const target = action?.target;
     const resolved = typeof target === "number"
@@ -526,7 +534,7 @@ export class ChromiumBrowserManager {
       // A hidden native view has no compositor target for dispatchMouseEvent.
       // Use the actual page node in that same WebContents until the user opens
       // Browser again; visible browser actions always retain CDP coordinates.
-      if (!this.surface.visible && resolved) {
+      if (!tabIsVisible && resolved) {
         await contents.executeJavaScript(`document.querySelector(${JSON.stringify(`[data-clyra-browser-id="${resolved.id}"]`)})?.click()`, true);
         return;
       }
@@ -548,10 +556,10 @@ export class ChromiumBrowserManager {
         await send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: keyCode === "Enter" ? 13 : keyCode === "Backspace" ? 8 : String(keyCode).toUpperCase().charCodeAt(0), nativeVirtualKeyCode: keyCode === "Enter" ? 13 : keyCode === "Backspace" ? 8 : String(keyCode).toUpperCase().charCodeAt(0), modifiers });
       });
     };
-    contents.focus();
+    if (tabIsVisible) contents.focus();
     switch (action?.type) {
-      case "navigate": await this.navigate(action.url); break;
-      case "search": await this.navigate(action.query); break;
+      case "navigate": await this.navigate(action.url, tabId); break;
+      case "search": await this.navigate(action.query, tabId); break;
       case "back": case "go_back": if (contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack(); break;
       case "forward": case "go_forward": if (contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward(); break;
       case "reload": contents.reload(); break;
@@ -572,7 +580,7 @@ export class ChromiumBrowserManager {
       }); break;
       case "type": {
         await focus();
-        if (!this.surface.visible && resolved) {
+        if (!tabIsVisible && resolved) {
           await contents.executeJavaScript(`(() => {
             const node = document.querySelector(${JSON.stringify(`[data-clyra-browser-id="${resolved.id}"]`)});
             if (!node) return;
@@ -629,7 +637,7 @@ export class ChromiumBrowserManager {
       }
       case "scroll": {
         const amount = Math.abs(Number(action.amount || 600));
-        if (!this.surface.visible) {
+        if (!tabIsVisible) {
           const x = action.direction === "left" ? -amount : action.direction === "right" ? amount : 0;
           const y = action.direction === "up" ? -amount : amount;
           await contents.executeJavaScript(`window.scrollBy({ left: ${x}, top: ${y}, behavior: "instant" })`, true);
@@ -645,12 +653,24 @@ export class ChromiumBrowserManager {
       default: break;
     }
     await new Promise((resolve) => setTimeout(resolve, action?.type === "navigate" || action?.type === "search" ? 350 : 90));
-    const after = await this.observe();
+    // Tab lifecycle actions can destroy the WebContents referenced by tabId
+    // (most notably Close). Observe the tab that survived / became active,
+    // rather than attempting to inspect a just-destroyed renderer.
+    const lifecycleAction = ["open_tab", "switch_tab", "close_tab", "duplicate_tab", "restore_closed_tab"].includes(action?.type);
+    const observationTabId = lifecycleAction ? this.activeTabId : tabId;
+    const after = await this.observe(observationTabId);
+    // close_tab intentionally destroys `contents`; never touch it after the
+    // lifecycle operation has completed.
+    if (tabId && tabId !== this.activeTabId && !contents.isDestroyed()) contents.setBackgroundThrottling(true);
     return { ok: true, state: this.getState(), observation: after };
   }
 
-  async setCursor(cursor) {
-    const contents = this.activeContents();
+  async setCursor(cursor, tabId = this.activeTabId) {
+    // Keep the human's visible tab undisturbed while an agent continues in a
+    // different tab. The cursor becomes visible automatically when that tab
+    // is brought back to the foreground on the next agent event.
+    if (tabId && tabId !== this.activeTabId) return;
+    const contents = this.contentsFor(tabId);
     if (!contents || contents.isDestroyed()) return;
     const payload = cursor && Number.isFinite(cursor.x) && Number.isFinite(cursor.y)
       ? {
@@ -670,22 +690,42 @@ export class ChromiumBrowserManager {
       const root = existing || Object.assign(document.createElement("div"), { id });
       if (!existing) {
         root.setAttribute("aria-hidden", "true");
-        root.style.cssText = "position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;will-change:transform;contain:layout style paint;transition:opacity 120ms ease;";
+        root.style.cssText = "position:fixed;left:0;top:0;width:24px;height:30px;z-index:2147483647;pointer-events:none;will-change:transform;contain:layout style paint;transition:opacity 120ms ease;";
+        const glow = document.createElement("div");
+        glow.dataset.part = "glow";
+        glow.style.cssText = "position:absolute;left:-10px;top:-10px;width:42px;height:42px;border-radius:999px;background:radial-gradient(circle,rgba(86,142,255,.24),rgba(79,124,255,.10) 43%,transparent 72%);filter:blur(3px);";
         const pointer = document.createElement("div");
         pointer.dataset.part = "pointer";
-        pointer.style.cssText = "width:18px;height:24px;background:#0f172a;clip-path:polygon(0 0,0 88%,25% 67%,42% 100%,54% 94%,37% 63%,72% 63%);filter:drop-shadow(0 2px 2px rgba(15,23,42,.3));";
+        pointer.style.cssText = "position:absolute;left:0;top:0;width:23px;height:27px;background:#111318;clip-path:polygon(5% 1%,96% 34%,61% 49%,43% 98%);filter:drop-shadow(0 1px 1px rgba(255,255,255,.76)) drop-shadow(0 3px 7px rgba(27,49,93,.32));transform-origin:5px 2px;";
+        const caret = document.createElement("div");
+        caret.dataset.part = "caret";
+        caret.style.cssText = "display:none;position:absolute;left:16px;top:6px;width:2px;height:22px;border-radius:999px;background:#1d1f24;box-shadow:0 0 0 1px rgba(255,255,255,.9),0 1px 5px rgba(52,97,177,.22);";
+        const click = document.createElement("div");
+        click.dataset.part = "click";
+        click.style.cssText = "display:none;position:absolute;left:-8px;top:-8px;width:26px;height:26px;border:1.5px solid rgba(79,124,255,.72);border-radius:999px;";
         const label = document.createElement("span");
         label.dataset.part = "label";
-        label.style.cssText = "position:absolute;left:19px;top:18px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:7px;background:rgba(15,23,42,.94);padding:5px 8px;color:#fff;font:600 10px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;box-shadow:0 8px 24px rgba(15,23,42,.18);";
-        root.append(pointer, label);
+        label.style.cssText = "position:absolute;left:24px;top:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:7px;background:rgba(20,22,27,.94);padding:5px 8px;color:#fff;font:600 10px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;box-shadow:0 8px 24px rgba(15,23,42,.18);";
+        root.append(glow, pointer, caret, click, label);
         document.documentElement.appendChild(root);
       }
       root.querySelector('[data-part="label"]').textContent = data.label;
       root.querySelector('[data-part="label"]').style.display = data.showLabel ? "block" : "none";
-      root.style.transition = data.reducedMotion ? "none" : "transform 180ms cubic-bezier(.22,1,.36,1), opacity 120ms ease";
+      root.style.transition = data.reducedMotion ? "none" : "transform 280ms cubic-bezier(.16,1,.3,1), opacity 120ms ease";
       root.style.transform = "translate3d(" + (data.x - 3) + "px," + (data.y - 2) + "px,0)";
       root.style.opacity = "1";
       const pointer = root.querySelector('[data-part="pointer"]');
+      const caret = root.querySelector('[data-part="caret"]');
+      const click = root.querySelector('[data-part="click"]');
+      if (caret) {
+        caret.style.display = data.kind === "type" ? "block" : "none";
+        caret.animate?.([{ opacity: 1 }, { opacity: .2 }, { opacity: 1 }], { duration: 880, iterations: data.kind === "type" ? Infinity : 1, easing: "steps(2,end)" });
+      }
+      if (pointer) pointer.style.opacity = data.kind === "type" ? ".7" : "1";
+      if (click) {
+        click.style.display = data.kind.includes("click") ? "block" : "none";
+        if (data.kind.includes("click")) click.animate?.([{ transform: "scale(.46)", opacity: .82 }, { transform: "scale(1.42)", opacity: 0 }], { duration: 480, easing: "cubic-bezier(.16,1,.3,1)" });
+      }
       if (pointer) {
         pointer.animate?.(
           data.kind.includes("click") ? [{ transform: "scale(1)" }, { transform: "scale(.82)" }, { transform: "scale(1)" }] : [{ opacity: 1 }, { opacity: 1 }],

@@ -34,15 +34,16 @@ class WindowManager {
     // Window binding properties
     this.bindWindows = false; // Disabled on Linux-friendly Clyra bridge to avoid resize recursion
     this.chatDrawerOpen = false; // Chat expands under the centered main bar (no separate panel)
-    this.mainCollapsedMaxWidth = 700; // Compact frosted pill (+ icons + Stealth + drag)
-    this.mainExpandedWidth = 700; // Keep the same stable width when the drawer opens.
+    this.mainCollapsedMaxWidth = 560; // Stable visual width for bar and drawer.
+    // The conversation retains the compact bar's measured width.
+    this.mainExpandedWidth = 560;
     this.windowGap = 10; // Small gap between windows
     this.boundWindowsPosition = { x: 0, y: 0 }; // Track position of bound windows
     this.stealthEnabled = false;
     
     this.windowConfigs = {
       main: {
-        width: 700,
+        width: 560,
         height: 56,
         useContentSize: true,
         file: 'index.html',
@@ -357,7 +358,7 @@ class WindowManager {
   resizable: true,
     // Compact bar can collapse; expanded chat drawer needs room for all controls
     minWidth: 60,
-    maxWidth: Math.max(this.windowConfigs.main.width, this.mainExpandedWidth || 580, 580),
+    maxWidth: Math.max(this.windowConfigs.main.width, this.mainExpandedWidth || 560, 560),
         minimizable: false,
         maximizable: false,
         closable: false,
@@ -903,9 +904,12 @@ class WindowManager {
   }
 
   setupScreenCaptureAvailabilityWatcher() {
-    // Avoid screencast portal errors on Linux/Wayland by disabling periodic detection
-    if (process.platform === 'linux') {
-      logger.info('Skipping screen capture availability watcher on Linux to avoid portal screencast errors');
+    // Proactive desktopCapturer probes are not needed for actual capture (which
+    // remains on-demand). They can trigger a native ScreenCaptureKit crash on
+    // some macOS builds and portal errors on Linux/Wayland, so only enable the
+    // diagnostic poll when explicitly requested.
+    if (process.platform === 'linux' || (process.platform === 'darwin' && process.env.CLYRA_OPENCLUELY_CAPTURE_POLL !== '1')) {
+      logger.info('Skipping periodic screen capture availability watcher; capture remains available on demand');
       return;
     }
 
@@ -1742,7 +1746,7 @@ class WindowManager {
     const display = this.currentDisplay || screen.getPrimaryDisplay();
     const availableWidth = Math.max(360, Number(display?.workArea?.width || display?.bounds?.width || 720) - 24);
     if (this.chatDrawerOpen) {
-      return Math.min(availableWidth, Math.max(this.mainExpandedWidth || 580, 520));
+      return Math.min(availableWidth, Math.max(this.mainExpandedWidth || 560, 520));
     }
     return Math.min(availableWidth, Math.max(this.mainCollapsedMaxWidth || 720, 360));
   }

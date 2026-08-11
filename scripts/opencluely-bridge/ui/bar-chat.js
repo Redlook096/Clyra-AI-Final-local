@@ -8,9 +8,11 @@
 (function () {
   const HISTORY_KEY = 'opencluely_bar_chat_v2';
   const GREETING = 'Hi, how can I help you?';
-  // Keep the native window target independent of its current viewport. Using
-  // window.innerWidth here made a clipped bar measure itself as clipped.
-  const BAR_W = 700;
+  // The command bar and its drawer are one spatial object.  A fixed desktop
+  // column means neither its apparent width nor any control positions change
+  // when chat opens or collapses.
+  const BAR_WIDTH = 560;
+  const MIN_BAR_W = 60;
   const COLLAPSED_H = 56;
   const DRAWER_H = 360;
   // Keep in sync with --oc-dur-w / --oc-dur-h — Ask snaps open vertically only
@@ -97,14 +99,75 @@
     }
   }
 
-  function formatMarkdown(text) {
-    return String(text || '')
+  function escapeHtml(value) {
+    return String(value || '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/`(.+?)`/g, '<code>$1</code>')
-      .replace(/\n/g, '<br>');
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  // A deliberately small, safe Markdown renderer. It covers the formatting
+  // people naturally use in a command bar without giving model output an HTML
+  // execution path: headings, lists, quotes, code, emphasis and strikeout.
+  function formatInlineMarkdown(value) {
+    return String(value || '')
+      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/__([^_\n]+)__/g, '<strong>$1</strong>')
+      .replace(/~~([^~\n]+)~~/g, '<s>$1</s>')
+      .replace(/(^|[^\w])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+      .replace(/(^|[^\w])_([^_\n]+)_/g, '$1<em>$2</em>');
+  }
+
+  function formatMarkdown(text) {
+    const fenced = [];
+    const escaped = escapeHtml(text).replace(/```(?:[^\n]*)\n?([\s\S]*?)```/g, (_match, code) => {
+      const token = `\u0000CODE${fenced.length}\u0000`;
+      fenced.push(`<pre><code>${code.replace(/^\n|\n$/g, '')}</code></pre>`);
+      return token;
+    });
+    const lines = escaped.split(/\r?\n/);
+    let html = '';
+    let list = null;
+    const closeList = () => {
+      if (list) html += `</${list}>`;
+      list = null;
+    };
+
+    for (const rawLine of lines) {
+      const codeMatch = rawLine.match(/^\u0000CODE(\d+)\u0000$/);
+      const ordered = rawLine.match(/^\s*\d+\.\s+(.+)$/);
+      const unordered = rawLine.match(/^\s*[-*+]\s+(.+)$/);
+      const heading = rawLine.match(/^(#{1,3})\s+(.+)$/);
+      const quote = rawLine.match(/^&gt;\s?(.+)$/);
+      if (codeMatch) {
+        closeList();
+        html += fenced[Number(codeMatch[1])] || '';
+      } else if (heading) {
+        closeList();
+        html += `<h${heading[1].length}>${formatInlineMarkdown(heading[2])}</h${heading[1].length}>`;
+      } else if (quote) {
+        closeList();
+        html += `<blockquote>${formatInlineMarkdown(quote[1])}</blockquote>`;
+      } else if (ordered || unordered) {
+        const kind = ordered ? 'ol' : 'ul';
+        if (list !== kind) {
+          closeList();
+          html += `<${kind}>`;
+          list = kind;
+        }
+        html += `<li>${formatInlineMarkdown((ordered || unordered)[1])}</li>`;
+      } else if (!rawLine.trim()) {
+        closeList();
+      } else {
+        closeList();
+        html += `<p>${formatInlineMarkdown(rawLine)}</p>`;
+      }
+    }
+    closeList();
+    return html || '<p></p>';
   }
 
   let lastAssistantText = '';
@@ -311,6 +374,7 @@
   }
 
   function measureShell() {
+    if (!open) return { width: measureCollapsedTabWidth(), height: COLLAPSED_H };
     const rect = shell.getBoundingClientRect();
     const tabRect = tab?.getBoundingClientRect();
     const contentW = Math.ceil(Math.max(rect.width, tabRect?.width || 0, shell.scrollWidth || 0));
@@ -318,9 +382,17 @@
     return {
       // Keep the controls fully inside the visible work area. CSS supplies the
       // same limit; this protects the native Electron resize path as well.
-      width: Math.max(BAR_W, contentW),
+      width: Math.max(MIN_BAR_W, contentW),
       height: Math.max(COLLAPSED_H, contentH),
     };
+  }
+
+  function measureCollapsedTabWidth() {
+    // Never derive width from `scrollWidth`: labels can be hidden by a narrow
+    // viewport while the native window is animating, which was the source of
+    // the compact bar shrinking after a chat collapse. The main process still
+    // clamps this request for genuinely narrow displays.
+    return BAR_WIDTH;
   }
 
   let lastResize = { w: 0, h: 0 };
@@ -434,11 +506,12 @@
     mode = nextMode;
 
     try {
-      // Keep current horizontal size — only open chat downward, instantly.
-      const from = measureShell();
-      const keepW = Math.max(BAR_W, from.width, Math.ceil(tab?.getBoundingClientRect?.()?.width || from.width));
+      // Grow down only. The reading surface and compact bar share one fixed
+      // column, so all toolbar controls remain at their original coordinates.
+      const keepW = measureCollapsedTabWidth();
       wide = false;
       open = true;
+      shell.style.setProperty('--oc-chat-width', `${keepW}px`);
       shell.classList.remove('is-wide');
       shell.classList.add('is-chat-open');
       drawer.setAttribute('aria-hidden', 'false');
@@ -485,13 +558,13 @@
       open = false;
       wide = false;
       shell.classList.remove('is-chat-open', 'is-wide');
+      shell.style.removeProperty('--oc-chat-width');
       drawer.setAttribute('aria-hidden', 'true');
       updateCloseIcon();
       notifyDrawer(false, { recenter: false });
 
       await new Promise((r) => requestAnimationFrame(r));
-      const pill = tab ? tab.getBoundingClientRect() : measureShell();
-      const pillW = Math.max(BAR_W, Math.ceil(pill.width || from.width || BAR_W));
+      const pillW = measureCollapsedTabWidth();
       await resizeWindowNow(pillW, COLLAPSED_H, { growFromTopCenter: true });
       updateCloseIcon();
     } finally {

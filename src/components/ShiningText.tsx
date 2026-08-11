@@ -76,13 +76,17 @@ export function ShiningText({
   return (
     <motion.span
       className={cn(
-        "inline-block bg-clip-text text-transparent",
+        "inline-block bg-[linear-gradient(110deg,#404040,35%,#fff,50%,#404040,75%,#404040)] bg-[length:200%_100%] bg-clip-text text-transparent",
         preset === "thinkingChat"
-          ? "clyra-thinking-shimmer text-[12.5px] font-medium leading-none tracking-[-0.01em] sm:text-[13px]"
-          : "clyra-shining-text bg-[linear-gradient(110deg,#52525b,35%,#94a3b8,50%,#52525b,75%,#52525b)] bg-[length:200%_100%]",
+          ? "text-[12.5px] font-medium leading-none tracking-[-0.01em] sm:text-[13px]"
+          : "text-base font-normal",
         className,
       )}
-      initial={false}
+      initial={{ backgroundPosition: "200% 0" }}
+      animate={{ backgroundPosition: "-200% 0" }}
+      // A full pass is intentionally unhurried. The animation loops on its
+      // own cadence instead of accelerating to satisfy a short status window.
+      transition={{ repeat: Infinity, duration: 3.2, ease: "linear" }}
     >
       {text}
     </motion.span>

@@ -13,6 +13,7 @@ import {
 import { stopMediaStreamTracks, VoicePcmCapturer } from "../lib/voicePcmCapture";
 import { decodeVoicePcmPacket, stableVoiceId } from "../lib/voicePcmPacket";
 import { getElectronDesktop } from "../lib/electron-runtime";
+import type { VoiceWaveformSignal } from "../components/voice/VoiceWaveform";
 import {
   remainingVoiceSilenceMs,
   VOICE_MIN_UTTERANCE_MS,
@@ -152,6 +153,16 @@ export function useVoiceCall(options: {
   const meterContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const meterRafRef = useRef<number | null>(null);
+  const micFrequencyDataRef = useRef<Uint8Array | null>(null);
+  const playbackAnalyserRef = useRef<AnalyserNode | null>(null);
+  const playbackMeterRafRef = useRef<number | null>(null);
+  const playbackFrequencyDataRef = useRef<Uint8Array | null>(null);
+  const waveformSignalRef = useRef<VoiceWaveformSignal>({
+    level: 0,
+    bands: new Float32Array(5),
+    source: "none",
+    updatedAt: 0,
+  });
   const speechVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const stopSpeechResumeRef = useRef<(() => void) | null>(null);
   const ttsWatchdogRef = useRef<number | null>(null);
@@ -192,6 +203,7 @@ export function useVoiceCall(options: {
   const playbackResumeTimerRef = useRef<number | null>(null);
   const localTtsActiveRef = useRef(false);
   const micLevelRef = useRef(0);
+  const lastMeterPaintRef = useRef(0);
   const silenceFramesRef = useRef(0);
   const spokenCharsRef = useRef(0);
   const pendingSpeakTailRef = useRef(false);
@@ -212,6 +224,35 @@ export function useVoiceCall(options: {
   speechRateRef.current = options.speechRate ?? 0.94;
   speechPitchRef.current = options.speechPitch ?? 1.03;
   speechVolumeRef.current = options.speechVolume ?? 0.96;
+
+  const updateWaveformSignal = (
+    source: "mic" | "tts",
+    level: number,
+    analyser?: AnalyserNode | null,
+    frequencyData?: Uint8Array | null,
+  ) => {
+    const signal = waveformSignalRef.current;
+    signal.level = Math.max(0, Math.min(1, level));
+    signal.source = source;
+    signal.updatedAt = performance.now();
+    if (!analyser || !frequencyData?.length) {
+      signal.bands.fill(signal.level);
+      return;
+    }
+    analyser.getByteFrequencyData(frequencyData);
+    // Five broad, overlapping voice-oriented bands. This preserves the real
+    // spectrum without turning the visual into a literal equaliser.
+    const useful = Math.max(12, Math.min(frequencyData.length, 180));
+    const stops = [0.01, 0.04, 0.1, 0.23, 0.46, 0.78];
+    for (let band = 0; band < signal.bands.length; band += 1) {
+      const from = Math.floor(stops[band]! * useful);
+      const to = Math.max(from + 1, Math.floor(stops[band + 1]! * useful));
+      let total = 0;
+      for (let bin = from; bin < to; bin += 1) total += (frequencyData[bin] ?? 0) / 255;
+      const value = total / Math.max(1, to - from);
+      signal.bands[band] = Math.max(0, Math.min(1, value * 1.45));
+    }
+  };
 
   mutedRef.current = muted;
   statusRef.current = status;
@@ -270,7 +311,22 @@ export function useVoiceCall(options: {
       cancelAnimationFrame(meterRafRef.current);
       meterRafRef.current = null;
     }
+    micFrequencyDataRef.current = null;
     setMicLevel(0);
+  }, []);
+
+  const stopPlaybackMeter = useCallback(() => {
+    if (playbackMeterRafRef.current != null) {
+      cancelAnimationFrame(playbackMeterRafRef.current);
+      playbackMeterRafRef.current = null;
+    }
+    try {
+      playbackAnalyserRef.current?.disconnect();
+    } catch {
+      // AudioContext teardown can race a source ending.
+    }
+    playbackAnalyserRef.current = null;
+    playbackFrequencyDataRef.current = null;
   }, []);
 
   const stopRecognition = useCallback(() => {
@@ -358,6 +414,10 @@ export function useVoiceCall(options: {
     meterContextRef.current = null;
     if (meter && meter.state !== "closed") void meter.close();
     micLevelRef.current = 0;
+    waveformSignalRef.current.level = 0;
+    waveformSignalRef.current.bands.fill(0);
+    waveformSignalRef.current.source = "none";
+    waveformSignalRef.current.updatedAt = performance.now();
     setMicLevel(0);
   }, [clearPipelineSilenceTimer, stopMeter, stopRecognition]);
 
@@ -367,6 +427,36 @@ export function useVoiceCall(options: {
     }
     const context = audioContextRef.current;
     if (context.state === "suspended") await context.resume();
+    if (!playbackAnalyserRef.current) {
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.82;
+      analyser.connect(context.destination);
+      playbackAnalyserRef.current = analyser;
+      const time = new Uint8Array(analyser.fftSize);
+      const frequency = new Uint8Array(analyser.frequencyBinCount);
+      playbackFrequencyDataRef.current = frequency;
+      const tick = () => {
+        if (!activeRef.current || !playbackAnalyserRef.current) return;
+        playbackAnalyserRef.current.getByteTimeDomainData(time);
+        let sum = 0;
+        for (let index = 0; index < time.length; index += 1) {
+          const sample = (time[index]! - 128) / 128;
+          sum += sample * sample;
+        }
+        const rms = Math.sqrt(sum / time.length);
+        if (statusRef.current === "speaking" || playbackSourcesRef.current.size > 0) {
+          updateWaveformSignal(
+            "tts",
+            Math.min(1, Math.pow(rms * 6.2, 0.88)),
+            playbackAnalyserRef.current,
+            playbackFrequencyDataRef.current,
+          );
+        }
+        playbackMeterRafRef.current = requestAnimationFrame(tick);
+      };
+      playbackMeterRafRef.current = requestAnimationFrame(tick);
+    }
     playbackTimeRef.current = Math.max(playbackTimeRef.current, context.currentTime);
     return context;
   }, []);
@@ -379,6 +469,7 @@ export function useVoiceCall(options: {
     stopSpeechResumeRef.current = null;
     localTtsActiveRef.current = false;
     stopScheduledPlayback();
+    stopPlaybackMeter();
     if (audioContextRef.current?.state !== "closed") {
       void audioContextRef.current?.close();
     }
@@ -386,7 +477,7 @@ export function useVoiceCall(options: {
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       window.speechSynthesis.cancel();
     }
-  }, [clearPlaybackResumeTimer, clearTtsWatchdog, releaseCapture, stopScheduledPlayback]);
+  }, [clearPlaybackResumeTimer, clearTtsWatchdog, releaseCapture, stopPlaybackMeter, stopScheduledPlayback]);
 
   const endCall = useCallback(() => {
     const sessionId = sessionIdRef.current;
@@ -439,7 +530,7 @@ export function useVoiceCall(options: {
     audioBuffer.copyToChannel(float32, 0);
     const source = ctx.createBufferSource();
     source.buffer = audioBuffer;
-    source.connect(ctx.destination);
+    source.connect(playbackAnalyserRef.current ?? ctx.destination);
     playbackSourcesRef.current.add(source);
     source.onended = () => {
       playbackSourcesRef.current.delete(source);
@@ -684,8 +775,17 @@ export function useVoiceCall(options: {
   const applyMicLevel = useCallback((raw: number) => {
     const level = mutedRef.current ? 0 : Math.max(0, Math.min(1, raw));
     micLevelRef.current = level;
-    // Near-instant meter feed; visual layer does soft settle.
-    setMicLevel((prev) => prev * 0.18 + level * 0.82);
+    // The waveform reads this mutable, real audio signal at display cadence.
+    // Keep React state at a low rate for accessibility/legacy consumers rather
+    // than re-rendering the whole voice overlay on every audio callback.
+    if (statusRef.current !== "speaking") {
+      updateWaveformSignal("mic", level, analyserRef.current, micFrequencyDataRef.current);
+    }
+    const nowForPaint = performance.now();
+    if (nowForPaint - lastMeterPaintRef.current > 90 || level === 0) {
+      lastMeterPaintRef.current = nowForPaint;
+      setMicLevel((prev) => prev * 0.18 + level * 0.82);
+    }
 
     // Barge-in gate: require 2s of continuous speech before interrupting the AI.
     if (assistantHoldRef.current && !mutedRef.current) {
@@ -923,12 +1023,13 @@ export function useVoiceCall(options: {
       if (ctx.state === "suspended") await ctx.resume();
       const source = ctx.createMediaStreamSource(stream);
       const analyser = ctx.createAnalyser();
-      analyser.fftSize = 1024;
-      analyser.smoothingTimeConstant = 0.2;
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.8;
       source.connect(analyser);
       analyserRef.current = analyser;
 
       const data = new Uint8Array(analyser.fftSize);
+      micFrequencyDataRef.current = new Uint8Array(analyser.frequencyBinCount);
       const tick = () => {
         if (!analyserRef.current || !activeRef.current) return;
         // Preserve a direct analyser feed after PCM capture starts. It keeps
@@ -1508,6 +1609,7 @@ export function useVoiceCall(options: {
     status,
     muted,
     micLevel,
+    waveformSignalRef,
     partialTranscript,
     assistantText,
     error,

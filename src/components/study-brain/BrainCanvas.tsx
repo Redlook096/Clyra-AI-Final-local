@@ -1,11 +1,10 @@
 import {
-  Background,
   ConnectionMode,
-  Controls,
   MiniMap,
   ReactFlow,
   ReactFlowProvider,
   addEdge,
+  useReactFlow,
   useEdgesState,
   useNodesState,
   type Connection,
@@ -21,6 +20,14 @@ import type { BrainAction, StudyBrain } from "../../lib/study-brain/types";
 import { positionAroundBrain } from "../../lib/study-brain/storage";
 import { BrainNodeView } from "./nodes/BrainNode";
 import { SourceNodeView } from "./nodes/SourceNode";
+
+export type StudyCanvasApi = {
+  zoomIn: () => void;
+  zoomOut: () => void;
+  fitView: () => void;
+  center: () => void;
+  focusNode: (id: string) => void;
+};
 
 const nodeTypes = {
   brain: BrainNodeView,
@@ -44,6 +51,9 @@ function facingSide(from: XYPosition, to: XYPosition): SideId {
 
 function brainToFlow(brain: StudyBrain, processing: boolean, onAction: (action: BrainAction) => void) {
   const brainPos = brain.positions.brain || { x: 420, y: 280 };
+  const connectedIds = brain.connections.length
+    ? brain.connections
+    : brain.sources.map((source) => source.id);
   const nodes: Node[] = [
     {
       id: "brain",
@@ -52,7 +62,7 @@ function brainToFlow(brain: StudyBrain, processing: boolean, onAction: (action: 
       data: {
         title: brain.title,
         processing,
-        connectedCount: brain.connections.length,
+        connectedCount: connectedIds.length,
         onAction,
       },
       draggable: true,
@@ -64,15 +74,14 @@ function brainToFlow(brain: StudyBrain, processing: boolean, onAction: (action: 
       id: source.id,
       type: "source",
       position: brain.positions[source.id] || positionAroundBrain(brainPos, index),
-      data: { source: { ...source, connected: brain.connections.includes(source.id) } },
+      data: { source: { ...source, connected: connectedIds.includes(source.id) } },
     });
   });
-  const edges: Edge[] = brain.connections.map((sourceId) => {
+  const edges: Edge[] = connectedIds.map((sourceId) => {
     const sourcePos = brain.positions[sourceId] || brainPos;
     return {
       id: `e-${sourceId}-brain`,
-      // Orthogonal routing — never diagonal spokes
-      type: "smoothstep",
+      type: "step",
       source: sourceId,
       target: "brain",
       sourceHandle: facingSide(sourcePos, brainPos),
@@ -90,13 +99,20 @@ function CanvasInner({
   onBrainChange,
   onAction,
   onSelectSource,
+  tool = "select",
+  onCanvasApi,
+  onConnectionDrop,
 }: {
   brain: StudyBrain;
   processing: boolean;
-  onBrainChange: (next: StudyBrain) => void;
+  onBrainChange: (next: StudyBrain, recordHistory?: boolean) => void;
   onAction: (action: BrainAction) => void;
   onSelectSource: (id: string | null) => void;
+  tool?: "select" | "pan" | "connect";
+  onCanvasApi?: (api: StudyCanvasApi) => void;
+  onConnectionDrop?: (position: { x: number; y: number }) => void;
 }) {
+  const { fitView, zoomIn, zoomOut, setCenter } = useReactFlow();
   const initial = useMemo(() => brainToFlow(brain, processing, onAction), []);
   const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
@@ -104,12 +120,36 @@ function CanvasInner({
   brainRef.current = brain;
   const actionRef = useRef(onAction);
   actionRef.current = onAction;
+  const connectingRef = useRef(false);
 
   useEffect(() => {
     const next = brainToFlow(brain, processing, (action) => actionRef.current(action));
     setNodes(next.nodes);
     setEdges(next.edges);
   }, [brain, processing, setNodes, setEdges]);
+
+  // A newly added source can otherwise inherit the empty-space viewport and
+  // land beyond the side panel. Fit only when the node count changes; manual
+  // panning and dragging remain untouched afterwards.
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      void fitView({ padding: 0.2, duration: 220 });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [brain.sources.length, fitView]);
+
+  useEffect(() => {
+    onCanvasApi?.({
+      zoomIn: () => { void zoomIn({ duration: 160 }); },
+      zoomOut: () => { void zoomOut({ duration: 160 }); },
+      fitView: () => { void fitView({ padding: 0.2, duration: 180 }); },
+      center: () => { void setCenter(brainRef.current.positions.brain?.x || 420, brainRef.current.positions.brain?.y || 280, { duration: 180 }); },
+      focusNode: (id) => {
+        const position = brainRef.current.positions[id];
+        if (position) void setCenter(position.x + 100, position.y + 45, { zoom: 1, duration: 180 });
+      },
+    });
+  }, [fitView, onCanvasApi, setCenter, zoomIn, zoomOut]);
 
   const persistLayout = useCallback(
     (nextNodes: Node[], nextEdges: Edge[], viewport?: Viewport) => {
@@ -143,7 +183,7 @@ function CanvasInner({
         const next = addEdge(
           {
             ...connection,
-            type: "smoothstep",
+            type: "step",
             animated: false,
             style: EDGE_STYLE,
           },
@@ -161,32 +201,53 @@ function CanvasInner({
       nodes={nodes}
       edges={edges}
       nodeTypes={nodeTypes}
-      defaultEdgeOptions={{ type: "smoothstep", style: EDGE_STYLE }}
+      defaultEdgeOptions={{ type: "step", style: EDGE_STYLE }}
       connectionMode={ConnectionMode.Loose}
       onNodesChange={(changes) => {
         onNodesChange(changes);
       }}
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
+      onConnectStart={() => { connectingRef.current = true; }}
+      onConnectEnd={(event, connectionState) => {
+        if (connectingRef.current && !connectionState.isValid) {
+          const pointer = event as MouseEvent | TouchEvent;
+          const point = "touches" in pointer && pointer.touches[0]
+            ? pointer.touches[0]
+            : pointer as MouseEvent;
+          onConnectionDrop?.({ x: point.clientX, y: point.clientY });
+        }
+        connectingRef.current = false;
+      }}
       onNodeDragStop={(_event, _node, nextNodes) => persistLayout(nextNodes, edges)}
       onSelectionChange={({ nodes: selected }) => {
         const source = selected.find((node) => node.type === "source");
         onSelectSource(source?.id || null);
       }}
-      onMoveEnd={(_event, viewport) => persistLayout(nodes, edges, viewport)}
+      onMoveEnd={(event, viewport) => {
+        // React Flow also fires this after a programmatic fitView. That event
+        // has no user gesture and can otherwise persist the previous node
+        // snapshot while a newly imported source is being mounted.
+        if (!event) {
+          const current = brainRef.current;
+          onBrainChange({ ...current, viewport, updatedAt: current.updatedAt }, false);
+          return;
+        }
+        persistLayout(nodes, edges, viewport);
+      }}
       fitView
       fitViewOptions={{ padding: 0.18 }}
       minZoom={0.35}
       maxZoom={1.6}
-      snapToGrid
-      snapGrid={[16, 16]}
       panOnScroll
-      selectionOnDrag
-      className="study-brain-flow bg-[color:var(--clyra-canvas)]"
+      panOnDrag={tool === "pan"}
+      panActivationKeyCode="Space"
+      nodesDraggable={tool !== "pan"}
+      selectionOnDrag={tool === "select"}
+      connectOnClick={tool === "connect"}
+      className={`study-brain-flow study-brain-flow--${tool} bg-[color:var(--clyra-canvas)]`}
       proOptions={{ hideAttribution: true }}
     >
-      <Background gap={22} size={1} color="rgba(0,0,0,0.045)" />
-      <Controls showInteractive={false} className="!overflow-hidden !rounded-[10px] !border-[color:var(--clyra-border)] !shadow-none" />
       {brain.sources.length >= 8 ? (
         <MiniMap
           pannable
@@ -203,9 +264,12 @@ function CanvasInner({
 export function BrainCanvas(props: {
   brain: StudyBrain;
   processing: boolean;
-  onBrainChange: (next: StudyBrain) => void;
+  onBrainChange: (next: StudyBrain, recordHistory?: boolean) => void;
   onAction: (action: BrainAction) => void;
   onSelectSource: (id: string | null) => void;
+  tool?: "select" | "pan" | "connect";
+  onCanvasApi?: (api: StudyCanvasApi) => void;
+  onConnectionDrop?: (position: { x: number; y: number }) => void;
 }) {
   return (
     <ReactFlowProvider>

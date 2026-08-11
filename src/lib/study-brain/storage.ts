@@ -88,6 +88,27 @@ function migrateV3(raw: unknown): StudyBrainStore | null {
   };
 }
 
+/**
+ * V4 persisted sources once carried `connected: true` independently from the
+ * edge list. Treat that older shape as a real connection instead of rendering
+ * a misleading empty hub or dropping it from grounded chat context.
+ */
+function normaliseConnections(brain: StudyBrain): StudyBrain {
+  const sourceIds = new Set(brain.sources.map((source) => source.id));
+  const savedConnections = Array.isArray(brain.connections)
+    ? [...new Set(brain.connections.filter((id) => sourceIds.has(id)))]
+    : [];
+  const connections = savedConnections.length
+    ? savedConnections
+    : brain.sources.map((source) => source.id);
+  const linked = new Set(connections);
+  return {
+    ...brain,
+    connections,
+    sources: brain.sources.map((source) => ({ ...source, connected: linked.has(source.id) })),
+  };
+}
+
 export function loadStudyBrainStore(): StudyBrainStore {
   if (typeof window === "undefined") {
     return { version: 4, brains: [], activeBrainId: null };
@@ -96,7 +117,11 @@ export function loadStudyBrainStore(): StudyBrainStore {
     const raw = window.localStorage.getItem(STUDY_BRAIN_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as StudyBrainStore;
-      if (parsed?.version === 4 && Array.isArray(parsed.brains)) return parsed;
+      if (parsed?.version === 4 && Array.isArray(parsed.brains)) {
+        const normalised = { ...parsed, brains: parsed.brains.map(normaliseConnections) };
+        saveStudyBrainStore(normalised);
+        return normalised;
+      }
     }
     const legacy = window.localStorage.getItem(LEGACY_V3);
     if (legacy) {
@@ -128,7 +153,11 @@ export function saveStudyBrainStore(store: StudyBrainStore) {
 }
 
 export function connectedSources(brain: StudyBrain): StudySourceNode[] {
-  const linked = new Set(brain.connections);
+  const linked = new Set(
+    brain.connections.length
+      ? brain.connections
+      : brain.sources.map((source) => source.id),
+  );
   return brain.sources.filter((s) => s.enabled && s.status === "ready" && linked.has(s.id) && s.body.trim());
 }
 
@@ -152,11 +181,13 @@ export function positionAroundBrain(
   brainPos: { x: number; y: number },
   index: number,
 ): { x: number; y: number } {
+  // First resource starts beside the Brain rather than above it, so the
+  // initial canvas never places a node under the application header.
   const spokes = [
-    { dx: 0, dy: -280 },
     { dx: 320, dy: 0 },
     { dx: 0, dy: 280 },
     { dx: -320, dy: 0 },
+    { dx: 0, dy: -280 },
   ] as const;
   const spoke = spokes[index % 4]!;
   const ring = Math.floor(index / 4);

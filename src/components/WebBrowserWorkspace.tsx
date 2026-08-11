@@ -93,6 +93,13 @@ type BrowserTab = {
   zoom: number;
 };
 
+type InternalBrowserPage = "history" | "bookmarks" | "settings";
+
+type InternalBrowserTab = {
+  id: string;
+  page: InternalBrowserPage;
+};
+
 type BrowserHistoryEntry = {
   id: string;
   title: string;
@@ -666,13 +673,18 @@ export default function WebBrowserWorkspace() {
   const [agentDemo] = useState(() => {
     if (typeof window === "undefined") return false;
     const mode = new URLSearchParams(window.location.search).get("browserDemo");
-    return mode === "agent" || mode === "ebay";
+    return mode === "agent" || mode === "ebay" || mode === "typing" || mode === "click";
   });
   const [agentDemoKind] = useState(() => {
     if (typeof window === "undefined") return "agent" as const;
-    return new URLSearchParams(window.location.search).get("browserDemo") === "ebay"
-      ? ("ebay" as const)
-      : ("agent" as const);
+    const demo = new URLSearchParams(window.location.search).get("browserDemo");
+    if (demo === "ebay") return "ebay" as const;
+    // A focused visual-QA state for the real typing cursor treatment. It is
+    // intentionally query-only and mirrors the same `type` event used by an
+    // agent action, so we can inspect that state without submitting a task.
+    if (demo === "typing") return "typing" as const;
+    if (demo === "click") return "click" as const;
+    return "agent" as const;
   });
   const [agentStatus, setAgentStatus] = useState("Ready");
   const [agentPhase, setAgentPhase] = useState<AgentStatus>("idle");
@@ -683,8 +695,19 @@ export default function WebBrowserWorkspace() {
   const [activityOpen, setActivityOpen] = useState(false);
   const [planDisclosureOpen, setPlanDisclosureOpen] = useState(false);
   const [browserMenuOpen, setBrowserMenuOpen] = useState(false);
-  const [askMenuOpen, setAskMenuOpen] = useState(false);
+  const [hoveredBrowserTabId, setHoveredBrowserTabId] = useState<string | null>(null);
+  // These pages deliberately live in the tab strip rather than the utility
+  // drawer. They are browser destinations in their own right, while still
+  // using the same persisted local profile as the native Chromium tabs.
+  const [internalTabs, setInternalTabs] = useState<InternalBrowserTab[]>([]);
+  const [activeInternalTabId, setActiveInternalTabId] = useState<string | null>(null);
   const [cursor, setCursor] = useState<AgentCursor | null>(null);
+  const cursorIntent = truncateLabel(
+    agentDemo
+      ? (agentDemoKind === "ebay" ? "Opening MacBook M2 listing" : agentDemoKind === "typing" ? "Typing Clyra AI" : agentDemoKind === "click" ? "Opening result" : "Searching for sunscreen")
+      : (agentStatus && agentStatus !== "Ready" ? agentStatus : cursor?.label || "Working"),
+    44,
+  );
   const [frameTick, setFrameTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [messages, setMessagesState] = useState<AgentMessage[]>(() => {
@@ -957,6 +980,7 @@ export default function WebBrowserWorkspace() {
   const performAction = useCallback(
     async (action: BrowserAction, quiet = false) => {
       if (action.type === "open_tab") {
+        setActiveInternalTabId(null);
         sideLockRef.current = false;
         setSideOpen(false);
         setSideView("agent");
@@ -984,6 +1008,8 @@ export default function WebBrowserWorkspace() {
   const navigate = async (event?: FormEvent, target = address) => {
     event?.preventDefault();
     if (!target.trim()) return;
+    // Typing an address from a Clyra page returns to the last real browser tab.
+    setActiveInternalTabId(null);
     await takeManualControl();
     await requestBrowser("/api/openbrowser/navigate", { body: { target } }).catch(() => undefined);
   };
@@ -1067,7 +1093,7 @@ export default function WebBrowserWorkspace() {
       const response = await fetch("/api/openbrowser/assist", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-        body: JSON.stringify({ task: cleanTask }),
+        body: JSON.stringify({ task: cleanTask, tabId: originTabId }),
         signal: abort.signal,
       });
       if (!response.ok || !response.body) {
@@ -1247,6 +1273,17 @@ export default function WebBrowserWorkspace() {
     await requestBrowser("/api/openbrowser/bookmarks", { body: {}, quiet: true }).catch(() => undefined);
   };
 
+  const toggleBookmark = async () => {
+    const currentUrl = activeTab?.url || browserState?.url;
+    if (!currentUrl || activeInternalTab) return;
+    const existing = browserState?.bookmarks.find((bookmark) => bookmark.url === currentUrl);
+    if (existing) {
+      await requestBrowser(`/api/openbrowser/bookmarks/${existing.id}`, { method: "DELETE", quiet: true }).catch(() => undefined);
+      return;
+    }
+    await saveBookmark();
+  };
+
   const zoom = async (delta: number | "reset") => {
     await requestBrowser("/api/openbrowser/zoom", { body: { delta }, quiet: true }).catch(() => undefined);
   };
@@ -1315,16 +1352,25 @@ export default function WebBrowserWorkspace() {
     }
     void desktop.browser.setCursor({
       ...cursor,
+      label: cursorIntent,
       showLabel: settings.showAiActionLabels,
       reducedMotion: settings.reducedMotion,
     });
     return () => { void desktop.browser.setCursor(null); };
-  }, [browserState?.agent.manualControl, cursor, desktopChromium, isAgentBusy, settings.reducedMotion, settings.showAiActionLabels, settings.showAiCursor]);
+  }, [browserState?.agent.manualControl, cursor, cursorIntent, desktopChromium, isAgentBusy, settings.reducedMotion, settings.showAiActionLabels, settings.showAiCursor]);
   const pageHost = useMemo(() => displayHost(browserState?.url || address), [address, browserState?.url]);
   const activeTab = useMemo(
     () => browserState?.tabs.find((tab) => tab.active),
     [browserState?.tabs],
   );
+  const activeInternalTab = useMemo(
+    () => internalTabs.find((tab) => tab.id === activeInternalTabId) || null,
+    [activeInternalTabId, internalTabs],
+  );
+  const currentPageBookmark = useMemo(() => {
+    const url = activeTab?.url || browserState?.url;
+    return url ? browserState?.bookmarks.find((bookmark) => bookmark.url === url) : undefined;
+  }, [activeTab?.url, browserState?.bookmarks, browserState?.url]);
   const pageName = useMemo(
     () => displayPageName(activeTab?.url || browserState?.url || address, activeTab?.title || browserState?.title),
     [activeTab?.title, activeTab?.url, address, browserState?.title, browserState?.url],
@@ -1336,6 +1382,7 @@ export default function WebBrowserWorkspace() {
     : "";
   const showAgentChrome = isAgentBusy || agentDemo;
   const showStartPage =
+    !activeInternalTab &&
     !showAgentChrome &&
     (!browserState || isBrowserStartPageUrl(activeTab?.url || browserState?.url || ""));
 
@@ -1344,10 +1391,10 @@ export default function WebBrowserWorkspace() {
   // surface; otherwise an async surface update from the prior web page can
   // briefly leave a white Chromium layer above this React view.
   useEffect(() => {
-    if (!desktopChromium || !showStartPage) return;
+    if (!desktopChromium || (!showStartPage && !activeInternalTab)) return;
     const desktop = getElectronDesktop();
     void desktop?.browser.setSurface({ visible: false });
-  }, [desktopChromium, showStartPage]);
+  }, [activeInternalTab, desktopChromium, showStartPage]);
   const aiInControl = agentDemo
     || (["planning", "observing", "executing", "verifying", "recovering"].includes(agentPhase) && !browserState?.agent.manualControl);
 
@@ -1357,15 +1404,17 @@ export default function WebBrowserWorkspace() {
     setSideOpen(false);
   }, [activeTab?.id, showStartPage, isAgentBusy]);
   const agentTaskTitle = agentDemo
-    ? (agentDemoKind === "ebay" ? "Searching MacBook M2 on eBay" : "Fulfilling beach essentials request")
+    ? (agentDemoKind === "ebay" ? "Searching MacBook M2 on eBay" : agentDemoKind === "typing" ? "Typing a search query" : agentDemoKind === "click" ? "Opening a result" : "Fulfilling beach essentials request")
     : (runTask || browserState?.agent.task || agentStatus || "Working");
-  const restingHost = pageHost || "Search or enter address";
+  const restingHost = activeInternalTab
+    ? `Clyra ${activeInternalTab.page === "history" ? "History" : activeInternalTab.page === "bookmarks" ? "Bookmarks" : "Settings"}`
+    : pageHost || "Search or enter address";
   const demoCursor = agentDemo
     ? {
-        x: Math.round((browserState?.viewport.width || 1440) * (agentDemoKind === "ebay" ? 0.48 : 0.42)),
-        y: Math.round((browserState?.viewport.height || 900) * (agentDemoKind === "ebay" ? 0.44 : 0.38)),
-        kind: "move" as const,
-        label: agentDemoKind === "ebay" ? "Opening MacBook M2 listing" : "Searching for sunscreen",
+        x: Math.round((browserState?.viewport.width || 1440) * (agentDemoKind === "ebay" ? 0.48 : agentDemoKind === "typing" ? 0.46 : agentDemoKind === "click" ? 0.52 : 0.42)),
+        y: Math.round((browserState?.viewport.height || 900) * (agentDemoKind === "ebay" ? 0.44 : agentDemoKind === "typing" ? 0.36 : agentDemoKind === "click" ? 0.48 : 0.38)),
+        kind: agentDemoKind === "typing" ? ("type" as const) : agentDemoKind === "click" ? ("click" as const) : ("move" as const),
+        label: agentDemoKind === "ebay" ? "Opening MacBook M2 listing" : agentDemoKind === "typing" ? "Typing Clyra AI" : agentDemoKind === "click" ? "Opening result" : "Searching for sunscreen",
         id: 1,
       }
     : null;
@@ -1376,6 +1425,21 @@ export default function WebBrowserWorkspace() {
     setSideView(view);
     setSideOpen(true);
     setBrowserMenuOpen(false);
+  };
+
+  const openInternalPage = (page: InternalBrowserPage) => {
+    const existing = internalTabs.find((tab) => tab.page === page);
+    const tabId = existing?.id || `clyra-${page}-${Date.now()}`;
+    if (!existing) setInternalTabs((tabs) => [...tabs, { id: tabId, page }]);
+    setActiveInternalTabId(tabId);
+    sideLockRef.current = false;
+    setSideOpen(false);
+    setBrowserMenuOpen(false);
+  };
+
+  const closeInternalPage = (tabId: string) => {
+    setInternalTabs((tabs) => tabs.filter((tab) => tab.id !== tabId));
+    setActiveInternalTabId((active) => active === tabId ? null : active);
   };
 
   return (
@@ -1403,35 +1467,46 @@ export default function WebBrowserWorkspace() {
               <motion.button
                 key={tab.id}
                 layout="position"
-                initial={{ opacity: 0, scale: 0.96, x: -4 }}
+                initial={{ opacity: 0, scale: 0.98, x: -12 }}
                 animate={{ opacity: 1, scale: 1, x: 0 }}
-                exit={{ opacity: 0, scale: 0.96, x: 4 }}
-                transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                exit={{ opacity: 0, scale: 0.98, x: -12 }}
+                transition={{ type: "spring", stiffness: 440, damping: 34, mass: 0.5 }}
                 type="button"
-                onClick={() => void performAction({ type: "switch_tab", tabId: tab.id })}
+                onPointerEnter={() => setHoveredBrowserTabId(tab.id)}
+                onPointerLeave={() => setHoveredBrowserTabId(null)}
+                onClick={() => {
+                  setActiveInternalTabId(null);
+                  void performAction({ type: "switch_tab", tabId: tab.id });
+                }}
                 onAuxClick={(event) => {
                   if (event.button === 1 && browserState.tabs.length > 1) void performAction({ type: "close_tab", tabId: tab.id });
                 }}
                 className={cn(
-                  "group/tab relative mb-0 flex min-w-[132px] max-w-[180px] items-center gap-1.5 overflow-hidden px-2.5 text-left font-medium transition-[background-color,color] duration-150 ease-out",
-                  tab.active
-                    ? "h-[27px] rounded-t-[8px] bg-[var(--atlas-tab-active)] text-[var(--atlas-text-primary)]"
-                    : "mb-px h-[26px] rounded-[8px] text-[var(--atlas-text-secondary)] hover:bg-black/[0.04]",
+                  "group/tab isolate relative mb-0 flex min-w-[170px] max-w-[210px] items-center gap-2 overflow-hidden px-[15px] text-left font-medium transition-[background-color,color] duration-150 ease-out",
+                  tab.active && !activeInternalTab
+                    ? agentOwnsTab
+                      ? "h-[36px] rounded-t-[10px] bg-transparent text-[var(--atlas-text-secondary)]"
+                      : "h-[36px] rounded-t-[10px] bg-[var(--atlas-tab-active)] text-[var(--atlas-text-primary)]"
+                    : "mb-px h-[34px] rounded-[9px] text-[var(--atlas-text-secondary)]",
                   agentOwnsTab && "clyra-browser-agent-tab",
                 )}
-                style={{ fontSize: "11px" }}
+                style={{ fontSize: "13px" }}
                 title={agentOwnsTab ? "Clyra is controlling this tab" : undefined}
               >
-                {tab.loading ? (
-                  <Loader2 className="h-[13px] w-[13px] shrink-0 animate-spin text-[var(--atlas-text-tertiary)]" />
-                ) : tab.favicon ? (
-                  <img src={tab.favicon} alt="" className="h-[13px] w-[13px] shrink-0 rounded-sm" />
-                ) : (
-                  <Globe2 className="h-[13px] w-[13px] shrink-0 text-[var(--atlas-text-tertiary)]" />
-                )}
-                <span className={cn("min-w-0 flex-1 truncate", agentOwnsTab && "clyra-thinking-shimmer [--clyra-thinking-base:#676b70] [--clyra-thinking-highlight:#202124]")}>
-                  {tab.title || "New tab"}
+                {hoveredBrowserTabId === tab.id && !(tab.active && !activeInternalTab) ? <motion.span layoutId="browser-tab-hover" transition={{ type: "spring", stiffness: 580, damping: 42, mass: 0.42 }} className="pointer-events-none absolute inset-0 rounded-[9px] bg-black/[0.045]" /> : null}
+                <span className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[6px] bg-[#f3f5f7] text-[var(--atlas-text-secondary)]">
+                  {tab.loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Globe2 className="h-3 w-3" strokeWidth={1.8} />}
                 </span>
+                {agentOwnsTab ? (
+                  <ShiningText
+                    text={agentStatus || "Thinking"}
+                    preset="thinkingChat"
+                    play={!browserState.settings.reducedMotion}
+                    className="min-w-0 flex-1 truncate !text-[13px]"
+                  />
+                ) : (
+                  <span className="min-w-0 flex-1 truncate">{tab.title || "New tab"}</span>
+                )}
                 <span
                   role="button"
                   tabIndex={0}
@@ -1447,43 +1522,81 @@ export default function WebBrowserWorkspace() {
               </motion.button>
               );
             })}
+            {internalTabs.map((tab) => {
+              const pageTitle = tab.page === "history" ? "History" : tab.page === "bookmarks" ? "Bookmarks" : "Settings";
+              const PageIcon = tab.page === "history" ? History : tab.page === "bookmarks" ? Bookmark : Settings2;
+              const selected = activeInternalTabId === tab.id;
+              return (
+                <motion.button
+                  key={tab.id}
+                  layout="position"
+                  initial={{ opacity: 0, scale: 0.98, x: -12 }}
+                  animate={{ opacity: 1, scale: 1, x: 0 }}
+                  exit={{ opacity: 0, scale: 0.98, x: -12 }}
+                  transition={{ type: "spring", stiffness: 440, damping: 34, mass: 0.5 }}
+                  type="button"
+                  onPointerEnter={() => setHoveredBrowserTabId(tab.id)}
+                  onPointerLeave={() => setHoveredBrowserTabId(null)}
+                  onClick={() => setActiveInternalTabId(tab.id)}
+                  className={cn(
+                    "group/tab isolate relative mb-0 flex min-w-[170px] max-w-[210px] items-center gap-2 overflow-hidden px-[15px] text-left text-[13px] font-medium transition-[background-color,color] duration-150 ease-out",
+                    selected
+                      ? "h-[36px] rounded-t-[10px] bg-[var(--atlas-tab-active)] text-[var(--atlas-text-primary)]"
+                      : "mb-px h-[34px] rounded-[9px] text-[var(--atlas-text-secondary)]",
+                  )}
+                >
+                  {hoveredBrowserTabId === tab.id && !selected ? <motion.span layoutId="browser-tab-hover" transition={{ type: "spring", stiffness: 580, damping: 42, mass: 0.42 }} className="pointer-events-none absolute inset-0 rounded-[9px] bg-black/[0.045]" /> : null}
+                  <PageIcon className="h-4 w-4 shrink-0 text-[var(--atlas-text-tertiary)]" />
+                  <span className="min-w-0 flex-1 truncate">{pageTitle}</span>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Close ${pageTitle}`}
+                    onClick={(event) => { event.stopPropagation(); closeInternalPage(tab.id); }}
+                    className="grid h-4 w-4 shrink-0 place-items-center rounded-full text-[var(--atlas-text-tertiary)] opacity-0 transition-[opacity,background-color,color] hover:bg-black/[0.06] hover:text-[var(--atlas-text-primary)] group-hover/tab:opacity-100"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </span>
+                </motion.button>
+              );
+            })}
           </AnimatePresence>
-          <IconButton label="New tab" onClick={() => void performAction({ type: "open_tab" })} className="mb-0.5 h-6 w-6 rounded-md text-[var(--atlas-text-secondary)] hover:bg-black/[0.05] hover:text-[var(--atlas-text-primary)]">
-            <Plus className="h-3.5 w-3.5" />
+          <IconButton label="New tab" onClick={() => void performAction({ type: "open_tab" })} className="mb-0.5 h-8 w-8 rounded-[9px] text-[var(--atlas-text-secondary)] hover:bg-black/[0.05] hover:text-[var(--atlas-text-primary)]">
+            <Plus className="h-4 w-4" />
           </IconButton>
         </div>
 
         {/* Toolbar — full width */}
         <div
-          className="relative flex shrink-0 items-center gap-0.5 border-b px-1.5 [&_button]:text-[var(--atlas-text-secondary)] [&_button:hover]:bg-black/[0.05] [&_button:hover]:text-[var(--atlas-text-primary)]"
+          className="relative flex shrink-0 items-center gap-1.5 border-b px-2 [&_button]:text-[var(--atlas-text-secondary)] [&_button:hover]:bg-black/[0.05] [&_button:hover]:text-[var(--atlas-text-primary)]"
           style={{
             height: "var(--atlas-toolbar-height)",
             background: "var(--atlas-toolbar-bg)",
             borderColor: "var(--atlas-divider)",
           }}
         >
-          <IconButton label="Back" disabled={!browserState?.canGoBack} onClick={() => void performAction({ type: "back" })} className="h-7 w-7">
-            <ArrowLeft className="h-3.5 w-3.5" />
+          <IconButton label="Back" disabled={Boolean(activeInternalTab) || !browserState?.canGoBack} onClick={() => void performAction({ type: "back" })} className="h-8 w-8">
+            <ArrowLeft className="h-4 w-4" />
           </IconButton>
-          <IconButton label="Forward" disabled={!browserState?.canGoForward} onClick={() => void performAction({ type: "forward" })} className="h-7 w-7">
-            <ArrowRight className="h-3.5 w-3.5" />
+          <IconButton label="Forward" disabled={Boolean(activeInternalTab) || !browserState?.canGoForward} onClick={() => void performAction({ type: "forward" })} className="h-8 w-8">
+            <ArrowRight className="h-4 w-4" />
           </IconButton>
-          <IconButton label={browserState?.loading ? "Stop loading" : "Reload"} onClick={() => void performAction({ type: browserState?.loading ? "stop_loading" : "reload" })} className="h-7 w-7">
-            {browserState?.loading ? <X className="h-3.5 w-3.5" /> : <RefreshCw className={cn("h-3.5 w-3.5", isBrowserBusy && "animate-spin")} />}
+          <IconButton label={browserState?.loading ? "Stop loading" : "Reload"} disabled={Boolean(activeInternalTab)} onClick={() => void performAction({ type: browserState?.loading ? "stop_loading" : "reload" })} className="h-8 w-8">
+            {browserState?.loading ? <X className="h-4 w-4" /> : <RefreshCw className={cn("h-4 w-4", isBrowserBusy && "animate-spin")} />}
           </IconButton>
-          <form onSubmit={(event) => void navigate(event)} className="relative min-w-0 flex-1 px-1">
+          <form onSubmit={(event) => void navigate(event)} className="relative min-w-0 flex-1 px-1.5">
             <div
               className={cn(
-                "group/omnibox flex h-7 items-center transition-[background-color,box-shadow,border-radius,width] duration-150",
+                "group/omnibox flex h-9 items-center transition-[background-color,box-shadow,border-radius] duration-150",
                 omniboxFocused
-                  ? "w-full gap-1.5 rounded-md bg-white px-2 shadow-[inset_0_0_0_1px_var(--atlas-divider)]"
-                  : "mx-auto w-fit max-w-[240px] justify-center gap-0 rounded-none bg-transparent px-1",
+                  ? "w-full gap-2 rounded-[10px] bg-white px-3 shadow-[inset_0_0_0_1px_var(--atlas-divider)]"
+                  : "w-full justify-center gap-0 rounded-[10px] bg-transparent px-3 hover:bg-black/[0.035]",
               )}
             >
               {omniboxFocused ? (
                 browserState?.secure
-                  ? <LockKeyhole className="h-3 w-3 shrink-0 text-[var(--atlas-text-tertiary)]" strokeWidth={1.8} />
-                  : <Search className="h-3 w-3 shrink-0 text-[var(--atlas-text-tertiary)]" />
+                  ? <LockKeyhole className="h-4 w-4 shrink-0 text-[var(--atlas-text-tertiary)]" strokeWidth={1.8} />
+                  : <Search className="h-4 w-4 shrink-0 text-[var(--atlas-text-tertiary)]" />
               ) : null}
               <input
                 data-browser-omnibox
@@ -1508,8 +1621,8 @@ export default function WebBrowserWorkspace() {
                 className={cn(
                   "min-w-0 flex-1 bg-transparent outline-none",
                   omniboxFocused
-                    ? "text-left text-[12px] font-medium text-[var(--atlas-text-primary)]"
-                    : "cursor-text text-center text-[11px] font-medium text-[var(--atlas-text-tertiary)]",
+                    ? "text-left text-[13px] font-medium text-[var(--atlas-text-primary)]"
+                    : "cursor-text text-center text-[13px] font-medium text-[var(--atlas-text-tertiary)]",
                 )}
                 placeholder="Search or enter address"
                 aria-label="Address and search bar"
@@ -1521,10 +1634,24 @@ export default function WebBrowserWorkspace() {
                   }
                 }}
               />
+              <button
+                type="button"
+                title={currentPageBookmark ? "Remove bookmark" : "Bookmark this page"}
+                aria-label={currentPageBookmark ? "Remove bookmark" : "Bookmark this page"}
+                disabled={Boolean(activeInternalTab) || !browserState?.url}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => void toggleBookmark()}
+                className={cn(
+                  "grid h-7 w-7 shrink-0 place-items-center rounded-[7px] text-[var(--atlas-text-tertiary)] transition-[background-color,color,transform] duration-150 hover:bg-black/[0.05] hover:text-[var(--atlas-text-primary)] active:scale-95 disabled:pointer-events-none disabled:opacity-30",
+                  currentPageBookmark && "text-[var(--atlas-clyra-blue)]",
+                )}
+              >
+                <Star className={cn("h-[15px] w-[15px]", currentPageBookmark && "fill-current")} strokeWidth={1.8} />
+              </button>
             </div>
           </form>
           <div className="relative z-50">
-            <IconButton label="Browser menu" onClick={() => setBrowserMenuOpen((value) => !value)} active={browserMenuOpen} className="h-7 w-7">
+            <IconButton label="Browser menu" onClick={() => setBrowserMenuOpen((value) => !value)} active={browserMenuOpen} className="h-8 w-8">
               <Ellipsis className="h-4 w-4" />
             </IconButton>
             <AnimatePresence>
@@ -1537,12 +1664,12 @@ export default function WebBrowserWorkspace() {
                   className="absolute right-0 top-8 z-[70] w-56 overflow-hidden rounded-xl border border-[var(--atlas-divider)] bg-white p-1.5 shadow-[0_16px_42px_rgba(15,23,42,0.14)]"
                 >
                   {[
-                    { view: "history" as const, label: "History", icon: History },
-                    { view: "bookmarks" as const, label: "Bookmarks", icon: Bookmark },
+                    { view: "history" as const, label: "History", icon: History, tabPage: "history" as const },
+                    { view: "bookmarks" as const, label: "Bookmarks", icon: Bookmark, tabPage: "bookmarks" as const },
                     { view: "downloads" as const, label: "Downloads", icon: Download },
-                    { view: "settings" as const, label: "Browser settings", icon: Settings2 },
+                    { view: "settings" as const, label: "Browser settings", icon: Settings2, tabPage: "settings" as const },
                   ].map((item) => (
-                    <button key={item.view} type="button" onClick={() => openSideView(item.view)} className="flex h-9 w-full items-center gap-3 rounded-lg px-2.5 text-[12px] font-medium text-[var(--atlas-text-secondary)] transition-colors hover:bg-black/[0.04] hover:text-[var(--atlas-text-primary)]">
+                    <button key={item.view} type="button" onClick={() => item.tabPage ? openInternalPage(item.tabPage) : openSideView(item.view)} className="flex h-9 w-full items-center gap-3 rounded-lg px-2.5 text-[12px] font-medium text-[var(--atlas-text-secondary)] transition-colors hover:bg-black/[0.04] hover:text-[var(--atlas-text-primary)]">
                       <item.icon className="h-4 w-4" /> {item.label}
                     </button>
                   ))}
@@ -1570,7 +1697,7 @@ export default function WebBrowserWorkspace() {
               });
             }}
             className={cn(
-              "ml-0.5 flex h-[25px] shrink-0 items-center gap-1 rounded-[7px] px-2 text-[10.5px] font-medium transition-[background-color,color] duration-150",
+              "ml-0.5 flex h-8 shrink-0 items-center gap-1 rounded-[9px] px-3 text-[12px] font-medium transition-[background-color,color] duration-150",
               sideOpen && sideView === "agent"
                 ? "bg-black/[0.04] text-[var(--atlas-clyra-blue)]"
                 : "bg-transparent text-[var(--atlas-clyra-blue)] hover:bg-black/[0.035]",
@@ -1604,7 +1731,22 @@ export default function WebBrowserWorkspace() {
             className="group relative min-h-0 flex-1 overflow-hidden bg-white outline-none"
             aria-label="Interactive browser page"
           >
-            {showStartPage ? (
+            {activeInternalTab ? (
+              <BrowserInternalPage
+                page={activeInternalTab.page}
+                history={browserState?.history || []}
+                bookmarks={browserState?.bookmarks || []}
+                settings={settings}
+                onNavigate={(target) => {
+                  setAddress(target);
+                  void navigate(undefined, target);
+                }}
+                onClearHistory={() => void requestBrowser("/api/openbrowser/history", { method: "DELETE", body: {}, quiet: true })}
+                onSaveBookmark={() => void saveBookmark()}
+                onRemoveBookmark={(id) => void requestBrowser(`/api/openbrowser/bookmarks/${id}`, { method: "DELETE", quiet: true })}
+                onUpdateSettings={(patch) => void updateSettings(patch)}
+              />
+            ) : showStartPage ? (
               <BrowserStartPage
                 history={browserState?.history}
                 bookmarks={browserState?.bookmarks}
@@ -1619,7 +1761,7 @@ export default function WebBrowserWorkspace() {
                   setTask(prompt);
                   void runAgentTask(prompt);
                 }}
-                onOpenSettings={() => openSideView("settings")}
+                onOpenSettings={() => openInternalPage("settings")}
               />
             ) : browserState && desktopChromium ? (
               <ElectronWebContentsSurface
@@ -1627,7 +1769,7 @@ export default function WebBrowserWorkspace() {
                 surfaceId="primary-browser"
                 kind="browser"
                 className="h-full w-full"
-                active={!showStartPage}
+                active={!showStartPage && !activeInternalTab}
                 fallback={
                   <img
                     data-clyra-browser-frame="1"
@@ -1687,27 +1829,24 @@ export default function WebBrowserWorkspace() {
                   }}
                   exit={{ opacity: 0, scale: 0.92 }}
                   transition={{
-                    left: settings.aiCursorSpeed === "instant" ? { duration: 0.035 } : { type: "spring", stiffness: settings.aiCursorSpeed === "fast" ? 520 : 310, damping: settings.aiCursorSpeed === "fast" ? 38 : 31, mass: 0.46 },
-                    top: settings.aiCursorSpeed === "instant" ? { duration: 0.035 } : { type: "spring", stiffness: settings.aiCursorSpeed === "fast" ? 520 : 310, damping: settings.aiCursorSpeed === "fast" ? 38 : 31, mass: 0.46 },
+                    // Keep the pointer physically connected to each action.
+                    // A critically damped spring reads as intentional movement,
+                    // rather than a sequence of teleports between targets.
+                    left: settings.aiCursorSpeed === "instant" ? { duration: 0.035 } : { type: "spring", stiffness: settings.aiCursorSpeed === "fast" ? 430 : 260, damping: settings.aiCursorSpeed === "fast" ? 34 : 29, mass: 0.52 },
+                    top: settings.aiCursorSpeed === "instant" ? { duration: 0.035 } : { type: "spring", stiffness: settings.aiCursorSpeed === "fast" ? 430 : 260, damping: settings.aiCursorSpeed === "fast" ? 34 : 29, mass: 0.52 },
                     scale: { duration: 0.16 },
                     opacity: { duration: 0.1 },
                   }}
                   className="clyra-browser-agent-cursor pointer-events-none absolute z-20 -translate-x-[2px] -translate-y-[2px]"
+                  data-kind={liveCursor.kind}
                 >
-                  <svg
-                    className="clyra-browser-agent-cursor__arrow"
-                    viewBox="0 0 16 16"
-                    aria-hidden
-                  >
-                    <path d="M3.2 1.6 13.4 7.4a.7.7 0 0 1-.05 1.25L8.6 10.1l-1.4 4.55a.7.7 0 0 1-1.3.05L3.2 1.6Z" />
-                  </svg>
-                  {settings.showAiActionLabels && liveCursor.label ? (
-                    <span className="absolute left-[18px] top-[18px] flex h-[22px] max-w-[240px] items-center truncate whitespace-nowrap rounded-[6px] bg-[var(--atlas-agent-black)] px-2 text-[10px] font-medium leading-none text-white shadow-[0_4px_12px_rgba(0,0,0,.22)]">{liveCursor.label}</span>
+                  <span className="clyra-browser-agent-cursor__arrow" aria-hidden />
+                  <span className="clyra-browser-agent-cursor__caret" aria-hidden />
+                  {settings.showAiActionLabels ? (
+                    <span className="clyra-browser-agent-cursor__label">{cursorIntent}</span>
                   ) : null}
                   {(liveCursor.kind === "click" || liveCursor.kind === "double_click") ? (
-                    <span key={liveCursor.id} className="absolute left-[3px] top-[2px]" aria-hidden>
-                      <span className="absolute h-2.5 w-2.5 animate-ping rounded-full bg-[rgba(96,152,230,0.35)] [animation-duration:0.55s]" />
-                    </span>
+                    <span key={liveCursor.id} className="clyra-browser-agent-cursor__click" aria-hidden />
                   ) : null}
                 </motion.div>
               ) : null}
@@ -1817,10 +1956,12 @@ export default function WebBrowserWorkspace() {
               initial={{ opacity: 0, width: 0 }}
               animate={{ opacity: 1, width: "var(--atlas-sidebar-width)" }}
               exit={{ opacity: 0, width: 0 }}
-              transition={{ duration: 0.42, ease: [0.16, 1, 0.3, 1] }}
+              transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+              onUpdate={() => window.dispatchEvent(new Event("clyra:native-surface-layout"))}
+              onAnimationComplete={() => window.dispatchEvent(new Event("clyra:native-surface-layout"))}
               className="absolute inset-x-0 bottom-0 top-[calc(var(--atlas-titlebar-height)+var(--atlas-toolbar-height))] z-40 flex min-h-0 w-full flex-col overflow-hidden bg-[var(--atlas-sidebar-bg)] text-[var(--atlas-text-primary)] lg:static lg:w-[var(--atlas-sidebar-width)] lg:max-w-[var(--atlas-sidebar-width)] lg:shrink-0"
             >
-              <header className="relative flex h-[34px] shrink-0 items-center justify-between border-b border-[var(--atlas-divider)] px-2">
+              <header className="relative flex h-[34px] shrink-0 items-center gap-2 border-b border-[var(--atlas-divider)] px-2">
                 <button
                   type="button"
                   onClick={() => (sideView !== "agent" ? setSideView("agent") : setSideOpen(false))}
@@ -1829,43 +1970,7 @@ export default function WebBrowserWorkspace() {
                 >
                   <ArrowLeft className="h-3.5 w-3.5" />
                 </button>
-                <div className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setAskMenuOpen((value) => !value)}
-                    className="grid h-7 w-7 place-items-center rounded-md text-[var(--atlas-text-secondary)] transition-colors hover:bg-black/[0.04] hover:text-[var(--atlas-text-primary)]"
-                    aria-label="Ask panel menu"
-                  >
-                    <Ellipsis className="h-4 w-4" />
-                  </button>
-                  <AnimatePresence>
-                    {askMenuOpen ? (
-                      <motion.div
-                        initial={{ opacity: 0, y: -4, scale: 0.98 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: -4, scale: 0.98 }}
-                        transition={{ duration: 0.12 }}
-                        className="absolute right-0 top-8 z-[60] w-44 overflow-hidden rounded-lg border border-[var(--atlas-divider)] bg-white p-1 shadow-[0_12px_28px_rgba(15,23,42,0.12)]"
-                      >
-                        {[
-                          { view: "history" as const, label: "History" },
-                          { view: "bookmarks" as const, label: "Bookmarks" },
-                          { view: "downloads" as const, label: "Downloads" },
-                          { view: "settings" as const, label: "Settings" },
-                        ].map((item) => (
-                          <button
-                            key={item.view}
-                            type="button"
-                            onClick={() => { setAskMenuOpen(false); openSideView(item.view); }}
-                            className="flex h-8 w-full items-center rounded-md px-2.5 text-[11px] font-medium text-[var(--atlas-text-secondary)] hover:bg-black/[0.04] hover:text-[var(--atlas-text-primary)]"
-                          >
-                            {item.label}
-                          </button>
-                        ))}
-                      </motion.div>
-                    ) : null}
-                  </AnimatePresence>
-                </div>
+                <span className="text-[11px] font-medium text-[var(--atlas-text-secondary)]">Ask Clyra</span>
               </header>
 
               {sideView === "agent" ? (
@@ -1953,8 +2058,9 @@ export default function WebBrowserWorkspace() {
                                     .filter(([host]) => host)
                                     .slice(0, 8)
                                     .map(([host, url]) => (
-                                      <a key={url} href={url} target="_blank" rel="noreferrer" title={host}>
-                                        <img src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`} alt="" />
+                                      <a key={url} href={url} target="_blank" rel="noreferrer" title={host} className="clyra-message-source-chip">
+                                        <span className="clyra-message-source-chip__icon"><Globe2 className="h-3.5 w-3.5" strokeWidth={1.7} /></span>
+                                        <span className="clyra-message-source-chip__bullet"><i className="clyra-message-source-chip__dot" /><span className="clyra-message-source-chip__label">{host}</span></span>
                                       </a>
                                     ))}
                                 </div>
@@ -2116,6 +2222,170 @@ export default function WebBrowserWorkspace() {
       </motion.div>
     </div>
   );
+}
+
+function BrowserInternalPage({
+  page,
+  history,
+  bookmarks,
+  settings,
+  onNavigate,
+  onClearHistory,
+  onSaveBookmark,
+  onRemoveBookmark,
+  onUpdateSettings,
+}: {
+  page: InternalBrowserPage;
+  history: BrowserHistoryEntry[];
+  bookmarks: BrowserBookmark[];
+  settings: BrowserSettings;
+  onNavigate: (url: string) => void;
+  onClearHistory: () => void;
+  onSaveBookmark: () => void;
+  onRemoveBookmark: (id: string) => void;
+  onUpdateSettings: (patch: Partial<BrowserSettings>) => void;
+}) {
+  const isHistory = page === "history";
+  const isBookmarks = page === "bookmarks";
+  const [historySearch, setHistorySearch] = useState("");
+  const groupedHistory = useMemo(() => {
+    const groups = new Map<string, BrowserHistoryEntry[]>();
+    const query = historySearch.trim().toLocaleLowerCase();
+    history.filter((entry) => !query || `${entry.title} ${entry.url}`.toLocaleLowerCase().includes(query)).forEach((entry) => {
+      const date = new Date(entry.visitedAt);
+      const label = Number.isNaN(date.valueOf())
+        ? "Earlier"
+        : date.toDateString() === new Date().toDateString()
+          ? "Today"
+          : date.toDateString() === new Date(Date.now() - 86_400_000).toDateString()
+            ? "Yesterday"
+            : date.toLocaleDateString(undefined, { month: "long", day: "numeric" });
+      groups.set(label, [...(groups.get(label) || []), entry]);
+    });
+    return [...groups.entries()].slice(0, 8);
+  }, [history, historySearch]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 5 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: settings.reducedMotion ? 0.01 : 0.18, ease: [0.16, 1, 0.3, 1] }}
+      className="h-full overflow-y-auto bg-[#fbfbfc] text-[var(--atlas-text-primary)]"
+    >
+      <div className="mx-auto w-full max-w-[860px] px-8 pb-16 pt-10 sm:px-12">
+        {isHistory ? (
+          <>
+            <header className="mb-9 flex items-start justify-between gap-5">
+              <div>
+                <div className="mb-3 grid h-9 w-9 place-items-center rounded-[10px] bg-[#f1f5ff] text-[var(--atlas-clyra-blue)]"><History className="h-[18px] w-[18px]" /></div>
+                <h1 className="text-[25px] font-semibold tracking-[-0.035em]">History</h1>
+                <p className="mt-1.5 text-[13px] text-[var(--atlas-text-secondary)]">Pages you’ve visited in Clyra Browser.</p>
+                <div className="mt-4 flex items-center gap-2 text-[11px] text-[var(--atlas-text-tertiary)]"><span className="rounded-full bg-[#f0f2f5] px-2.5 py-1 font-medium">{history.length} saved visits</span><span>Stored locally</span></div>
+              </div>
+              <button type="button" onClick={onClearHistory} disabled={!history.length} className="mt-1 h-8 rounded-[8px] px-2.5 text-[12px] font-medium text-[var(--atlas-text-secondary)] transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-35">Clear browsing data</button>
+            </header>
+            <div className="mb-7 flex h-10 max-w-[510px] items-center gap-2 rounded-[10px] border border-[var(--atlas-divider)] bg-white px-3 shadow-[0_1px_2px_rgba(15,23,42,0.02)]">
+              <Search className="h-4 w-4 text-[var(--atlas-text-tertiary)]" />
+              <input value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-[var(--atlas-text-tertiary)]" placeholder="Search history" aria-label="Search history" />
+            </div>
+            {groupedHistory.length ? (
+              <div className="space-y-8">
+                {groupedHistory.map(([label, entries]) => (
+                  <section key={label}>
+                    <h2 className="mb-2 px-1 text-[11px] font-semibold text-[var(--atlas-text-tertiary)]">{label}</h2>
+                    <div className="space-y-0.5">
+                      {entries.slice(0, 18).map((entry) => (
+                        <button key={entry.id} type="button" onClick={() => onNavigate(entry.url)} className="group flex w-full items-center gap-3 rounded-[10px] px-2.5 py-2 text-left transition-colors hover:bg-[#f1f3f6]">
+                          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[8px] border border-[var(--atlas-divider)] bg-white"><Globe2 className="h-3.5 w-3.5 text-[var(--atlas-text-tertiary)]" /></span>
+                          <span className="min-w-0 flex-1"><span className="block truncate text-[13px] font-medium text-[var(--atlas-text-primary)]">{entry.title || displayHost(entry.url)}</span><span className="mt-0.5 block truncate text-[11px] text-[var(--atlas-text-tertiary)]">{compactUrl(entry.url)}</span></span>
+                          <span className="shrink-0 text-[11px] text-[var(--atlas-text-tertiary)]">{formatWhen(entry.visitedAt)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            ) : <EmptyPanel icon={History} label={historySearch ? "No matching history" : "No browsing history yet"} />}
+          </>
+        ) : isBookmarks ? (
+          <>
+            <header className="mb-9 flex items-start justify-between gap-5">
+              <div>
+                <div className="mb-3 grid h-9 w-9 place-items-center rounded-[10px] bg-[#f1f5ff] text-[var(--atlas-clyra-blue)]"><Bookmark className="h-[18px] w-[18px]" /></div>
+                <h1 className="text-[25px] font-semibold tracking-[-0.035em]">Bookmarks</h1>
+                <p className="mt-1.5 text-[13px] text-[var(--atlas-text-secondary)]">Pages you’ve saved for later.</p>
+                <div className="mt-4 flex items-center gap-2 text-[11px] text-[var(--atlas-text-tertiary)]"><span className="rounded-full bg-[#f0f2f5] px-2.5 py-1 font-medium">{bookmarks.length} saved pages</span><span>Available on this device</span></div>
+              </div>
+              <button type="button" onClick={onSaveBookmark} className="mt-1 flex h-8 items-center gap-1.5 rounded-[8px] px-2.5 text-[12px] font-medium text-[var(--atlas-clyra-blue)] transition-colors hover:bg-[#edf3ff]"><Plus className="h-3.5 w-3.5" /> Bookmark current page</button>
+            </header>
+            <div className="mb-7 flex h-10 max-w-[510px] items-center gap-2 rounded-[10px] border border-[var(--atlas-divider)] bg-white px-3 shadow-[0_1px_2px_rgba(15,23,42,0.02)]">
+              <Search className="h-4 w-4 text-[var(--atlas-text-tertiary)]" />
+              <input value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-[var(--atlas-text-tertiary)]" placeholder="Search bookmarks" aria-label="Search bookmarks" />
+            </div>
+            {bookmarks.filter((bookmark) => !historySearch.trim() || `${bookmark.title} ${bookmark.url}`.toLocaleLowerCase().includes(historySearch.trim().toLocaleLowerCase())).length ? (
+              <section>
+                <h2 className="mb-2 px-1 text-[11px] font-semibold text-[var(--atlas-text-tertiary)]">Saved pages</h2>
+                <div className="space-y-0.5">
+                  {bookmarks.filter((bookmark) => !historySearch.trim() || `${bookmark.title} ${bookmark.url}`.toLocaleLowerCase().includes(historySearch.trim().toLocaleLowerCase())).map((bookmark) => (
+                    <div key={bookmark.id} className="group flex w-full items-center gap-3 rounded-[10px] px-2.5 py-2 transition-colors hover:bg-[#f1f3f6]">
+                      <button type="button" onClick={() => onNavigate(bookmark.url)} className="flex min-w-0 flex-1 items-center gap-3 text-left"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-[8px] border border-[var(--atlas-divider)] bg-white"><Bookmark className="h-3.5 w-3.5 text-[var(--atlas-clyra-blue)]" /></span><span className="min-w-0"><span className="block truncate text-[13px] font-medium text-[var(--atlas-text-primary)]">{bookmark.title || displayHost(bookmark.url)}</span><span className="mt-0.5 block truncate text-[11px] text-[var(--atlas-text-tertiary)]">{compactUrl(bookmark.url)}</span></span></button>
+                      <button type="button" onClick={() => onRemoveBookmark(bookmark.id)} className="grid h-7 w-7 shrink-0 place-items-center rounded-[7px] text-[var(--atlas-text-tertiary)] opacity-0 transition-[opacity,background-color,color] hover:bg-red-50 hover:text-red-600 group-hover:opacity-100" aria-label={`Remove ${bookmark.title || "bookmark"}`}><Trash2 className="h-3.5 w-3.5" /></button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : <EmptyPanel icon={Bookmark} label={historySearch ? "No matching bookmarks" : "No bookmarks yet"} />}
+          </>
+        ) : (
+          <>
+            <header className="mb-9">
+              <div className="mb-3 grid h-9 w-9 place-items-center rounded-[10px] bg-[#f1f5ff] text-[var(--atlas-clyra-blue)]"><Settings2 className="h-[18px] w-[18px]" /></div>
+              <h1 className="text-[25px] font-semibold tracking-[-0.035em]">Browser settings</h1>
+              <p className="mt-1.5 text-[13px] text-[var(--atlas-text-secondary)]">A quiet, local setup for browsing with Clyra.</p>
+            </header>
+            <div className="space-y-8">
+              <InternalSettingsSection title="General" icon={Search}>
+                <InternalSettingSelect label="Search engine" description="Used when you enter a search in the address bar." value={settings.defaultSearchEngine} options={["google", "bing", "duckduckgo"]} onChange={(value) => onUpdateSettings({ defaultSearchEngine: value as BrowserSettings["defaultSearchEngine"] })} />
+                <InternalSettingToggle label="Restore tabs" description="Reopen your last browser tabs when Clyra starts." checked={settings.restoreTabs} onChange={(value) => onUpdateSettings({ restoreTabs: value })} />
+                <InternalSettingToggle label="Show bookmarks bar" description="Keep saved pages one click away." checked={settings.showBookmarksBar} onChange={(value) => onUpdateSettings({ showBookmarksBar: value })} />
+              </InternalSettingsSection>
+              <InternalSettingsSection title="Privacy" icon={ShieldCheck}>
+                <InternalSettingToggle label="Save browsing history" description="Store visited pages in your local Clyra profile." checked={settings.saveHistory} onChange={(value) => onUpdateSettings({ saveHistory: value })} />
+                <InternalSettingToggle label="Private session" description="Don’t save new tabs or browsing history." checked={settings.privateMode} onChange={(value) => onUpdateSettings({ privateMode: value })} />
+              </InternalSettingsSection>
+              <InternalSettingsSection title="Clyra assistance" icon={Eye}>
+                <InternalSettingToggle label="Show AI cursor" description="Show Clyra’s position while it works on a page." checked={settings.showAiCursor} onChange={(value) => onUpdateSettings({ showAiCursor: value })} />
+                <InternalSettingToggle label="Show action labels" description="Briefly describe what Clyra is doing beside the cursor." checked={settings.showAiActionLabels} onChange={(value) => onUpdateSettings({ showAiActionLabels: value })} />
+                <InternalSettingSelect label="Cursor speed" description="Choose how quickly Clyra’s cursor travels." value={settings.aiCursorSpeed} options={["natural", "fast", "instant"]} onChange={(value) => onUpdateSettings({ aiCursorSpeed: value as BrowserSettings["aiCursorSpeed"] })} />
+              </InternalSettingsSection>
+              <InternalSettingsSection title="Performance" icon={Settings2}>
+                <InternalSettingSelect label="Browser performance" description="Balance visual quality and system efficiency." value={settings.performanceMode} options={["quality", "balanced", "efficient"]} onChange={(value) => onUpdateSettings({ performanceMode: value as BrowserSettings["performanceMode"] })} />
+                <InternalSettingToggle label="Reduce motion" description="Use quieter transitions throughout the browser." checked={settings.reducedMotion} onChange={(value) => onUpdateSettings({ reducedMotion: value })} />
+              </InternalSettingsSection>
+              <InternalSettingsSection title="Keyboard shortcuts" icon={Keyboard}>
+                <div className="divide-y divide-[var(--atlas-divider)] px-4">
+                  {[['Focus address bar', '⌘ L'], ['Open new tab', '⌘ T'], ['Reopen closed tab', '⇧ ⌘ T'], ['Close tab', '⌘ W'], ['Reload page', '⌘ R']].map(([label, shortcut]) => <div key={label} className="flex h-10 items-center justify-between text-[12px]"><span className="text-[var(--atlas-text-secondary)]">{label}</span><kbd className="rounded-[5px] border border-[var(--atlas-divider)] bg-[#fbfbfc] px-1.5 py-0.5 text-[10px] font-medium text-[var(--atlas-text-tertiary)]">{shortcut}</kbd></div>)}
+                </div>
+              </InternalSettingsSection>
+              <div className="flex items-center gap-2 rounded-[10px] border border-[var(--atlas-divider)] bg-white px-3 py-2.5 text-[11px] leading-4 text-[var(--atlas-text-secondary)]"><ShieldCheck className="h-4 w-4 shrink-0 text-emerald-600" /> Your browsing profile and saved pages stay on this device.</div>
+            </div>
+          </>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
+function InternalSettingsSection({ title, icon: Icon, children }: { title: string; icon: LucideIcon; children: React.ReactNode }) {
+  return <section><div className="mb-2 flex items-center gap-2 px-1"><Icon className="h-3.5 w-3.5 text-[var(--atlas-text-tertiary)]" /><h2 className="text-[12px] font-semibold text-[var(--atlas-text-secondary)]">{title}</h2></div><div className="overflow-hidden rounded-[12px] border border-[var(--atlas-divider)] bg-white">{children}</div></section>;
+}
+
+function InternalSettingToggle({ label, description, checked, onChange }: { label: string; description: string; checked: boolean; onChange: (value: boolean) => void }) {
+  return <div className="flex min-h-[66px] items-center justify-between gap-5 border-b border-[var(--atlas-divider)] px-4 last:border-b-0"><div><p className="text-[13px] font-medium">{label}</p><p className="mt-0.5 text-[11px] leading-4 text-[var(--atlas-text-secondary)]">{description}</p></div><Toggle label={label} checked={checked} onChange={onChange} /></div>;
+}
+
+function InternalSettingSelect({ label, description, value, options, onChange }: { label: string; description: string; value: string; options: string[]; onChange: (value: string) => void }) {
+  return <label className="flex min-h-[66px] items-center justify-between gap-5 border-b border-[var(--atlas-divider)] px-4 last:border-b-0"><span><span className="block text-[13px] font-medium">{label}</span><span className="mt-0.5 block text-[11px] leading-4 text-[var(--atlas-text-secondary)]">{description}</span></span><select value={value} onChange={(event) => onChange(event.target.value)} className="h-8 min-w-[112px] rounded-[8px] border border-[var(--atlas-divider)] bg-[#fbfbfc] px-2 text-[12px] font-medium capitalize text-[var(--atlas-text-secondary)] outline-none transition-colors focus:border-[var(--atlas-clyra-blue)]">{options.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>;
 }
 
 function statusPillMeta(phase: AgentStatus, manualControl: boolean): { label: string; className: string; live?: boolean } {

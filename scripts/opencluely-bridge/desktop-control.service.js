@@ -8,7 +8,7 @@
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { screen } = require('electron');
+const { BrowserWindow, screen } = require('electron');
 const logger = require('../core/logger').createServiceLogger('DESKTOP-CONTROL');
 const { checkActionSafety } = require('./control-safety');
 
@@ -65,6 +65,9 @@ class DesktopControlService {
     this.driver = 'none';
     this.currentTask = '';
     this.pressedButtons = new Set();
+    // Click-through native overlays provide an honest visual trace of the
+    // agent's actions while leaving every underlying control usable.
+    this.cursorWindows = new Map();
   }
 
   async initialize() {
@@ -91,12 +94,61 @@ class DesktopControlService {
     return { ok: true, driver: this.driver };
   }
 
+  async ensureCursorWindow(display) {
+    const id = String(display?.id ?? 'primary');
+    const existing = this.cursorWindows.get(id);
+    if (existing && !existing.isDestroyed()) return existing;
+    const bounds = display?.bounds || screen.getPrimaryDisplay().bounds;
+    const win = new BrowserWindow({
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+      frame: false,
+      transparent: true,
+      resizable: false,
+      movable: false,
+      focusable: false,
+      skipTaskbar: true,
+      alwaysOnTop: true,
+      hasShadow: false,
+      visibleOnAllWorkspaces: true,
+      webPreferences: { nodeIntegration: false, contextIsolation: true, backgroundThrottling: false },
+    });
+    win.setIgnoreMouseEvents(true, { forward: true });
+    try { win.setAlwaysOnTop(true, 'screen-saver'); } catch (_) { win.setAlwaysOnTop(true, 'floating'); }
+    win.on('closed', () => this.cursorWindows.delete(id));
+    await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(AI_CURSOR_HTML)}`);
+    this.cursorWindows.set(id, win);
+    return win;
+  }
+
+  async showAICursor(point = this.lastPoint, label = 'Working…', kind = 'move') {
+    const x = Math.round(Number(point?.x) || 0);
+    const y = Math.round(Number(point?.y) || 0);
+    const display = screen.getDisplayNearestPoint({ x, y });
+    const win = await this.ensureCursorWindow(display);
+    if (!win || win.isDestroyed()) return { ok: false, error: 'cursor overlay unavailable' };
+    const bounds = display.bounds;
+    win.showInactive();
+    await win.webContents.executeJavaScript(
+      `window.__openCluelySetAICursor(${JSON.stringify({ x: x - bounds.x, y: y - bounds.y, label: String(label || 'Working…').slice(0, 96), kind: String(kind || 'move') })}); true`,
+      true,
+    );
+    return { ok: true, point: { x, y } };
+  }
+
+  hideAICursor() {
+    for (const win of this.cursorWindows.values()) {
+      try { if (!win.isDestroyed()) win.hide(); } catch (_) { /* ignore */ }
+    }
+  }
+
   async point(x, y, label = 'Look here') {
     this.guideOnly = true;
     const point = { x: Math.round(x), y: Math.round(y) };
     this.lastPoint = point;
-    // Match computer-agent: use the actual system pointer, never a second
-    // decorative cursor or full-screen glow. The bar remains the status UI.
+    await this.showAICursor(point, label, 'point').catch(() => {});
     await wait(120);
     return { ok: true, point, guide: true };
   }
@@ -123,6 +175,7 @@ class DesktopControlService {
     } catch (error) {
       logger.warn('Mouse move failed', { error: error.message, driver: this.driver });
     }
+    await this.showAICursor(point, label, 'move').catch(() => {});
     this.lastPoint = point;
     await wait(80);
     return { ok: true, point };
@@ -135,6 +188,7 @@ class DesktopControlService {
     const point = { x: Math.round(x ?? this.lastPoint.x), y: Math.round(y ?? this.lastPoint.y) };
     const count = Math.max(1, Math.min(3, Number(clicks) || 1));
     await this.move(point.x, point.y, label);
+    await this.showAICursor(point, label, 'click').catch(() => {});
     try {
       if (this.xdotool) {
         const btn = button === 'right' ? '3' : button === 'middle' ? '2' : '1';
@@ -176,6 +230,7 @@ for ($i=0; $i -lt ${count}; $i++) { ${downUp} Start-Sleep -Milliseconds 80 }
       return { ok: true, skipped: 'guide' };
     }
     const amount = Math.max(-20, Math.min(20, Math.round(Number(deltaY) || -3)));
+    await this.showAICursor(this.lastPoint, label, 'scroll').catch(() => {});
     try {
       if (this.xdotool) {
         // positive deltaY => scroll up (button 4); negative => scroll down (button 5)
@@ -219,6 +274,7 @@ for ($i=0; $i -lt ${reps}; $i++) { [M]::mouse_event(0x0800, 0, 0, ${wheelDelta},
     }
     const value = String(text || '');
     if (!value) return { ok: true };
+    await this.showAICursor(this.lastPoint, label, 'type').catch(() => {});
     try {
       if (this.xdotool) {
         await execFileAsync(this.xdotool, ['type', '--clearmodifiers', '--delay', '12', '--', value], {
@@ -244,6 +300,7 @@ for ($i=0; $i -lt ${reps}; $i++) { [M]::mouse_event(0x0800, 0, 0, ${wheelDelta},
     if (this.guideOnly) {
       return { ok: true, skipped: 'guide' };
     }
+    await this.showAICursor(this.lastPoint, label, 'key').catch(() => {});
     try {
       if (this.xdotool) {
         await execFileAsync(this.xdotool, ['key', '--clearmodifiers', String(keyName)], { timeout: 4000 });
@@ -476,6 +533,9 @@ for ($i=0; $i -lt ${reps}; $i++) { [M]::mouse_event(0x0800, 0, 0, ${wheelDelta},
     this.controlling = true;
     this.guideOnly = false;
     this.currentTask = String(task || '');
+    const cursor = screen.getCursorScreenPoint();
+    this.lastPoint = { x: cursor.x, y: cursor.y };
+    await this.showAICursor(this.lastPoint, 'Understanding your task…', 'thinking').catch(() => {});
     return { ok: true, controlling: true, driver: this.driver };
   }
 
@@ -487,10 +547,28 @@ for ($i=0; $i -lt ${reps}; $i++) { [M]::mouse_event(0x0800, 0, 0, ${wheelDelta},
     for (const button of [...this.pressedButtons]) {
       await this.mouseButton('up', button).catch(() => {});
     }
+    // Keep the final action visible just long enough to be perceived, then
+    // clear the overlay so it never leaves a stale pointer behind.
+    setTimeout(() => this.hideAICursor(), 420);
     return { ok: true, controlling: false };
   }
 
-  destroy() {}
+  destroy() {
+    this.hideAICursor();
+    for (const win of this.cursorWindows.values()) {
+      try { if (!win.isDestroyed()) win.destroy(); } catch (_) { /* ignore */ }
+    }
+    this.cursorWindows.clear();
+  }
 }
+
+const AI_CURSOR_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
+  *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}
+  #cursor{position:absolute;left:0;top:0;pointer-events:none;opacity:0;transform:translate(-5px,-4px) scale(.94);transition:opacity 140ms ease,transform 180ms cubic-bezier(.2,.8,.2,1),left 180ms cubic-bezier(.2,.8,.2,1),top 180ms cubic-bezier(.2,.8,.2,1)}#cursor.show{opacity:1;transform:translate(-5px,-4px) scale(1)}
+  #halo{position:absolute;left:-17px;top:-17px;width:44px;height:44px;border-radius:50%;background:radial-gradient(circle,rgba(73,124,255,.28) 0,rgba(73,124,255,.12) 40%,rgba(73,124,255,0) 72%);animation:pulse 1.65s ease-in-out infinite}
+  #arrow{position:relative;width:20px;height:24px;filter:drop-shadow(0 2px 5px rgba(30,64,175,.36))}#arrow path{fill:#4f7cff;stroke:#fff;stroke-width:1.6;stroke-linejoin:round}#cursor.click #halo{animation:pulse .72s ease-out infinite}#cursor.type #arrow path,#cursor.key #arrow path{fill:#745be8}#cursor.scroll #arrow path{fill:#168579}
+  #label{position:absolute;left:18px;top:23px;display:block;max-width:260px;padding:6px 10px;border:1px solid rgba(255,255,255,.72);border-radius:9px;background:rgba(20,28,46,.90);color:#fff;font-size:11px;font-weight:650;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-shadow:0 8px 22px rgba(15,23,42,.25);backdrop-filter:blur(12px)}
+  @keyframes pulse{0%,100%{transform:scale(.82);opacity:.72}50%{transform:scale(1.15);opacity:1}}@media (prefers-reduced-motion:reduce){#cursor{transition:opacity 80ms ease}#halo{animation:none}}
+</style></head><body><div id="cursor"><div id="halo"></div><svg id="arrow" viewBox="0 0 24 28" aria-hidden="true"><path d="M3.5 2.5 20 12.6l-7.1 1.9-3 8.7L3.5 2.5Z"/></svg><span id="label"></span></div><script>window.__openCluelySetAICursor=(p)=>{const e=document.getElementById('cursor');e.style.left=(p.x||0)+'px';e.style.top=(p.y||0)+'px';document.getElementById('label').textContent=p.label||'Working…';e.className='show '+(p.kind||'move')};</script></body></html>`;
 
 module.exports = new DesktopControlService();

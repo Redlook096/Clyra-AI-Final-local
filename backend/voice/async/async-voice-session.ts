@@ -302,11 +302,10 @@ export class AsyncVoiceSession {
     this.closed = true;
     for (const [contextId] of this.contexts) this.cancelContext(contextId);
     if (this.socket?.readyState === WebSocket.OPEN) {
-      // Async documents both `{ terminate: true }` and `{ text: "" }` as
-      // graceful connection-close frames. The current production validator
-      // applies the regular transcript schema to the terminate form, so use
-      // the empty-text form to close without an avoidable protocol error.
-      this.socket.send(JSON.stringify({ text: "" }));
+      // The current production websocket validates the regular transcript
+      // schema for a graceful close. Sending `{ text: "" }` triggers a
+      // provider-side validation error after an otherwise healthy call.
+      this.socket.send(JSON.stringify({ transcript: "" }));
     }
     this.socket?.close();
     this.socket = null;

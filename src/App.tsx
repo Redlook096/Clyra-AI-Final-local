@@ -111,6 +111,7 @@ import { VoiceWaveform } from "./components/voice/VoiceWaveform";
 import { VoicePcmCapturer } from "./lib/voicePcmCapture";
 import { useVoiceCall } from "./hooks/useVoiceCall";
 import { AiOrb, type OrbColorTheme } from "./components/AiOrb";
+import { GoogleProductIcon, YouTubeBrandIcon } from "./components/brand/ProductIcons";
 import { getElectronDesktop } from "./lib/electron-runtime";
 import { VibeAgentMessageBody } from "./components/vibe/VibeAgentMessageBody";
 import { VibeLivePreviewPanel } from "./components/vibe/VibeLivePreviewPanel";
@@ -6160,6 +6161,7 @@ Please analyze the code you just wrote and fix this error.`;
         status={voiceCall.status}
         muted={voiceCall.muted}
         micLevel={voiceCall.micLevel}
+        waveformSignalRef={voiceCall.waveformSignalRef}
         partialTranscript={voiceCall.partialTranscript}
         assistantText={voiceCall.assistantText}
         error={voiceCall.error}
@@ -7052,8 +7054,10 @@ Please analyze the code you just wrote and fix this error.`;
                         </Suspense>
                       ) : messages.length === 0 ? (
                           <motion.div
-                            initial={false}
-                            className="flex flex-col w-full max-w-[720px] mx-auto px-5 sm:px-8"
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: .32, ease: [0.16, 1, 0.3, 1] }}
+                            className="clyra-primary-chat-welcome flex w-full max-w-[720px] flex-col px-5 sm:px-8"
                           >
                             <motion.div
                             initial={false}
@@ -7082,6 +7086,21 @@ Please analyze the code you just wrote and fix this error.`;
                             <p className="mt-2 text-[17px] text-slate-500">
                               What would you like to accomplish today?
                             </p>
+                            <p className="mt-2 max-w-[440px] text-[12.5px] leading-5 text-slate-400">
+                              Ask a question, bring in a source, or let Clyra research the web with you.
+                            </p>
+                            <div className="clyra-primary-chat-welcome__sources mt-6" aria-label="Available Clyra sources">
+                              <GoogleProductIcon product="drive" />
+                              <GoogleProductIcon product="docs" />
+                              <YouTubeBrandIcon />
+                              <Globe strokeWidth={1.7} />
+                              <span>Web, YouTube, and your Google sources</span>
+                            </div>
+                            <div className="clyra-primary-chat-welcome__suggestions mt-4" aria-label="Suggested ways to begin">
+                              <button type="button" onClick={() => applyQuickPrompt("/search ")}><Globe /> Research the web</button>
+                              <button type="button" onClick={() => applyQuickPrompt("/youtube ")}><YouTubeBrandIcon /> Analyse YouTube</button>
+                              <button type="button" onClick={() => applyQuickPrompt("Search my Google Drive for ")}><GoogleProductIcon product="drive" /> Use Google Drive</button>
+                            </div>
                           </motion.div>
                         </motion.div>
                       ) : (
