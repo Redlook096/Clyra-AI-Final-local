@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import { Notification, safeStorage, shell } from "electron";
 import { ClyraAdaptiveDocumentEngine } from "./clyra-adaptive-document-engine.mjs";
 import { AgentOrchestrator } from "./agent-orchestrator.mjs";
+import { recordApiUsage } from "../lib/api-usage-ledger.mjs";
 
 const AUTH_TIMEOUT_MS = 10 * 60_000;
 const SCOPES = [
@@ -208,7 +209,9 @@ export class GoogleWorkspaceManager {
         continue;
       }
       this.log("google-api-response", { stage, httpStatus:response.status, ok:response.ok, ...(response.ok ? {} : { errorCode }) });
-      if(!response.ok) throw safeFailure(stage, response.status, errorCode); return body;
+      if(!response.ok) throw safeFailure(stage, response.status, errorCode);
+      void recordApiUsage({ provider:"google-workspace", model:"workspace-api", feature:stage, usage:{ totalTokens:0 }, units:{ requests:1 }, costUsd:0 }).catch(()=>undefined);
+      return body;
     }
     throw safeFailure(stage, 503, "retry_exhausted");
   }

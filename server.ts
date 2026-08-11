@@ -41,6 +41,7 @@ import { promises as fs } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import crypto from "node:crypto";
 import { jsonrepair } from "jsonrepair";
+import { clearApiUsage, getApiUsageSummary, recordApiUsage, usageFromAnthropic, usageFromOpenAi } from "./lib/api-usage-ledger.mjs";
 import {
   getPreviewLogs,
   getPreviewSession,
@@ -99,6 +100,31 @@ let deepResearchWebManager: {
   execute: (payload: Record<string, unknown>) => Promise<unknown>;
   subscribe: (runId: string, listener: (event: Record<string, unknown>) => void) => () => void;
 } | null = null;
+
+/** Record the provider's returned usage without blocking a user response. */
+function recordOpenAiUsage(payload: any, feature: string, fallbackModel?: string) {
+  const upstream = String(process.env.MY_LLM_BASE_URL || process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com");
+  const provider = /api\.openai\.com/i.test(upstream)
+    ? "openai"
+    : /deepseek\.com/i.test(upstream)
+      ? "deepseek"
+      : "openai-compatible";
+  void recordApiUsage({
+    provider,
+    model: String(payload?.model || fallbackModel || process.env.DEEPSEEK_MODEL || "deepseek-v4-flash"),
+    feature,
+    usage: usageFromOpenAi(payload),
+  }).catch((error) => console.warn("[usage] unable to record provider usage", error instanceof Error ? error.message : error));
+}
+
+function recordAnthropicUsage(payload: any, feature: string, fallbackModel?: string) {
+  void recordApiUsage({
+    provider: "anthropic",
+    model: String(payload?.model || fallbackModel || "unknown"),
+    feature,
+    usage: usageFromAnthropic(payload),
+  }).catch((error) => console.warn("[usage] unable to record provider usage", error instanceof Error ? error.message : error));
+}
 
 type VibeProjectStatus = "Draft" | "Building" | "Ready" | "Failed";
 
@@ -1325,6 +1351,25 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
+  // Usage is local-only application telemetry. It stores token/unit counts and
+  // calculated cost metadata, never prompts, completions, API keys, or files.
+  app.get("/api/usage", async (_req, res) => {
+    try {
+      res.json(await getApiUsageSummary());
+    } catch (error) {
+      res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Usage data is unavailable" });
+    }
+  });
+
+  app.post("/api/usage/clear", async (_req, res) => {
+    try {
+      await clearApiUsage();
+      res.json(await getApiUsageSummary());
+    } catch (error) {
+      res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Usage data could not be cleared" });
+    }
+  });
+
   app.get("/api/clipper/publishing/capabilities", async (req, res) => {
     const platform = String(req.query.platform || "").trim();
     const accountId = String(req.query.accountId || "").trim() || undefined;
@@ -1397,6 +1442,7 @@ async function startServer() {
       });
       const payload = await upstream.json();
       if (!upstream.ok) throw new Error(payload?.error?.message || "Cleanup failed");
+      recordOpenAiUsage(payload, "dictation-cleanup");
       const text = String(payload?.choices?.[0]?.message?.content || "").trim();
       res.json({ ok: true, text: text || conservativeDictationCleanup(transcript), source: "clyra-llm" });
     } catch {
@@ -1435,6 +1481,7 @@ async function startServer() {
       });
       const payload = await upstream.json();
       if (!upstream.ok) throw new Error(payload?.error?.message || "Optimisation failed");
+      recordOpenAiUsage(payload, "dictation-optimise");
       const text = String(payload?.choices?.[0]?.message?.content || "").trim();
       if (!text) throw new Error("Clyra returned an empty rewrite.");
       res.json({ ok: true, text });
@@ -1484,6 +1531,7 @@ async function startServer() {
       });
       const payload = await upstream.json();
       if (!upstream.ok) throw new Error(payload?.error?.message || "Clyra response failed");
+      recordOpenAiUsage(payload, "smart-toolbar");
       const answer = String(payload?.choices?.[0]?.message?.content || "").trim();
       if (!answer) throw new Error("Clyra returned an empty response");
       res.json({ ok: true, text: answer });
@@ -1566,6 +1614,7 @@ async function startServer() {
       });
       const payload = await upstream.json();
       if (!upstream.ok) throw new Error(payload?.error?.message || "Script generation failed");
+      recordOpenAiUsage(payload, "creator-script");
       const raw = String(payload?.choices?.[0]?.message?.content || "");
       const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
       const start = raw.indexOf("{");
@@ -1686,6 +1735,7 @@ async function startServer() {
       });
       const payload = await upstream.json();
       if (!upstream.ok) throw new Error(payload?.error?.message || "Study response failed");
+      recordOpenAiUsage(payload, "study-answer");
       const answer = String(payload?.choices?.[0]?.message?.content || "").trim();
       if (!answer) throw new Error("Study Brain returned an empty response");
       const citedIndexes = [...answer.matchAll(/\[S(\d+)\]/g)].map((match) => Number(match[1]) - 1).filter((index) => context[index]);
@@ -1758,6 +1808,7 @@ async function startServer() {
           throw new Error("Study generation returned an incomplete provider response");
         }
         if (!upstream.ok) throw new Error(payload?.error?.message || "Study generation failed");
+        recordOpenAiUsage(payload, "study-materials");
         const raw = String(payload?.choices?.[0]?.message?.content || "");
         const data = parseStructuredStudyJson(raw);
         if (!data || typeof data !== "object") throw new Error("The study response was not valid structured data");
@@ -2002,9 +2053,29 @@ async function startServer() {
         return;
       }
 
-      Readable.fromWeb(
-        upstream.body as import("stream/web").ReadableStream,
-      ).pipe(res);
+      // Streaming OpenAI-format APIs send the final token accounting in an
+      // SSE event. Meter that one event while passing every byte through.
+      let sseBuffer = "";
+      let recorded = false;
+      const meter = new Transform({
+        transform(chunk, _encoding, callback) {
+          const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+          sseBuffer = `${sseBuffer}${text}`.slice(-256_000);
+          for (const line of sseBuffer.split(/\r?\n/)) {
+            const match = line.match(/^data:\s*(\{.*\})\s*$/);
+            if (!match || recorded) continue;
+            try {
+              const eventPayload = JSON.parse(match[1]!);
+              if (eventPayload?.usage) {
+                recordOpenAiUsage(eventPayload, "chat", String((requestBody as any)?.model || ""));
+                recorded = true;
+              }
+            } catch { /* an incomplete SSE frame will be observed later */ }
+          }
+          callback(null, chunk);
+        },
+      });
+      Readable.fromWeb(upstream.body as import("stream/web").ReadableStream).pipe(meter).pipe(res);
     } catch (err) {
       console.error("Clyra chat proxy error:", err);
       if (!res.headersSent) {
@@ -2450,6 +2521,7 @@ async function startServer() {
         signal: AbortSignal.timeout(120_000),
       });
       const payload = await upstream.json().catch(() => ({}));
+      if (upstream.ok) recordAnthropicUsage(payload, "computer-control", computerUseModel());
       res.status(upstream.status).json(payload);
     } catch (error) {
       res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Computer Use provider request failed." });
@@ -2535,6 +2607,7 @@ async function startServer() {
           const payload = await upstream.json();
           const text = String(payload?.choices?.[0]?.message?.content || "").trim();
           if (text) {
+            recordOpenAiUsage(payload, "screen-companion");
             res.json({ ...payload, ok: true, text, source: "clyra-api" });
             return;
           }
@@ -2866,6 +2939,7 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
 
         if (response.ok) {
           const data = await response.json();
+          recordOpenAiUsage(data, "vibe-plan", "deepseek-v4-flash");
           let content = data.choices[0].message.content || "";
           // Robust JSON extraction in case reasoner adds some markdown or text
           const jsonMatch = content.match(/\{[\s\S]*\}/);

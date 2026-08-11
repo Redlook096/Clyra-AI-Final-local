@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { loadVoiceConfig } from "../voice/config";
+import { recordApiUsage } from "../../lib/api-usage-ledger.mjs";
 
 const MAX_PENDING = 8;
 const REQUEST_TIMEOUT_MS = 180_000;
@@ -342,6 +343,16 @@ export function registerCreatorTtsRoutes(app: express.Express) {
             response = await requestSpeech(config.asyncFallbackModel);
           }
           if (!response.ok) throw new Error(`Async narration failed (${response.status})`);
+          void recordApiUsage({
+            provider: "async",
+            model: response.headers.get("x-async-model") || config.asyncModel,
+            feature: "creator-tts",
+            // Async bills/limits by provider-specific audio units, so retain
+            // the exact request character count and mark the cost unpriced
+            // until the account's contract rate is supplied.
+            usage: { totalTokens: 0 },
+            units: { inputCharacters: text.length },
+          }).catch(() => undefined);
           const pcm = Buffer.from(await response.arrayBuffer());
           if (!pcm.length) throw new Error("Async narration returned no audio");
           const audio = pcm16Wav(pcm, config.asyncSampleRate);

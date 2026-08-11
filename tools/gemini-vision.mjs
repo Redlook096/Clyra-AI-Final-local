@@ -1,3 +1,5 @@
+import { recordApiUsage, usageFromGemini } from "../lib/api-usage-ledger.mjs";
+
 /**
  * Gemini vision for camera / screen frames (preferred when GEMINI_API_KEY is set).
  */
@@ -70,6 +72,16 @@ export async function callGeminiVision(imageBuffer, prompt, opts = {}) {
       `Gemini vision failed (${response.status})`;
     throw new Error(String(detail));
   }
+
+  // Gemini returns authoritative token counts in usageMetadata. The ledger
+  // intentionally leaves a dollar amount blank until this exact model has a
+  // verified rate, rather than displaying a misleading $0 estimate.
+  void recordApiUsage({
+    provider: "gemini",
+    model,
+    feature: "screen-vision",
+    usage: usageFromGemini(json),
+  }).catch(() => undefined);
 
   const parts = json?.candidates?.[0]?.content?.parts;
   const text = Array.isArray(parts)

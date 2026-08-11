@@ -1,4 +1,5 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { GripHorizontal } from "lucide-react";
 import { cn } from "../../../lib/utils";
 
 const SIDE_HANDLES: Array<{ id: string; position: Position }> = [
@@ -46,13 +47,17 @@ export function BrainNodeView({ data, selected }: NodeProps) {
         <span className="mt-1 text-[11.5px] text-[color:var(--clyra-text-tertiary)]">
           {processing
             ? "Working…"
-            : `${connectedCount} resource${connectedCount === 1 ? "" : "s"}`}
+            : connectedCount
+              ? `${connectedCount} resource${connectedCount === 1 ? "" : "s"}`
+              : "Drag to arrange your study space"}
         </span>
       </div>
       <div
         className="study-brain-drag-handle absolute -bottom-0.5 left-1/2 h-1 w-7 -translate-x-1/2 cursor-grab rounded-full bg-[color:var(--clyra-border-strong)]/70 active:cursor-grabbing"
-        title="Drag to move"
-      />
+        title="Drag project and its layout"
+      >
+        <GripHorizontal className="absolute left-1/2 top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 text-[color:var(--clyra-text-tertiary)]" strokeWidth={1.8} />
+      </div>
     </div>
   );
 }

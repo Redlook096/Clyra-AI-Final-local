@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode, type MouseEvent }
 import { AnimatePresence, motion } from "motion/react";
 import {
   Bot,
+  ChartNoAxesCombined,
   ChevronRight,
   Code2,
   Download,
@@ -11,6 +12,7 @@ import {
   Palette,
   Play,
   RotateCcw,
+  RefreshCw,
   Shield,
   Trash2,
   Type,
@@ -61,6 +63,7 @@ const sections = [
   { id: "chat", label: "Conversation", icon: MessageCircle },
   { id: "voice", label: "Voice", icon: Bot },
   { id: "advanced", label: "Model", icon: Monitor },
+  { id: "usage", label: "Usage", icon: ChartNoAxesCombined },
   { id: "data", label: "Privacy", icon: Shield },
 ] as const;
 
@@ -242,6 +245,8 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<(typeof sections)[number]["id"]>("look");
   const [voicePreviewState, setVoicePreviewState] = useState<"idle" | "loading" | "error">("idle");
+  const [usage, setUsage] = useState<any>(null);
+  const [usageState, setUsageState] = useState<"idle" | "loading" | "error">("idle");
   const voicePreviewRef = useRef<{ audio: HTMLAudioElement; url: string } | null>(null);
   const chatCount = chats.length;
   void orbColorTheme;
@@ -262,6 +267,26 @@ export function SettingsModal({
     setVoicePitch(preset.pitch);
     setVoiceVolume(preset.volume);
   };
+
+  const refreshUsage = async () => {
+    setUsageState("loading");
+    try {
+      const response = await fetch("/api/usage", { cache: "no-store" });
+      const payload = await response.json();
+      if (!response.ok || !payload?.ok) throw new Error("Usage unavailable");
+      setUsage(payload);
+      setUsageState("idle");
+    } catch {
+      setUsageState("error");
+    }
+  };
+
+  useEffect(() => {
+    if (!isOpen || activeSection !== "usage") return;
+    void refreshUsage();
+    const interval = window.setInterval(() => void refreshUsage(), 5_000);
+    return () => window.clearInterval(interval);
+  }, [isOpen, activeSection]);
 
   useEffect(() => () => {
     voicePreviewRef.current?.audio.pause();
@@ -598,6 +623,33 @@ export function SettingsModal({
                         Model routing stays automatic so the app preserves existing OpenAI-compatible API behavior.
                       </div>
                     </>
+                  ) : null}
+
+                  {activeSection === "usage" ? (
+                    <div className="py-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <p className="text-[15px] font-semibold tracking-[-.01em] text-slate-900">API usage</p>
+                          <p className="mt-1 max-w-[410px] text-[12px] leading-relaxed text-slate-500">Live token and unit metering from completed provider calls. Totals refresh automatically after each use.</p>
+                        </div>
+                        <button type="button" onClick={() => void refreshUsage()} className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800" aria-label="Refresh API usage">
+                          <RefreshCw className={cn("h-4 w-4", usageState === "loading" && "animate-spin")} />
+                        </button>
+                      </div>
+                      {usageState === "error" ? <p className="mt-6 rounded-xl bg-rose-50 px-3 py-2 text-[12px] text-rose-700">Usage data is temporarily unavailable. Your API calls continue normally.</p> : null}
+                      <div className="mt-5 grid grid-cols-2 gap-2.5">
+                        <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3.5"><p className="text-[11px] font-medium text-slate-500">Total cost</p><p className="mt-1 text-[20px] font-semibold tracking-[-.03em] text-slate-900">${Number(usage?.total?.costUsd || 0).toFixed(4)}</p><p className="mt-1 text-[10.5px] text-slate-400">USD · verified rates</p></div>
+                        <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3.5"><p className="text-[11px] font-medium text-slate-500">Today</p><p className="mt-1 text-[20px] font-semibold tracking-[-.03em] text-slate-900">{Number(usage?.today?.tokens || 0).toLocaleString()}</p><p className="mt-1 text-[10.5px] text-slate-400">provider tokens</p></div>
+                      </div>
+                      <div className="mt-5">
+                        <div className="mb-2 flex items-center justify-between"><p className="text-[11px] font-medium uppercase tracking-[.08em] text-slate-400">By provider & model</p><p className="text-[10.5px] text-slate-400">{usage?.total?.requests || 0} requests</p></div>
+                        <div className="overflow-hidden rounded-xl border border-slate-200/80 bg-white">
+                          {(usage?.byModel || []).length ? usage.byModel.slice(0, 6).map((item: any) => <div key={`${item.provider}-${item.model}`} className="flex items-center justify-between gap-3 border-b border-slate-100 px-3.5 py-3 last:border-0"><div className="min-w-0"><p className="truncate text-[12.5px] font-medium text-slate-800">{item.model}</p><p className="mt-0.5 text-[10.5px] text-slate-400">{item.provider} · {Number(item.tokens || 0).toLocaleString()} tokens · {item.requests} requests</p></div><p className={cn("shrink-0 text-[11.5px] font-medium", item.unpricedRequests ? "text-amber-600" : "text-slate-700")}>{item.unpricedRequests ? "Unpriced" : `$${Number(item.costUsd || 0).toFixed(4)}`}</p></div>) : <div className="px-3.5 py-7 text-center text-[12px] text-slate-400">No provider calls recorded yet.</div>}
+                        </div>
+                      </div>
+                      <p className="mt-4 text-[10.5px] leading-relaxed text-slate-400">{usage?.methodology || "Models without a verified rate are labeled Unpriced rather than counted as $0. Usage records never store prompt or response content."}</p>
+                      <button type="button" onClick={async () => { await fetch("/api/usage/clear", { method: "POST" }); await refreshUsage(); }} className="mt-4 inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[11.5px] font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"><Trash2 className="h-3.5 w-3.5" /> Clear usage history</button>
+                    </div>
                   ) : null}
 
                   {activeSection === "data" ? (

@@ -3,6 +3,7 @@
  * https://github.com/suitedaces/computer-agent
  */
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
+import { recordApiUsage, usageFromAnthropic } from "../../lib/api-usage-ledger.mjs";
 const BETA_HEADER =
   "computer-use-2025-01-24,interleaved-thinking-2025-05-14,web-fetch-2025-09-10,context-management-2025-06-27";
 const API_VERSION = "2023-06-01";
@@ -146,6 +147,17 @@ export async function sendComputerAgentMessage(messages, opts = {}) {
   }
 
   const content = Array.isArray(json?.content) ? json.content : [];
+  // Proxy requests are recorded by the Clyra server that made the provider
+  // call. Direct mode bypasses that server, so record its authoritative usage
+  // here to keep Settings → Usage complete without double-counting.
+  if (!proxyUrl) {
+    void recordApiUsage({
+      provider: "anthropic",
+      model: json?.model || model,
+      feature: "opencluely-computer-control",
+      usage: usageFromAnthropic(json),
+    }).catch(() => undefined);
+  }
   return { content, usage: json?.usage || null, model, stopReason: json?.stop_reason || null };
 }
 

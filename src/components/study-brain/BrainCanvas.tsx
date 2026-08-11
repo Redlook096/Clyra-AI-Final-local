@@ -219,7 +219,23 @@ function CanvasInner({
         }
         connectingRef.current = false;
       }}
-      onNodeDragStop={(_event, _node, nextNodes) => persistLayout(nextNodes, edges)}
+      onNodeDragStop={(_event, node, nextNodes) => {
+        // The project node is the canvas anchor: dragging it carries its
+        // connected layout with it. Source nodes remain independently
+        // draggable, and dragging the empty canvas pans the entire view.
+        if (node.id === "brain") {
+          const previous = brainRef.current.positions.brain || { x: 420, y: 280 };
+          const delta = { x: node.position.x - previous.x, y: node.position.y - previous.y };
+          const shifted = nextNodes.map((item) => item.id === "brain" ? item : {
+            ...item,
+            position: { x: item.position.x + delta.x, y: item.position.y + delta.y },
+          });
+          setNodes(shifted);
+          persistLayout(shifted, edges);
+          return;
+        }
+        persistLayout(nextNodes, edges);
+      }}
       onSelectionChange={({ nodes: selected }) => {
         const source = selected.find((node) => node.type === "source");
         onSelectSource(source?.id || null);
@@ -240,10 +256,16 @@ function CanvasInner({
       minZoom={0.35}
       maxZoom={1.6}
       panOnScroll
-      panOnDrag={tool === "pan"}
+      // Background drags always pan the workspace. Nodes retain their own
+      // direct manipulation, so there is no redundant "pan" tool to switch.
+      panOnDrag
       panActivationKeyCode="Space"
-      nodesDraggable={tool !== "pan"}
-      selectionOnDrag={tool === "select"}
+      nodesDraggable
+      // The default gesture is intentionally spatial: empty-canvas drags pan
+      // the workspace, while a node drag acts only on that node (or moves the
+      // project anchor plus its layout). Avoid turning a background drag into
+      // a redundant selection-box tool.
+      selectionOnDrag={false}
       connectOnClick={tool === "connect"}
       className={`study-brain-flow study-brain-flow--${tool} bg-[color:var(--clyra-canvas)]`}
       proOptions={{ hideAttribution: true }}

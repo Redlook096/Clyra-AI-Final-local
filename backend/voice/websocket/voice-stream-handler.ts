@@ -19,6 +19,7 @@ import {
   type VoiceServerMessage,
 } from "./voice-stream-protocol";
 import { prepareDeepseekChatBody } from "../../../lib/deepseek-models";
+import { recordApiUsage, usageFromOpenAi } from "../../../lib/api-usage-ledger.mjs";
 
 type ActiveSocket = {
   ws: WebSocket;
@@ -107,6 +108,10 @@ async function streamLlmReply(
       { role: "user", content: prompt },
     ],
   });
+  // OpenAI-compatible providers emit one final SSE event with authoritative
+  // usage when asked explicitly.  Keep this off the user-facing token path so
+  // the voice response remains just as fast while its cost is still exact.
+  Object.assign(llmBody, { stream_options: { include_usage: true } });
   const response = await fetch(`${config.llmBaseUrl.replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
     headers: {
@@ -125,6 +130,7 @@ async function streamLlmReply(
   const decoder = new TextDecoder();
   let buffer = "";
   let firstToken = true;
+  let usageRecorded = false;
   while (true) {
     if (signal.aborted) {
       reader.cancel().catch(() => undefined);
@@ -142,8 +148,19 @@ async function streamLlmReply(
       if (!payload || payload === "[DONE]") continue;
       try {
         const json = JSON.parse(payload) as {
+          model?: string;
+          usage?: Record<string, unknown>;
           choices?: Array<{ delta?: { content?: string } }>;
         };
+        if (json.usage && !usageRecorded) {
+          usageRecorded = true;
+          void recordApiUsage({
+            provider: /api\.openai\.com/i.test(config.llmBaseUrl) ? "openai" : "deepseek",
+            model: json.model || config.llmModel,
+            feature: "voice-assistant",
+            usage: usageFromOpenAi(json),
+          }).catch(() => undefined);
+        }
         const token = json.choices?.[0]?.delta?.content;
         if (token) {
           if (firstToken) {

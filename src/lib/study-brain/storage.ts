@@ -198,6 +198,39 @@ export function positionAroundBrain(
   };
 }
 
+/**
+ * Position an AI-created set as a calm, evenly spaced hub around the project.
+ * The first ring is cardinal-only to keep the graph legible; further nodes are
+ * distributed over a second ring rather than piling up on a single spoke.
+ */
+export function layoutSourcesAroundBrain(
+  brainPos: { x: number; y: number },
+  sourceIds: string[],
+): Record<string, { x: number; y: number }> {
+  const positions: Record<string, { x: number; y: number }> = {};
+  const count = sourceIds.length;
+  if (!count) return positions;
+  const nodeOffset = { x: 100, y: 42 };
+  const firstRingCount = Math.min(4, count);
+  const cardinalAngles = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
+  sourceIds.slice(0, firstRingCount).forEach((id, index) => {
+    const angle = cardinalAngles[index]!;
+    positions[id] = {
+      x: Math.round(brainPos.x + Math.cos(angle) * 320 - nodeOffset.x),
+      y: Math.round(brainPos.y + Math.sin(angle) * 260 - nodeOffset.y),
+    };
+  });
+  const remaining = sourceIds.slice(firstRingCount);
+  remaining.forEach((id, index) => {
+    const angle = -Math.PI / 2 + (Math.PI * 2 * index) / remaining.length;
+    positions[id] = {
+      x: Math.round(brainPos.x + Math.cos(angle) * 500 - nodeOffset.x),
+      y: Math.round(brainPos.y + Math.sin(angle) * 390 - nodeOffset.y),
+    };
+  });
+  return positions;
+}
+
 export function findSourceByCitation(brain: StudyBrain, citation: string): StudySourceNode | null {
   const needle = citation.trim().toLowerCase();
   if (!needle) return null;

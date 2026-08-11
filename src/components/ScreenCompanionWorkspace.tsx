@@ -271,22 +271,18 @@ export default function ScreenCompanionWorkspace() {
       {/* Guide / control cursor preview */}
       {pointer && demoMode !== "off" ? (
         <div
-          className="pointer-events-none absolute z-40"
+          className="companion-agent-cursor pointer-events-none absolute z-40"
           style={{ left: `${pointer.x}%`, top: `${pointer.y}%` }}
           data-testid="companion-guide-cursor"
         >
+          <span className="companion-agent-cursor__halo" aria-hidden />
+          <svg className="companion-agent-cursor__arrow" viewBox="0 0 28 32" aria-hidden>
+            <path d="M4.62 2.72C3.09 1.91 1.57 3.43 2.39 4.96l8.36 16.3c.75 1.47 2.87 1.39 3.5-.13l2.69-6.51 6.51-2.69c1.52-.63 1.6-2.75.13-3.5L4.62 2.72Z" />
+          </svg>
+          {demoMode === "guide" ? <span className="companion-agent-cursor__click" aria-hidden /> : null}
           <div
             className={cn(
-              "absolute -left-3.5 -top-3.5 h-9 w-9 rounded-full border-2",
-              demoMode === "guide"
-                ? "animate-ping border-sky-400/80"
-                : "border-white/40",
-            )}
-          />
-          <div className="h-3.5 w-3.5 rounded-full border-2 border-white bg-[#111] shadow-[0_2px_8px_rgba(0,0,0,.35)]" />
-          <div
-            className={cn(
-              "mt-2 ml-2 inline-block max-w-[220px] truncate rounded-[7px] px-2.5 py-1 text-[11px] font-semibold text-white shadow-[0_6px_18px_rgba(0,0,0,.28)]",
+              "companion-agent-cursor__label inline-block max-w-[220px] truncate rounded-[7px] px-2.5 py-1 text-[11px] font-semibold text-white shadow-[0_6px_18px_rgba(0,0,0,.28)]",
               demoMode === "guide" ? "bg-[#1d4ed8]" : "bg-[#171817]",
             )}
           >

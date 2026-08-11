@@ -19,7 +19,6 @@ import {
   Link2,
   Link as LinkIcon,
   Loader2,
-  Hand,
   Mic,
   MessageCircle,
   MousePointer2,
@@ -59,6 +58,7 @@ import {
   emptyBrain,
   findSourceByCitation,
   hasDuplicateOrigin,
+  layoutSourcesAroundBrain,
   loadStudyBrainStore,
   positionAroundBrain,
   saveStudyBrainStore,
@@ -427,7 +427,7 @@ export default function StudyBrainWorkspace({
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [workspaceView, setWorkspaceView] = useState<"nodes" | "chat" | "materials">("nodes");
   const [typingAssistantId, setTypingAssistantId] = useState<string | null>(null);
-  const [canvasTool, setCanvasTool] = useState<"select" | "pan" | "connect">("select");
+  const [canvasTool, setCanvasTool] = useState<"select" | "connect">("select");
   const [canvasMenuOpen, setCanvasMenuOpen] = useState<"add" | "study" | "view" | null>(null);
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [composer, setComposer] = useState("");
@@ -611,7 +611,6 @@ export default function StudyBrainWorkspace({
       const element = event.target as HTMLElement | null;
       if (element?.closest("input, textarea, [contenteditable='true']")) return;
       if (event.key.toLowerCase() === "v") setCanvasTool("select");
-      if (event.key.toLowerCase() === "h") setCanvasTool("pan");
       if (event.key.toLowerCase() === "c") setCanvasTool("connect");
       if (event.key.toLowerCase() === "a") setAddOpen(true);
       if (event.key.toLowerCase() === "n") void addBlankNote();
@@ -774,7 +773,7 @@ export default function StudyBrainWorkspace({
         if (additions.length) {
           const brainPos = prepared.positions.brain || { x: 420, y: 280 };
           const positions = { ...prepared.positions };
-          additions.forEach((source, index) => { positions[source.id] = positionAroundBrain(brainPos, prepared.sources.length + index); });
+          Object.assign(positions, layoutSourcesAroundBrain(brainPos, additions.map((source) => source.id)));
           prepared = {
             ...prepared,
             sources: [...prepared.sources, ...additions],
@@ -1011,7 +1010,7 @@ export default function StudyBrainWorkspace({
           });
         });
         const positions = { ...refreshed.positions };
-        researchedSources.forEach((source, index) => { positions[source.id] = positionAroundBrain(brainPos, refreshed.sources.length + index); });
+        Object.assign(positions, layoutSourcesAroundBrain(brainPos, researchedSources.map((source) => source.id)));
         updateBrain({
           ...refreshed,
           title,
@@ -1662,14 +1661,7 @@ export default function StudyBrainWorkspace({
             ) : null}
           </AnimatePresence>
           {!dragging && !isNewStudy ? (
-            <div className="study-canvas-toolbar absolute bottom-5 left-1/2 z-20 flex h-11 -translate-x-1/2 items-center rounded-[12px] border border-[color:var(--clyra-border)] bg-white/90 p-1 shadow-[0_1px_2px_rgba(0,0,0,.05),0_8px_24px_rgba(0,0,0,.06)] backdrop-blur-sm">
-              <div className="flex items-center gap-0.5">
-                {[
-                  { id: "select" as const, label: "Select", shortcut: "V", icon: MousePointer2 },
-                  { id: "pan" as const, label: "Pan", shortcut: "H", icon: Hand },
-                ].map((tool) => <button key={tool.id} type="button" onClick={() => setCanvasTool(tool.id)} className={cn("study-canvas-tool", canvasTool === tool.id && "study-canvas-tool--active")} data-tooltip={`${tool.label} · ${tool.shortcut}`} aria-label={`${tool.label} (${tool.shortcut})`}><tool.icon className="h-4 w-4" strokeWidth={1.65} /></button>)}
-              </div>
-              <span className="study-canvas-divider" />
+            <div className="study-canvas-toolbar absolute bottom-5 left-1/2 z-20 flex h-11 -translate-x-1/2 items-center rounded-[16px] border border-[color:var(--clyra-border)] bg-white/90 p-1.5 shadow-[0_1px_2px_rgba(0,0,0,.05),0_8px_24px_rgba(0,0,0,.06)] backdrop-blur-sm">
               <div className="flex items-center gap-0.5">
                 <button type="button" onClick={() => void addBlankNote()} className="study-canvas-tool" data-tooltip="Add note · N" aria-label="Add note"><NotebookPen className="h-4 w-4" strokeWidth={1.65} /></button>
                 <button type="button" onClick={() => setCanvasTool("connect")} className={cn("study-canvas-tool", canvasTool === "connect" && "study-canvas-tool--active")} data-tooltip="Connect nodes · C" aria-label="Connect nodes"><LinkIcon className="h-4 w-4" strokeWidth={1.65} /></button>
