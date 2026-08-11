@@ -61,6 +61,12 @@ class ComputerAgentService {
       return capture.imageBuffer.toString('base64');
     } finally {
       if (softCloakFn) softCloakFn(false);
+      // A capture must not leave the visual control layer hidden. Restore the
+      // secondary cursor immediately after the frame has been handed to the
+      // planner, without contaminating the captured frame itself.
+      if (desktopControl?.controlling) {
+        await desktopControl.showAICursor?.(desktopControl.lastPoint, 'Planning next action…', 'thinking').catch(() => {});
+      }
     }
   }
 
@@ -146,11 +152,15 @@ class ComputerAgentService {
       return { ok: false, error: 'app_unavailable_on_windows', message };
     }
     const appName = wantsSafari ? 'Safari' : 'Google Chrome';
-    await desktopControl.showAICursor?.(
-      screen.getCursorScreenPoint(),
-      `Opening ${appName}`,
-      'launch',
-    );
+    const displayBounds = screen.getPrimaryDisplay().workArea || screen.getPrimaryDisplay().bounds;
+    // Keep the visual pointer independent from the person's real pointer. This
+    // is deliberately close to the browser chrome so the action remains easy
+    // to follow, while macOS receives the shortcut/click separately.
+    const addressBarPoint = {
+      x: displayBounds.x + Math.round(displayBounds.width * 0.3),
+      y: displayBounds.y + 118,
+    };
+    await desktopControl.move?.(addressBarPoint.x, addressBarPoint.y, `Opening ${appName}`);
     this.#emit({ status: 'bash', message: `Opening ${appName}`, engine: this.engine });
     const launchCommand = process.platform === 'darwin'
       ? `open -a "${appName}"`
@@ -164,6 +174,7 @@ class ComputerAgentService {
       return { ok: false, error: 'chrome_open_failed', message };
     }
     await new Promise((resolve) => setTimeout(resolve, 850));
+    await desktopControl.move?.(addressBarPoint.x, addressBarPoint.y, 'Focusing the address bar');
     const focused = await desktopControl.key(process.platform === 'darwin' ? 'cmd+l' : 'ctrl+l', 'Focus address bar');
     if (!focused?.ok) {
       const message = `${appName} opened, but macOS did not allow keyboard control: ${focused?.error || 'Accessibility permission is required.'}`;

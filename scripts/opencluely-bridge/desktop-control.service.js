@@ -116,7 +116,11 @@ class DesktopControlService {
       webPreferences: { nodeIntegration: false, contextIsolation: true, backgroundThrottling: false },
     });
     win.setIgnoreMouseEvents(true, { forward: true });
-    try { win.setAlwaysOnTop(true, 'screen-saver'); } catch (_) { win.setAlwaysOnTop(true, 'floating'); }
+    // Keep the visual agent layer above the controlled app without using a
+    // screen-saver-level surface, which macOS can omit from captures and
+    // occasionally place behind a full-screen browser.
+    try { win.setAlwaysOnTop(true, 'pop-up-menu', 1); } catch (_) { win.setAlwaysOnTop(true, 'floating'); }
+    try { win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (_) { /* older Electron */ }
     win.on('closed', () => this.cursorWindows.delete(id));
     await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(AI_CURSOR_HTML)}`);
     this.cursorWindows.set(id, win);
@@ -160,14 +164,16 @@ class DesktopControlService {
       return { ok: true, skipped: 'guide', point };
     }
     try {
-      if (this.xdotool) {
+      if (process.platform === 'darwin') {
+        // The blue agent cursor is the motion users see. Quartz click events
+        // carry their own coordinates, so moving the person's hardware cursor
+        // is neither required nor desirable.
+      } else if (this.xdotool) {
         await execFileAsync(this.xdotool, ['mousemove', '--sync', String(point.x), String(point.y)], {
           timeout: 4000,
         });
       } else if (this.cliclick) {
         await execFileAsync(this.cliclick, [`m:${point.x},${point.y}`], { timeout: 4000 });
-      } else if (process.platform === 'darwin') {
-        await darwinInput(['move', String(point.x), String(point.y)], 4000);
       } else if (process.platform === 'win32') {
         const ps = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${point.x},${point.y})`;
         await execFileAsync('powershell', ['-NoProfile', '-Command', ps], { timeout: 4000 });
@@ -187,15 +193,18 @@ class DesktopControlService {
     }
     const point = { x: Math.round(x ?? this.lastPoint.x), y: Math.round(y ?? this.lastPoint.y) };
     const count = Math.max(1, Math.min(3, Number(clicks) || 1));
+    // On macOS `move` only updates the secondary Clyra cursor. Give that
+    // visual motion a brief lead before sending the coordinate-specific click.
     await this.move(point.x, point.y, label);
     await this.showAICursor(point, label, 'click').catch(() => {});
+    await wait(72);
     try {
       if (this.xdotool) {
         const btn = button === 'right' ? '3' : button === 'middle' ? '2' : '1';
         await execFileAsync(this.xdotool, ['click', '--repeat', String(count), '--delay', '80', btn], {
           timeout: 6000,
         });
-      } else if (this.cliclick) {
+      } else if (this.cliclick && process.platform !== 'darwin') {
         const cmd = count >= 2 ? `dc:${point.x},${point.y}` : `c:${point.x},${point.y}`;
         await execFileAsync(this.cliclick, [cmd], { timeout: 4000 });
       } else if (process.platform === 'darwin') {
@@ -564,7 +573,7 @@ for ($i=0; $i -lt ${reps}; $i++) { [M]::mouse_event(0x0800, 0, 0, ${wheelDelta},
 
 const AI_CURSOR_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
   *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}
-  #screen-border{position:fixed;inset:8px;border:1px solid rgba(79,124,255,.68);border-radius:15px;box-shadow:0 0 0 1px rgba(130,171,255,.16),0 0 26px rgba(54,119,255,.22),inset 0 0 22px rgba(79,124,255,.06);opacity:0;transition:opacity 180ms ease;pointer-events:none}#screen-border.active{opacity:1}
+  #screen-border{position:fixed;inset:8px;border:1.5px solid rgba(96,151,255,.88);border-radius:15px;box-shadow:0 0 0 1px rgba(135,178,255,.23),0 0 30px rgba(54,119,255,.30),inset 0 0 26px rgba(79,124,255,.10);opacity:0;transition:opacity 180ms ease;pointer-events:none}#screen-border.active{opacity:1}
   #cursor{position:absolute;left:0;top:0;pointer-events:none;opacity:0;transform:translate(-5px,-4px) scale(.94);transition:opacity 140ms ease,transform 190ms cubic-bezier(.22,1,.36,1),left 220ms cubic-bezier(.22,1,.36,1),top 220ms cubic-bezier(.22,1,.36,1)}#cursor.show{opacity:1;transform:translate(-5px,-4px) scale(1)}
   #halo{position:absolute;left:-15px;top:-15px;width:51px;height:51px;border-radius:50%;background:radial-gradient(circle,rgba(87,151,255,.29) 0,rgba(63,128,255,.13) 39%,rgba(63,128,255,0) 71%);filter:blur(3px);animation:pulse 2.8s ease-in-out infinite}
   #arrow{position:relative;width:28px;height:32px;overflow:visible;filter:drop-shadow(0 0 1px rgba(255,255,255,.84)) drop-shadow(0 2px 4px rgba(16,24,40,.34)) drop-shadow(0 0 10px rgba(43,128,255,.34));transform-origin:5px 2px}#cursor.click #halo{animation:pulse .62s ease-out infinite}

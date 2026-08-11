@@ -42,8 +42,9 @@ def click(x: float, y: float, button: str = "left", count: int = 1) -> None:
         down = Q.kCGEventOtherMouseDown
         up = Q.kCGEventOtherMouseUp
 
-    move(x, y)
-    time.sleep(0.02)
+    # CGEvent mouse-down/up coordinates are sufficient for a click.  Do not
+    # post a mouse-move first: the visible Clyra agent cursor is intentionally
+    # separate from the person's hardware cursor during Take Control.
     for i in range(max(1, min(3, count))):
         d = Q.CGEventCreateMouseEvent(None, down, (x, y), btn)
         u = Q.CGEventCreateMouseEvent(None, up, (x, y), btn)
