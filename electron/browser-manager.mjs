@@ -690,27 +690,35 @@ export class ChromiumBrowserManager {
       const root = existing || Object.assign(document.createElement("div"), { id });
       if (!existing) {
         root.setAttribute("aria-hidden", "true");
-        root.style.cssText = "position:fixed;left:0;top:0;width:24px;height:30px;z-index:2147483647;pointer-events:none;will-change:transform;contain:layout style paint;transition:opacity 120ms ease;";
+        root.style.cssText = "position:fixed;left:0;top:0;width:27px;height:33px;z-index:2147483647;pointer-events:none;will-change:transform;contain:layout style paint;transition:opacity 120ms ease;";
         const glow = document.createElement("div");
         glow.dataset.part = "glow";
-        glow.style.cssText = "position:absolute;left:-10px;top:-10px;width:42px;height:42px;border-radius:999px;background:radial-gradient(circle,rgba(86,142,255,.24),rgba(79,124,255,.10) 43%,transparent 72%);filter:blur(3px);";
+        glow.style.cssText = "position:absolute;left:-13px;top:-13px;width:49px;height:49px;border-radius:999px;background:radial-gradient(circle,rgba(87,151,255,.24),rgba(63,128,255,.11) 39%,transparent 70%);filter:blur(4px);";
         const pointer = document.createElement("div");
         pointer.dataset.part = "pointer";
-        pointer.style.cssText = "position:absolute;left:0;top:0;width:23px;height:27px;background:#111318;clip-path:polygon(5% 1%,96% 34%,61% 49%,43% 98%);filter:drop-shadow(0 1px 1px rgba(255,255,255,.76)) drop-shadow(0 3px 7px rgba(27,49,93,.32));transform-origin:5px 2px;";
+        pointer.style.cssText = "position:absolute;left:0;top:0;width:26px;height:31px;background:linear-gradient(142deg,#2a303b 0%,#11141a 36%,#050609 100%);clip-path:polygon(5% 1%,96% 34%,61% 49%,43% 98%);filter:drop-shadow(0 0 1px rgba(235,246,255,.98)) drop-shadow(0 2px 4px rgba(16,24,40,.32)) drop-shadow(0 0 8px rgba(43,128,255,.24));transform-origin:5px 2px;";
         const caret = document.createElement("div");
         caret.dataset.part = "caret";
         caret.style.cssText = "display:none;position:absolute;left:16px;top:6px;width:2px;height:22px;border-radius:999px;background:#1d1f24;box-shadow:0 0 0 1px rgba(255,255,255,.9),0 1px 5px rgba(52,97,177,.22);";
         const click = document.createElement("div");
         click.dataset.part = "click";
-        click.style.cssText = "display:none;position:absolute;left:-8px;top:-8px;width:26px;height:26px;border:1.5px solid rgba(79,124,255,.72);border-radius:999px;";
+        click.style.cssText = "display:none;position:absolute;left:-8px;top:-8px;width:26px;height:26px;border:1.5px solid rgba(83,145,255,.78);border-radius:999px;box-shadow:0 0 0 3px rgba(79,124,255,.11);";
         const label = document.createElement("span");
         label.dataset.part = "label";
-        label.style.cssText = "position:absolute;left:24px;top:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:7px;background:rgba(20,22,27,.94);padding:5px 8px;color:#fff;font:600 10px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;box-shadow:0 8px 24px rgba(15,23,42,.18);";
+        label.style.cssText = "position:absolute;left:29px;top:1px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid rgba(36,42,52,.12);border-radius:8px;background:rgba(255,255,255,.93);padding:5px 9px 5px 18px;color:#252a33;font:650 10.5px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;letter-spacing:-.01em;box-shadow:0 5px 16px rgba(20,32,52,.16),inset 0 1px 0 rgba(255,255,255,.72);";
+        const labelDot = document.createElement("i");
+        labelDot.style.cssText = "position:absolute;left:8px;top:50%;width:4px;height:4px;margin-top:-2px;border-radius:999px;background:#4f7cff;box-shadow:0 0 0 2px rgba(79,124,255,.12);";
+        label.append(labelDot);
         root.append(glow, pointer, caret, click, label);
         document.documentElement.appendChild(root);
       }
-      root.querySelector('[data-part="label"]').textContent = data.label;
-      root.querySelector('[data-part="label"]').style.display = data.showLabel ? "block" : "none";
+      const label = root.querySelector('[data-part="label"]');
+      if (label) {
+        const text = label.lastChild && label.lastChild.nodeType === Node.TEXT_NODE ? label.lastChild : document.createTextNode("");
+        text.textContent = data.label;
+        if (!text.parentNode) label.append(text);
+        label.style.display = data.showLabel ? "block" : "none";
+      }
       root.style.transition = data.reducedMotion ? "none" : "transform 280ms cubic-bezier(.16,1,.3,1), opacity 120ms ease";
       root.style.transform = "translate3d(" + (data.x - 3) + "px," + (data.y - 2) + "px,0)";
       root.style.opacity = "1";
@@ -724,7 +732,7 @@ export class ChromiumBrowserManager {
       if (pointer) pointer.style.opacity = data.kind === "type" ? ".7" : "1";
       if (click) {
         click.style.display = data.kind.includes("click") ? "block" : "none";
-        if (data.kind.includes("click")) click.animate?.([{ transform: "scale(.46)", opacity: .82 }, { transform: "scale(1.42)", opacity: 0 }], { duration: 480, easing: "cubic-bezier(.16,1,.3,1)" });
+        if (data.kind.includes("click")) click.animate?.([{ transform: "scale(.42)", opacity: .88 }, { transform: "scale(1.52)", opacity: 0 }], { duration: 520, easing: "cubic-bezier(.16,1,.3,1)" });
       }
       if (pointer) {
         pointer.animate?.(
