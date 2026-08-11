@@ -1,20 +1,23 @@
-import { chmod, mkdir } from "node:fs/promises";
+import { chmod, mkdir, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
+const targetPlatform = process.env.CLYRA_SIDECAR_TARGET || `${process.platform}-${process.arch}`;
 const bunTarget = {
   "darwin-x64": "bun-darwin-x64",
   "darwin-arm64": "bun-darwin-arm64",
   "linux-x64": "bun-linux-x64",
   "linux-arm64": "bun-linux-arm64",
   "win32-x64": "bun-windows-x64",
-}[`${process.platform}-${process.arch}`];
+  "win32-arm64": "bun-windows-arm64",
+}[targetPlatform];
 
-if (!bunTarget) throw new Error(`Unsupported Electron sidecar target: ${process.platform}-${process.arch}`);
+if (!bunTarget) throw new Error(`Unsupported Electron sidecar target: ${targetPlatform}`);
 
 const outputDir = path.resolve("desktop-binaries");
 await mkdir(outputDir, { recursive: true });
-const output = path.join(outputDir, process.platform === "win32" ? "clyra-server.exe" : "clyra-server");
+const isWindowsTarget = targetPlatform.startsWith("win32-");
+const output = path.join(outputDir, isWindowsTarget ? "clyra-server.exe" : "clyra-server");
 const result = spawnSync("bun", [
   "build",
   "server.ts",
@@ -28,5 +31,9 @@ const result = spawnSync("bun", [
 ], { cwd: process.cwd(), stdio: "inherit" });
 
 if (result.status !== 0) process.exit(result.status ?? 1);
-if (process.platform !== "win32") await chmod(output, 0o755);
+// A release must contain exactly the helper matching its target platform.
+// Only remove the stale generated sibling after the new helper was compiled,
+// so a failed build never leaves a previously working release without one.
+await rm(path.join(outputDir, isWindowsTarget ? "clyra-server" : "clyra-server.exe"), { force: true });
+if (!isWindowsTarget) await chmod(output, 0o755);
 console.log(`Prepared Electron sidecar: ${output}`);

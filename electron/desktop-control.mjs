@@ -1,6 +1,6 @@
 /**
  * OS-level desktop control for Clyra Screen Companion.
- * Linux: xdotool. macOS: AppleScript when present.
+ * Linux: xdotool. macOS: AppleScript. Windows: native SendInput via PowerShell.
  * Draws Atlas-style AI cursor — also used in Guide mode to point without clicking.
  */
 import { execFile } from "node:child_process";
@@ -12,11 +12,77 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function which(bin) {
   try {
-    const { stdout } = await execFileAsync("which", [bin], { timeout: 2_000 });
-    return String(stdout || "").trim() || null;
+    const { stdout } = await execFileAsync(process.platform === "win32" ? "where" : "which", [bin], { timeout: 2_000 });
+    return String(stdout || "").split(/\r?\n/).map((value) => value.trim()).find(Boolean) || null;
   } catch {
     return null;
   }
+}
+
+const WINDOWS_INPUT = String.raw`
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class ClyraWindowsInput {
+  [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public INPUTUNION U; }
+  [StructLayout(LayoutKind.Explicit)] public struct INPUTUNION { [FieldOffset(0)] public KEYBDINPUT ki; }
+  [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+  [DllImport("user32.dll", SetLastError=true)] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll", SetLastError=true)] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+  [DllImport("user32.dll", SetLastError=true)] public static extern uint SendInput(uint count, INPUT[] inputs, int size);
+  const uint KEYEVENTF_UNICODE = 0x0004;
+  const uint KEYEVENTF_KEYUP = 0x0002;
+  public static void TypeText(string value) {
+    foreach (char character in value ?? String.Empty) {
+      INPUT[] inputs = new INPUT[2];
+      inputs[0].type = 1;
+      inputs[0].U.ki.wScan = character;
+      inputs[0].U.ki.dwFlags = KEYEVENTF_UNICODE;
+      inputs[1].type = 1;
+      inputs[1].U.ki.wScan = character;
+      inputs[1].U.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+      SendInput(2, inputs, Marshal.SizeOf(typeof(INPUT)));
+    }
+  }
+}
+'@
+`;
+
+async function runWindowsPowerShell(script, timeout = 4_000) {
+  await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    timeout,
+    windowsHide: true,
+  });
+}
+
+function windowsSendKeys(key) {
+  const normalized = String(key || "").trim().toLowerCase().replace(/\s+/g, "");
+  const aliases = {
+    "cmd+l": "^l",
+    "command+l": "^l",
+    "ctrl+l": "^l",
+    "control+l": "^l",
+    "cmd+c": "^c",
+    "command+c": "^c",
+    "ctrl+c": "^c",
+    "control+c": "^c",
+    "cmd+v": "^v",
+    "command+v": "^v",
+    "ctrl+v": "^v",
+    "control+v": "^v",
+    enter: "{ENTER}",
+    return: "{ENTER}",
+    tab: "{TAB}",
+    escape: "{ESC}",
+    esc: "{ESC}",
+    backspace: "{BACKSPACE}",
+    delete: "{DELETE}",
+    left: "{LEFT}",
+    right: "{RIGHT}",
+    up: "{UP}",
+    down: "{DOWN}",
+  };
+  return aliases[normalized] || `{${String(key || "").toUpperCase()}}`;
 }
 
 export class DesktopControlService {
@@ -31,7 +97,14 @@ export class DesktopControlService {
 
   async initialize() {
     this.xdotool = await which("xdotool");
-    return { ok: true, driver: this.xdotool ? "xdotool" : process.platform === "darwin" ? "applescript" : "none" };
+    const driver = this.xdotool
+      ? "xdotool"
+      : process.platform === "darwin"
+        ? "applescript"
+        : process.platform === "win32"
+          ? "powershell-sendinput"
+          : "none";
+    return { ok: true, driver };
   }
 
   async ensureCursorOverlay() {
@@ -58,7 +131,19 @@ export class DesktopControlService {
       },
     });
     this.cursorWindow.setIgnoreMouseEvents(true, { forward: true });
-    this.cursorWindow.setAlwaysOnTop(true, "screen-saver");
+    // Windows does not support the macOS screen-saver window level. Keeping
+    // the overlay at the normal floating level avoids it disappearing behind
+    // a controlled app or showing a black surface on Windows 10.
+    if (process.platform === "darwin") {
+      this.cursorWindow.setAlwaysOnTop(true, "pop-up-menu", 1);
+    } else {
+      this.cursorWindow.setAlwaysOnTop(true, "floating");
+      try {
+        this.cursorWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      } catch {
+        /* older Electron */
+      }
+    }
     await this.cursorWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(CURSOR_HTML)}`);
     return this.cursorWindow;
   }
@@ -105,6 +190,8 @@ export class DesktopControlService {
       await execFileAsync(this.xdotool, ["mousemove", "--sync", String(point.x), String(point.y)], { timeout: 3_000 });
     } else if (process.platform === "darwin") {
       await execFileAsync("osascript", ["-e", `tell application "System Events" to set position of mouse to {${point.x}, ${point.y}}`], { timeout: 3_000 }).catch(() => undefined);
+    } else if (process.platform === "win32") {
+      await runWindowsPowerShell(`${WINDOWS_INPUT}\n[ClyraWindowsInput]::SetCursorPos(${point.x}, ${point.y}) | Out-Null`);
     }
     this.lastPoint = point;
     return { ok: true, point };
@@ -123,6 +210,13 @@ export class DesktopControlService {
     } else if (process.platform === "darwin") {
       const script = `tell application "System Events" to click at {${point.x}, ${point.y}}`;
       await execFileAsync("osascript", ["-e", script], { timeout: 3_000 });
+    } else if (process.platform === "win32") {
+      const flags = button === "right"
+        ? ["0x0008", "0x0010"]
+        : button === "middle"
+          ? ["0x0020", "0x0040"]
+          : ["0x0002", "0x0004"];
+      await runWindowsPowerShell(`${WINDOWS_INPUT}\n[ClyraWindowsInput]::mouse_event(${flags[0]}, 0, 0, 0, [UIntPtr]::Zero); [ClyraWindowsInput]::mouse_event(${flags[1]}, 0, 0, 0, [UIntPtr]::Zero)`);
     }
     await this.setCursor({ ...point, label: "Clicked", kind: "click" });
     return { ok: true, point };
@@ -142,6 +236,9 @@ export class DesktopControlService {
     } else if (process.platform === "darwin") {
       const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r?\n/g, "\\n");
       await execFileAsync("osascript", ["-e", `tell application "System Events" to keystroke "${escaped}"`], { timeout: 20_000 });
+    } else if (process.platform === "win32") {
+      const encoded = Buffer.from(value, "utf8").toString("base64");
+      await runWindowsPowerShell(`${WINDOWS_INPUT}\n$value = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${encoded}')); [ClyraWindowsInput]::TypeText($value)`, 20_000);
     }
     return { ok: true };
   }
@@ -162,6 +259,9 @@ export class DesktopControlService {
       } else {
         await execFileAsync("osascript", ["-e", `tell application "System Events" to key code 36`], { timeout: 3_000 });
       }
+    } else if (process.platform === "win32") {
+      const send = windowsSendKeys(key).replace(/'/g, "''");
+      await runWindowsPowerShell(`Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${send}')`);
     }
     return { ok: true };
   }
@@ -192,6 +292,21 @@ export class DesktopControlService {
           return this.typeText(action.text, action.label || "Typing");
         case "key":
           return this.key(action.key, action.label || "Key");
+        case "scroll": {
+          if (this.guideOnly || this.manualControl) return { ok: true, skipped: this.guideOnly ? "guide" : "manualControl" };
+          const amount = Math.max(-20, Math.min(20, Number(action.deltaY ?? action.amount) || 0));
+          if (process.platform === "win32") {
+            const wheel = Math.round(amount >= 0 ? 120 : -120);
+            const repeats = Math.max(1, Math.round(Math.abs(amount)));
+            await runWindowsPowerShell(`${WINDOWS_INPUT}\nfor ($i = 0; $i -lt ${repeats}; $i++) { [ClyraWindowsInput]::mouse_event(0x0800, 0, 0, ${wheel}, [UIntPtr]::Zero) }`);
+          } else if (this.xdotool) {
+            const button = amount >= 0 ? "4" : "5";
+            await execFileAsync(this.xdotool, ["click", "--repeat", String(Math.max(1, Math.round(Math.abs(amount)))), button], { timeout: 3_000 });
+          } else {
+            return { ok: false, error: "Scrolling is unavailable on this platform" };
+          }
+          return { ok: true, deltaY: amount };
+        }
         case "wait":
           await wait(Math.max(0, Math.min(5_000, Number(action.ms) || 300)));
           return { ok: true };

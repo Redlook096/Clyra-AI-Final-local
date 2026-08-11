@@ -5,6 +5,9 @@ $App = Join-Path $Root "apps\opencluely"
 $env:CLYRA_API_BASE = if ($env:CLYRA_API_BASE) { $env:CLYRA_API_BASE } else { "http://127.0.0.1:31415" }
 $env:CLYRA_CONTROL_PORT = if ($env:CLYRA_CONTROL_PORT) { $env:CLYRA_CONTROL_PORT } else { "3847" }
 $env:ELECTRON_DISABLE_SECURITY_WARNINGS = "1"
+# Clyra may have been started through Electron's Node-mode fallback. The
+# nested OpenCluely instance must always boot as an Electron application.
+Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 
 function Import-DotEnv($path) {
   if (-not (Test-Path $path)) { return }

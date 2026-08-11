@@ -1003,7 +1003,10 @@ async function createWindow() {
     minHeight: 680,
     show: false,
     backgroundColor: "#ffffff",
-    titleBarStyle: "hidden",
+    // Keep Clyra's custom canvas on macOS, but retain the native caption
+    // controls on Windows 10/11. A hidden macOS-style title bar on Windows
+    // leaves users without reliable move/minimise/close affordances.
+    titleBarStyle: process.platform === "darwin" ? "hidden" : "default",
     title: "Clyra",
   });
   uiView = new WebContentsView({
