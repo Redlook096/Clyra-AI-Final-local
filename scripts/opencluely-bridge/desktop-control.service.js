@@ -9,7 +9,10 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const { BrowserWindow, screen } = require('electron');
-const logger = require('../core/logger').createServiceLogger('DESKTOP-CONTROL');
+const logger = (() => {
+  try { return require('../core/logger').createServiceLogger('DESKTOP-CONTROL'); }
+  catch (_) { return { info: console.log, warn: console.warn, error: console.error }; }
+})();
 const { checkActionSafety } = require('./control-safety');
 
 const execFileAsync = promisify(execFile);
@@ -122,7 +125,7 @@ class DesktopControlService {
     try { win.setAlwaysOnTop(true, 'pop-up-menu', 1); } catch (_) { win.setAlwaysOnTop(true, 'floating'); }
     try { win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (_) { /* older Electron */ }
     win.on('closed', () => this.cursorWindows.delete(id));
-    await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(AI_CURSOR_HTML)}`);
+    await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(AI_PRESENCE_HTML)}`);
     this.cursorWindows.set(id, win);
     return win;
   }
@@ -130,21 +133,28 @@ class DesktopControlService {
   async showAICursor(point = this.lastPoint, label = 'Working…', kind = 'move') {
     const x = Math.round(Number(point?.x) || 0);
     const y = Math.round(Number(point?.y) || 0);
+    this.lastPoint = { x, y };
+    if (typeof BrowserWindow !== 'function' || !screen || typeof screen.getDisplayNearestPoint !== 'function') {
+      return { ok: true, point: { x, y } };
+    }
     const display = screen.getDisplayNearestPoint({ x, y });
     const win = await this.ensureCursorWindow(display);
     if (!win || win.isDestroyed()) return { ok: false, error: 'cursor overlay unavailable' };
-    const bounds = display.bounds;
     win.showInactive();
-    await win.webContents.executeJavaScript(
-      `window.__openCluelySetAICursor(${JSON.stringify({ x: x - bounds.x, y: y - bounds.y, label: String(label || 'Working…').slice(0, 96), kind: String(kind || 'move'), controlling: Boolean(this.controlling && !this.guideOnly) })}); true`,
-      true,
-    );
+    await win.webContents.executeJavaScript('window.__setAIPresence(true); true', true);
     return { ok: true, point: { x, y } };
   }
 
   hideAICursor() {
     for (const win of this.cursorWindows.values()) {
-      try { if (!win.isDestroyed()) win.hide(); } catch (_) { /* ignore */ }
+      try {
+        if (!win.isDestroyed()) {
+          win.webContents.executeJavaScript('window.__setAIPresence(false); true', true).catch(() => {});
+          setTimeout(() => {
+            try { if (!win.isDestroyed()) win.hide(); } catch (_) {}
+          }, 450);
+        }
+      } catch (_) { /* ignore */ }
     }
   }
 
@@ -165,9 +175,8 @@ class DesktopControlService {
     }
     try {
       if (process.platform === 'darwin') {
-        // The blue agent cursor is the motion users see. Quartz click events
-        // carry their own coordinates, so moving the person's hardware cursor
-        // is neither required nor desirable.
+        // macOS CGEvent Quartz input
+        await darwinInput(['move', String(point.x), String(point.y)], 4000);
       } else if (this.xdotool) {
         await execFileAsync(this.xdotool, ['mousemove', '--sync', String(point.x), String(point.y)], {
           timeout: 4000,
@@ -204,7 +213,7 @@ class DesktopControlService {
         await execFileAsync(this.xdotool, ['click', '--repeat', String(count), '--delay', '80', btn], {
           timeout: 6000,
         });
-      } else if (this.cliclick && process.platform !== 'darwin') {
+      } else if (this.cliclick) {
         const cmd = count >= 2 ? `dc:${point.x},${point.y}` : `c:${point.x},${point.y}`;
         await execFileAsync(this.cliclick, [cmd], { timeout: 4000 });
       } else if (process.platform === 'darwin') {
@@ -248,12 +257,6 @@ for ($i=0; $i -lt ${count}; $i++) { ${downUp} Start-Sleep -Milliseconds 80 }
         await execFileAsync(this.xdotool, ['click', '--repeat', String(reps), '--delay', '30', btn], {
           timeout: 6000,
         });
-      } else if (this.cliclick && process.platform === 'darwin') {
-        // cliclick: positive = up
-        const wheel = amount >= 0 ? `kd:ctrl` : '';
-        void wheel;
-        await execFileAsync(this.cliclick, [`m:${this.lastPoint.x},${this.lastPoint.y}`], { timeout: 4000 }).catch(() => {});
-        await darwinInput(['scroll', '0', String(amount)], 6000);
       } else if (process.platform === 'darwin') {
         await darwinInput(['scroll', '0', String(amount)], 6000);
       } else if (process.platform === 'win32') {
@@ -542,7 +545,7 @@ for ($i=0; $i -lt ${reps}; $i++) { [M]::mouse_event(0x0800, 0, 0, ${wheelDelta},
     this.controlling = true;
     this.guideOnly = false;
     this.currentTask = String(task || '');
-    const cursor = screen.getCursorScreenPoint();
+    const cursor = typeof screen?.getCursorScreenPoint === 'function' ? screen.getCursorScreenPoint() : { x: 400, y: 300 };
     this.lastPoint = { x: cursor.x, y: cursor.y };
     await this.showAICursor(this.lastPoint, 'Understanding your task…', 'thinking').catch(() => {});
     return { ok: true, controlling: true, driver: this.driver };
@@ -571,15 +574,11 @@ for ($i=0; $i -lt ${reps}; $i++) { [M]::mouse_event(0x0800, 0, 0, ${wheelDelta},
   }
 }
 
-const AI_CURSOR_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
-  *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}
-  #screen-border{position:fixed;inset:8px;border:1.5px solid rgba(96,151,255,.88);border-radius:15px;box-shadow:0 0 0 1px rgba(135,178,255,.23),0 0 30px rgba(54,119,255,.30),inset 0 0 26px rgba(79,124,255,.10);opacity:0;transition:opacity 180ms ease;pointer-events:none}#screen-border.active{opacity:1}
-  #cursor{position:absolute;left:0;top:0;pointer-events:none;opacity:0;transform:translate(-5px,-4px) scale(.94);transition:opacity 140ms ease,transform 190ms cubic-bezier(.22,1,.36,1),left 220ms cubic-bezier(.22,1,.36,1),top 220ms cubic-bezier(.22,1,.36,1)}#cursor.show{opacity:1;transform:translate(-5px,-4px) scale(1)}
-  #halo{position:absolute;left:-15px;top:-15px;width:51px;height:51px;border-radius:50%;background:radial-gradient(circle,rgba(87,151,255,.29) 0,rgba(63,128,255,.13) 39%,rgba(63,128,255,0) 71%);filter:blur(3px);animation:pulse 2.8s ease-in-out infinite}
-  #arrow{position:relative;width:28px;height:32px;overflow:visible;filter:drop-shadow(0 0 1px rgba(255,255,255,.84)) drop-shadow(0 2px 4px rgba(16,24,40,.34)) drop-shadow(0 0 10px rgba(43,128,255,.34));transform-origin:5px 2px}#cursor.click #halo{animation:pulse .62s ease-out infinite}
-  #label{position:absolute;left:29px;top:1px;display:block;max-width:260px;padding:5px 9px 5px 18px;border:1px solid rgba(36,42,52,.12);border-radius:8px;background:rgba(255,255,255,.94);color:#252a33;font-size:10.5px;font-weight:650;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-shadow:0 5px 16px rgba(20,32,52,.16),inset 0 1px 0 rgba(255,255,255,.72);backdrop-filter:blur(10px)}#label::before{position:absolute;left:8px;top:50%;width:4px;height:4px;content:"";margin-top:-2px;border-radius:50%;background:#4f7cff;box-shadow:0 0 0 2px rgba(79,124,255,.12)}
-  #click{display:none;position:absolute;left:-8px;top:-8px;width:27px;height:27px;border:1.5px solid rgba(83,145,255,.8);border-radius:50%;box-shadow:0 0 0 3px rgba(79,124,255,.12)}#cursor.click #click{display:block;animation:click .52s cubic-bezier(.16,1,.3,1) both}
-  @keyframes pulse{0%,100%{transform:scale(.92);opacity:.46}50%{transform:scale(1.06);opacity:.78}}@keyframes click{from{transform:scale(.44);opacity:.9}to{transform:scale(1.55);opacity:0}}@media (prefers-reduced-motion:reduce){#cursor{transition:opacity 80ms ease}#halo{animation:none}#screen-border{transition:none}}
-</style></head><body><div id="screen-border"></div><div id="cursor"><div id="halo"></div><svg id="arrow" viewBox="0 0 28 32" aria-hidden="true"><defs><linearGradient id="clyraControlCursor" x1="2" y1="2" x2="22" y2="28" gradientUnits="userSpaceOnUse"><stop stop-color="#2b3039"/><stop offset=".42" stop-color="#15181d"/><stop offset="1" stop-color="#07080a"/></linearGradient></defs><path d="M4.62 2.72C3.09 1.91 1.57 3.43 2.39 4.96l8.36 16.3c.75 1.47 2.87 1.39 3.5-.13l2.69-6.51 6.51-2.69c1.52-.63 1.6-2.75.13-3.5L4.62 2.72Z" fill="url(#clyraControlCursor)" stroke="rgba(255,255,255,.55)" stroke-width=".55" stroke-linejoin="round"/></svg><div id="click"></div><span id="label"></span></div><script>window.__openCluelySetAICursor=(p)=>{const e=document.getElementById('cursor');e.style.left=(p.x||0)+'px';e.style.top=(p.y||0)+'px';document.getElementById('label').textContent=p.label||'Working…';document.getElementById('screen-border').classList.toggle('active',Boolean(p.controlling));e.className='show '+(p.kind||'move')};</script></body></html>`;
+const AI_PRESENCE_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
+  *{box-sizing:border-box;margin:0;padding:0}html,body{width:100%;height:100%;overflow:hidden;background:transparent;pointer-events:none;user-select:none;-webkit-user-select:none}
+</style></head><body><script>
+  window.__setAIPresence=()=>{};
+  window.__openCluelySetAICursor=()=>{};
+</script></body></html>`;
 
 module.exports = new DesktopControlService();

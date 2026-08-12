@@ -1,15 +1,16 @@
 /**
- * OpenCluely Take Control — powered by suitedaces/computer-agent architecture.
+ * OpenCluely Take Control — powered by 777genius/os-ai-computer-use architecture.
  * Uses Anthropic Computer Use API when ANTHROPIC_API_KEY is set; falls back to
- * Clyra Gemini vision + JSON planner otherwise.
+ * Clyra Gemini vision + os-ai-computer-use orchestrator otherwise.
  *
- * Reference: https://github.com/suitedaces/computer-agent (Apache-2.0)
+ * Reference: https://github.com/777genius/os-ai-computer-use (Apache-2.0)
  */
 const { screen } = require('electron');
 // This service is copied to the Electron app root (not src/services).
 const logger = require('./src/core/logger').createServiceLogger('COMPUTER-AGENT');
 const { BashExecutor } = require('./computer-agent-bash');
 const { safetyPromptRules } = require('./src/services/control-safety');
+const { OsAiComputerUseOrchestrator } = require('./os-ai-computer-use.service');
 
 const MAX_ITERATIONS = 50;
 const AI_WIDTH = 1280;
@@ -24,7 +25,7 @@ class ComputerAgentService {
     // This is the usable baseline before the optional Computer Use provider is
     // checked. It keeps status truthful on a fresh launch instead of showing
     // an ambiguous "unknown" engine.
-    this.engine = 'clyra-gemini-fallback';
+    this.engine = 'os-ai-computer-use';
     this.abortController = null;
     this.runId = 0;
   }
@@ -35,7 +36,7 @@ class ComputerAgentService {
       running: this.running,
       anthropicConfigured: Boolean(process.env.ANTHROPIC_API_KEY || process.env.CLYRA_ANTHROPIC_API_KEY),
       apiProxy: String(process.env.CLYRA_COMPUTER_AGENT_API_URL || process.env.CLYRA_API_BASE || '').trim() || null,
-      reference: 'https://github.com/suitedaces/computer-agent',
+      reference: 'https://github.com/777genius/os-ai-computer-use',
     };
   }
 
@@ -95,12 +96,6 @@ class ComputerAgentService {
     this.#emit({ status: 'running', message: `Take Control: ${task}`, engine: 'clyra-desktop-control' });
 
     try {
-      // The upstream computer-agent uses bash for deterministic local work.
-      // Gemini's vision fallback has no bash tool-call surface, so retain that
-      // capability for explicit, low-risk launch-and-type requests instead of
-      // guessing dock coordinates from a screenshot.
-      const directResult = await this.#runExplicitDesktopShortcut(task);
-      if (directResult) return directResult;
       const apiKey = (process.env.ANTHROPIC_API_KEY || process.env.CLYRA_ANTHROPIC_API_KEY || '').trim();
       const { computerAgentAvailability } = await import('./computer-agent-api.mjs');
       // The Clyra-hosted provider is optional. Give its loopback health check a
@@ -367,91 +362,15 @@ class ComputerAgentService {
   }
 
   async #runGeminiFallback(task, { softCloakFn }) {
-    const { llmService, desktopControl, captureService } = this.deps;
-    const bounds = screen.getPrimaryDisplay().bounds;
-    let lastSummary = '';
-
-    for (let step = 0; step < 12; step += 1) {
-      if (this.abort) {
-        this.#emit({ status: 'stopped', message: 'Control stopped.', engine: this.engine });
-        return { ok: true, stopped: true };
-      }
-
-      let capture;
-      try {
-        if (softCloakFn) softCloakFn(true);
-        await new Promise((r) => setTimeout(r, 100));
-        capture = await captureService.captureForComputerAgent({ fullScreen: true });
-      } finally {
-        if (softCloakFn) softCloakFn(false);
-      }
-
-      if (!capture?.imageBuffer?.length) {
-        this.#emit({
-          status: 'error',
-          message: 'Could not capture the screen. Grant Screen Recording + Accessibility permissions.',
-          engine: this.engine,
-        });
-        return { ok: false, error: 'capture_failed' };
-      }
-
-      const vision = await llmService.callVision(
-        capture.imageBuffer,
-        [
-          `You are OpenCluely controlling the desktop (computer-agent fallback). Task: "${task}".`,
-          `AI coordinate space is ${AI_WIDTH}x${AI_HEIGHT}. Display is ${bounds.width}x${bounds.height}.`,
-          lastSummary ? `Previous: ${lastSummary}` : '',
-          'Reply ONLY JSON:',
-          '{"done":false,"action":{"action":"left_click"|"mouse_move"|"type"|"key"|"scroll"|"wait","coordinate":[x,y],"text":"","scroll_direction":"down","scroll_amount":3},"note":"..."}',
-          '{"done":true,"note":"..."}',
-          safetyPromptRules(task),
-        ]
-          .filter(Boolean)
-          .join(' '),
-        capture.mimeType || 'image/jpeg',
-      );
-
-      const match = String(vision || '').match(/\{[\s\S]*\}/);
-      let plan = null;
-      if (match) {
-        try {
-          plan = JSON.parse(match[0]);
-        } catch {
-          plan = null;
-        }
-      }
-      if (!plan) {
-        lastSummary = 'Planner returned invalid JSON';
-        this.#emit({ status: 'step', message: lastSummary, engine: this.engine });
-        continue;
-      }
-
-      if (plan.done) {
-        this.#emit({ status: 'done', message: String(plan.note || 'Task complete.'), engine: this.engine });
-        return { ok: true, done: true };
-      }
-
-      const input = plan.action || {};
-      if (input.action) {
-        try {
-          if (softCloakFn) softCloakFn(true);
-          await new Promise((r) => setTimeout(r, 80));
-          const result = await desktopControl.performComputerAction(input, task);
-          if (result?.blocked) {
-            this.#emit({ status: 'done', message: result.reason, engine: this.engine, blocked: true });
-            return { ok: true, blocked: true };
-          }
-          lastSummary = String(plan.note || input.action);
-          this.#emit({ status: 'step', message: lastSummary, engine: this.engine, action: input });
-        } finally {
-          if (softCloakFn) softCloakFn(false);
-        }
-      }
-      await new Promise((r) => setTimeout(r, 450));
-    }
-
-    this.#emit({ status: 'done', message: lastSummary || 'Finished.', engine: this.engine });
-    return { ok: true };
+    const orchestrator = new OsAiComputerUseOrchestrator(this.deps);
+    return orchestrator.run({
+      task,
+      softCloakFn,
+      onEvent: (event, payload) => {
+        if (this.abort) orchestrator.cancel();
+        this.#emit(payload);
+      },
+    });
   }
 }
 

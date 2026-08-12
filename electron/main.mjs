@@ -340,12 +340,7 @@ async function toggleOpenCluelyOverlay() {
 async function openOpenCluelyWithAutoAnswer() {
   const opened = await ensureOpenCluely({ expand: true });
   if (!opened?.ok) return opened;
-  // Do not await model completion in the shortcut handler. The companion keeps
-  // its drawer visible and paints the answer in place as it arrives.
-  void postOpenCluelyControl("/auto-answer", {}, 75_000).then((result) => {
-    if (!result?.ok) console.warn("[opencluely] Auto Answer did not complete after ⌘/.");
-  });
-  return { ...opened, action: "open-and-auto-answer" };
+  return { ...opened, action: "open" };
 }
 
 function syncOpenCluelyBridgeFromRepo() {
@@ -358,11 +353,17 @@ function syncOpenCluelyBridgeFromRepo() {
     ["window.manager.js", "src/managers/window.manager.js"],
     ["config.js", "src/core/config.js"],
     ["capture.service.js", "src/services/capture.service.js"],
+    ["capture.service.js", "capture.service.js"],
     ["desktop-control.service.js", "src/services/desktop-control.service.js"],
+    ["desktop-control.service.js", "desktop-control.service.js"],
     ["control-safety.js", "src/services/control-safety.js"],
     ["macos-input.py", "src/services/macos-input.py"],
+    ["macos-input.py", "macos-input.py"],
     ["macos-input.swift", "src/services/macos-input.swift"],
     ["computer-agent.service.js", "computer-agent.service.js"],
+    ["computer-agent.service.js", "src/services/computer-agent.service.js"],
+    ["os-ai-computer-use.service.js", "os-ai-computer-use.service.js"],
+    ["os-ai-computer-use.service.js", "src/services/os-ai-computer-use.service.js"],
     ["computer-agent-bash.js", "computer-agent-bash.js"],
     ["computer-agent-api.mjs", "computer-agent-api.mjs"],
     ["preload.js", "preload.js"],

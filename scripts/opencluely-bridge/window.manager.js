@@ -826,9 +826,7 @@ class WindowManager {
         setMacOSAlwaysOnTop();
         setTimeout(() => {
           if (win.isDestroyed()) return;
-          if (!isLLM) {
-            try { win.setVisibleOnAllWorkspaces(false); } catch { /* ignore */ }
-          }
+          try { win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch { /* ignore */ }
           setMacOSAlwaysOnTop();
         }, 300);
       }, 30);

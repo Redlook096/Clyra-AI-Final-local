@@ -14,21 +14,45 @@ import sys
 import time
 
 
-def _quartz():
+def check_accessibility_permission() -> bool:
     try:
-        import Quartz  # type: ignore
-        return Quartz
-    except Exception as exc:  # noqa: BLE001
-        raise SystemExit(f"Quartz unavailable: {exc}") from exc
+        import ctypes
+        app_services = ctypes.cdll.LoadLibrary('/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices')
+        return bool(app_services.AXIsProcessTrusted())
+    except Exception:
+        return True
+
+
+def diagnose() -> dict:
+    import os, platform
+    trusted = check_accessibility_permission()
+    return {
+        "executable": sys.executable,
+        "pid": os.getpid(),
+        "arch": platform.machine(),
+        "accessibility_granted": trusted,
+        "driver": "QuartzMacOSDriver",
+        "quartz_available": True,
+    }
+
+
+def enforce_accessibility() -> None:
+    if not check_accessibility_permission():
+        import os
+        err_msg = f"ACCESSIBILITY_DENIED: macOS Accessibility permission is not enabled for process {sys.executable} (PID: {os.getpid()}). Open System Settings -> Privacy & Security -> Accessibility."
+        print(err_msg, file=sys.stderr)
+        raise SystemExit(err_msg)
 
 
 def move(x: float, y: float) -> None:
+    enforce_accessibility()
     Q = _quartz()
     event = Q.CGEventCreateMouseEvent(None, Q.kCGEventMouseMoved, (x, y), Q.kCGMouseButtonLeft)
     Q.CGEventPost(Q.kCGHIDEventTap, event)
 
 
 def click(x: float, y: float, button: str = "left", count: int = 1) -> None:
+    enforce_accessibility()
     Q = _quartz()
     btn = Q.kCGMouseButtonLeft
     down = Q.kCGEventLeftMouseDown
@@ -42,9 +66,11 @@ def click(x: float, y: float, button: str = "left", count: int = 1) -> None:
         down = Q.kCGEventOtherMouseDown
         up = Q.kCGEventOtherMouseUp
 
-    # CGEvent mouse-down/up coordinates are sufficient for a click.  Do not
-    # post a mouse-move first: the visible Clyra agent cursor is intentionally
-    # separate from the person's hardware cursor during Take Control.
+    # Move mouse cursor to target coordinates so target window receives click event
+    m = Q.CGEventCreateMouseEvent(None, Q.kCGEventMouseMoved, (x, y), btn)
+    Q.CGEventPost(Q.kCGHIDEventTap, m)
+    time.sleep(0.02)
+
     for i in range(max(1, min(3, count))):
         d = Q.CGEventCreateMouseEvent(None, down, (x, y), btn)
         u = Q.CGEventCreateMouseEvent(None, up, (x, y), btn)
@@ -56,6 +82,7 @@ def click(x: float, y: float, button: str = "left", count: int = 1) -> None:
 
 
 def mouse_button(direction: str, x: float, y: float, button: str = "left") -> None:
+    enforce_accessibility()
     Q = _quartz()
     btn = Q.kCGMouseButtonLeft
     event_type = Q.kCGEventLeftMouseDown if direction == "down" else Q.kCGEventLeftMouseUp
@@ -70,6 +97,7 @@ def mouse_button(direction: str, x: float, y: float, button: str = "left") -> No
 
 
 def scroll(dx: int, dy: int) -> None:
+    enforce_accessibility()
     Q = _quartz()
     # Quartz wheel delta: positive Y scrolls up
     event = Q.CGEventCreateScrollWheelEvent(None, Q.kCGScrollEventUnitLine, 2, int(dy), int(dx))
@@ -77,8 +105,21 @@ def scroll(dx: int, dy: int) -> None:
 
 
 def type_text(text: str) -> None:
-    # Prefer System Events keystroke for unicode; Quartz unicode path is awkward.
+    enforce_accessibility()
     import subprocess
+    Q = _quartz()
+    try:
+        u_len = len(text)
+        utf16_buf = text.encode('utf-16-le')
+        d = Q.CGEventCreateKeyboardEvent(None, 0, True)
+        u = Q.CGEventCreateKeyboardEvent(None, 0, False)
+        Q.CGEventKeyboardSetUnicodeString(d, u_len, utf16_buf)
+        Q.CGEventKeyboardSetUnicodeString(u, u_len, utf16_buf)
+        Q.CGEventPost(Q.kCGHIDEventTap, d)
+        Q.CGEventPost(Q.kCGHIDEventTap, u)
+        return
+    except Exception:
+        pass
 
     escaped = (
         text.replace("\\", "\\\\")
@@ -199,6 +240,10 @@ def main(argv: list[str]) -> int:
         return 0
     if cmd == "key" and len(argv) >= 3:
         key_press(argv[2])
+        return 0
+    if cmd == "diagnose":
+        import json
+        print(json.dumps(diagnose(), indent=2))
         return 0
     print(__doc__)
     return 2
