@@ -2,6 +2,9 @@ export type ElectronSurfaceBounds = { x: number; y: number; width: number; heigh
 
 export type ClyraDesktopBridge = {
   runtime: "electron";
+  preview?: {
+    launch: (payload: { url: string; title?: string }) => Promise<{ ok: boolean; error?: string }>;
+  };
   browser: {
     getState: () => Promise<any>;
     setSurface: (payload: { bounds?: ElectronSurfaceBounds; visible: boolean }) => Promise<any>;

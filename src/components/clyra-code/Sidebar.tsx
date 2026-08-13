@@ -23,9 +23,9 @@ export type ChatThread = {
 export function ClyraMark({ compact = false, size = 18 }: { compact?: boolean; size?: number }) {
   return (
     <span className={cn("flex shrink-0 items-center justify-center rounded-full bg-[#3977F6]", compact && "h-6 w-6")} style={compact ? undefined : { width: size, height: size }} aria-hidden>
-      <svg width={Math.round(size * 0.56)} height={Math.round(size * 0.56)} viewBox="0 0 16 16" fill="none">
-        <path d="M3 3.5h10v9H3z" stroke="white" strokeWidth="1.55" strokeLinejoin="round" />
-        <path d="m5.3 6 1.9 1.8-1.9 1.8M9 9.6h2" stroke="white" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" />
+      <svg width={Math.round(size * 0.62)} height={Math.round(size * 0.62)} viewBox="0 0 20 20" fill="none">
+        <rect x="2.75" y="3.5" width="14.5" height="12.5" rx="2.2" stroke="white" strokeWidth="1.45" />
+        <path d="m6.2 7.15 2.55 2.35-2.55 2.35M10.9 12.25h2.85" stroke="white" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     </span>
   );

@@ -806,6 +806,29 @@ function registerIpc() {
   ipcMain.handle("browser:inspect", async (event) => { authorize(event); return { ok: true, snapshot: await browserManager.inspect() }; });
   ipcMain.handle("browser:set-cursor", async (event, cursor) => { authorize(event); await browserManager.setCursor(cursor); return { ok: true }; });
   ipcMain.handle("browser:devtools", (event) => { authorize(event); browserManager.activeContents()?.openDevTools({ mode: "detach" }); return { ok: true }; });
+  ipcMain.handle("preview:launch-desktop", async (event, payload = {}) => {
+    authorize(event);
+    const target = String(payload.url || "");
+    try {
+      const parsed = new URL(target);
+      if (!/^https?:$/.test(parsed.protocol) || !["127.0.0.1", "localhost"].includes(parsed.hostname)) {
+        return { ok: false, error: "Only the local project preview can be launched." };
+      }
+      const previewWindow = new BrowserWindow({
+        width: 1180,
+        height: 760,
+        minWidth: 640,
+        minHeight: 480,
+        title: String(payload.title || "Clyra desktop project"),
+        backgroundColor: "#ffffff",
+        webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
+      });
+      await previewWindow.loadURL(target);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Could not launch the desktop preview." };
+    }
+  });
   // Task View previews are real pixels from the already-rendered workspace.
   // The renderer sends the exact workspace bounds before it reveals the
   // overview, so no tool is remounted, resized, or asked to recreate itself.

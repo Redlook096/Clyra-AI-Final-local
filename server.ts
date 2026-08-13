@@ -66,6 +66,7 @@ import { registerOpenCodeRoutes } from "./lib/opencode/opencode-routes";
 import { registerVoiceRoutes, attachVoiceWebSocket } from "./backend/voice";
 import { attachTerminalWebSocket } from "./lib/terminal-ws";
 import { detectMobileSwiftProject, registerMobilePreviewRoutes } from "./lib/mobile-preview-routes";
+import { registerSwiftWasmRoutes } from "./lib/swift-wasm-routes";
 import { registerPreviewProxy, attachPreviewUpgrades } from "./lib/preview-proxy";
 import { registerCreatorTtsRoutes, stopCreatorTtsWorker } from "./backend/creator-tts/service";
 import {
@@ -1404,6 +1405,7 @@ async function startServer() {
   registerClineRoutes(app);
   registerOpenCodeRoutes(app);
   registerMobilePreviewRoutes(app);
+  registerSwiftWasmRoutes(app);
   registerVoiceRoutes(app);
   registerCreatorTtsRoutes(app);
   // The live-preview proxy is required by both Vite development and the
@@ -3926,15 +3928,12 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
   if (process.env.NODE_ENV !== "production") {
     const viteModule = "vite";
     const { createServer: createViteServer } = await import(viteModule);
-    const hmrPort = Number(process.env.HMR_PORT) || 24678;
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: {
-          host: "localhost",
-          port: hmrPort,
-          clientPort: hmrPort,
-        },
+        // Renderer refreshes are intentionally driven by Clyra's preview
+        // controller; this prevents an embedded-browser HMR socket warning.
+        hmr: false,
       },
       optimizeDeps: {
         entries: ["index.html", "todo.html"],

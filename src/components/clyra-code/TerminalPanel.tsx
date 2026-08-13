@@ -2,6 +2,7 @@ import { Component, useCallback, useEffect, useRef, useState, type ComponentProp
 import { motion } from "motion/react";
 import { LoaderCircle, PanelBottomClose, PanelBottomOpen, Pencil, Plus, TerminalSquare, X } from "lucide-react";
 import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { AGENT_EASE } from "./motion";
 
@@ -96,11 +97,14 @@ class TerminalErrorBoundary extends Component<{ children: ReactNode }, { failed:
 function TerminalPanelInner({ projectId, open, height, onHeightChange, onToggle, agentActivityCount: _agentActivityCount = 0 }: { projectId: string | null; open: boolean; height: number; onHeightChange: (height: number) => void; onToggle: () => void; agentActivityCount?: number }) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
   const bridgeRef = useRef<TerminalBridge | null>(null);
   const activeRef = useRef("terminal-1");
   const outputRef = useRef(new Map<string, string>());
   const sequenceRef = useRef(1);
   const startupTimersRef = useRef(new Map<string, number>());
+  const followOutputRef = useRef(true);
+  const followFrameRef = useRef<number | null>(null);
   const [hostReady, setHostReady] = useState(false);
   const [tabs, setTabs] = useState<SessionTab[]>([{ id: "terminal-1", label: shellLabel() }]);
   const [activeTab, setActiveTab] = useState("terminal-1");
@@ -111,11 +115,19 @@ function TerminalPanelInner({ projectId, open, height, onHeightChange, onToggle,
   const fit = useCallback((tabId = activeRef.current) => {
     const node = mountRef.current;
     const term = termRef.current;
-    if (!node || !term) return;
-    const cols = Math.max(40, Math.floor(node.clientWidth / 7.24));
-    const rows = Math.max(4, Math.floor(node.clientHeight / 16.8));
-    term.resize(cols, rows);
-    bridgeRef.current?.resize(tabId, cols, rows);
+    const fitAddon = fitAddonRef.current;
+    if (!node || !term || !fitAddon || node.clientWidth < 8 || node.clientHeight < 8) return;
+    fitAddon.fit();
+    bridgeRef.current?.resize(tabId, term.cols, term.rows);
+  }, []);
+
+  const followLatest = useCallback((force = false) => {
+    const term = termRef.current;
+    if (!term || (!force && !followOutputRef.current) || followFrameRef.current !== null) return;
+    followFrameRef.current = requestAnimationFrame(() => {
+      followFrameRef.current = null;
+      if (force || followOutputRef.current) termRef.current?.scrollToBottom();
+    });
   }, []);
 
   const connect = useCallback((tabId: string) => {
@@ -149,10 +161,17 @@ function TerminalPanelInner({ projectId, open, height, onHeightChange, onToggle,
   useEffect(() => {
     if (!hostReady) return;
     if (!termRef.current && mountRef.current) {
-      const term = new Terminal({ convertEol: false, cursorBlink: true, cursorStyle: "bar", fontFamily: '"SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, monospace', fontSize: 12, lineHeight: 1.4, theme: TERM_THEME, allowProposedApi: true });
+      const term = new Terminal({ convertEol: false, cursorBlink: true, cursorStyle: "underline", scrollback: 10_000, fontFamily: '"SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, monospace', fontSize: 12.5, lineHeight: 1.4, theme: TERM_THEME, allowProposedApi: true });
+      const fitAddon = new FitAddon();
+      term.loadAddon(fitAddon);
       term.open(mountRef.current);
       term.onData((data) => bridgeRef.current?.write(activeRef.current, data));
+      term.onScroll((viewportY) => {
+        const buffer = term.buffer.active;
+        followOutputRef.current = buffer.baseY - viewportY <= 2;
+      });
       termRef.current = term;
+      fitAddonRef.current = fitAddon;
     }
     const bridge = bridgeRef.current ?? (bridgeRef.current = electronBridge() ?? websocketBridge());
     const offData = bridge.onData((tabId, data) => {
@@ -164,7 +183,10 @@ function TerminalPanelInner({ projectId, open, height, onHeightChange, onToggle,
       setTabs((items) => items.map((item) => item.id === tabId ? { ...item, busy: false, failed: false } : item));
       outputRef.current.set(tabId, (outputRef.current.get(tabId) || "") + data);
       if (tabId === activeRef.current) {
-        termRef.current?.write(data, () => termRef.current?.scrollToBottom());
+        const term = termRef.current;
+        const buffer = term?.buffer.active;
+        if (buffer && buffer.baseY - buffer.viewportY <= 2) followOutputRef.current = true;
+        term?.write(data, () => followLatest());
       }
     });
     const offExit = bridge.onExit((tabId) => {
@@ -182,7 +204,7 @@ function TerminalPanelInner({ projectId, open, height, onHeightChange, onToggle,
       for (const timer of startupTimersRef.current.values()) window.clearTimeout(timer);
       startupTimersRef.current.clear();
     };
-  }, [connect, hostReady, projectId]);
+  }, [connect, followLatest, hostReady, projectId]);
 
   useEffect(() => {
     activeRef.current = activeTab;
@@ -191,17 +213,20 @@ function TerminalPanelInner({ projectId, open, height, onHeightChange, onToggle,
     term.reset();
     const saved = outputRef.current.get(activeTab);
     if (saved) term.write(saved);
+    followOutputRef.current = true;
     connect(activeTab);
-    requestAnimationFrame(() => { fit(activeTab); term.scrollToBottom(); term.focus(); });
-  }, [activeTab, connect, fit, projectId]);
+    requestAnimationFrame(() => { fit(activeTab); followLatest(true); term.focus(); });
+  }, [activeTab, connect, fit, followLatest, projectId]);
 
   useEffect(() => {
     const node = mountRef.current;
     if (!node || !open) return;
-    const observer = new ResizeObserver(() => { fit(); termRef.current?.scrollToBottom(); });
+    const observer = new ResizeObserver(() => {
+      requestAnimationFrame(() => { fit(); followLatest(); });
+    });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [fit, height, open]);
+  }, [fit, followLatest, height, open]);
 
   useEffect(() => {
     if (editingTab) requestAnimationFrame(() => { tabInputRef.current?.focus(); tabInputRef.current?.select(); });

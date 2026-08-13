@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Globe2, Monitor, PanelLeftOpen, PanelRightClose, PanelRightOpen, Smartphone } from "lucide-react";
+import { Globe2, Monitor, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Smartphone } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { api } from "./api";
 import { useClyraCode, type AgentAction } from "./store";
@@ -82,6 +82,7 @@ export default function ClyraCodeWorkspace() {
   const [creating, setCreating] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [previewFullscreen, setPreviewFullscreen] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(200);
   const [agentActivityCount, setAgentActivityCount] = useState(0);
   const [suggestion, setSuggestion] = useState<{ text: string; nonce: number } | undefined>(
@@ -243,6 +244,13 @@ export default function ClyraCodeWorkspace() {
   /* -------------------- helpers -------------------- */
   const activeProject = state.projects.find((p) => p.id === state.activeProjectId) ?? null;
   const taskTitle = state.sessionTitle || (state.log.length ? "Task" : "");
+  const desktopProject = /\b(?:desktop|electron)\b/i.test(`${activeProject?.name ?? ""} ${taskTitle}`);
+  const canLaunchElectronPreview = Boolean(window.clyraDesktop?.preview?.launch);
+  const launchDesktopPreview = useCallback(async () => {
+    const url = preview.session?.url;
+    if (!url) return;
+    await window.clyraDesktop?.preview?.launch({ url, title: activeProject?.name || "Clyra desktop project" });
+  }, [activeProject?.name, preview.session?.url]);
   const hasConversation = state.log.length > 0;
 
   // A blank project gives the welcome workspace all available width. Selecting
@@ -401,9 +409,21 @@ export default function ClyraCodeWorkspace() {
       >
         {rightPanelOpen ? <PanelRightClose className="h-[18px] w-[18px]" strokeWidth={1.65} /> : <PanelRightOpen className="h-[18px] w-[18px]" strokeWidth={1.65} />}
       </button>
+      {desktopProject && preview.session?.url && canLaunchElectronPreview ? (
+        <button
+          type="button"
+          onClick={() => void launchDesktopPreview()}
+          className="absolute right-[47px] top-[7px] z-40 flex h-[30px] items-center gap-1.5 rounded-[8px] px-2.5 text-[11.5px] font-medium text-[#3977F6] transition-colors duration-150 hover:bg-[#3977F6]/[0.07]"
+          title="Launch this desktop project in Electron"
+        >
+          <Play className="h-[12px] w-[12px]" fill="currentColor" strokeWidth={1.8} />
+          Launch app
+        </button>
+      ) : null}
 
       {/* -------- centre: agent conversation -------- */}
-      <section
+      <motion.section
+        layout="size"
         className={cn("flex min-h-0 flex-col bg-[color:var(--main-background)] transition-[width] duration-[300ms] ease-[cubic-bezier(0.22,1,0.36,1)]", rightPanelOpen ? "shrink-0" : "min-w-0 flex-1")}
         style={rightPanelOpen ? { width: conversationWidth } : undefined}
       >
@@ -426,9 +446,7 @@ export default function ClyraCodeWorkspace() {
                 </h1>
               </div>
             </>
-          ) : (
-            <h1 className="text-[12.5px] font-medium text-[#343539]">Clyra Code</h1>
-          )}
+          ) : <span className="flex-1" aria-hidden />}
         </header>
 
         {
@@ -443,7 +461,7 @@ export default function ClyraCodeWorkspace() {
                 className="flex min-h-0 flex-1 flex-col justify-center overflow-y-auto pb-[9vh]"
               >
                 <div className="mx-auto flex w-full max-w-[620px] flex-col items-center px-5 text-center">
-                  <ClyraMark size={29} />
+                  <ClyraMark size={40} />
                   <h2 className="mt-4 text-[25px] font-medium leading-[1.18] tracking-[-0.03em] text-[#202124]">
                     What do you want to build?
                   </h2>
@@ -541,10 +559,17 @@ export default function ClyraCodeWorkspace() {
             )}
           </AnimatePresence>
         }
-      </section>
+      </motion.section>
 
-      <AnimatePresence initial={false}>
-        {rightPanelOpen ? <motion.div layout key="preview-panel" initial={{ width: 0, x: 8, opacity: 0 }} animate={{ width: "auto", x: 0, opacity: 1 }} exit={{ width: 0, x: 8, opacity: 0 }} transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }} className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+      <motion.div
+        initial={false}
+        animate={rightPanelOpen
+          ? { flexGrow: 1, flexBasis: 0, width: "auto", x: 0, opacity: 1 }
+          : { flexGrow: 0, flexBasis: 0, width: 0, x: 8, opacity: 0 }}
+        transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+        className={cn("flex min-h-0 min-w-0 overflow-hidden", !rightPanelOpen && "pointer-events-none")}
+        aria-hidden={!rightPanelOpen || undefined}
+      >
           <div className="cc-resize-handle" data-active={dragging || undefined} onPointerDown={onDragStart} role="separator" aria-orientation="vertical" />
           <RightPanel
             state={state}
@@ -561,9 +586,10 @@ export default function ClyraCodeWorkspace() {
             onVisualEdit={(instruction) => void startRun(instruction)}
             onVisualSourceEdit={recordVisualEdit}
             onPreviewError={handlePreviewError}
+            fullscreen={previewFullscreen}
+            onToggleFullscreen={() => setPreviewFullscreen((value) => !value)}
           />
-        </motion.div> : null}
-      </AnimatePresence>
+      </motion.div>
       </div>
 
       <TerminalPanel

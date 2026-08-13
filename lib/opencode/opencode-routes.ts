@@ -10,21 +10,23 @@ import { detectMobileSwiftProject } from "../mobile-preview-routes";
 
 const execFileAsync = promisify(execFile);
 
-const IOS_AGENTS_MD = `# Clyra Code Agent — Swift Mobile Preview Mode
+const IOS_AGENTS_MD = `# Clyra Code Agent — Cross-platform SwiftUI Source Mode
 
-You are building a real Swift/SwiftUI mobile application for a physical iPhone.
-It must use a portable SwiftPM layout supported by xtool on macOS and Windows
-via WSL. Never create an Xcode project or use the Xcode simulator.
+You are building a portable Swift/SwiftUI application source workspace. Clyra
+must work consistently on macOS and Windows, so do not depend on Xcode,
+xcodebuild, a physical iPhone, xtool, go-ios, WSL, or a platform-only simulator.
+Never claim a native install or device build succeeded unless the configured
+preview service has returned a real successful result.
 
 Project architecture rules — for every coding request:
 - Inspect the existing project structure first (list files and read Package.swift) and match its conventions.
 - Split code across the standard layout — never generate the whole application inside one giant Swift file:
   App/  Views/  Components/  Models/  ViewModels/  Services/  Utilities/  Resources/  Tests/
-- Use real SwiftUI and a portable Swift Package (Package.swift) with xtool.yml. Keep views small, focused and reusable.
+- Use real SwiftUI and a portable Swift Package (Package.swift). Keep views small, focused and reusable.
 - Reuse existing views and models instead of rebuilding them. Revisit and edit multiple files during the run when needed.
 - Apple guidance lives in .agent/skills/ — apply its design guidance where compatible with ElementaryUI.
-- Clyra's local preview service uses xtool to build/sign/install and go-ios to stream and automate a connected device. Do not create .xcodeproj or invoke xcodebuild.
-- Only claim completion after a successful build. If the build fails, show the error, fix the file, and rebuild.
+- The embedded preview can be unavailable on a host without a configured preview bridge. Generate correct reusable source and use portable/static checks where available; report the preview limitation plainly rather than attempting unavailable device tooling.
+- Only claim completion for checks that actually ran. If validation fails, show the error, fix the file, and rerun the available validation.
 - Use SF Symbols, Swift concurrency (async/await), and accessibility best practices.
 `;
 
@@ -149,6 +151,7 @@ Project architecture rules — for every coding request:
 - Reuse existing components instead of rebuilding them. Revisit and edit multiple files during the run when needed.
 - Run the project's build/typecheck/tests after changes and fix every error before finishing.
 - For greenfield web apps, put index.html at the project root so the live preview can start, and keep it as a thin shell that loads the real source files.
+- For desktop/Electron requests, build the product first as a responsive web application that runs in the live development preview. Then add a minimal Electron main/preload wrapper, safe BrowserWindow configuration, and package scripts around that same web app. Do not make the live preview depend on Electron or native-only APIs; it must remain usable in Chromium at every responsive preview size.
 `,
           "utf8",
         ).catch(() => undefined);

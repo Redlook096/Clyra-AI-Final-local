@@ -8,6 +8,9 @@ function subscribe(channel, callback) {
 
 contextBridge.exposeInMainWorld("clyraDesktop", {
   runtime: "electron",
+  preview: {
+    launch: (payload) => ipcRenderer.invoke("preview:launch-desktop", payload),
+  },
   browser: {
     getState: () => ipcRenderer.invoke("browser:get-state"),
     setSurface: (payload) => ipcRenderer.invoke("browser:set-surface", payload),

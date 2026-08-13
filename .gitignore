@@ -34,5 +34,9 @@ __pycache__/
 references/
 xyflow/
 
+# Large, reproducible upstream integration checkouts. Licences are recorded
+# in THIRDPARTY_NOTICES.md; clone these through their integration scripts.
+lib/*-repo/
+
 # Fresh OpenCluely Electron clone (rebuilt via scripts/clone-opencluely.sh)
 apps/opencluely/

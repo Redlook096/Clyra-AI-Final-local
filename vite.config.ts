@@ -4,7 +4,6 @@ import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
-  const hmrPort = Number(process.env.HMR_PORT) || 24678;
   return {
     plugins: [react(), tailwindcss()],
     resolve: {
@@ -54,11 +53,10 @@ export default defineConfig(() => {
       holdUntilCrawlEnd: false,
     },
     server: {
-      hmr: {
-        host: 'localhost',
-        port: hmrPort,
-        clientPort: hmrPort,
-      },
+      // Clyra owns preview refreshes. Disabling Vite's page-level HMR avoids
+      // a failed development WebSocket in embedded Chromium while project
+      // previews still refresh through Clyra's explicit preview lifecycle.
+      hmr: false,
       watch: {
         ignored: [
           '**/vibe-sandbox/**',

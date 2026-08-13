@@ -7,12 +7,14 @@ import {
   ExternalLink,
   FileText,
   Globe,
+  Maximize2,
+  Minimize2,
   RotateCw,
   Search,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { ShiningText } from "../ShiningText";
-import { api, type FileDiff, type MobilePreviewStatus, type PreviewLogLine, type PreviewSession } from "./api";
+import { api, type FileDiff, type MobilePreviewStatus, type PreviewLogLine, type PreviewSession, type SwiftWasmStatus } from "./api";
 import type { AgentAction, ClyraCodeState, ProjectPlatform } from "./store";
 import { DiffCounters } from "./AnimatedCounter";
 import { computeLineDiff, linesFromPatch } from "./diff";
@@ -131,6 +133,8 @@ function BrowserView({
   onToggleInspect,
   onFrameReady,
   onPreviewError,
+  fullscreen,
+  onToggleFullscreen,
 }: {
   session: PreviewSession | null;
   frameVersion: number;
@@ -144,6 +148,8 @@ function BrowserView({
   onToggleInspect: () => void;
   onFrameReady: (win: Window | null) => void;
   onPreviewError?: (message: string) => void;
+  fullscreen: boolean;
+  onToggleFullscreen: () => void;
 }) {
   const [historyIndex, setHistoryIndex] = useState(0);
   const [history, setHistory] = useState<string[]>([]);
@@ -209,7 +215,7 @@ function BrowserView({
         >
           <RotateCw className="h-[13px] w-[13px]" strokeWidth={1.8} />
         </button>
-        <div className="flex min-w-0 flex-1 justify-center">
+        <div className="mx-2 flex h-[28px] min-w-0 flex-1 items-center justify-center rounded-[8px] bg-black/[0.025] px-3">
           {host ? (
             <span className="cc-mono truncate text-[11.5px] text-[color:var(--text-secondary)]">
               {host}
@@ -230,6 +236,15 @@ function BrowserView({
             <ExternalLink className="h-[14px] w-[14px]" strokeWidth={1.8} />
           </button>
         ) : null}
+        <button
+          type="button"
+          aria-label={fullscreen ? "Exit full screen preview" : "Full screen preview"}
+          title={fullscreen ? "Exit full screen" : "Full screen"}
+          onClick={onToggleFullscreen}
+          className="rounded-[7px] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:bg-[color:var(--surface-hover)]"
+        >
+          {fullscreen ? <Minimize2 className="h-[14px] w-[14px]" strokeWidth={1.8} /> : <Maximize2 className="h-[14px] w-[14px]" strokeWidth={1.8} />}
+        </button>
         <button
           type="button"
           onClick={onToggleInspect}
@@ -324,7 +339,97 @@ function BrowserView({
 
 const DEFAULT_DEVICE = "Connected iPhone";
 
+/**
+ * A portable SwiftUI source preview. It is intentionally separate from the
+ * optional physical-device bridge below: every Clyra client can render this
+ * Chromium preview, while a real iPhone stream remains an opt-in enhancement.
+ */
 function IosPreviewView({
+  projectId,
+  relaunchSignal,
+  agentRunning,
+  inspectMode,
+  onToggleInspect,
+  onInspectElement,
+  fullscreen,
+  onToggleFullscreen,
+}: {
+  projectId: string | null;
+  relaunchSignal: number;
+  agentRunning: boolean;
+  inspectMode: boolean;
+  onToggleInspect: () => void;
+  onInspectElement: (payload: InspectPayload) => void;
+  fullscreen: boolean;
+  onToggleFullscreen: () => void;
+  onPreviewError?: (message: string) => void;
+}) {
+  const [status, setStatus] = useState<SwiftWasmStatus | null>(null);
+  const [phase, setPhase] = useState<"waiting" | "building" | "running" | "failed">("waiting");
+  const [bundleUrl, setBundleUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [orientation, setOrientation] = useState<"portrait" | "landscape">("portrait");
+  const [frameKey, setFrameKey] = useState(0);
+  const launchRef = useRef<string | null>(null);
+  const phoneAreaRef = useRef<HTMLDivElement | null>(null);
+
+  const build = useCallback(async () => {
+    if (!projectId) return;
+    setPhase("building");
+    setError(null);
+    try {
+      const result = await api.swiftWasmBuild(projectId);
+      if (!result.ok || !result.bundleUrl) throw new Error(result.error ?? "Preview build did not produce a bundle.");
+      setBundleUrl(result.bundleUrl);
+      setFrameKey((value) => value + 1);
+      setPhase("running");
+    } catch (cause) {
+      setPhase("failed");
+      setError(cause instanceof Error ? cause.message : "Preview build failed.");
+    }
+  }, [projectId]);
+
+  useEffect(() => { void api.swiftWasmStatus().then(setStatus).catch(() => undefined); }, []);
+  useEffect(() => {
+    if (!projectId) return;
+    if (agentRunning) { setPhase("waiting"); return; }
+    let cancelled = false;
+    void api.swiftWasmReadiness(projectId).then((readiness) => {
+      if (cancelled) return;
+      if (!readiness.ready) { setPhase("waiting"); return; }
+      if (launchRef.current !== `${projectId}:${relaunchSignal}`) {
+        launchRef.current = `${projectId}:${relaunchSignal}`;
+        void build();
+      }
+    }).catch(() => !cancelled && setPhase("waiting"));
+    return () => { cancelled = true; };
+  }, [agentRunning, build, projectId, relaunchSignal]);
+
+  const loading = agentRunning || phase === "waiting" || phase === "building";
+  const title = agentRunning ? "Building your SwiftUI app…" : phase === "building" ? "Updating local preview…" : "Preparing SwiftUI preview…";
+  return <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex h-[40px] items-center gap-1 border-b border-[color:var(--border-subtle)] px-2.5">
+      <span className="flex h-7 items-center rounded-[7px] px-2 text-[11.5px] font-medium text-[#505258]">iPhone 16</span>
+      <span className="text-[10.5px] text-[#96989D]">Local SwiftUI preview</span>
+      <span className="flex-1" />
+      <button type="button" aria-label="Rotate preview" title="Rotate preview" onClick={() => setOrientation((value) => value === "portrait" ? "landscape" : "portrait")} className="rounded-[7px] p-1.5 text-[#93959A] transition-colors hover:bg-black/[0.03] hover:text-[#202124]"><RotateCw className="h-[13px] w-[13px]" strokeWidth={1.8} /></button>
+      <button type="button" aria-label="Reload preview" title="Reload preview" onClick={() => void build()} className="rounded-[7px] p-1.5 text-[#93959A] transition-colors hover:bg-black/[0.03] hover:text-[#202124]"><RotateCw className="h-[13px] w-[13px]" strokeWidth={1.8} /></button>
+      <button type="button" aria-label={fullscreen ? "Exit full screen preview" : "Full screen preview"} title={fullscreen ? "Exit full screen" : "Full screen"} onClick={onToggleFullscreen} className="rounded-[7px] p-1.5 text-[#93959A] transition-colors hover:bg-black/[0.03] hover:text-[#202124]">{fullscreen ? <Minimize2 className="h-[13px] w-[13px]" strokeWidth={1.8} /> : <Maximize2 className="h-[13px] w-[13px]" strokeWidth={1.8} />}</button>
+      <button type="button" onClick={onToggleInspect} className={cn("ml-1 flex h-7 items-center gap-1.5 rounded-[8px] px-2.5 text-[11.5px] transition-colors", inspectMode ? "bg-[#E8F0FE] font-medium text-[#3977F6]" : "font-medium text-[#505258] hover:bg-black/[0.03]")}>{inspectMode ? "✓ Editing" : "Commenting"}</button>
+    </div>
+    <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[#FAFAF9] p-4">
+      {bundleUrl && !loading && phase === "running" ? <div ref={phoneAreaRef} className={cn("relative overflow-hidden rounded-[38px] bg-[#1C1C1E] p-[8px] shadow-[0_16px_34px_rgba(15,23,42,0.18)]", orientation === "portrait" ? "h-[532px] w-[260px]" : "h-[270px] w-[532px]")}>
+        <span className={cn("absolute z-10 rounded-full bg-[#111]", orientation === "portrait" ? "left-1/2 top-[14px] h-[19px] w-[88px] -translate-x-1/2" : "left-[14px] top-1/2 h-[88px] w-[19px] -translate-y-1/2")} />
+        <iframe key={frameKey} src={bundleUrl} title="SwiftUI preview" className="h-full w-full rounded-[30px] bg-white" />
+        {inspectMode ? <button type="button" className="absolute inset-0 z-20 cursor-crosshair" aria-label="Reference SwiftUI view" onClick={(event) => { const rect = phoneAreaRef.current?.getBoundingClientRect(); onInspectElement({ platform: "ios", kind: "SwiftUI view", label: "SwiftUI preview", name: "ContentView", x: Math.round(event.clientX - (rect?.left ?? 0)), y: Math.round(event.clientY - (rect?.top ?? 0)) }); }}><span className="pointer-events-none absolute left-3 top-3 rounded-[6px] bg-[#3977F6]/95 px-2 py-1 text-[10px] font-medium text-white">Click a view to reference it in chat</span></button> : null}
+      </div> : null}
+      {loading ? <div className="relative z-10 flex h-full w-full flex-col items-center justify-center gap-3.5 bg-[#FAFAF9]"><div className="relative h-[438px] w-[218px] rounded-[34px] bg-[#202124] p-[7px] shadow-[0_16px_34px_rgba(15,23,42,0.18)]"><div className="relative flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-[28px] bg-[#F8F8F7]"><span className="absolute left-1/2 top-2 h-[18px] w-[86px] -translate-x-1/2 rounded-full bg-[#202124]" /><div className="cc-preview-loader" /><ShiningText text={title} play className="mt-4 max-w-[160px] text-center text-[11.5px] font-medium tracking-[-0.01em]" /><p className="mt-1.5 max-w-[166px] text-center text-[9.5px] leading-[1.4] text-[#8A8A8A]">Preview will appear once Swift source is ready</p></div></div><p className="text-[10.5px] text-[#96989D]">Cross-platform local preview</p></div> : null}
+      {phase === "failed" ? <div className="flex max-w-[340px] flex-col items-center gap-2 text-center"><p className="text-[13px] font-medium text-[#3D3F43]">Preview build failed</p><p className="text-[11.5px] leading-[1.5] text-[#94969A]">{error}</p><button type="button" onClick={() => void build()} className="h-7 rounded-[7px] border border-black/[0.08] px-2.5 text-[11.5px] text-[#202124] hover:bg-black/[0.03]">Try again</button></div> : null}
+    </div>
+  </div>;
+}
+
+function PhysicalDeviceIosPreviewView({
   projectId,
   relaunchSignal,
   agentRunning,
@@ -367,6 +472,13 @@ function IosPreviewView({
 
   const launch = useCallback(
     async () => {
+      // A completion signal can arrive before the optional device bridge has
+      // reported its capability. Keep the preview in its honest idle state
+      // rather than attempting a build that is guaranteed to fail.
+      if (!status?.configured) {
+        setPhase("idle");
+        return;
+      }
       if (!projectId) return;
       setPhase("building");
       setError(null);
@@ -385,7 +497,7 @@ function IosPreviewView({
         setError(err instanceof Error ? err.message : "The mobile preview pipeline failed.");
       }
     },
-    [projectId],
+    [projectId, status?.configured],
   );
 
   useEffect(() => {
@@ -424,10 +536,10 @@ function IosPreviewView({
   }, [projectId, status, launch, agentRunning, relaunchSignal]);
 
   useEffect(() => {
-    if (!projectId || relaunchSignal === 0) return;
+    if (!projectId || relaunchSignal === 0 || !status?.configured) return;
     launchedRef.current = null;
     void launch();
-  }, [relaunchSignal, projectId, launch]);
+  }, [relaunchSignal, projectId, launch, status?.configured]);
 
   const currentDeviceName = device;
 
@@ -592,9 +704,9 @@ function IosPreviewView({
           </div>
         ) : status && !status.configured ? (
           <div className="flex w-full max-w-[340px] flex-col items-center gap-2.5 text-center">
-            <p className="text-[13px] font-medium text-[#3D3F43]">Connect an iPhone</p>
+            <p className="text-[13px] font-medium text-[#3D3F43]">iPhone preview is unavailable</p>
             <p className="text-[11.5px] leading-[1.5] text-[#94969A]">
-              Install and configure <span className="cc-mono">xtool</span> and <span className="cc-mono">go-ios</span>, then connect an iPhone. Clyra uses WSL on Windows and native tools on macOS.
+              Swift source can still be created here. Configure a supported local preview bridge to stream a native device.
             </p>
           </div>
         ) : (
@@ -882,6 +994,8 @@ export function RightPanel({
   onVisualEdit,
   onVisualSourceEdit,
   onPreviewError,
+  fullscreen = false,
+  onToggleFullscreen,
 }: {
   state: ClyraCodeState;
   actionList: AgentAction[];
@@ -901,6 +1015,8 @@ export function RightPanel({
   onVisualSourceEdit?: (edit: { file: string; before: string; after: string; additions: number; deletions: number }) => void;
   /** A real preview error can be offered to the agent after its run settles. */
   onPreviewError?: (message: string) => void;
+  fullscreen?: boolean;
+  onToggleFullscreen?: () => void;
 }) {
   const [inspectMode, setInspectMode] = useState(false);
   const [selection, setSelection] = useState<InspectPayload | null>(null);
@@ -1058,7 +1174,7 @@ export function RightPanel({
   ];
 
   return (
-    <section className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-[color:var(--preview-background)]">
+    <section className={cn("relative flex min-h-0 min-w-0 flex-1 flex-col bg-[color:var(--preview-background)] transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]", fullscreen && "fixed inset-0 z-[100] bg-white shadow-2xl")}>
       <div className="relative flex h-[42px] items-center gap-1 border-b border-[color:var(--border-subtle)] px-2.5">
         {tabs.map((entry) => {
           const Icon = entry.icon;
@@ -1101,6 +1217,8 @@ export function RightPanel({
               });
             }}
             onPreviewError={onPreviewError}
+            fullscreen={fullscreen}
+            onToggleFullscreen={() => onToggleFullscreen?.()}
           />
         ) : (
           <BrowserView
@@ -1118,6 +1236,8 @@ export function RightPanel({
               frameWindowRef.current = win;
             }}
             onPreviewError={onPreviewError}
+            fullscreen={fullscreen}
+            onToggleFullscreen={() => onToggleFullscreen?.()}
           />
         )
       ) : tab === "changes" ? (
