@@ -97,6 +97,14 @@ export type ClyraDesktopBridge = {
     execute: (payload: { prompt: string; runId?: string; checkpointId?: string; answers?: string; action?: "start" | "continue" | "cancel" }) => Promise<{ ok: boolean; text: string; needsClarification?: boolean; checkpointId?: string; questions?: string[]; analysisPrompt?: string; sources?: Array<{ url: string; publisher: string; branch: string }>; assumptions?: string[]; paused?: boolean; cancelled?: boolean }>;
     onAgentProgress: (callback: (payload: { runId: string; service: "clyra" | "research"; state: "running" | "completed" | "failed"; label: string; detail: string }) => void) => () => void;
   };
+  terminal?: {
+    open: (payload: { projectId: string; tabId?: string }) => Promise<{ ok: boolean; cwd?: string }>;
+    write: (payload: { data: string; tabId?: string }) => Promise<{ ok: boolean }>;
+    resize: (payload: { cols: number; rows: number; tabId?: string }) => Promise<{ ok: boolean }>;
+    kill: (payload?: { tabId?: string }) => Promise<{ ok: boolean }>;
+    onData: (callback: (payload: { tabId?: string; data?: string } | string) => void) => () => void;
+    onExit: (callback: (payload: { tabId?: string; code?: number } | number) => void) => () => void;
+  };
 };
 
 declare global {

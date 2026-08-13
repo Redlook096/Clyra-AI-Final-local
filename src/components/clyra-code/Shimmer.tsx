@@ -1,4 +1,5 @@
 import { cn } from "../../lib/utils";
+import { ShiningText } from "../ShiningText";
 
 /**
  * Masked glyph shimmer for active harness targets (filenames, commands,
@@ -33,16 +34,16 @@ export function ShimmerText({
     );
   }
   return (
-    <span
+    <ShiningText
+      text={text}
+      play
+      duration={long ? 1.75 : 1.65}
       className={cn(
-        "cc-shimmer truncate",
-        tone === "blue" && "cc-shimmer--blue",
-        long && "cc-shimmer--long",
+        "truncate text-[12px]",
+        tone === "blue" && "text-[#3977F6]",
         mono && "cc-mono",
         className,
       )}
-    >
-      {text}
-    </span>
+    />
   );
 }

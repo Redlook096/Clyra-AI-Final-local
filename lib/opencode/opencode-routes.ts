@@ -5,9 +5,31 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { clyraDataPath } from "../runtime-paths";
-import { openCodeRuntimeManager } from "./OpenCodeRuntimeManager";
+import { codingModelStatus, openCodeRuntimeManager } from "./OpenCodeRuntimeManager";
+import { detectMobileSwiftProject } from "../mobile-preview-routes";
 
 const execFileAsync = promisify(execFile);
+
+const IOS_AGENTS_MD = `# Clyra Code Agent — Swift Mobile Preview Mode
+
+You are building a real Swift/SwiftUI mobile application for a physical iPhone.
+It must use a portable SwiftPM layout supported by xtool on macOS and Windows
+via WSL. Never create an Xcode project or use the Xcode simulator.
+
+Project architecture rules — for every coding request:
+- Inspect the existing project structure first (list files and read Package.swift) and match its conventions.
+- Split code across the standard layout — never generate the whole application inside one giant Swift file:
+  App/  Views/  Components/  Models/  ViewModels/  Services/  Utilities/  Resources/  Tests/
+- Use real SwiftUI and a portable Swift Package (Package.swift) with xtool.yml. Keep views small, focused and reusable.
+- Reuse existing views and models instead of rebuilding them. Revisit and edit multiple files during the run when needed.
+- Apple guidance lives in .agent/skills/ — apply its design guidance where compatible with ElementaryUI.
+- Clyra's local preview service uses xtool to build/sign/install and go-ios to stream and automate a connected device. Do not create .xcodeproj or invoke xcodebuild.
+- Only claim completion after a successful build. If the build fails, show the error, fix the file, and rebuild.
+- Use SF Symbols, Swift concurrency (async/await), and accessibility best practices.
+`;
+
+const APPLE_SKILL_SOURCE = path.resolve(process.cwd(), "lib/apple-skills-repo", "skills");
+const SWIFTUI_SKILL_SOURCE = path.resolve(process.cwd(), "lib/swiftui-agent-skill-repo", "skills", "swiftui-expert-skill");
 
 /**
  * Project workspaces live inside Clyra's data dir, which the parent repo
@@ -35,6 +57,10 @@ async function ensureProjectGitRepo(root: string) {
 }
 
 const MAX_PROMPT_LENGTH = 20_000;
+// The request body is JSON/base64, so keep the decoded total safely inside
+// Express's 16 MB body limit.
+const MAX_ATTACHMENT_BYTES = 6 * 1024 * 1024;
+const MAX_ATTACHMENT_TOTAL_BYTES = 10 * 1024 * 1024;
 const subscriptions = new Map<string, () => void>();
 
 function safeProjectId(value: string) {
@@ -49,6 +75,32 @@ function titleFor(prompt: string) {
   return prompt.replace(/\s+/g, " ").trim().slice(0, 72) || "New Clyra task";
 }
 
+function requestsIosProject(prompt: string) {
+  return /\b(?:ios|iphone|ipad|swiftui|uikit|xcode|xcworkspace|xcodeproj)\b/i.test(prompt);
+}
+
+/**
+ * A new workspace has no Xcode project yet, so file-based platform detection
+ * alone cannot select iOS mode. Seed the same real agent guidance from the
+ * request when the user explicitly asks for an Apple-platform project.
+ */
+async function prepareIosAgentWorkspace(root: string) {
+  await fs.writeFile(path.join(root, "AGENTS.md"), IOS_AGENTS_MD, "utf8").catch(() => undefined);
+  try {
+    await fs.mkdir(path.join(root, ".agent", "skills"), { recursive: true });
+    await fs.cp(APPLE_SKILL_SOURCE, path.join(root, ".agent", "skills", "apple-skills"), {
+      recursive: true,
+      force: true,
+    }).catch(() => undefined);
+    await fs.cp(SWIFTUI_SKILL_SOURCE, path.join(root, ".agent", "skills", "swiftui-expert"), {
+      recursive: true,
+      force: true,
+    }).catch(() => undefined);
+  } catch {
+    /* Skills are optional context, not a runtime prerequisite. */
+  }
+}
+
 function sendSse(res: import("express").Response, event: unknown) {
   res.write(`data: ${JSON.stringify(event)}\n\n`);
 }
@@ -57,17 +109,15 @@ function sendSse(res: import("express").Response, event: unknown) {
 export function registerOpenCodeRoutes(app: Application) {
   app.get("/api/opencode/status", async (_req, res) => {
     const health = await openCodeRuntimeManager.health();
+    const configuredModel = codingModelStatus();
     res.json({
       sdkVersion: "1.18.12",
       executableVersion: process.env.CLYRA_OPENCODE_VERSION || "detected at runtime",
-      model: (() => {
-        const provider = String(process.env.CLYRA_OPENCODE_PROVIDER || "").trim();
-        const model = String(process.env.CLYRA_OPENCODE_MODEL || "").trim();
-        if (provider && model) return `${provider}/${model}`;
-        const key = String(process.env.DEEPSEEK_API_KEY || process.env.MY_LLM_API_KEY || "").trim();
-        const ok = key.startsWith("sk-") && key.length >= 32 && !/test|dummy|example|placeholder/i.test(key);
-        return ok ? (model || "deepseek-chat") : (model || "north-mini-code-free");
-      })(),
+      // Model identity is safe to show. Credentials remain exclusively in the
+      // service process and are never emitted in this response.
+      model: configuredModel.available ? `${configuredModel.providerID}/${configuredModel.modelID}` : undefined,
+      providerConfigured: configuredModel.available,
+      providerError: configuredModel.available ? undefined : configuredModel.error,
       ...health,
     });
   });
@@ -80,14 +130,32 @@ export function registerOpenCodeRoutes(app: Application) {
       await fs.mkdir(root, { recursive: true });
       await ensureProjectGitRepo(root).catch(() => undefined);
       // Seed adaptive agent guidance when missing (OpenCode reads AGENTS.md).
+      // iOS projects always get the iOS App Mode guidance plus the Apple
+      // development skills copied into the sandbox the agent can read.
       try {
         await fs.access(path.join(root, "AGENTS.md"));
       } catch {
         await fs.writeFile(
           path.join(root, "AGENTS.md"),
-          `# Clyra Code Agent\n\nBe an adaptive expert coding agent. Understand intent → investigate → act → inspect → adapt → validate until complete.\nNo fixed tool-call quota. Scale effort to the request. Read before editing. Prefer production-quality work. Fix failures after checks.\n`,
+          `# Clyra Code Agent
+
+Be an adaptive expert coding agent like Cursor or Codex. Understand intent → investigate → plan across files → act → inspect → adapt → validate until complete.
+No fixed tool-call quota. Scale effort to the request. Read before editing. Prefer production-quality work. Fix failures after checks.
+
+Project architecture rules — for every coding request:
+- Inspect the existing project structure first (list files, read configs) and match its framework and conventions.
+- Split code naturally across components, pages, styles, hooks, utilities, APIs, config, assets, and tests. Never cram everything into a single index.html unless a single-file deliverable is genuinely requested.
+- For React/Next/Vite projects create proper files: components, styles, hooks, utilities, routes, and config.
+- Reuse existing components instead of rebuilding them. Revisit and edit multiple files during the run when needed.
+- Run the project's build/typecheck/tests after changes and fix every error before finishing.
+- For greenfield web apps, put index.html at the project root so the live preview can start, and keep it as a thin shell that loads the real source files.
+`,
           "utf8",
         ).catch(() => undefined);
+      }
+      // Swift mobile preview mode is source based, not Xcode based.
+      if (detectMobileSwiftProject(root)) {
+        await prepareIosAgentWorkspace(root);
       }
       res.json(await openCodeRuntimeManager.start(projectId, root));
     } catch (error) {
@@ -116,6 +184,20 @@ export function registerOpenCodeRoutes(app: Application) {
     catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : "Could not list sessions." }); }
   });
 
+  app.patch("/api/opencode/sessions/:projectId/:sessionId", async (req, res) => {
+    const title = String(req.body?.title || "").trim().slice(0, 160);
+    if (!title) return res.status(400).json({ error: "A chat title is required." });
+    try { res.json(await openCodeRuntimeManager.renameSession(safeProjectId(req.params.projectId), req.params.sessionId, title)); }
+    catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : "Could not rename chat." }); }
+  });
+
+  app.delete("/api/opencode/sessions/:projectId/:sessionId", async (req, res) => {
+    try {
+      await openCodeRuntimeManager.deleteSession(safeProjectId(req.params.projectId), req.params.sessionId);
+      res.json({ ok: true });
+    } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : "Could not delete chat." }); }
+  });
+
   app.get("/api/opencode/sessions/:projectId/:sessionId/messages", async (req, res) => {
     try { res.json(await openCodeRuntimeManager.messages(safeProjectId(req.params.projectId), req.params.sessionId)); }
     catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : "Could not fetch history." }); }
@@ -130,9 +212,40 @@ export function registerOpenCodeRoutes(app: Application) {
     const text = String(req.body?.text || "").trim();
     if (!text || text.length > MAX_PROMPT_LENGTH) return res.status(400).json({ error: "Enter a coding request up to 20,000 characters." });
     try {
+      if (requestsIosProject(text)) await prepareIosAgentWorkspace(projectPath(safeProjectId(req.params.projectId)));
       await openCodeRuntimeManager.prompt(safeProjectId(req.params.projectId), req.params.sessionId, text, typeof req.body?.agent === "string" ? req.body.agent : undefined);
       res.json({ ok: true });
     } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : "Prompt could not be sent." }); }
+  });
+
+  // Persist attachments inside the selected workspace. OpenCode can then read
+  // the exact files named in the prompt instead of receiving mock metadata.
+  app.post("/api/opencode/projects/:projectId/attachments", async (req, res) => {
+    const projectId = safeProjectId(req.params.projectId);
+    const files = Array.isArray(req.body?.files) ? req.body.files : [];
+    if (!projectId || !files.length) return res.status(400).json({ error: "Choose one or more files to attach." });
+    if (files.length > 12) return res.status(400).json({ error: "Attach up to 12 files at a time." });
+    const root = path.join(projectPath(projectId), ".clyra-attachments");
+    let total = 0;
+    const saved: Array<{ name: string; path: string; type: string }> = [];
+    try {
+      await fs.mkdir(root, { recursive: true });
+      for (const [index, entry] of files.entries()) {
+        const encoded = typeof entry?.data === "string" ? entry.data : "";
+        const buffer = Buffer.from(encoded, "base64");
+        const name = path.basename(String(entry?.name || "attachment")).replace(/[^a-zA-Z0-9._ -]/g, "_").slice(0, 120) || "attachment";
+        if (!encoded || !buffer.length || buffer.length > MAX_ATTACHMENT_BYTES || total + buffer.length > MAX_ATTACHMENT_TOTAL_BYTES) {
+          return res.status(413).json({ error: "Attachments are limited to 6 MB each and 10 MB total." });
+        }
+        total += buffer.length;
+        const filename = `${Date.now()}-${index + 1}-${name}`;
+        await fs.writeFile(path.join(root, filename), buffer);
+        saved.push({ name, path: `.clyra-attachments/${filename}`, type: String(entry?.type || "application/octet-stream").slice(0, 100) });
+      }
+      res.json({ attachments: saved });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Could not attach the selected files." });
+    }
   });
 
   app.post("/api/opencode/sessions/:projectId/:sessionId/abort", async (req, res) => {
@@ -167,6 +280,8 @@ export function registerOpenCodeRoutes(app: Application) {
     try {
       const root = projectPath(projectId);
       await fs.mkdir(root, { recursive: true });
+      await ensureProjectGitRepo(root).catch(() => undefined);
+      if (requestsIosProject(prompt)) await prepareIosAgentWorkspace(root);
       await openCodeRuntimeManager.start(projectId, root);
       const session = await openCodeRuntimeManager.createSession(projectId, titleFor(prompt));
       await openCodeRuntimeManager.prompt(projectId, session.id, prompt, Boolean(req.body?.planMode) ? "plan" : undefined);

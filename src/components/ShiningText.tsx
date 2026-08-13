@@ -49,12 +49,15 @@ export function ShiningText({
   text,
   className,
   preset = "default",
+  duration = 3.2,
   /** When false, show static text (shine stops). */
   play = true,
 }: {
   text: string;
   className?: string;
   preset?: ShiningPreset;
+  /** Existing Clyra shimmer, with an optional cadence for compact tool states. */
+  duration?: number;
   play?: boolean;
 }) {
   if (!play) {
@@ -73,8 +76,13 @@ export function ShiningText({
     );
   }
 
+  // Inline-styled gradient with a compositor-driven CSS keyframe sweep. The
+  // gradient and base position are applied inline, so the glyphs are always
+  // visible (even before/without the animation), and the sweep itself runs on
+  // the browser's animation timeline — React re-renders and paused rAF loops
+  // can never freeze or restart it.
   return (
-    <motion.span
+    <span
       className={cn(
         "inline-block bg-[linear-gradient(110deg,#404040,35%,#fff,50%,#404040,75%,#404040)] bg-[length:200%_100%] bg-clip-text text-transparent",
         preset === "thinkingChat"
@@ -82,13 +90,12 @@ export function ShiningText({
           : "text-base font-normal",
         className,
       )}
-      initial={{ backgroundPosition: "200% 0" }}
-      animate={{ backgroundPosition: "-200% 0" }}
-      // A full pass is intentionally unhurried. The animation loops on its
-      // own cadence instead of accelerating to satisfy a short status window.
-      transition={{ repeat: Infinity, duration: 3.2, ease: "linear" }}
+      style={{
+        backgroundPosition: "200% 0",
+        animation: `clyra-text-shine ${duration}s linear infinite`,
+      }}
     >
       {text}
-    </motion.span>
+    </span>
   );
 }

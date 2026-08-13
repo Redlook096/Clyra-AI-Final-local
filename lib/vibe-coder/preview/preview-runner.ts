@@ -302,6 +302,13 @@ export function getPreviewSession(projectId: string) {
   return state ? serialise(state) : null;
 }
 
+/** Live vite port for the preview proxy (Visual Edit inspection). */
+export function getPreviewTargetPort(projectId: string) {
+  const state = sessions.get(projectId);
+  if (!state || !state.process || state.process.exitCode != null) return null;
+  return state.session.port ?? null;
+}
+
 export function getPreviewLogs(projectId: string) {
   return sessions.get(projectId)?.logs ?? [];
 }

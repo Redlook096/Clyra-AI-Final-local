@@ -5,12 +5,17 @@ import { useEffect, useRef, useState } from "react";
  * Counters always start at 0 and tween toward actual diff statistics —
  * intermediate frames are interpolation of real data, never invented totals.
  */
-function useTweenedNumber(target: number, durationMs = 240) {
-  const [display, setDisplay] = useState(0);
-  const displayRef = useRef(0);
+function useTweenedNumber(target: number, durationMs = 240, animate = true) {
+  const [display, setDisplay] = useState(() => (animate ? 0 : target));
+  const displayRef = useRef(animate ? 0 : target);
   const frameRef = useRef<number | null>(null);
 
   useEffect(() => {
+    if (!animate) {
+      displayRef.current = target;
+      setDisplay(target);
+      return;
+    }
     const from = displayRef.current;
     const to = target;
     if (from === to) return;
@@ -20,9 +25,12 @@ function useTweenedNumber(target: number, durationMs = 240) {
       setDisplay(to);
       return;
     }
+    // Larger real jumps get a slightly longer ease so the count never races
+    // or snaps; small deltas stay quick.
+    const scaled = Math.min(420, durationMs + Math.abs(to - from) * 8);
     const start = performance.now();
     const step = (now: number) => {
-      const t = Math.min(1, (now - start) / durationMs);
+      const t = Math.min(1, (now - start) / scaled);
       const eased = 1 - Math.pow(1 - t, 3);
       const value = Math.round(from + (to - from) * eased);
       displayRef.current = value;
@@ -33,7 +41,7 @@ function useTweenedNumber(target: number, durationMs = 240) {
     return () => {
       if (frameRef.current) cancelAnimationFrame(frameRef.current);
     };
-  }, [target, durationMs]);
+  }, [target, durationMs, animate]);
 
   return display;
 }
@@ -43,14 +51,17 @@ export function DiffCounters({
   deletions,
   showZero = true,
   className,
+  animate = true,
 }: {
   additions?: number;
   deletions?: number;
   showZero?: boolean;
   className?: string;
+  /** Stream live action counters; completed summaries use their settled totals. */
+  animate?: boolean;
 }) {
-  const add = useTweenedNumber(additions ?? 0);
-  const del = useTweenedNumber(deletions ?? 0);
+  const add = useTweenedNumber(additions ?? 0, 240, animate);
+  const del = useTweenedNumber(deletions ?? 0, 240, animate);
   const showAdd = additions !== undefined || showZero;
   const showDel = deletions !== undefined || showZero;
   if (!showAdd && !showDel) return null;

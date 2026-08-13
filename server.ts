@@ -64,6 +64,9 @@ import { FileSpecPlanner } from "./lib/vibe-coder/harness/file-spec-planner";
 import { registerClineRoutes } from "./lib/cline/cline-routes";
 import { registerOpenCodeRoutes } from "./lib/opencode/opencode-routes";
 import { registerVoiceRoutes, attachVoiceWebSocket } from "./backend/voice";
+import { attachTerminalWebSocket } from "./lib/terminal-ws";
+import { detectMobileSwiftProject, registerMobilePreviewRoutes } from "./lib/mobile-preview-routes";
+import { registerPreviewProxy, attachPreviewUpgrades } from "./lib/preview-proxy";
 import { registerCreatorTtsRoutes, stopCreatorTtsWorker } from "./backend/creator-tts/service";
 import {
   buildWebSearchPrompt,
@@ -1400,8 +1403,14 @@ async function startServer() {
 
   registerClineRoutes(app);
   registerOpenCodeRoutes(app);
+  registerMobilePreviewRoutes(app);
   registerVoiceRoutes(app);
   registerCreatorTtsRoutes(app);
+  // The live-preview proxy is required by both Vite development and the
+  // packaged Electron production server. It keeps the preview same-origin so
+  // Visual Edit can inspect the actual page DOM rather than a placeholder.
+  // Register it before either frontend fallback takes ownership of routes.
+  registerPreviewProxy(app);
 
   app.post("/api/dictation/cleanup", async (req, res) => {
     const transcript = String(req.body?.transcript || "").trim().slice(0, 12_000);
@@ -2996,7 +3005,12 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
         const right = new Date(b!.updatedAt).getTime();
         return right - left;
       });
-    res.json({ projects });
+    // Tag Apple/iOS projects so the UI can switch to the iPhone preview.
+    const tagged = projects.map((project) => ({
+      ...project,
+      platform: detectMobileSwiftProject(path.join(projectsRoot(), project!.id, "files")) ? "ios" : "web",
+    }));
+    res.json({ projects: tagged });
   });
 
   app.post("/api/vibe/projects", async (req, res) => {
@@ -3942,6 +3956,8 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
   const { createServer } = await import("node:http");
   const httpServer = createServer(app);
   attachVoiceWebSocket(httpServer);
+  attachTerminalWebSocket(httpServer);
+  attachPreviewUpgrades(httpServer);
 
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);

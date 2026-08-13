@@ -389,7 +389,9 @@ function StudyMaterialsWorkspace({
   onGenerate: (action: BrainAction) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"all" | "quiz" | "flashcards" | "notes" | "plans">("all");
+  const [activeMaterial, setActiveMaterial] = useState<"overview" | "quiz" | "flashcards" | "notes">("overview");
+  const [answer, setAnswer] = useState<number | null>(null);
+  const [revealed, setRevealed] = useState(false);
   const generators: Array<{ action: BrainAction; title: string; detail: string; icon: typeof BookOpen }> = [
     { action: "quiz", title: "Quiz", detail: "Test your understanding", icon: GraduationCap },
     { action: "flashcards", title: "Flashcards", detail: "Review key concepts", icon: BookOpen },
@@ -398,17 +400,64 @@ function StudyMaterialsWorkspace({
     { action: "plan", title: "Revision plan", detail: "Build a study schedule", icon: Network },
   ];
   const hasMaterials = Boolean(brain.materials.quiz || brain.materials.flashcards || brain.materials.guide);
-  const visibleGenerators = generators.filter((item) => (filter === "all" || (filter === "notes" ? item.action === "guide" : filter === "plans" ? item.action === "plan" : item.action === filter)) && `${item.title} ${item.detail}`.toLowerCase().includes(query.trim().toLowerCase()));
+  const visibleGenerators = generators.filter((item) => `${item.title} ${item.detail}`.toLowerCase().includes(query.trim().toLowerCase()));
+  const quiz = brain.materials.quiz;
+  const cards = brain.materials.flashcards;
+  const guide = brain.materials.guide;
+  const firstQuestion = quiz?.questions[0];
+  const firstCard = cards?.cards[0];
+
+  const selectMaterial = (next: "overview" | "quiz" | "flashcards" | "notes") => {
+    setActiveMaterial(next);
+    setAnswer(null);
+    setRevealed(false);
+  };
+  const createMaterial = (action: BrainAction) => {
+    if (action === "quiz") selectMaterial("quiz");
+    if (action === "flashcards") selectMaterial("flashcards");
+    if (action === "guide") selectMaterial("notes");
+    onGenerate(action);
+  };
+
   return (
-    <div className="study-materials-workspace min-h-0 flex-1 overflow-y-auto bg-[color:var(--clyra-canvas)] px-8 py-8">
-      <div className="mx-auto max-w-[740px]">
-        <div className="flex items-start justify-between gap-4"><div><h1 className="text-[21px] font-semibold tracking-[-0.03em]">Study materials</h1><p className="mt-1 text-[13px] text-[color:var(--clyra-text-secondary)]">Create and revisit learning tools from your connected sources.</p></div><span className="text-[11px] text-[color:var(--clyra-text-tertiary)]">{brain.sources.length} sources</span></div>
-        <div className="mt-6 flex items-center gap-2"><label className="flex h-9 flex-1 items-center gap-2 rounded-[10px] border border-[color:var(--clyra-border)] bg-white px-3"><Search className="h-3.5 w-3.5 text-[color:var(--clyra-text-tertiary)]" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search materials…" className="min-w-0 flex-1 bg-transparent text-[12.5px] outline-none placeholder:text-[color:var(--clyra-text-tertiary)]" /></label><div className="flex rounded-[9px] bg-[color:var(--clyra-surface-muted)] p-0.5">{(["all", "quiz", "flashcards", "notes", "plans"] as const).map((item) => <button key={item} type="button" onClick={() => setFilter(item)} className={cn("h-7 rounded-[7px] px-2 text-[10.5px] font-medium capitalize", filter === item ? "bg-white text-[color:var(--clyra-text)] shadow-[0_1px_2px_rgba(0,0,0,.05)]" : "text-[color:var(--clyra-text-secondary)]")}>{item}</button>)}</div></div>
-        <div className="mt-4 grid grid-cols-2 gap-2.5">
-          {visibleGenerators.map((item) => { const Icon = item.icon; return <button key={item.action} type="button" disabled={busy} onClick={() => onGenerate(item.action)} className="study-material-row flex min-h-[82px] items-center gap-3 rounded-[14px] border border-[color:var(--clyra-border)] bg-white px-3.5 text-left disabled:opacity-50"><span className="grid h-8 w-8 place-items-center rounded-[9px] bg-[color:var(--clyra-surface-muted)]"><Icon className="h-4 w-4 text-[color:var(--clyra-text-secondary)]" strokeWidth={1.65} /></span><span className="min-w-0 flex-1"><strong className="block text-[13px] font-medium text-[color:var(--clyra-text)]">{item.title}</strong><span className="mt-0.5 block text-[11.5px] text-[color:var(--clyra-text-secondary)]">{item.detail}</span></span><Plus className="h-3.5 w-3.5 text-[color:var(--clyra-text-tertiary)]" /></button>; })}
+    <div className="study-materials-workspace min-h-0 flex-1 bg-[color:var(--clyra-canvas)]">
+      <aside className="study-materials-nav" aria-label="Study materials navigation">
+        <div className="study-materials-nav__title">
+          <span className="grid h-8 w-8 place-items-center rounded-[10px] bg-[color:var(--clyra-accent-soft)] text-[color:var(--clyra-accent)]"><BookOpen className="h-4 w-4" strokeWidth={1.65} /></span>
+          <span><strong>Study materials</strong><small>{brain.sources.length} connected sources</small></span>
         </div>
-        {hasMaterials ? <div className="mt-7"><p className="text-[10px] font-medium uppercase tracking-[.08em] text-[color:var(--clyra-text-tertiary)]">Recent</p><div className="mt-2 space-y-1 text-[12.5px] text-[color:var(--clyra-text-secondary)]">{brain.materials.quiz ? <p>{brain.materials.quiz.topic} quiz · {brain.materials.quiz.questions.length} questions</p> : null}{brain.materials.flashcards ? <p>{brain.materials.flashcards.topic} flashcards · {brain.materials.flashcards.cards.length} cards</p> : null}{brain.materials.guide ? <p>{brain.materials.guide.title} · Updated just now</p> : null}</div></div> : null}
-      </div>
+        <div className="study-materials-nav__items">
+          <button type="button" onClick={() => selectMaterial("overview")} className={cn(activeMaterial === "overview" && "is-active")}><FileText className="h-3.5 w-3.5" />Overview</button>
+          <button type="button" disabled={!quiz} onClick={() => selectMaterial("quiz")} className={cn(activeMaterial === "quiz" && "is-active")}><GraduationCap className="h-3.5 w-3.5" />Quiz <span>{quiz?.questions.length || 0}</span></button>
+          <button type="button" disabled={!cards} onClick={() => selectMaterial("flashcards")} className={cn(activeMaterial === "flashcards" && "is-active")}><BookOpen className="h-3.5 w-3.5" />Flashcards <span>{cards?.cards.length || 0}</span></button>
+          <button type="button" disabled={!guide} onClick={() => selectMaterial("notes")} className={cn(activeMaterial === "notes" && "is-active")}><NotebookPen className="h-3.5 w-3.5" />Notes</button>
+        </div>
+        <div className="study-materials-nav__footer"><span>{hasMaterials ? "Ready to review" : "Nothing generated yet"}</span></div>
+      </aside>
+      <main className="study-materials-main">
+        <header className="study-materials-header">
+          <div><p className="study-materials-eyebrow">{brain.title}</p><h1>{activeMaterial === "overview" ? "Learning workspace" : activeMaterial === "quiz" ? "Quiz" : activeMaterial === "flashcards" ? "Flashcards" : "Study notes"}</h1></div>
+          <label className="study-materials-search"><Search className="h-3.5 w-3.5" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find a study tool" /></label>
+        </header>
+        <section className="study-materials-stage" aria-live="polite">
+          {activeMaterial === "quiz" && firstQuestion ? (
+            <div className="study-quiz-sheet">
+              <p className="study-material-kicker">Question 1 of {quiz!.questions.length}</p><h2>{firstQuestion.question}</h2>
+              <div className="study-quiz-options">{firstQuestion.options.map((option, index) => <button type="button" key={option} onClick={() => setAnswer(index)} className={cn(answer === index && "is-selected", answer !== null && index === firstQuestion.correct && "is-correct", answer === index && answer !== firstQuestion.correct && "is-incorrect")}><span>{String.fromCharCode(65 + index)}</span>{option}</button>)}</div>
+              {answer !== null ? <p className={cn("study-quiz-feedback", answer === firstQuestion.correct ? "is-correct" : "is-incorrect")}>{answer === firstQuestion.correct ? "Correct" : firstQuestion.explanation || firstQuestion.hint}</p> : <p className="study-quiz-hint">Choose an answer to check your understanding.</p>}
+            </div>
+          ) : activeMaterial === "flashcards" && firstCard ? (
+            <div className="study-card-sheet">
+              <p className="study-material-kicker">{firstCard.tag || "Active recall"} · 1 of {cards!.cards.length}</p><button type="button" className={cn("study-flashcard", revealed && "is-revealed")} onClick={() => setRevealed((value) => !value)}><span>{revealed ? firstCard.back : firstCard.front}</span><small>{revealed ? "Tap to show prompt" : "Tap to reveal answer"}</small></button><div className="study-card-actions"><button type="button">Again</button><button type="button">Hard</button><button type="button">Good</button><button type="button">Easy</button></div>
+            </div>
+          ) : activeMaterial === "notes" && guide ? (
+            <div className="study-guide-sheet"><p className="study-material-kicker">Structured guide</p><h2>{guide.title}</h2><p className="study-guide-summary">{guide.summary}</p><div className="study-guide-sections">{guide.sections.slice(0, 4).map((section) => <section key={section.heading}><strong>{section.heading}</strong><p>{section.cue}</p><ul>{section.points.slice(0, 4).map((point) => <li key={point}>{point}</li>)}</ul></section>)}</div></div>
+          ) : (
+            <div className="study-materials-overview"><div className="study-materials-overview__intro"><p className="study-material-kicker">Your study space</p><h2>{hasMaterials ? "Pick up where you left off" : "Turn your sources into useful study material"}</h2><p>{hasMaterials ? "Use the left panel to review the material Clyra has already prepared, or create something new." : "Start with one focused learning tool. Clyra uses only the sources connected to this study space."}</p></div>{hasMaterials ? <div className="study-materials-overview__recent">{quiz ? <button type="button" onClick={() => selectMaterial("quiz")}><GraduationCap /><span><strong>{quiz.topic} quiz</strong><small>{quiz.questions.length} questions ready</small></span><ChevronRight /></button> : null}{cards ? <button type="button" onClick={() => selectMaterial("flashcards")}><BookOpen /><span><strong>{cards.topic} flashcards</strong><small>{cards.cards.length} cards ready</small></span><ChevronRight /></button> : null}{guide ? <button type="button" onClick={() => selectMaterial("notes")}><NotebookPen /><span><strong>{guide.title}</strong><small>Structured notes</small></span><ChevronRight /></button> : null}</div> : null}</div>
+          )}
+        </section>
+      </main>
+      <aside className="study-materials-actions" aria-label="Create study material"><p>CREATE</p>{visibleGenerators.map((item) => { const Icon = item.icon; return <button key={item.action} type="button" disabled={busy || !brain.sources.length} onClick={() => createMaterial(item.action)}><span><Icon className="h-3.5 w-3.5" strokeWidth={1.65} /></span><span><strong>{item.title}</strong><small>{item.detail}</small></span><Plus className="h-3.5 w-3.5" /></button>; })}{!brain.sources.length ? <small className="study-materials-actions__hint">Add a source in Nodes to unlock Clyra’s study tools.</small> : null}</aside>
     </div>
   );
 }

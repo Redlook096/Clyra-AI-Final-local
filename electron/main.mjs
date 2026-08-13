@@ -985,6 +985,120 @@ function registerIpc() {
   if (isDevelopment) ipcMain.handle("google:diagnostic", (event, payload) => { authorize(event); return googleWorkspaceManager?.diagnostic(payload || {}) || { ok:false, stage:"desktop", errorCode:"GOOGLE_UNAVAILABLE" }; });
 }
 
+/* ------------------------------------------------------------------ */
+/* Integrated terminal — real PTY shells owned by the main process.    */
+/* ------------------------------------------------------------------ */
+{
+  const { createRequire } = await import("node:module");
+  const require = createRequire(import.meta.url);
+  let nodePty = null;
+  try {
+    nodePty = require("node-pty");
+  } catch {
+    /* piped-shell fallback below */
+  }
+  const terminalSessions = new Map(); // sender id + tab id -> { pty, buffer }
+  const TERMINAL_BUFFER_LIMIT = 64 * 1024;
+
+  function terminalDir(projectId) {
+    const safe = String(projectId || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 96);
+    const nativeRoot = path.join(app.getPath("userData"), "projects", safe, "files");
+    const developmentRoot = path.join(process.cwd(), "projects", safe, "files");
+    const root = safe
+      ? (existsSync(nativeRoot) ? nativeRoot : existsSync(developmentRoot) ? developmentRoot : nativeRoot)
+      : path.join(app.getPath("userData"), "projects");
+    fs.mkdir(root, { recursive: true }).catch(() => undefined);
+    return root;
+  }
+
+  function spawnTerminalShell(cwd) {
+    const shell = process.platform === "win32" ? "powershell.exe" : process.env.SHELL || "/bin/bash";
+    if (nodePty) {
+      const pty = nodePty.spawn(shell, [], {
+        name: "xterm-256color",
+        cols: 100,
+        rows: 30,
+        cwd,
+        env: { ...process.env, TERM: "xterm-256color" },
+      });
+      return {
+        write: (data) => { try { pty.write(data); } catch { /* closed */ } },
+        resize: (cols, rows) => { try { pty.resize(cols, rows); } catch { /* closed */ } },
+        kill: () => { try { pty.kill(); } catch { /* closed */ } },
+        onData: (cb) => pty.onData(cb),
+        onExit: (cb) => pty.onExit(({ exitCode }) => cb(exitCode)),
+      };
+    }
+    const child = spawn(shell, [], { cwd, env: process.env, stdio: ["pipe", "pipe", "pipe"] });
+    const listeners = [];
+    const exitListeners = [];
+    child.stdout.on("data", (chunk) => { const data = chunk.toString("utf8"); for (const cb of listeners) cb(data); });
+    child.stderr.on("data", (chunk) => { const data = chunk.toString("utf8"); for (const cb of listeners) cb(data); });
+    child.on("exit", (code) => { for (const cb of exitListeners) cb(code ?? 0); });
+    return {
+      // Enter arrives as \r from xterm; the piped shell reads lines on \n.
+      write: (data) => { try { child.stdin.write(String(data).replace(/\r/g, "\n")); } catch { /* closed */ } },
+      resize: () => undefined,
+      kill: () => { try { child.kill(); } catch { /* closed */ } },
+      onData: (cb) => listeners.push(cb),
+      onExit: (cb) => exitListeners.push(cb),
+    };
+  }
+
+  ipcMain.handle("terminal:open", (event, payload) => {
+    authorize(event);
+    const senderId = event.sender.id;
+    const tabId = String(payload?.tabId || "default").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64) || "default";
+    const sessionId = `${senderId}:${tabId}`;
+    const existing = terminalSessions.get(sessionId);
+    // The terminal panel can collapse, remount, or switch tabs without
+    // replacing the user's shell. Only an explicit close/restart kills it.
+    if (existing) {
+      return { ok: true, cwd: existing.cwd };
+    }
+    const cwd = terminalDir(String(payload?.projectId || ""));
+    const shell = spawnTerminalShell(cwd);
+    const session = { shell, buffer: "", createdAt: Date.now(), cwd };
+    shell.onData((data) => {
+      session.buffer = (session.buffer + data).slice(-TERMINAL_BUFFER_LIMIT);
+      if (!event.sender.isDestroyed()) event.sender.send("terminal:data", { tabId, data });
+    });
+    shell.onExit((code) => {
+      if (!event.sender.isDestroyed()) event.sender.send("terminal:exit", { tabId, code });
+    });
+    terminalSessions.set(sessionId, session);
+    return { ok: true, cwd };
+  });
+
+  ipcMain.handle("terminal:write", (event, payload) => {
+    authorize(event);
+    const tabId = String(payload?.tabId || "default").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64) || "default";
+    const session = terminalSessions.get(`${event.sender.id}:${tabId}`);
+    session?.shell.write(String(payload?.data || ""));
+    return { ok: true };
+  });
+
+  ipcMain.handle("terminal:resize", (event, payload) => {
+    authorize(event);
+    const tabId = String(payload?.tabId || "default").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64) || "default";
+    const session = terminalSessions.get(`${event.sender.id}:${tabId}`);
+    const cols = Math.max(20, Math.min(400, Number(payload?.cols) || 100));
+    const rows = Math.max(4, Math.min(200, Number(payload?.rows) || 30));
+    session?.shell.resize(cols, rows);
+    return { ok: true };
+  });
+
+  ipcMain.handle("terminal:kill", (event, payload) => {
+    authorize(event);
+    const tabId = String(payload?.tabId || "default").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64) || "default";
+    const sessionId = `${event.sender.id}:${tabId}`;
+    const session = terminalSessions.get(sessionId);
+    session?.shell.kill();
+    terminalSessions.delete(sessionId);
+    return { ok: true };
+  });
+}
+
 function resizeUi() {
   if (!mainWindow || !uiView) return;
   const [width, height] = mainWindow.getContentSize();

@@ -3,25 +3,29 @@ import { motion } from "motion/react";
 import {
   ArrowLeft,
   ArrowRight,
+  ChevronDown,
   ExternalLink,
   FileText,
   Globe,
-  MessageSquarePlus,
-  Plus,
   RotateCw,
   Search,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { MarkdownMessageContent } from "../MarkdownMessageContent";
 import { ShiningText } from "../ShiningText";
-import { api, type FileDiff, type PreviewLogLine, type PreviewSession } from "./api";
-import type { AgentAction, ClyraCodeState } from "./store";
+import { api, type FileDiff, type MobilePreviewStatus, type PreviewLogLine, type PreviewSession } from "./api";
+import type { AgentAction, ClyraCodeState, ProjectPlatform } from "./store";
 import { DiffCounters } from "./AnimatedCounter";
 import { computeLineDiff, linesFromPatch } from "./diff";
 import { stripFilePrefix } from "./format";
 import type { ComposerContext } from "./Composer";
+import {
+  VisualInspector,
+  selectionChipLabel,
+  selectionContextDetail,
+  type InspectPayload,
+} from "./VisualInspector";
 
-export type RightTab = "summary" | "browser" | "terminal" | "changes" | "files";
+export type RightTab = "browser" | "changes" | "files";
 
 /* ------------------------------------------------------------------ */
 /* Preview controller                                                  */
@@ -114,8 +118,6 @@ export function usePreview(projectId: string | null, buildVersion: number) {
 
 /* ------------------------------------------------------------------ */
 /* Browser view                                                        */
-/* ------------------------------------------------------------------ */
-
 function BrowserView({
   session,
   frameVersion,
@@ -124,18 +126,25 @@ function BrowserView({
   onOpenTerminal,
   onAddContext,
   agentRunning = false,
+  projectId,
+  inspectMode,
+  onToggleInspect,
+  onFrameReady,
+  onPreviewError,
 }: {
   session: PreviewSession | null;
   frameVersion: number;
   onReload: () => void;
   onRestart: () => void;
-  onOpenTerminal: () => void;
+  onOpenTerminal?: () => void;
   onAddContext: (context: ComposerContext) => void;
   agentRunning?: boolean;
+  projectId: string | null;
+  inspectMode: boolean;
+  onToggleInspect: () => void;
+  onFrameReady: (win: Window | null) => void;
+  onPreviewError?: (message: string) => void;
 }) {
-  const [commenting, setCommenting] = useState(false);
-  const [pin, setPin] = useState<{ x: number; y: number } | null>(null);
-  const [comment, setComment] = useState("");
   const [historyIndex, setHistoryIndex] = useState(0);
   const [history, setHistory] = useState<string[]>([]);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
@@ -158,6 +167,10 @@ function BrowserView({
       session?.status === "runtime_error");
 
   useEffect(() => {
+    if (failed && session?.lastError?.message) onPreviewError?.(session.lastError.message);
+  }, [failed, onPreviewError, session?.lastError?.message]);
+
+  useEffect(() => {
     if (!url) return;
     setHistory((prev) => {
       if (prev[prev.length - 1] === url) return prev;
@@ -167,56 +180,44 @@ function BrowserView({
     });
   }, [url]);
 
-  const submitComment = () => {
-    if (!pin || !comment.trim()) return;
-    onAddContext({
-      id: `comment-${Date.now()}`,
-      label: `Preview note @ ${Math.round(pin.x)}%, ${Math.round(pin.y)}%`,
-      detail: `User comment pinned at ${Math.round(pin.x)}% x ${Math.round(pin.y)}% of the live preview (${url}): ${comment.trim()}`,
-    });
-    setPin(null);
-    setComment("");
-    setCommenting(false);
-  };
-
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-[46px] items-center gap-1 border-b border-[color:var(--border-subtle)] px-2.5">
+      <div className="flex h-[40px] items-center gap-0.5 border-b border-[color:var(--border-subtle)] px-2.5">
         <button
           type="button"
           aria-label="Back"
           disabled={historyIndex <= 0}
           onClick={() => setHistoryIndex((i) => Math.max(0, i - 1))}
-          className="rounded-[7px] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:bg-[color:var(--surface-hover)] disabled:text-[color:var(--text-disabled)]"
+          className="rounded-[7px] p-1.5 text-[#93959A] transition-colors hover:bg-[color:var(--surface-hover)] disabled:text-[color:var(--text-disabled)]"
         >
-          <ArrowLeft className="h-[15px] w-[15px]" strokeWidth={1.8} />
+          <ArrowLeft className="h-[13px] w-[13px]" strokeWidth={1.8} />
         </button>
         <button
           type="button"
           aria-label="Forward"
           disabled={historyIndex >= history.length - 1}
           onClick={() => setHistoryIndex((i) => Math.min(history.length - 1, i + 1))}
-          className="rounded-[7px] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:bg-[color:var(--surface-hover)] disabled:text-[color:var(--text-disabled)]"
+          className="rounded-[7px] p-1.5 text-[#93959A] transition-colors hover:bg-[color:var(--surface-hover)] disabled:text-[color:var(--text-disabled)]"
         >
-          <ArrowRight className="h-[15px] w-[15px]" strokeWidth={1.8} />
+          <ArrowRight className="h-[13px] w-[13px]" strokeWidth={1.8} />
         </button>
         <button
           type="button"
           aria-label="Reload"
           onClick={onReload}
-          className="rounded-[7px] p-1.5 text-[color:var(--text-secondary)] transition-colors hover:bg-[color:var(--surface-hover)]"
+          className="rounded-[7px] p-1.5 text-[#93959A] transition-colors hover:bg-[color:var(--surface-hover)]"
         >
-          <RotateCw className="h-[14px] w-[14px]" strokeWidth={1.8} />
+          <RotateCw className="h-[13px] w-[13px]" strokeWidth={1.8} />
         </button>
         <div className="flex min-w-0 flex-1 justify-center">
           {host ? (
-            <span className="cc-mono truncate text-[12px] text-[color:var(--text-secondary)]">
+            <span className="cc-mono truncate text-[11.5px] text-[color:var(--text-secondary)]">
               {host}
             </span>
           ) : starting ? (
-            <ShiningText text="Starting development server…" play className="text-[12px]" />
+            <ShiningText text="Starting development server…" play className="text-[11.5px]" />
           ) : (
-            <span className="text-[12px] text-[color:var(--text-tertiary)]">No preview yet</span>
+            <span className="text-[11.5px] text-[color:var(--text-tertiary)]">Preview</span>
           )}
         </div>
         {url ? (
@@ -231,20 +232,15 @@ function BrowserView({
         ) : null}
         <button
           type="button"
-          onClick={() => {
-            setCommenting((v) => !v);
-            setPin(null);
-            setComment("");
-          }}
+          onClick={onToggleInspect}
           className={cn(
-            "ml-1 flex h-7 items-center gap-1.5 rounded-[8px] px-2.5 text-[11.5px] font-medium transition-colors",
-            commenting
-              ? "bg-[color:var(--surface-selected)] text-[color:var(--text-primary)]"
-              : "text-[color:var(--text-secondary)] hover:bg-[color:var(--surface-hover)]",
+            "ml-1 flex h-7 items-center gap-1.5 rounded-[8px] px-2.5 text-[11.5px] transition-colors",
+            inspectMode
+              ? "bg-[#E8F0FE] font-medium text-[#3977F6]"
+              : "font-medium text-[color:var(--text-secondary)] hover:bg-[color:var(--surface-hover)]",
           )}
         >
-          <MessageSquarePlus className="h-3.5 w-3.5" strokeWidth={1.9} />
-          Commenting
+          {inspectMode ? "✓ Editing" : "Commenting"}
         </button>
       </div>
 
@@ -252,10 +248,18 @@ function BrowserView({
         {ready ? (
           <iframe
             key={frameVersion}
-            src={url}
+            // Keep the trailing slash so the preview behaves as a directory:
+            // relative JS/CSS assets and the injected inspect bridge resolve
+            // inside this project's proxied namespace.
+            src={`/api/vibe/projects/${encodeURIComponent(projectId ?? "")}/preview/`}
             title="Live preview"
             className="h-full w-full border-0 bg-white"
             sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
+            onLoad={(event) => {
+              const win = event.currentTarget.contentWindow;
+              onFrameReady(win);
+              win?.postMessage({ type: "clyra:mode", mode: inspectMode }, "*");
+            }}
           />
         ) : starting || agentRunning ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 bg-[#FAFAF9]">
@@ -299,250 +303,359 @@ function BrowserView({
         ) : (
           <div className="relative flex h-full flex-col items-center justify-center overflow-hidden bg-[#F7F7F6]">
             <div className="relative z-[1] flex max-w-[300px] flex-col items-center px-5 text-center">
-              <div className="mb-2.5 grid h-8 w-8 place-items-center rounded-[8px] border border-[#EEEEEC] bg-white text-[13px] font-medium text-[#171717]">
-                C
-              </div>
-              <h3 className="text-[14px] font-medium tracking-[-0.02em] text-[#171717]">
-                Build something to preview
+              <Globe className="mb-2.5 h-6 w-6 text-[#B7B9BD]" strokeWidth={1.4} />
+              <h3 className="text-[13px] font-medium tracking-[-0.015em] text-[#3D3F43]">
+                Preview will appear here
               </h3>
-              <p className="mt-1.5 text-[12px] leading-[1.45] text-[#8A8A8A]">
+              <p className="mt-1 text-[11.5px] leading-[1.45] text-[#94969A]">
                 Describe what to create in the chat. The live preview opens here once files are ready.
               </p>
             </div>
           </div>
         )}
 
-        {commenting && ready ? (
-          <div
-            className="absolute inset-0 cursor-crosshair"
-            onClick={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect();
-              setPin({
-                x: ((event.clientX - rect.left) / rect.width) * 100,
-                y: ((event.clientY - rect.top) / rect.height) * 100,
-              });
-            }}
-          >
-            {pin ? (
-              <div
-                className="absolute z-10 w-[240px] -translate-x-1/2 rounded-[10px] border border-[color:var(--border-medium)] bg-white p-2 shadow-[0_10px_28px_rgba(15,23,42,0.14)]"
-                style={{ left: `${pin.x}%`, top: `calc(${pin.y}% + 10px)` }}
-                onClick={(event) => event.stopPropagation()}
-              >
-                <textarea
-                  autoFocus
-                  value={comment}
-                  onChange={(event) => setComment(event.target.value)}
-                  placeholder="Describe what should change here"
-                  rows={2}
-                  className="w-full resize-none rounded-[7px] bg-[color:var(--surface-muted)] px-2 py-1.5 text-[12px] outline-none"
-                />
-                <div className="mt-1.5 flex justify-end gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setPin(null)}
-                    className="rounded-[6px] px-2 py-[3px] text-[11px] text-[color:var(--text-secondary)] hover:bg-[color:var(--surface-hover)]"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={submitComment}
-                    className="rounded-[6px] bg-[color:var(--accent-blue)] px-2 py-[3px] text-[11px] font-medium text-white"
-                  >
-                    Add to prompt
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            {pin ? (
-              <span
-                className="absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-[color:var(--accent-blue)] shadow"
-                style={{ left: `${pin.x}%`, top: `${pin.y}%` }}
-              />
-            ) : null}
-          </div>
-        ) : null}
       </div>
     </div>
   );
 }
-
 /* ------------------------------------------------------------------ */
-/* Summary view                                                        */
-/* ------------------------------------------------------------------ */
-
-function SummaryView({ state, actions }: { state: ClyraCodeState; actions: AgentAction[] }) {
-  const lastAssistant = [...state.log].reverse().find((e) => e.type === "assistant");
-  const commands = actions.filter((a) => a.kind === "command");
-  return (
-    <div className="cc-scroll min-h-0 flex-1 overflow-y-auto px-5 py-4">
-      <div className="mx-auto max-w-[640px]">
-        {state.sessionTitle ? (
-          <h3 className="text-[14px] font-semibold text-[color:var(--text-primary)]">
-            {state.sessionTitle}
-          </h3>
-        ) : null}
-        {lastAssistant && lastAssistant.type === "assistant" ? (
-          <div className="mt-2 text-[13px] leading-[1.6] text-[color:var(--text-primary)]">
-            <MarkdownMessageContent content={lastAssistant.text} />
-          </div>
-        ) : (
-          <p className="mt-2 text-[12.5px] text-[color:var(--text-tertiary)]">
-            The task summary appears here once the agent reports back.
-          </p>
-        )}
-
-        {state.diffs.length ? (
-          <>
-            <h4 className="mt-5 text-[12px] font-semibold uppercase tracking-[0.04em] text-[color:var(--text-tertiary)]">
-              Changed files
-            </h4>
-            <div className="mt-1.5">
-              {state.diffs.map((diff) => (
-                <div
-                  key={diff.file}
-                  className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 py-[3px]"
-                >
-                  <span className="cc-mono truncate text-[11.5px] text-[color:var(--text-secondary)]">
-                    {stripFilePrefix(diff.file)}
-                  </span>
-                  <DiffCounters additions={diff.additions} deletions={diff.deletions} />
-                </div>
-              ))}
-            </div>
-          </>
-        ) : null}
-
-        {commands.length ? (
-          <>
-            <h4 className="mt-5 text-[12px] font-semibold uppercase tracking-[0.04em] text-[color:var(--text-tertiary)]">
-              Commands
-            </h4>
-            <div className="mt-1.5">
-              {commands.map((command) => (
-                <div key={command.id} className="flex items-center gap-2 py-[3px]">
-                  <span className="cc-mono min-w-0 flex-1 truncate text-[11.5px] text-[color:var(--text-secondary)]">
-                    {command.target}
-                  </span>
-                  <span
-                    className={cn(
-                      "cc-mono text-[11px]",
-                      command.status === "error"
-                        ? "text-[color:var(--deletion-red)]"
-                        : "text-[color:var(--addition-green)]",
-                    )}
-                  >
-                    {command.status === "error" ? "exit 1" : command.status === "success" ? "exit 0" : "running"}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Terminal view                                                       */
+/* iOS Simulator preview — live stream from the embedded ios-bridge     */
 /* ------------------------------------------------------------------ */
 
-function TerminalView({
-  commands,
-  devLogs,
+const DEFAULT_DEVICE = "Connected iPhone";
+
+function IosPreviewView({
+  projectId,
+  relaunchSignal,
+  agentRunning,
+  inspectMode,
+  onToggleInspect,
+  onInspectElement,
+  onPreviewError,
 }: {
-  commands: AgentAction[];
-  devLogs: PreviewLogLine[];
+  projectId: string | null;
+  /** Bump after a successful agent run to reinstall + relaunch the app. */
+  relaunchSignal: number;
+  agentRunning: boolean;
+  inspectMode: boolean;
+  onToggleInspect: () => void;
+  onInspectElement: (payload: InspectPayload) => void;
+  onPreviewError?: (message: string) => void;
 }) {
-  const [source, setSource] = useState<"agent" | "server">("agent");
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [status, setStatus] = useState<MobilePreviewStatus | null>(null);
+  const [phase, setPhase] = useState<"idle" | "waiting" | "building" | "connecting" | "running" | "failed">("idle");
+  const [streamUrl, setStreamUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [device, setDevice] = useState(DEFAULT_DEVICE);
+  const [devices, setDevices] = useState<string[]>([]);
+  const [deviceMenu, setDeviceMenu] = useState(false);
+  const [orientation, setOrientation] = useState<"portrait" | "landscape">("portrait");
+  const [frameKey, setFrameKey] = useState(0);
+  const launchedRef = useRef<string | null>(null);
+  const reportedErrorRef = useRef<string | null>(null);
+  const streamAreaRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const node = scrollRef.current;
-    if (node && node.scrollHeight - node.scrollTop - node.clientHeight < 120) {
-      node.scrollTop = node.scrollHeight;
+    // Infrastructure readiness is not a source-code failure. Never start an
+    // automatic agent retry merely because a user has not installed the
+    // optional physical-device toolchain or connected a phone.
+    if (phase === "failed" && error && !/Install and configure xtool and go-ios|No connected preview session|Connect an iPhone/i.test(error) && reportedErrorRef.current !== error) {
+      reportedErrorRef.current = error;
+      onPreviewError?.(error);
     }
-  }, [commands, devLogs, source]);
+  }, [error, onPreviewError, phase]);
+
+  const launch = useCallback(
+    async () => {
+      if (!projectId) return;
+      setPhase("building");
+      setError(null);
+      try {
+        const result = await api.mobilePreviewBuild(projectId, device === DEFAULT_DEVICE ? undefined : device);
+        if (!result.ok || !result.streamUrl) {
+          setPhase("failed");
+          setError(result.error ?? "The physical-device build failed.");
+          return;
+        }
+        setStreamUrl(result.streamUrl);
+        setPhase("connecting");
+        setFrameKey((key) => key + 1);
+      } catch (err) {
+        setPhase("failed");
+        setError(err instanceof Error ? err.message : "The mobile preview pipeline failed.");
+      }
+    },
+    [projectId],
+  );
+
+  useEffect(() => {
+    void api.mobilePreviewStatus().then(setStatus).catch(() => undefined);
+    void api.mobilePreviewDevices().then(({ devices: found }) => {
+      setDevices(found);
+      if (found[0]) setDevice(found[0]);
+    }).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!projectId) return;
+    if (!status) return;
+    if (!status.configured) {
+      setPhase("idle");
+      return;
+    }
+    if (agentRunning) {
+      setPhase("waiting");
+      return;
+    }
+    let cancelled = false;
+    void api.mobilePreviewReadiness(projectId).then((readiness) => {
+      if (cancelled || launchedRef.current === projectId) return;
+      if (!readiness.ready) {
+        setPhase("waiting");
+        return;
+      }
+      launchedRef.current = projectId;
+      void launch();
+    }).catch(() => {
+      if (!cancelled) setPhase("waiting");
+    });
+    return () => { cancelled = true; };
+  }, [projectId, status, launch, agentRunning, relaunchSignal]);
+
+  useEffect(() => {
+    if (!projectId || relaunchSignal === 0) return;
+    launchedRef.current = null;
+    void launch();
+  }, [relaunchSignal, projectId, launch]);
+
+  const currentDeviceName = device;
+
+  // The loader owns the simulator surface until the first actual stream frame
+  // arrives. This prevents a blank preview or a stopped loader while the
+  // agent is still generating/building the native project.
+  const loading = agentRunning || phase === "waiting" || phase === "building" || phase === "connecting";
+  const loadingTitle =
+    phase === "waiting"
+      ? agentRunning
+        ? "Building your iOS project…"
+        : "Preparing iOS preview…"
+      : phase === "building"
+        ? "Building for your connected iPhone…"
+        : "Opening the live device stream…";
+  const loadingDetail =
+    phase === "waiting"
+      ? agentRunning
+        ? "Preview will appear when the native project is ready"
+        : "Waiting for the native project files"
+      : phase === "building"
+        ? "xtool is signing and installing the Swift package"
+        : "Waiting for the first live device frame";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-[38px] items-center gap-1 border-b border-[color:var(--border-subtle)] px-3">
-        {(["agent", "server"] as const).map((option) => (
-          <button
-            key={option}
-            type="button"
-            onClick={() => setSource(option)}
-            className={cn(
-              "rounded-[7px] px-2.5 py-[4px] text-[11.5px] font-medium transition-colors",
-              source === option
-                ? "bg-[color:var(--surface-selected)] text-[color:var(--text-primary)]"
-                : "text-[color:var(--text-tertiary)] hover:bg-[color:var(--surface-hover)]",
-            )}
-          >
-            {option === "agent" ? "Agent commands" : "Dev server"}
-          </button>
-        ))}
-      </div>
-      <div ref={scrollRef} className="cc-scroll min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        {source === "agent" ? (
-          commands.length ? (
-            commands.map((command) => (
-              <div key={command.id} className="mb-3">
-                <div className="flex items-center gap-2">
-                  <span className="cc-mono text-[11.5px] text-[color:var(--text-tertiary)]">$</span>
-                  <span className="cc-mono text-[12px] font-medium text-[color:var(--text-primary)]">
-                    {command.target}
-                  </span>
-                  <span
-                    className={cn(
-                      "cc-mono ml-auto text-[10.5px]",
-                      command.status === "error"
-                        ? "text-[color:var(--deletion-red)]"
-                        : command.status === "active"
-                          ? "text-[color:var(--accent-blue)]"
-                          : "text-[color:var(--text-tertiary)]",
-                    )}
-                  >
-                    {command.status === "active"
-                      ? "running"
-                      : command.status === "error"
-                        ? "exit 1"
-                        : "exit 0"}
-                  </span>
+      <div className="flex h-[40px] items-center gap-1 border-b border-[color:var(--border-subtle)] px-2.5">
+        {status ? (
+          <>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setDeviceMenu((open) => !open)}
+                className="flex h-7 items-center gap-1 rounded-[7px] px-2 text-[11.5px] font-medium text-[#505258] transition-colors hover:bg-black/[0.03]"
+              >
+                {currentDeviceName}
+                <ChevronDown className={cn("h-3 w-3 text-[#96989D] transition-transform", deviceMenu && "rotate-180")} />
+              </button>
+              {deviceMenu ? (
+                <div className="absolute left-0 top-[32px] z-30 max-h-64 w-[190px] overflow-y-auto rounded-[8px] border border-black/[0.06] bg-white py-0.5 shadow-[0_8px_20px_rgba(15,23,42,0.08)]">
+                  {(devices.length ? devices : [DEFAULT_DEVICE]).map((simulator) => (
+                    <button
+                      key={simulator}
+                      type="button"
+                      onClick={() => {
+                        setDevice(simulator);
+                        setDeviceMenu(false);
+                        launchedRef.current = null;
+                        void launch();
+                      }}
+                      className="flex w-full items-center justify-between px-2.5 py-[5px] text-left text-[11.5px] text-[#202124] transition-colors hover:bg-black/[0.03]"
+                    >
+                      <span className="truncate">{simulator}</span>
+                    </button>
+                  ))}
                 </div>
-                {command.output?.trim() ? (
-                  <pre className="cc-mono mt-1 whitespace-pre-wrap text-[11.5px] leading-[1.55] text-[color:var(--text-secondary)]">
-                    {command.output}
-                  </pre>
-                ) : null}
-              </div>
-            ))
-          ) : (
-            <p className="text-[12px] text-[color:var(--text-tertiary)]">
-              Commands the agent runs appear here.
-            </p>
-          )
-        ) : devLogs.length ? (
-          devLogs.map((line, index) => (
-            <pre
-              key={line.id ?? index}
+              ) : null}
+            </div>
+            <span className="text-[10.5px] text-[#96989D]">Physical device</span>
+            <span className="flex-1" />
+            <button
+              type="button"
+              aria-label="Rotate device"
+              title="Rotate device"
+              onClick={() => {
+                const next = orientation === "portrait" ? "landscape" : "portrait";
+                setOrientation(next);
+                if (projectId) void api.mobilePreviewInput(projectId, { action: "orientation", value: next }).catch(() => undefined);
+              }}
+              className="rounded-[7px] p-1.5 text-[#93959A] transition-colors hover:bg-black/[0.03] hover:text-[#202124]"
+            >
+              <RotateCw className="h-[13px] w-[13px]" strokeWidth={1.8} />
+            </button>
+            <button
+              type="button"
+              aria-label="Relaunch"
+              title="Rebuild and relaunch"
+              onClick={() => {
+                launchedRef.current = null;
+                void launch();
+              }}
+              className="rounded-[7px] p-1.5 text-[#93959A] transition-colors hover:bg-black/[0.03] hover:text-[#202124]"
+            >
+              <RotateCw className="h-[13px] w-[13px]" strokeWidth={1.8} />
+            </button>
+            <button
+              type="button"
+              onClick={onToggleInspect}
               className={cn(
-                "cc-mono whitespace-pre-wrap text-[11.5px] leading-[1.55]",
-                line.stream === "stderr"
-                  ? "text-[color:var(--deletion-red)]"
-                  : "text-[color:var(--text-secondary)]",
+                "ml-1 flex h-7 items-center gap-1.5 rounded-[8px] px-2.5 text-[11.5px] transition-colors",
+                inspectMode
+                  ? "bg-[#E8F0FE] font-medium text-[#3977F6]"
+                  : "font-medium text-[#505258] hover:bg-black/[0.03]",
               )}
             >
-              {line.line ?? line.text ?? ""}
-            </pre>
-          ))
+              {inspectMode ? "✓ Editing" : "Commenting"}
+            </button>
+          </>
         ) : (
-          <p className="text-[12px] text-[color:var(--text-tertiary)]">
-            Development server output appears here.
-          </p>
+          <span className="flex-1 text-[11.5px] text-[#505258]">iPhone Preview</span>
         )}
+      </div>
+
+      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[#FAFAF9] p-4">
+        {streamUrl ? (
+          <div ref={streamAreaRef} className="absolute inset-0 flex items-center justify-center overflow-hidden">
+            <PhysicalDevicePhoneFrame
+              url={streamUrl}
+              device={device}
+              frameKey={frameKey}
+              onReady={() => setPhase((current) => current === "connecting" ? "running" : current)}
+              onInput={(input) => {
+                if (projectId) void api.mobilePreviewInput(projectId, input).catch(() => undefined);
+              }}
+            />
+            {inspectMode && phase === "running" ? (
+              <div
+                className="absolute inset-0 z-20 cursor-crosshair"
+                onClick={(event) => {
+                  const node = streamAreaRef.current;
+                  if (!node || !projectId) return;
+                  const rect = node.getBoundingClientRect();
+                  const x = Math.round(event.clientX - rect.left);
+                  const y = Math.round(event.clientY - rect.top);
+                  void api.mobilePreviewInput(projectId, { action: "tap", x, y }).catch(() => undefined);
+                  onInspectElement({ platform: "ios", kind: "SwiftUI view", label: `iPhone view @ ${x}, ${y}`, name: "view", x, y, device: currentDeviceName });
+                }}
+              >
+                <div className="pointer-events-none absolute left-3 top-3 rounded-[6px] bg-[#3977F6]/95 px-2 py-1 text-[10px] font-medium text-white">
+                  Click a view to reference it in chat
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {loading ? (
+          <div className="relative z-10 flex h-full w-full flex-col items-center justify-center gap-3.5 bg-[#FAFAF9]">
+            <div className="relative h-[438px] w-[218px] rounded-[34px] bg-[#202124] p-[7px] shadow-[0_16px_34px_rgba(15,23,42,0.18)]">
+              <div className="relative flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-[28px] bg-[#F8F8F7]">
+                <span className="absolute left-1/2 top-2 h-[18px] w-[86px] -translate-x-1/2 rounded-full bg-[#202124]" aria-hidden />
+                <div className="cc-preview-loader" aria-hidden />
+                <ShiningText text={loadingTitle} play className="mt-4 max-w-[160px] text-center text-[11.5px] font-medium tracking-[-0.01em]" />
+                <p className="mt-1.5 max-w-[166px] text-center text-[9.5px] leading-[1.4] text-[#8A8A8A]">{loadingDetail}</p>
+              </div>
+            </div>
+            <p className="text-[10.5px] text-[#96989D]">Live physical-device preview</p>
+          </div>
+        ) : phase === "failed" ? (
+          <div className="flex max-w-[360px] flex-col items-center gap-2 text-center">
+            <p className="text-[13px] font-medium text-[#3D3F43]">Build failed</p>
+            <p className="max-h-40 overflow-y-auto whitespace-pre-wrap text-[11px] leading-[1.5] text-[#94969A]">
+              {error}
+            </p>
+            <button
+              type="button"
+              onClick={() => void launch()}
+              className="mt-1 h-7 rounded-[7px] border border-black/[0.08] px-2.5 text-[11.5px] text-[#202124] transition-colors hover:bg-black/[0.03]"
+            >
+              Try again
+            </button>
+          </div>
+        ) : status && !status.configured ? (
+          <div className="flex w-full max-w-[340px] flex-col items-center gap-2.5 text-center">
+            <p className="text-[13px] font-medium text-[#3D3F43]">Connect an iPhone</p>
+            <p className="text-[11.5px] leading-[1.5] text-[#94969A]">
+              Install and configure <span className="cc-mono">xtool</span> and <span className="cc-mono">go-ios</span>, then connect an iPhone. Clyra uses WSL on Windows and native tools on macOS.
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-2 text-center">
+            <p className="text-[13px] font-medium text-[#3D3F43]">iPhone preview</p>
+            <p className="text-[11.5px] text-[#94969A]">
+              The interactive preview will appear here once Swift source is ready.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Centered physical iPhone stream. Input is forwarded through go-ios. */
+function PhysicalDevicePhoneFrame({ url, device, frameKey, onReady, onInput }: { url: string; device: string; frameKey: number; onReady?: () => void; onInput?: (input: Record<string, unknown>) => void }) {
+  const areaRef = useRef<HTMLDivElement | null>(null);
+  const pointerStart = useRef<{ x: number; y: number } | null>(null);
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    const node = areaRef.current;
+    if (!node) return;
+    const observer = new ResizeObserver(() => {
+      setScale(Math.min(1, (node.clientWidth - 32) / 400, (node.clientHeight - 24) / 900));
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  const coordinates = (event: { clientX: number; clientY: number }) => {
+    const node = areaRef.current?.querySelector<HTMLElement>("[data-phone-screen]");
+    if (!node) return null;
+    const rect = node.getBoundingClientRect();
+    return { x: Math.round(((event.clientX - rect.left) / rect.width) * 390), y: Math.round(((event.clientY - rect.top) / rect.height) * 844) };
+  };
+
+  return (
+    <div ref={areaRef} className="absolute inset-0 flex items-center justify-center overflow-hidden">
+      <div
+        style={{ width: 260, height: 532, transform: `scale(${scale})`, transformOrigin: "center center" }}
+        className="relative shrink-0 rounded-[38px] bg-[#1C1C1E] p-[9px] shadow-[0_16px_34px_rgba(15,23,42,0.18)]"
+        tabIndex={0}
+        onPointerDown={(event) => { pointerStart.current = coordinates(event); }}
+        onPointerUp={(event) => {
+          const start = pointerStart.current;
+          const end = coordinates(event);
+          pointerStart.current = null;
+          if (!start || !end) return;
+          const distance = Math.hypot(end.x - start.x, end.y - start.y);
+          if (distance < 12) onInput?.({ action: "tap", ...end });
+          else onInput?.({ action: "swipe", ...start, toX: end.x, toY: end.y });
+        }}
+        onKeyDown={(event) => {
+          if (event.key.length === 1) onInput?.({ action: "type", text: event.key });
+          else if (event.key === "Enter") onInput?.({ action: "type", text: "\n" });
+        }}
+      >
+        <span className="absolute left-1/2 top-[14px] z-10 h-[19px] w-[88px] -translate-x-1/2 rounded-full bg-[#111]" />
+        <img data-phone-screen key={frameKey} src={url} title={`${device} live preview`} onLoad={onReady} className="h-full w-full rounded-[30px] bg-black object-cover" />
       </div>
     </div>
   );
@@ -569,8 +682,6 @@ function ChangesView({
     if (activeDiff.before || activeDiff.after) {
       return computeLineDiff(activeDiff.before ?? "", activeDiff.after ?? "");
     }
-    // Synthesized entry without full content: fall back to the edit tool's
-    // real patch text for this file when available.
     const patch = [...actions]
       .reverse()
       .find((a) => a.target === activeFile && a.patch)?.patch;
@@ -629,8 +740,8 @@ function ChangesView({
                   <tr
                     key={index}
                     className={cn(
-                      line.kind === "add" && "bg-[#e9f7ef]",
-                      line.kind === "del" && "bg-[#fdeeee]",
+                      line.kind === "add" && "bg-[rgba(46,160,90,0.085)]",
+                      line.kind === "del" && "bg-[rgba(195,73,73,0.075)]",
                     )}
                   >
                     <td className="cc-mono w-10 select-none px-2 text-right align-top text-[10px] leading-[1.7] text-[color:var(--text-disabled)]">
@@ -752,7 +863,6 @@ function FilesView({ projectId, diffs }: { projectId: string | null; diffs: File
 /* ------------------------------------------------------------------ */
 
 const EXTRA_TABS: Array<{ id: RightTab; label: string }> = [
-  { id: "terminal", label: "Terminal" },
   { id: "changes", label: "Changes" },
   { id: "files", label: "Files" },
 ];
@@ -766,6 +876,12 @@ export function RightPanel({
   onAddContext,
   focusFile,
   agentRunning = false,
+  onOpenTerminal,
+  platform = "web",
+  relaunchSignal = 0,
+  onVisualEdit,
+  onVisualSourceEdit,
+  onPreviewError,
 }: {
   state: ClyraCodeState;
   actionList: AgentAction[];
@@ -775,20 +891,175 @@ export function RightPanel({
   onAddContext: (context: ComposerContext) => void;
   focusFile: string | null;
   agentRunning?: boolean;
+  onOpenTerminal?: () => void;
+  platform?: ProjectPlatform;
+  /** Bumps after successful agent runs; iOS preview reinstalls + relaunches. */
+  relaunchSignal?: number;
+  /** Route visual changes that need the agent back into the coding stream. */
+  onVisualEdit?: (instruction: string) => void;
+  /** Record a successful direct source edit in Clyra's existing change stream. */
+  onVisualSourceEdit?: (edit: { file: string; before: string; after: string; additions: number; deletions: number }) => void;
+  /** A real preview error can be offered to the agent after its run settles. */
+  onPreviewError?: (message: string) => void;
 }) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [openExtras, setOpenExtras] = useState<RightTab[]>([]);
-  const commands = actionList.filter((a) => a.kind === "command");
+  const [inspectMode, setInspectMode] = useState(false);
+  const [selection, setSelection] = useState<InspectPayload | null>(null);
+  const frameWindowRef = useRef<Window | null>(null);
+
+  const postToFrame = (message: unknown) => {
+    frameWindowRef.current?.postMessage(message, "*");
+  };
+
+  // Messages from the injected inspect script inside the preview frame.
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as {
+        type?: string;
+        payload?: InspectPayload;
+        elId?: number;
+        rect?: { left: number; top: number; width: number; height: number };
+        absolute?: boolean;
+      };
+      if (!data || typeof data !== "object" || !data.type) return;
+      if (event.source !== frameWindowRef.current) return;
+      if (data.type === "clyra:element" && data.payload) {
+        setSelection(data.payload);
+        onAddContext({
+          id: `inspect-${Date.now()}`,
+          label: selectionChipLabel(data.payload),
+          detail: selectionContextDetail(data.payload),
+        });
+      } else if (data.type === "clyra:clear") {
+        setSelection(null);
+      } else if (data.type === "clyra:drag" && data.rect) {
+        handleDragChange({
+          elId: data.elId,
+          rect: data.rect,
+          absolute: data.absolute,
+          styles: (data as { styles?: Record<string, string> }).styles,
+        });
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection, inspectMode, state.activeProjectId]);
+
+  // Esc clears the selection; toggling off clears everything.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && (selection || inspectMode)) {
+        setSelection(null);
+        postToFrame({ type: "clyra:clear" });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection, inspectMode]);
+
+  useEffect(() => {
+    postToFrame({ type: "clyra:mode", mode: inspectMode });
+    if (!inspectMode) setSelection(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inspectMode]);
+
+  const agentFallback = (property: string, value: string) => {
+    if (!selection || !onVisualEdit) return;
+    onVisualEdit(
+      `Change ${property} to "${value}" on the selected preview element. Here is its structured inspect context:\n${selectionContextDetail(selection)}\nUpdate the real source files so the change is permanent. Do not use a temporary preview-only style.`,
+    );
+  };
+
+  const cssProperty = (property: string) => property.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+
+  const recordSourceEdit = (result: Awaited<ReturnType<typeof api.sourceEdit>>, reload = true) => {
+    if (result.applied && result.file && typeof result.before === "string" && typeof result.after === "string") {
+      onVisualSourceEdit?.({
+        file: result.file,
+        before: result.before,
+        after: result.after,
+        additions: result.additions ?? 0,
+        deletions: result.deletions ?? 0,
+      });
+      if (reload) preview.reload();
+    }
+  };
+
+  const handleChange = (property: string, value: string, liveStyles?: Record<string, string>) => {
+    if (!selection || !state.activeProjectId) return;
+    if (liveStyles && selection.elId) {
+      postToFrame({ type: "clyra:style", elId: selection.elId, styles: liveStyles });
+    }
+    if (property === "__ios__") {
+      onVisualEdit?.(
+        `In the iOS app, change the selected view ${selection.label ?? ""} at (${selection.x ?? 0}, ${selection.y ?? 0}) on ${selection.device ?? "the simulator"}: ${value}. Locate the real SwiftUI view in the project and update its source.`,
+      );
+      setSelection(null);
+      return;
+    }
+    const rule =
+      selection.rules?.find((r) => r.file && r.declarations[property] !== undefined) ??
+      selection.rules?.find((r) => r.file);
+    if (rule?.file && rule.selector) {
+      void api
+        .sourceEdit(state.activeProjectId, {
+          file: rule.file,
+          selector: rule.selector,
+          property: cssProperty(property),
+          value,
+        })
+        .then((result) => {
+          if (!result.applied) agentFallback(property, value);
+          else recordSourceEdit(result);
+        })
+        .catch(() => agentFallback(property, value));
+    } else {
+      agentFallback(property, value);
+    }
+  };
+
+  const handleDragChange = (data: {
+    elId?: number;
+    rect: { left: number; top: number; width: number; height: number };
+    absolute?: boolean;
+    styles?: Record<string, string>;
+  }) => {
+    if (!selection || !state.activeProjectId) return;
+    const rule = selection.rules?.find((r) => r.file);
+    const rect = data.rect;
+    if (rule?.file && rule.selector && data.styles && Object.keys(data.styles).length) {
+      const edits = Object.entries(data.styles).map(([property, value]) => ({ property: cssProperty(property), value }));
+      void Promise.all(
+        edits.map((edit) =>
+          api.sourceEdit(state.activeProjectId!, {
+            file: rule.file!,
+            selector: rule.selector,
+            property: edit.property,
+            value: edit.value,
+          }),
+        ),
+      )
+        .then((results) => {
+          results.forEach((result) => recordSourceEdit(result, false));
+          preview.reload();
+        })
+        .catch(() => agentFallback("layout", `${Math.round(rect.width)}×${Math.round(rect.height)}`));
+    } else if (onVisualEdit) {
+      onVisualEdit(
+        `Move or resize the selected preview element so it is ${Math.round(rect.width)}×${Math.round(rect.height)} at (${Math.round(rect.left)}, ${Math.round(rect.top)}).\n${selectionContextDetail(selection)}\nUse its existing responsive layout system (flex, grid, CSS layout, or SwiftUI modifiers) rather than introducing absolute positioning unless it is already positioned freely.`,
+      );
+    }
+  };
 
   const tabs: Array<{ id: RightTab; label: string; icon?: typeof Globe }> = [
-    { id: "summary", label: "Summary" },
-    { id: "browser", label: "Browser", icon: Globe },
-    ...EXTRA_TABS.filter((extra) => openExtras.includes(extra.id)),
+    { id: "browser", label: platform === "ios" ? "iPhone Preview" : "Browser", icon: Globe },
+    ...EXTRA_TABS,
   ];
 
   return (
-    <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-[color:var(--preview-background)]">
-      <div className="relative flex h-[50px] items-center gap-1 border-b border-[color:var(--border-subtle)] px-2.5">
+    <section className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-[color:var(--preview-background)]">
+      <div className="relative flex h-[42px] items-center gap-1 border-b border-[color:var(--border-subtle)] px-2.5">
         {tabs.map((entry) => {
           const Icon = entry.icon;
           const selected = tab === entry.id;
@@ -798,80 +1069,73 @@ export function RightPanel({
               type="button"
               onClick={() => onTabChange(entry.id)}
               className={cn(
-                "relative flex items-center gap-1.5 rounded-[8px] px-2.5 py-[6px] text-[12.5px] transition-colors duration-100",
+                "relative flex items-center gap-1.5 rounded-[7px] px-[9px] py-[6px] text-[11.75px] transition-colors duration-100",
                 selected
-                  ? "font-medium text-[#222222]"
-                  : "text-[color:var(--text-secondary)] hover:bg-[color:var(--surface-hover)]",
+                  ? "bg-[#F1F1F0] font-medium text-[#34363A]"
+                  : "text-[#818388] hover:bg-black/[0.03]",
               )}
             >
-              {selected ? (
-                <motion.span
-                  layoutId="cc-tab-pill"
-                  className="absolute inset-0 rounded-[8px] bg-[#ececec]"
-                  transition={{ type: "spring", stiffness: 500, damping: 40 }}
-                />
-              ) : null}
-              <span className="relative flex items-center gap-1.5">
+              <span className="flex items-center gap-1.5">
                 {Icon ? <Icon className="h-[13px] w-[13px]" strokeWidth={1.8} /> : null}
                 {entry.label}
               </span>
             </button>
           );
         })}
-        <div className="relative">
-          <button
-            type="button"
-            aria-label="Open view"
-            onClick={() => setMenuOpen((v) => !v)}
-            className="rounded-[7px] p-1.5 text-[color:var(--text-tertiary)] transition-colors hover:bg-[color:var(--surface-hover)]"
-          >
-            <Plus className="h-[14px] w-[14px]" strokeWidth={1.9} />
-          </button>
-          {menuOpen ? (
-            <div className="absolute left-0 top-[34px] z-20 w-[150px] rounded-[10px] border border-[color:var(--border-subtle)] bg-white py-1 shadow-[0_10px_30px_rgba(15,23,42,0.1)]">
-              {EXTRA_TABS.map((extra) => (
-                <button
-                  key={extra.id}
-                  type="button"
-                  onClick={() => {
-                    setOpenExtras((prev) =>
-                      prev.includes(extra.id) ? prev : [...prev, extra.id],
-                    );
-                    onTabChange(extra.id);
-                    setMenuOpen(false);
-                  }}
-                  className="flex w-full px-3 py-[6px] text-left text-[12.5px] text-[color:var(--text-primary)] transition-colors hover:bg-[color:var(--surface-hover)]"
-                >
-                  {extra.label}
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
       </div>
 
       {tab === "browser" ? (
-        <BrowserView
-          session={preview.session}
-          frameVersion={preview.frameVersion}
-          onReload={preview.reload}
-          onRestart={preview.restart}
-          onOpenTerminal={() => {
-            setOpenExtras((prev) => (prev.includes("terminal") ? prev : [...prev, "terminal"]));
-            onTabChange("terminal");
-          }}
-          onAddContext={onAddContext}
-          agentRunning={agentRunning}
-        />
-      ) : tab === "summary" ? (
-        <SummaryView state={state} actions={actionList} />
-      ) : tab === "terminal" ? (
-        <TerminalView commands={commands} devLogs={preview.logs} />
+        platform === "ios" ? (
+          <IosPreviewView
+            projectId={state.activeProjectId}
+            relaunchSignal={relaunchSignal}
+            agentRunning={agentRunning}
+            inspectMode={inspectMode}
+            onToggleInspect={() => setInspectMode((mode) => !mode)}
+            onInspectElement={(payload) => {
+              setSelection(payload);
+              onAddContext({
+                id: `inspect-${Date.now()}`,
+                label: selectionChipLabel(payload),
+                detail: selectionContextDetail(payload),
+              });
+            }}
+            onPreviewError={onPreviewError}
+          />
+        ) : (
+          <BrowserView
+            session={preview.session}
+            frameVersion={preview.frameVersion}
+            onReload={preview.reload}
+            onRestart={preview.restart}
+            onOpenTerminal={onOpenTerminal}
+            onAddContext={onAddContext}
+            agentRunning={agentRunning}
+            projectId={state.activeProjectId}
+            inspectMode={inspectMode}
+            onToggleInspect={() => setInspectMode((mode) => !mode)}
+            onFrameReady={(win) => {
+              frameWindowRef.current = win;
+            }}
+            onPreviewError={onPreviewError}
+          />
+        )
       ) : tab === "changes" ? (
         <ChangesView diffs={state.diffs} actions={actionList} focusFile={focusFile} />
       ) : (
         <FilesView projectId={state.activeProjectId} diffs={state.diffs} />
       )}
+
+      {inspectMode && selection ? (
+        <VisualInspector
+          payload={selection}
+          onClose={() => {
+            setSelection(null);
+            postToFrame({ type: "clyra:clear" });
+          }}
+          onChange={handleChange}
+        />
+      ) : null}
     </section>
   );
 }

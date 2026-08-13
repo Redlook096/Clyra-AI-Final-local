@@ -18,8 +18,10 @@ export type ActionKind =
   | "search"
   | "list"
   | "command"
+  | "build"
   | "check"
   | "test"
+  | "preview"
   | "fetch"
   | "todo"
   | "permission"
@@ -44,6 +46,9 @@ export type AgentAction = {
   patch?: string;
   /** Full file content written by the write tool (used for fallback diffs). */
   contentAfter?: string;
+  /** Real before/after snapshots from the session diff endpoint. */
+  before?: string;
+  after?: string;
   /** For permission rows. */
   permissionId?: string;
   permissionResolved?: string;
@@ -52,12 +57,15 @@ export type AgentAction = {
 export type LogEntry =
   | { type: "user"; id: string; text: string; ts: number }
   | { type: "assistant"; id: string; text: string; ts: number }
-  | { type: "reasoning"; id: string; ts: number; endedAt?: number }
+  /** A concise, provider-supplied reasoning summary — never hidden chain of thought. */
+  | { type: "reasoning"; id: string; text?: string; ts: number; endedAt?: number }
   | { type: "action"; id: string; actionId: string; ts: number };
 
 export type RunState = "idle" | "starting" | "running" | "complete" | "failed" | "cancelled";
 
 export type ConnectionState = "idle" | "connected" | "reconnecting";
+
+export type ProjectPlatform = "web" | "ios";
 
 export type ClyraCodeState = {
   projects: VibeProject[];
@@ -75,6 +83,8 @@ export type ClyraCodeState = {
   model: string | null;
   tokens: { input: number; output: number } | null;
   restored: boolean;
+  /** Active platform mode; drives Browser vs iPhone preview. */
+  platform: ProjectPlatform;
 };
 
 const STORAGE_KEY = "clyra-code:last-session";
@@ -95,10 +105,20 @@ const INITIAL: ClyraCodeState = {
   model: null,
   tokens: null,
   restored: false,
+  platform: "web",
 };
 
 function stripProjectPrefix(path: string) {
-  return path.replace(/^.*\/projects\/[^/]+\/files\//, "").replace(/^\.\//, "");
+  const normalized = path.replace(/\\/g, "/");
+  if (/^.*\/projects\/[^/]+\/files\/?$/.test(normalized)) return "project root";
+  return normalized.replace(/^.*\/projects\/[^/]+\/files\//, "").replace(/^\.\//, "");
+}
+
+/** Detect iOS intent from a prompt so iOS App Mode activates automatically. */
+export function detectIosIntent(prompt: string): boolean {
+  const ios = /\b(ios|iphone|ipad|swiftui|swift\s+app|xcode|apple\s+watch|watchos|visionos|apple\s+tv|tvos|app\s+store)\b/i;
+  const web = /\b(website|web\s+app|html|react|next\.?js|electron|desktop\s+app|landing\s+page|portfolio)\b/i;
+  return ios.test(prompt) && !web.test(prompt);
 }
 
 /** Commands often embed absolute project paths; compress them for display. */
@@ -115,8 +135,14 @@ function classifyCommand(command: string): ActionKind {
   if (/\b(vitest|jest|pytest|playwright|cypress|mocha|ava|tap|npm\s+test|pnpm\s+test|yarn\s+test|cargo\s+test|go\s+test)\b/.test(c)) {
     return "test";
   }
+  if (/\b(npm\s+run\s+build|pnpm\s+build|yarn\s+build|vite\s+build|next\s+build|astro\s+build|react-scripts\s+build|cargo\s+build|go\s+build)\b/.test(c)) {
+    return "build";
+  }
   if (/\b(tsc|typecheck|eslint|lint|prettier|biome|ruff|mypy|pyright|clippy|cargo\s+check)\b/.test(c)) {
     return "check";
+  }
+  if (/\b(vite\s+(?:preview|--host)|npm\s+run\s+(?:dev|preview)|pnpm\s+(?:dev|preview)|yarn\s+(?:dev|preview)|http-server|python(?:3)?\s+-m\s+http\.server|serve\s)\b/.test(c)) {
+    return "preview";
   }
   return "command";
 }
@@ -136,6 +162,7 @@ function classifyTool(tool: string, input: Record<string, unknown>): { kind: Act
   if (lower === "read") return { kind: "read", target: stripProjectPrefix(file) };
   if (/^(grep|glob|search|websearch|codebase_search)$/.test(lower)) return { kind: "search", target: query || stripProjectPrefix(file) || tool };
   if (/^(list|ls|tree)$/.test(lower)) return { kind: "list", target: stripProjectPrefix(file || String(input.dir || "")) || "project structure" };
+  if (/^(browser|preview|screenshot|open_browser)$/.test(lower)) return { kind: "preview", target: String(input.url || query || "live preview") };
   if (/^(webfetch|fetch|curl)$/.test(lower)) return { kind: "fetch", target: String(input.url || query || tool) };
   if (/^(todowrite|todoread|todo)$/.test(lower)) return { kind: "todo", target: "task list" };
   return { kind: "generic", target: stripProjectPrefix(file) || command || query || tool };
@@ -160,6 +187,29 @@ function countsFromDiffText(diff: string): { additions: number; deletions: numbe
   return additions || deletions ? { additions, deletions } : null;
 }
 
+/** Minimal unified patch rebuilt from an edit tool's real old/new inputs. */
+function buildEditSnippet(kind: ActionKind, input: Record<string, unknown>): string {
+  if (kind !== "edit") return "";
+  const oldText = firstString(input, "old", "old_string", "search", "replace");
+  const newText = firstString(input, "new", "new_string", "replace_with", "replacement");
+  if (!oldText && !newText) return "";
+  const minus = oldText
+    ? oldText.split("\n").map((line) => `-${line}`).join("\n")
+    : "";
+  const plus = newText
+    ? newText.split("\n").map((line) => `+${line}`).join("\n")
+    : "";
+  return [minus, plus].filter(Boolean).join("\n");
+}
+
+function firstString(input: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = input[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return "";
+}
+
 export function useClyraCode() {
   const [state, setState] = useState<ClyraCodeState>(INITIAL);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -167,6 +217,7 @@ export function useClyraCode() {
   const activeProjectRef = useRef<string | null>(null);
   const runStateRef = useRef<RunState>("idle");
   const diffTimerRef = useRef<number | null>(null);
+  const projectsRef = useRef<VibeProject[]>([]);
 
   useEffect(() => {
     runStateRef.current = state.runState;
@@ -200,6 +251,8 @@ export function useClyraCode() {
                   ...action,
                   additions: match.additions,
                   deletions: match.deletions,
+                  before: match.before || action.before,
+                  after: match.after || action.after,
                 };
               }
             }
@@ -240,7 +293,14 @@ export function useClyraCode() {
             // OpenCode replays the submitted user prompt as a part; the
             // optimistic user entry already owns it.
             if (prev.log.some((e) => e.type === "user" && e.text === text)) return prev;
-            const log = [...prev.log];
+            // An assistant response means the preceding real reasoning phase
+            // has concluded. Keep thought events sequential with the streamed
+            // tool work instead of leaving several active at once.
+            const log = prev.log.map((entry) =>
+              entry.type === "reasoning" && !entry.endedAt
+                ? { ...entry, endedAt: ts }
+                : entry,
+            );
             const index = log.findIndex((e) => e.id === entryId);
             const entry: LogEntry = { type: "assistant", id: entryId, text, ts };
             if (index >= 0) log[index] = entry;
@@ -251,9 +311,17 @@ export function useClyraCode() {
         }
         if (part.type === "reasoning") {
           const entryId = `reasoning-${part.messageID}-${part.id}`;
+          const summary = String(part.text ?? "").trim();
           setState((prev) => {
-            if (prev.log.some((e) => e.id === entryId)) return prev;
-            return { ...prev, log: [...prev.log, { type: "reasoning", id: entryId, ts }] };
+            const existing = prev.log.find((entry) => entry.id === entryId);
+            if (existing) {
+              if (existing.type !== "reasoning" || !summary || existing.text === summary) return prev;
+              return {
+                ...prev,
+                log: prev.log.map((entry) => entry.id === entryId ? { ...entry, text: summary } : entry),
+              };
+            }
+            return { ...prev, log: [...prev.log, { type: "reasoning", id: entryId, text: summary || undefined, ts }] };
           });
           return;
         }
@@ -277,9 +345,40 @@ export function useClyraCode() {
           const { kind, target } = classifyTool(tool, input);
           const actionId = `${part.sessionID}:${part.messageID}:${part.id}`;
           const status = toolStatus(partState.status);
+          // The harness question tool is the agent asking the user for input.
+          // Render it as natural assistant prose instead of a fake
+          // "Completed question" status row.
+          if (/^question$/.test(tool.trim().toLowerCase())) {
+            if (status === "success") {
+              const question = String(input.question || partState.output || "").trim();
+              if (question) {
+                setState((prev) => {
+                  const settledLog = prev.log.map((entry) =>
+                    entry.type === "reasoning" && !entry.endedAt
+                      ? { ...entry, endedAt: ts }
+                      : entry,
+                  );
+                  return {
+                    ...prev,
+                    log: [
+                      ...settledLog,
+                      { type: "assistant" as const, id: `assistant-${actionId}`, text: question, ts },
+                    ],
+                  };
+                });
+              }
+            }
+            return;
+          }
           const metadataDiff =
             typeof partState.metadata?.diff === "string" ? (partState.metadata.diff as string) : "";
-          const counts = countsFromDiffText(metadataDiff);
+          // Edit tools often carry their old/new text right in the input; the
+          // harness metadata has no diff for them. Rebuild the real change as
+          // a minimal patch so streaming edit boxes have honest line content.
+          const inputPatch = typeof input.patch === "string" ? input.patch : "";
+          const editSnippet = buildEditSnippet(kind, input);
+          const patchSource = metadataDiff || inputPatch || editSnippet;
+          const counts = countsFromDiffText(patchSource);
           const writtenContent =
             kind === "create" && typeof input.content === "string" ? input.content : undefined;
           // The write tool creates whole files; the real addition count is the
@@ -304,7 +403,7 @@ export function useClyraCode() {
                   : undefined,
               additions: counts?.additions ?? existing?.additions ?? writeAdditions,
               deletions: counts?.deletions ?? existing?.deletions,
-              patch: metadataDiff || existing?.patch,
+              patch: patchSource || existing?.patch,
               contentAfter: writtenContent ?? existing?.contentAfter,
               startedAt: existing?.startedAt ?? partState.time?.start ?? ts,
               endedAt:
@@ -313,9 +412,20 @@ export function useClyraCode() {
                   : undefined,
             };
             const actions = { ...prev.actions, [actionId]: action };
-            const log = prev.log.some((e) => e.type === "action" && e.actionId === actionId)
-              ? prev.log
-              : [...prev.log, { type: "action" as const, id: `entry-${actionId}`, actionId, ts }];
+            // A real tool invocation is the boundary of a thinking phase. The
+            // transcript should show one current action, never a growing list
+            // of still-shimmering thoughts.
+            const settledLog = prev.log.map((entry) =>
+              entry.type === "reasoning" && !entry.endedAt
+                ? { ...entry, endedAt: ts }
+                : entry,
+            );
+            const log = settledLog.some((e) => e.type === "action" && e.actionId === actionId)
+              ? settledLog
+              : [
+                  ...settledLog,
+                  { type: "action" as const, id: `entry-${actionId}`, actionId, ts },
+                ];
             return { ...prev, actions, log };
           });
           if (
@@ -461,6 +571,7 @@ export function useClyraCode() {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const projects = await api.listProjects();
+        projectsRef.current = projects;
         setState((prev) => ({ ...prev, projects }));
         return projects;
       } catch {
@@ -475,12 +586,16 @@ export function useClyraCode() {
       closeStream();
       activeSessionRef.current = null;
       activeProjectRef.current = projectId;
-      setState((prev) => ({
-        ...INITIAL,
-        projects: prev.projects,
-        model: prev.model,
-        activeProjectId: projectId,
-      }));
+      setState((prev) => {
+        const project = prev.projects.find((p) => p.id === projectId);
+        return {
+          ...INITIAL,
+          projects: prev.projects,
+          model: prev.model,
+          activeProjectId: projectId,
+          platform: project?.platform === "ios" ? "ios" : "web",
+        };
+      });
       try {
         if (projectId) localStorage.setItem(STORAGE_KEY, JSON.stringify({ projectId }));
         else localStorage.removeItem(STORAGE_KEY);
@@ -490,9 +605,9 @@ export function useClyraCode() {
   );
 
   const startRun = useCallback(
-    async (prompt: string) => {
+    async (prompt: string, agent?: string) => {
       const projectId = activeProjectRef.current;
-      if (!projectId || !prompt.trim()) return;
+      if (!projectId || !prompt.trim()) return false;
       const followUp = Boolean(activeSessionRef.current) && runStateRef.current !== "idle";
       const userEntry: LogEntry = {
         type: "user",
@@ -507,6 +622,7 @@ export function useClyraCode() {
         runEndedAt: null,
         error: null,
         restored: false,
+        platform: detectIosIntent(prompt) ? "ios" : prev.platform,
         log: [...prev.log, userEntry],
       }));
 
@@ -520,14 +636,29 @@ export function useClyraCode() {
           sessionId = session.id;
           activeSessionRef.current = sessionId;
           setState((prev) => ({ ...prev, sessionId, sessionTitle: session.title ?? prompt.slice(0, 72) }));
+          // First message names the project: a fresh project created without
+          // a name takes the request as its title.
+          const fresh = projectsRef.current.find((p) => p.id === projectId);
+          if (fresh && /^(new project|untitled)$/i.test(fresh.name.trim())) {
+            void api
+              .renameProject(projectId, session.title ?? prompt.slice(0, 60))
+              .then((renamed) => {
+                setState((prev) => ({
+                  ...prev,
+                  projects: prev.projects.map((p) => (p.id === renamed.id ? renamed : p)),
+                }));
+              })
+              .catch(() => undefined);
+          }
           try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify({ projectId, sessionId }));
           } catch { /* storage unavailable */ }
         }
-        await api.sendPrompt(projectId, sessionId, prompt);
+        await api.sendPrompt(projectId, sessionId, prompt, agent);
         setState((prev) =>
           prev.runState === "starting" ? { ...prev, runState: "running" } : prev,
         );
+        return true;
       } catch (error) {
         setState((prev) => ({
           ...prev,
@@ -535,6 +666,7 @@ export function useClyraCode() {
           runEndedAt: Date.now(),
           error: error instanceof Error ? error.message : "The run could not start.",
         }));
+        return false;
       }
     },
     [openStream],
@@ -556,6 +688,40 @@ export function useClyraCode() {
       await api.abortSession(projectId, sessionId).catch(() => undefined);
     }
   }, []);
+
+  /**
+   * A Visual Edit is a real write made through the same project filesystem as
+   * OpenCode. Surface it in the existing action/diff stream so it remains
+   * reviewable instead of behaving like an invisible preview mutation.
+   */
+  const recordVisualEdit = useCallback(
+    (edit: { file: string; before: string; after: string; additions: number; deletions: number }) => {
+      const now = Date.now();
+      const actionId = `visual-edit:${now}:${Math.random().toString(36).slice(2, 7)}`;
+      const target = stripProjectPrefix(edit.file);
+      setState((prev) => ({
+        ...prev,
+        actions: {
+          ...prev.actions,
+          [actionId]: {
+            id: actionId,
+            kind: "edit",
+            tool: "visual_edit",
+            status: "success",
+            target,
+            additions: edit.additions,
+            deletions: edit.deletions,
+            before: edit.before,
+            after: edit.after,
+            startedAt: now,
+            endedAt: now,
+          },
+        },
+        log: [...prev.log, { type: "action", id: `entry:${actionId}`, actionId, ts: now }],
+      }));
+    },
+    [],
+  );
 
   const replyPermission = useCallback(
     async (permissionId: string, response: "allow" | "always" | "deny") => {
@@ -587,6 +753,8 @@ export function useClyraCode() {
   /** Rebuild the work log from persisted session messages after a reload. */
   const restoreSession = useCallback(
     async (projectId: string, sessionId: string) => {
+      // Bring the runtime up so persisted sessions can be queried again.
+      await api.startRuntime(projectId).catch(() => undefined);
       const messages = await api.sessionMessages(projectId, sessionId).catch(() => null);
       if (!messages) return false;
       const log: LogEntry[] = [];
@@ -600,7 +768,13 @@ export function useClyraCode() {
         const action = actions[key];
         const match = diffs.find((d) => stripProjectPrefix(d.file) === action.target);
         if (match && /^(edit|create|delete)$/.test(action.kind)) {
-          actions[key] = { ...action, additions: match.additions, deletions: match.deletions };
+          actions[key] = {
+            ...action,
+            additions: match.additions,
+            deletions: match.deletions,
+            before: match.before || action.before,
+            after: match.after || action.after,
+          };
         }
       }
       setState((prev) => ({
@@ -620,27 +794,53 @@ export function useClyraCode() {
     [openStream],
   );
 
+  /** Select a saved conversation without changing the workspace it belongs to. */
+  const selectThread = useCallback(
+    async (projectId: string, sessionId: string) => {
+      selectProject(projectId);
+      await restoreSession(projectId, sessionId);
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ projectId, sessionId }));
+      } catch { /* storage unavailable */ }
+    },
+    [restoreSession, selectProject],
+  );
+
+  /** A new chat is a new OpenCode session, never a new project directory. */
+  const newChat = useCallback(
+    async (projectId: string) => {
+      await api.startRuntime(projectId);
+      const session = await api.createSession(projectId, "New chat");
+      selectProject(projectId);
+      activeSessionRef.current = session.id;
+      setState((prev) => ({ ...prev, sessionId: session.id, sessionTitle: session.title ?? "New chat" }));
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ projectId, sessionId: session.id }));
+      } catch { /* storage unavailable */ }
+      return session;
+    },
+    [selectProject],
+  );
+
   const boot = useCallback(async () => {
-    const [projects, status] = await Promise.all([
+    const [, status] = await Promise.all([
       loadProjects(),
       api.openCodeStatus().catch(() => null),
     ]);
-    let saved: { projectId?: string; sessionId?: string } = {};
-    try {
-      saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-    } catch { /* corrupt storage ignored */ }
-    const savedProject = projects.find((p) => p.id === saved.projectId);
-    const projectId = savedProject?.id ?? projects[0]?.id ?? null;
-    activeProjectRef.current = projectId;
+    // Clyra deliberately opens in a fresh, unbound welcome state. Projects
+    // remain available in the sidebar, but reopening Vibe Coder never drops
+    // a user back into an old conversation or restores its scroll position.
+    activeProjectRef.current = null;
+    activeSessionRef.current = null;
     setState((prev) => ({
       ...prev,
-      activeProjectId: projectId,
+      activeProjectId: null,
+      sessionId: null,
+      sessionTitle: "",
       model: status?.model ?? null,
+      platform: "web",
     }));
-    if (projectId && saved.sessionId && savedProject) {
-      await restoreSession(projectId, saved.sessionId).catch(() => undefined);
-    }
-  }, [loadProjects, restoreSession]);
+  }, [loadProjects]);
 
   useEffect(() => {
     void boot();
@@ -655,7 +855,7 @@ export function useClyraCode() {
       .filter(Boolean);
     const running = state.runState === "running" || state.runState === "starting";
     const fileActions = actionList.filter((a) => /^(edit|create|delete)$/.test(a.kind));
-    const commandActions = actionList.filter((a) => a.kind === "command");
+    const commandActions = actionList.filter((a) => /^(command|build|check|test|preview)$/.test(a.kind));
     const pendingPermissions = actionList.filter(
       (a) => a.kind === "permission" && a.status === "active",
     );
@@ -678,6 +878,26 @@ export function useClyraCode() {
       }
       effectiveDiffs = [...byFile.values()];
     }
+    // Keep direct Visual Edit writes visible beside harness-generated diffs.
+    // When the same file has a session diff, preserve its original before
+    // snapshot and layer the latest real visual edit over it.
+    const directVisualEdits = fileActions.filter(
+      (action) => action.tool === "visual_edit" && action.status === "success" && action.before !== undefined && action.after !== undefined,
+    );
+    if (directVisualEdits.length) {
+      const byFile = new Map(effectiveDiffs.map((diff) => [diff.file, diff]));
+      for (const action of directVisualEdits) {
+        const existing = byFile.get(action.target);
+        byFile.set(action.target, {
+          file: action.target,
+          before: existing?.before || action.before || "",
+          after: action.after || existing?.after || "",
+          additions: (existing?.additions ?? 0) + (action.additions ?? 0),
+          deletions: (existing?.deletions ?? 0) + (action.deletions ?? 0),
+        });
+      }
+      effectiveDiffs = [...byFile.values()];
+    }
     return { actionList, running, fileActions, commandActions, pendingPermissions, effectiveDiffs };
   }, [state.log, state.actions, state.runState, state.diffs]);
 
@@ -686,9 +906,12 @@ export function useClyraCode() {
     ...derived,
     loadProjects,
     selectProject,
+    selectThread,
+    newChat,
     startRun,
     cancelRun,
     replyPermission,
+    recordVisualEdit,
     setState,
   };
 }
@@ -733,11 +956,18 @@ function rebuildMessage(
       const tool = String(part.tool || "tool");
       const partState = part.state ?? { status: "completed" as const };
       const input = (partState.input ?? {}) as Record<string, unknown>;
+      if (/^question$/.test(tool.trim().toLowerCase())) {
+        const question = String(input.question || partState.output || "").trim();
+        if (question) log.push({ type: "assistant", id: `assistant-${part.messageID}-${part.id}`, text: question, ts });
+        continue;
+      }
       const { kind, target } = classifyTool(tool, input);
       const actionId = `${part.sessionID}:${part.messageID}:${part.id}`;
       const metadataDiff =
         typeof partState.metadata?.diff === "string" ? (partState.metadata.diff as string) : "";
-      const counts = countsFromDiffText(metadataDiff);
+      const inputPatch = typeof input.patch === "string" ? input.patch : "";
+      const patchSource = metadataDiff || inputPatch || buildEditSnippet(kind, input);
+      const counts = countsFromDiffText(patchSource);
       const writtenContent =
         kind === "create" && typeof input.content === "string" ? input.content : undefined;
       actions[actionId] = {
@@ -751,7 +981,7 @@ function rebuildMessage(
           counts?.additions ??
           (writtenContent !== undefined ? writtenContent.split("\n").length : undefined),
         deletions: counts?.deletions,
-        patch: metadataDiff || undefined,
+        patch: patchSource || undefined,
         contentAfter: writtenContent,
         startedAt: partState.time?.start ?? ts,
         endedAt: partState.time?.end,

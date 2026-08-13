@@ -6,9 +6,17 @@ import os from "node:os";
 
 const DEFAULT_AGENTS_MD = `# Clyra Code Agent
 
-Be an adaptive expert coding agent. Understand intent → investigate → act → inspect → adapt → validate until complete.
-No fixed tool-call quota. Scale effort to the request. Read before editing. Prefer production-quality work. Fix failures after checks.
-For greenfield apps, put index.html at the project root so live preview can start.
+Be an adaptive expert coding agent like Cursor or Codex. Understand intent → investigate → plan across files → act → inspect → adapt → validate until complete. No fixed tool-call quota. Scale effort to the request. Read before editing. Prefer production-quality work. Fix failures after checks.
+
+Work in real, adaptive phases rather than an unstructured command log. For non-trivial tasks, use the available todo/task-list tool before implementation and keep it updated as discoveries change the plan. Each phase should be a coherent unit such as inspection, implementation, validation, or recovery. Between meaningful phases, provide a concise user-facing progress update (one to three sentences) describing what was actually learned or completed and the next step. Never reveal hidden chain-of-thought or invent actions, files, checks, or results.
+
+Project architecture rules — for every coding request:
+- Inspect the existing project structure first (list files, read configs) and match its framework and conventions.
+- Split code naturally across components, pages, styles, hooks, utilities, APIs, config, assets, and tests. Never cram everything into a single index.html unless a single-file deliverable is genuinely requested.
+- For React/Next/Vite projects create proper files: components, styles, hooks, utilities, routes, and config.
+- Reuse existing components instead of rebuilding them. Revisit and edit multiple files during the run when needed.
+- Run the project's build/typecheck/tests after changes and fix every error before finishing.
+- For greenfield web apps, put index.html at the project root so the live preview can start, and keep it as a thin shell that loads the real source files.
 `;
 
 export type ClyraAgentEvent = {
@@ -31,26 +39,59 @@ type ProjectRuntime = {
   listeners: Set<(event: ClyraAgentEvent) => void>;
   events: ClyraAgentEvent[];
   partStates: Map<string, string>;
-  reconciliation: Map<string, { fingerprint: string; idleSince?: number }>;
+  reconciliation: Map<string, { fingerprint: string; idleSince?: number; emptyRetries?: number }>;
 };
 
-function resolveCodingModel(): { providerID: string; modelID: string } {
+export type CodingModelStatus =
+  | { available: true; providerID: string; modelID: string }
+  | { available: false; error: string };
+
+/**
+ * Resolve the coding model from the same server-only configuration that powers
+ * Clyra.  The renderer never receives credentials, and we deliberately do not
+ * fall back to an OpenCode-hosted free model: doing so would silently bypass a
+ * user's configured Clyra provider.
+ */
+export function codingModelStatus(): CodingModelStatus {
   const provider = String(process.env.CLYRA_OPENCODE_PROVIDER || "").trim();
-  const model = String(process.env.CLYRA_OPENCODE_MODEL || "").trim();
-  if (provider && model) return { providerID: provider, modelID: model };
+  const model = String(
+    process.env.CLYRA_OPENCODE_MODEL || process.env.DEEPSEEK_MODEL || process.env.MY_LLM_MODEL || "",
+  ).trim();
+  if (provider && model) return { available: true, providerID: provider, modelID: model };
 
   const deepseekKey = String(process.env.DEEPSEEK_API_KEY || process.env.MY_LLM_API_KEY || "").trim();
   const deepseekLooksValid =
-    deepseekKey.startsWith("sk-") &&
-    deepseekKey.length >= 32 &&
+    deepseekKey.length >= 16 &&
     !/test|dummy|example|placeholder/i.test(deepseekKey);
 
   if (deepseekLooksValid) {
-    return { providerID: "deepseek", modelID: model || "deepseek-v4-flash" };
+    return { available: true, providerID: "deepseek", modelID: model || "deepseek-v4-flash" };
   }
 
-  // Free OpenCode coding model — works without a DeepSeek credential.
-  return { providerID: "opencode", modelID: model || "north-mini-code-free" };
+  return {
+    available: false,
+    error: "Clyra's configured coding provider is unavailable. Check the server-side Clyra provider configuration and retry.",
+  };
+}
+
+function resolveCodingModel(): { providerID: string; modelID: string } {
+  const status = codingModelStatus();
+  if (!status.available) throw new Error(status.error);
+  return { providerID: status.providerID, modelID: status.modelID };
+}
+
+/**
+ * Some DeepSeek Flash tool-use turns can terminate with no assistant part
+ * after a legitimate sequence of commands. Keep the configured model for the
+ * normal run, but use the available Pro variant only for the bounded recovery
+ * continuation so the agent can finish the work it already started.
+ */
+function resolveRecoveryModel(): { providerID: string; modelID: string } {
+  const model = resolveCodingModel();
+  if (model.providerID === "deepseek" && model.modelID === "deepseek-v4-flash") {
+    return { ...model, modelID: "deepseek-v4-pro" };
+  }
+  return model;
 }
 
 /**
@@ -110,20 +151,44 @@ export class OpenCodeRuntimeManager {
     return this.client(project.projectPath).session.list({ throwOnError: true });
   }
 
+  async renameSession(projectId: string, sessionId: string, title: string) {
+    const project = this.requiredProject(projectId);
+    if (!project.sessions.has(sessionId)) project.sessions.add(sessionId);
+    return this.client(project.projectPath).session.update({
+      path: { id: sessionId },
+      body: { title },
+      throwOnError: true,
+    });
+  }
+
+  async deleteSession(projectId: string, sessionId: string) {
+    const project = this.requiredProject(projectId);
+    const result = await this.client(project.projectPath).session.delete({
+      path: { id: sessionId },
+      throwOnError: true,
+    });
+    project.sessions.delete(sessionId);
+    return result;
+  }
+
   async messages(projectId: string, sessionId: string) {
-    const project = this.requiredSession(projectId, sessionId);
+    const project = this.requiredProject(projectId);
+    // Sessions persist on the OpenCode server across Clyra restarts, so a
+    // restored session may not be in our in-memory set yet. The SDK client
+    // is scoped to the project directory, which keeps this safe.
+    if (!project.sessions.has(sessionId)) project.sessions.add(sessionId);
     return this.client(project.projectPath).session.messages({ path: { id: sessionId }, throwOnError: true });
   }
 
   async diff(projectId: string, sessionId: string) {
-    const project = this.requiredSession(projectId, sessionId);
+    const project = this.requiredProject(projectId);
+    if (!project.sessions.has(sessionId)) project.sessions.add(sessionId);
     return this.client(project.projectPath).session.diff({ path: { id: sessionId }, throwOnError: true });
   }
 
   async prompt(projectId: string, sessionId: string, text: string, agent?: string, model?: { providerID: string; modelID: string }) {
     const project = this.requiredSession(projectId, sessionId);
-    // Prefer an explicit override, then a usable DeepSeek key, then OpenCode's
-    // free coding models so local/cloud agents can still build without secrets.
+    // The model always comes from Clyra's server-side provider configuration.
     const selectedModel = model ?? resolveCodingModel();
     // Adaptive behaviour is guided via AGENTS.md (OpenCode reads it), not by
     // injecting preface text into the user turn (which models may echo).
@@ -141,7 +206,12 @@ export class OpenCodeRuntimeManager {
   private async ensureAgentsGuide(projectPath: string) {
     const agentsPath = path.join(projectPath, "AGENTS.md");
     try {
-      await fs.promises.access(agentsPath);
+      // Upgrade projects still carrying the original seeded guidance so the
+      // multi-file architecture rules apply to existing workspaces too.
+      const existing = await fs.promises.readFile(agentsPath, "utf8");
+      if (/Be an adaptive expert coding agent\./.test(existing) && !/Project architecture rules/.test(existing)) {
+        await fs.promises.writeFile(agentsPath, DEFAULT_AGENTS_MD, "utf8").catch(() => undefined);
+      }
     } catch {
       await fs.promises.writeFile(agentsPath, DEFAULT_AGENTS_MD, "utf8").catch(() => undefined);
     }
@@ -287,7 +357,7 @@ export class OpenCodeRuntimeManager {
       // final assistant text lands. Treat a long-stable fingerprint as idle so
       // Thinking collapses and the live preview can refresh.
       const idleSince = !changed ? (previous?.idleSince ?? now) : undefined;
-      project.reconciliation.set(sessionId, { fingerprint, idleSince });
+      project.reconciliation.set(sessionId, { fingerprint, idleSince, emptyRetries: previous?.emptyRetries ?? 0 });
 
       // The server can briefly report idle in between tool-call turns. Keep
       // reconciling through that transition and only complete after a stable
@@ -303,9 +373,48 @@ export class OpenCodeRuntimeManager {
         const hasTool = parts.some((part) => part.type === "tool" || Boolean(part.tool));
         const hasErrorPart = parts.some((part) => part.type === "error" || (part.state as { status?: string } | undefined)?.status === "error");
         if (assistant && !hasText && !hasTool && !hasErrorPart) {
+          // Deep tool-use runs can occasionally end with a blank continuation
+          // from the model even though OpenCode has already completed real
+          // reads/commands. Resume that *same* session before declaring the
+          // provider unhealthy. This is intentionally bounded and is not a
+          // fabricated activity state: it is a normal OpenCode prompt sent to
+          // the configured server-side model, with its ensuing events streamed
+          // back through the existing transcript.
+          const didMeaningfulWork = messages.some((message) =>
+            message.info?.role === "assistant" &&
+            (message.parts ?? []).some((part) =>
+              part.type === "tool" ||
+              (part.type === "reasoning" && String((part as { text?: unknown }).text ?? "").trim().length > 0),
+            ),
+          );
+          const emptyRetries = previous?.emptyRetries ?? 0;
+          if (didMeaningfulWork && emptyRetries < 2) {
+            project.reconciliation.set(sessionId, {
+              fingerprint: "",
+              emptyRetries: emptyRetries + 1,
+            });
+            this.publish(project, { type: "session.status", properties: { sessionID: sessionId, status: { type: "busy" } } });
+            try {
+              await this.client(project.projectPath).session.promptAsync({
+                path: { id: sessionId },
+                body: {
+                  model: resolveRecoveryModel(),
+                  parts: [{
+                    type: "text",
+                    text: "Continue the current task from the work already completed. Your previous turn ended without a final response. Complete any remaining implementation and validation, then provide a concise final result.",
+                  }],
+                },
+                throwOnError: true,
+              });
+              setTimeout(() => void this.reconcileSession(project, sessionId, 0), 900).unref();
+              return;
+            } catch (retryError) {
+              this.lastError = retryError instanceof Error ? retryError.message : String(retryError);
+            }
+          }
           const authHint = this.readRecentProviderAuthError();
           const message = authHint
-            || "The coding model returned an empty response. Set DEEPSEEK_API_KEY (or run `opencode auth login`) so Clyra Code can run agent loops.";
+            || "The configured coding model stopped before completing its final response. Completed work is preserved; retry to continue the same task.";
           this.lastError = message;
           this.publish(project, { type: "session.error", properties: { sessionID: sessionId, error: { message } } });
           project.reconciliation.delete(sessionId);
@@ -336,7 +445,7 @@ export class OpenCodeRuntimeManager {
       for (let i = lines.length - 1; i >= 0; i -= 1) {
         const line = lines[i];
         if (/\[401\]|Unauthorized|Provider returned error|AI_APICallError/i.test(line)) {
-          return "Coding model auth failed (401). Add DEEPSEEK_API_KEY to the server env, or run `opencode auth login`, then retry.";
+          return "Clyra's configured coding provider rejected the request (401). Check the server-side provider configuration, then retry.";
         }
       }
     } catch {

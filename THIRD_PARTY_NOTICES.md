@@ -7,6 +7,8 @@ application in this change.
 | Component | Revision | Licence | Intended reference use |
 | --- | --- | --- | --- |
 | browser-use | `40717057a3f46c403df360206c2784c840da3345` | MIT | Browser agent observation, planning, verification, and chat-card patterns. |
+| xtool-org/xtool | `697adae` | MIT | Optional cross-platform SwiftPM build/sign/install adapter. It runs through WSL on Windows or natively on macOS; Clyra never copies its source. |
+| danielpaulus/go-ios | `9c9fa2a` | MIT | Optional physical-iPhone device stream and UI-automation adapter. Clyra invokes its public CLI contract only. |
 | PageLM (CaviraOSS) | `736f22b9b1b194fc50d90b29337d04d99ba81172` | PageLM Community License (non-commercial without written permission) | Study-suite capability and prompt reference only; no source copied. Clyra Study Pal is a native rewrite. |
 | OpenCluely | `dffdf1a8f7ccefe895fb8de928b177167df11d58` | Apache-2.0 | Explicit screen-assistant/session design. |
 | suitedaces/computer-agent (Taskhomie) | `b5bf31fa8041461675782dae2c7ec155b323224c` | Apache-2.0 | Computer Use tool contract and agent-loop architecture reference. Clyra uses its own Electron adapter and does not bundle Taskhomie or its Tauri runtime. |
@@ -139,18 +141,20 @@ pose model-weight licence.
 See `DEPENDENCY_COMMITS.lock` for clone pins and `MODEL_LICENSES.md` for the
 mandatory model-weight release gate.
 
-## Optional OpenCode Vibe runtime (2026-08-02)
+## Integrated Clyra Code runtime (2026-08-12)
 
 | Reference | Revision | Source licence | Clyra decision |
 | --- | --- | --- | --- |
-| anomalyco/opencode | `1882c33827cf0ce5c948b69ab5a87ed8f6790cf8` | MIT | Clyra owns a narrow subprocess/SSE adapter to OpenCode's documented `run --format json` interface. The OpenCode source, UI, configuration, models, provider credentials, and plugins are not copied or bundled. |
+| cdesktop-ai/cdesktop | `75bd015e` | Apache-2.0 | Reference checkout for the desktop coding-workspace interaction model: sessions, action stream, files, diffs, terminal and preview. Clyra owns its React surface and does not ship cdesktop branding or source. |
+| anomalyco/opencode | `1f94d8a3` | MIT | Clyra owns the loopback SDK/SSE adapter. OpenCode provides the live coding-agent harness; Clyra retains provider configuration, project-scoping, UI, credentials and approvals. |
 
 The Vibe Coder surface runs only against a Clyra-managed project workspace and
 does not accept a browser-supplied filesystem path. It does not silently enable
-OpenCode's `--auto` permission flag; deployments may opt in with
-`CLYRA_OPENCODE_AUTO_APPROVE=true` after their own security review. A configured
-OpenCode provider/model is required for execution. OpenCode is a third-party
-runtime and Clyra is not affiliated with its authors.
+OpenCode's `--auto` permission flag; approvals remain explicit in Clyra. Model
+requests use Clyra's already configured server-side provider and never expose a
+credential to the renderer. The full Apache-2.0 and MIT licence texts remain in
+the respective checked-out upstream directories. Clyra is not affiliated with
+either upstream project.
 
 ## Clyra Code V5 technical references (2026-08-04)
 

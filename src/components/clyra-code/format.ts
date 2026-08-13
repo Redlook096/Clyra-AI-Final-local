@@ -1,5 +1,8 @@
 export function stripFilePrefix(path: string) {
-  return path.replace(/^.*\/projects\/[^/]+\/files\//, "").replace(/^\.\//, "");
+  const normalized = path.replace(/\\/g, "/");
+  const root = normalized.match(/^.*\/projects\/[^/]+\/files\/?$/);
+  if (root) return "project root";
+  return normalized.replace(/^.*\/projects\/[^/]+\/files\//, "").replace(/^\.\//, "");
 }
 
 export function formatTokens(tokens: { input: number; output: number } | null) {

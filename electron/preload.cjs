@@ -70,4 +70,12 @@ contextBridge.exposeInMainWorld("clyraDesktop", {
     execute: (payload) => ipcRenderer.invoke("research:execute", payload),
     onAgentProgress: (callback) => subscribe("research:agent-progress", callback),
   },
+  terminal: {
+    open: (payload) => ipcRenderer.invoke("terminal:open", payload),
+    write: (payload) => ipcRenderer.invoke("terminal:write", payload),
+    resize: (payload) => ipcRenderer.invoke("terminal:resize", payload),
+    kill: (payload) => ipcRenderer.invoke("terminal:kill", payload),
+    onData: (callback) => subscribe("terminal:data", callback),
+    onExit: (callback) => subscribe("terminal:exit", callback),
+  },
 });

@@ -13,6 +13,40 @@ export type VibeProject = {
   createdAt: string;
   updatedAt: string;
   previewUrl?: string;
+  /** Detected platform: web (default) or ios for Swift/Xcode projects. */
+  platform?: "web" | "ios";
+};
+
+export type IosSimulatorInfo = {
+  udid: string;
+  name: string;
+  version: string;
+  booted: boolean;
+};
+
+export type IosStatus = {
+  mac: boolean;
+  xcode: string | null;
+  simulators: IosSimulatorInfo[];
+  booted: IosSimulatorInfo | null;
+  bridgeRunning: boolean;
+  bridgeUrl: string | null;
+};
+
+export type SwiftWasmStatus = {
+  configured: boolean;
+  compilerUrl: string | null;
+  framework: "ElementaryUI";
+  target: string;
+  devices: string[];
+};
+
+export type MobilePreviewStatus = {
+  configured: boolean;
+  xtool: boolean;
+  goIos: boolean;
+  host: string;
+  requiresPhysicalDevice: boolean;
 };
 
 export type FileDiff = {
@@ -66,6 +100,13 @@ export type PreviewLogLine = {
   timestamp?: number;
 };
 
+export type UploadedCodeAttachment = {
+  name: string;
+  relativePath?: string;
+  type: string;
+  data: string;
+};
+
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
@@ -92,6 +133,95 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, prompt }),
     }).then((r) => r.project),
+
+  renameProject: (id: string, name: string) =>
+    json<{ project: VibeProject }>(`/api/vibe/projects/${enc(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    }).then((r) => r.project),
+
+  iosStatus: () => json<IosStatus>("/api/ios/status"),
+
+  swiftWasmStatus: () => json<SwiftWasmStatus>("/api/swift-wasm/status"),
+
+  swiftWasmBuild: (projectId: string) => json<{ ok: boolean; bundleUrl?: string; buildId?: string; diagnostics?: string[]; error?: string }>(
+    `/api/swift-wasm/projects/${enc(projectId)}/build`,
+    { method: "POST" },
+  ),
+
+  swiftWasmInspect: (projectId: string) =>
+    json<{ metadata: { file: string; name: string; line: number } | null }>(
+      `/api/swift-wasm/projects/${enc(projectId)}/inspect`,
+    ),
+
+  swiftWasmReadiness: (projectId: string) =>
+    json<{ ready: boolean; kind: "package" | null; projectPath: string | null }>(
+      `/api/swift-wasm/projects/${enc(projectId)}/readiness`,
+    ),
+
+  mobilePreviewStatus: () => json<MobilePreviewStatus>("/api/mobile-preview/status"),
+
+  mobilePreviewDevices: () => json<{ devices: string[] }>("/api/mobile-preview/devices"),
+
+  mobilePreviewBuild: (projectId: string, deviceId?: string) => json<{ ok: boolean; bundleId?: string; streamUrl?: string | null; message?: string; error?: string }>(
+    `/api/mobile-preview/projects/${enc(projectId)}/build`,
+    { method: "POST", body: JSON.stringify(deviceId ? { deviceId } : {}) },
+  ),
+
+  mobilePreviewReadiness: (projectId: string) =>
+    json<{ ready: boolean; projectPath: string }>(`/api/mobile-preview/projects/${enc(projectId)}/readiness`),
+
+  mobilePreviewInput: (projectId: string, input: Record<string, unknown>) =>
+    json<{ ok: boolean; error?: string }>(`/api/mobile-preview/projects/${enc(projectId)}/input`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  iosStartBridge: () => json<{ ok: boolean; url: string }>("/api/ios/bridge/start", { method: "POST" }),
+
+  iosLaunch: (projectId: string, device?: { name?: string; version?: string }) =>
+    json<{
+      ok: boolean;
+      sessionId?: string;
+      controlUrl?: string;
+      device?: string;
+      version?: string;
+      bundleId?: string;
+      error?: string;
+    }>("/api/ios/launch", {
+      method: "POST",
+      body: JSON.stringify({ projectId, deviceName: device?.name, iosVersion: device?.version }),
+    }),
+
+  iosRelaunch: (projectId: string) =>
+    json<{ ok: boolean; error?: string }>("/api/ios/relaunch", {
+      method: "POST",
+      body: JSON.stringify({ projectId }),
+    }),
+
+  iosInspect: (projectId: string) =>
+    json<{ metadata: { file: string; name: string; line: number } | null }>(
+      `/api/ios/projects/${enc(projectId)}/inspect`,
+    ),
+
+  iosReadiness: (projectId: string) =>
+    json<{ ready: boolean; kind: "workspace" | "project" | "package" | null; projectPath: string | null }>(
+      `/api/ios/projects/${enc(projectId)}/readiness`,
+    ),
+
+  sourceEdit: (projectId: string, payload: { file: string; selector: string; property: string; value: string }) =>
+    json<{
+      applied: boolean;
+      error?: string;
+      file?: string;
+      before?: string;
+      after?: string;
+      additions?: number;
+      deletions?: number;
+    }>(`/api/vibe/projects/${enc(projectId)}/source-edit`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 
   getProject: (id: string) =>
     json<{ project: VibeProject; files: Array<{ path: string; content: string }>; plan: string }>(
@@ -120,10 +250,27 @@ export const api = {
       `/api/opencode/sessions/${enc(projectId)}`,
     ),
 
+  renameSession: (projectId: string, sessionId: string, title: string) =>
+    json<{ id: string; title: string }>(`/api/opencode/sessions/${enc(projectId)}/${enc(sessionId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    }),
+
+  deleteSession: (projectId: string, sessionId: string) =>
+    json<{ ok: boolean }>(`/api/opencode/sessions/${enc(projectId)}/${enc(sessionId)}`, {
+      method: "DELETE",
+    }),
+
   sendPrompt: (projectId: string, sessionId: string, text: string, agent?: string) =>
     json<{ ok: boolean }>(
       `/api/opencode/sessions/${enc(projectId)}/${enc(sessionId)}/prompt`,
       { method: "POST", body: JSON.stringify({ text, agent }) },
+    ),
+
+  uploadAttachments: (projectId: string, files: UploadedCodeAttachment[]) =>
+    json<{ attachments: Array<{ name: string; path: string; type: string }> }>(
+      `/api/opencode/projects/${enc(projectId)}/attachments`,
+      { method: "POST", body: JSON.stringify({ files }) },
     ),
 
   abortSession: (projectId: string, sessionId: string) =>
