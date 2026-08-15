@@ -2,10 +2,10 @@
 """Optional lightweight face tracking for the AI Clipper.
 
 Detection backends (feature-detected, never hard-required):
-  1. MediaPipe Tasks Face Landmarker in timestamped VIDEO mode (preferred)
-  2. Motion-heuristic box tracker when MediaPipe is missing but Smooth/Responsive
-     is requested — uses low-res frame differencing + upper-body centroid
-  3. Fixed centre crop when mode is Off or tracking is unavailable
+  1. UltraFace RFB-320 (local OpenCV DNN) for fast, multi-face source detection
+  2. MediaPipe Tasks Face/Pose in timestamped VIDEO mode for landmark/body detail
+  3. Motion-heuristic box tracker only when neither detector is available
+  4. Fixed centre crop when mode is Off or tracking is unavailable
 
 Tracking IDs:
   - Norfair when installed
@@ -44,6 +44,20 @@ import urllib.request
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+
+# UltraFace RFB-320 from Linzaer's Ultra-Light-Fast-Generic-Face-Detector-1MB
+# project.  It is deliberately kept as a small, local OpenCV-DNN model: it
+# gives the offline renderer a reliable detection on every sampled source
+# frame, without a network round trip or a heavyweight runtime.
+ULTRAFACE_MODEL_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "models", "ultraface-rfb-320.onnx"
+)
+ULTRAFACE_INPUT_SIZE = (320, 240)
+ULTRAFACE_SCORE_THRESHOLD = 0.62
+ULTRAFACE_NMS_THRESHOLD = 0.30
+# Keep small faces in group scenes.  The RFB-320 model is specifically useful
+# here; later composition decides whether a multi-person safe crop is needed.
+ULTRAFACE_MIN_BOX_FRACTION = 0.0007
 
 # Face Landmarker supports timestamped prerecorded-video analysis.  The model
 # is acquired into Clyra's local worker cache, never bundled into the renderer.
@@ -106,6 +120,102 @@ FLOW_MIN_VALID_RATIO = 0.60
 FLOW_MAX_FB_ERROR_PX = 1.75
 
 
+def _ultraface_available() -> bool:
+    """Whether the bundled RFB-320 detector can run in this worker."""
+    if not os.path.isfile(ULTRAFACE_MODEL_PATH):
+        return False
+    try:
+        import cv2  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _ultraface_priors() -> np.ndarray:
+    """Generate the SSD priors used by UltraFace's post-processing graph."""
+    input_w, input_h = ULTRAFACE_INPUT_SIZE
+    min_boxes = ((10, 16, 24), (32, 48), (64, 96), (128, 192, 256))
+    strides = (8, 16, 32, 64)
+    priors: List[List[float]] = []
+    for stride, boxes in zip(strides, min_boxes):
+        feature_w = int(math.ceil(input_w / stride))
+        feature_h = int(math.ceil(input_h / stride))
+        for y in range(feature_h):
+            for x in range(feature_w):
+                for size in boxes:
+                    priors.append([
+                        (x + 0.5) / feature_w,
+                        (y + 0.5) / feature_h,
+                        size / input_w,
+                        size / input_h,
+                    ])
+    return np.clip(np.asarray(priors, dtype=np.float32), 0.0, 1.0)
+
+
+class _UltraFaceDetector:
+    """Small OpenCV wrapper around the checked-in UltraFace RFB-320 model."""
+
+    def __init__(self) -> None:
+        import cv2
+
+        self.cv2 = cv2
+        self.net = cv2.dnn.readNetFromONNX(ULTRAFACE_MODEL_PATH)
+        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+        self.priors = _ultraface_priors()
+
+    def detect(self, rgb: np.ndarray) -> List[Dict[str, Any]]:
+        if rgb.size == 0:
+            return []
+        height, width = rgb.shape[:2]
+        if height < 2 or width < 2:
+            return []
+        # The original project normalises RGB pixels around 127 / 128.
+        resized = self.cv2.resize(rgb, ULTRAFACE_INPUT_SIZE)
+        blob = self.cv2.dnn.blobFromImage(resized, 1.0 / 128.0, ULTRAFACE_INPUT_SIZE, 127.0)
+        self.net.setInput(blob)
+        raw_boxes, raw_scores = self.net.forward(["boxes", "scores"])
+        locations = np.asarray(raw_boxes, dtype=np.float32).reshape(-1, 4)
+        scores = np.asarray(raw_scores, dtype=np.float32).reshape(-1, 2)[:, 1]
+        count = min(len(locations), len(scores), len(self.priors))
+        if count == 0:
+            return []
+        locations, scores, priors = locations[:count], scores[:count], self.priors[:count]
+        centers = locations[:, :2] * 0.1 * priors[:, 2:] + priors[:, :2]
+        sizes = np.exp(np.clip(locations[:, 2:] * 0.2, -8.0, 8.0)) * priors[:, 2:]
+        corners = np.concatenate((centers - sizes * 0.5, centers + sizes * 0.5), axis=1)
+        candidates = np.where(scores >= ULTRAFACE_SCORE_THRESHOLD)[0]
+        if not len(candidates):
+            return []
+        boxes_px = []
+        candidate_scores = []
+        for index in candidates:
+            x1, y1, x2, y2 = np.clip(corners[index], 0.0, 1.0)
+            if (x2 - x1) * (y2 - y1) < ULTRAFACE_MIN_BOX_FRACTION:
+                continue
+            boxes_px.append([int(x1 * width), int(y1 * height), int((x2 - x1) * width), int((y2 - y1) * height)])
+            candidate_scores.append(float(scores[index]))
+        if not boxes_px:
+            return []
+        keep = self.cv2.dnn.NMSBoxes(boxes_px, candidate_scores, ULTRAFACE_SCORE_THRESHOLD, ULTRAFACE_NMS_THRESHOLD)
+        observations: List[Dict[str, Any]] = []
+        for kept in np.asarray(keep).reshape(-1):
+            x, y, w, h = boxes_px[int(kept)]
+            x1, y1 = max(0.0, x / width), max(0.0, y / height)
+            x2, y2 = min(1.0, (x + w) / width), min(1.0, (y + h) / height)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            bbox = [x1, y1, x2, y2]
+            observations.append({
+                "bbox": bbox,
+                "confidence": candidate_scores[int(kept)],
+                "stableAnchor": _robust_anchor([], bbox),
+                "mouthOpen": 0.0,
+                "detector": "ultraface-rfb-320",
+            })
+        return observations
+
+
 def capability_report() -> Dict[str, Any]:
     mediapipe_ok = False
     norfair_ok = False
@@ -137,6 +247,7 @@ def capability_report() -> Dict[str, Any]:
     except Exception:
         opencv_ok = False
     return {
+        "ultraFaceRfb320": _ultraface_available(),
         "mediapipeTasks": mediapipe_ok,
         "poseLandmarker": mediapipe_ok,
         "bodyLandmarks": mediapipe_ok,
@@ -148,10 +259,13 @@ def capability_report() -> Dict[str, Any]:
         "byteTrack": False,
         "norfair": norfair_ok,
         "scenedetect": scenedetect_ok,
-        "fallback": "motion-heuristic" if not mediapipe_ok else None,
+        "fallback": "motion-heuristic" if not mediapipe_ok and not _ultraface_available() else None,
         "note": (
-            "MediaPipe Tasks Face Landmarker unavailable; Smooth/Responsive use a "
-            "lightweight motion-heuristic tracker. Install mediapipe for true face detection."
+            "UltraFace RFB-320 detections plus MediaPipe Face/Pose and optical-flow propagation ready."
+            if mediapipe_ok and _ultraface_available()
+            else "UltraFace RFB-320 detections with optical-flow propagation ready."
+            if _ultraface_available()
+            else "MediaPipe Tasks Face Landmarker unavailable; Smooth/Responsive use a lightweight motion-heuristic tracker. Install mediapipe for true face detection."
             if not mediapipe_ok
             else "MediaPipe Face/Pose video-mode adapters with optical-flow propagation ready."
         ),
@@ -2420,9 +2534,17 @@ def _analyse_proxy_stream(
     the video in memory.
     """
     caps = capability_report()
-    backend = "mediapipe-face-pose+lk-flow" if caps["mediapipeTasks"] else "motion-heuristic"
+    backend = (
+        "ultraface-rfb-320+mediapipe-pose+lk-flow"
+        if caps.get("ultraFaceRfb320") and caps["mediapipeTasks"]
+        else "ultraface-rfb-320+lk-flow"
+        if caps.get("ultraFaceRfb320")
+        else "mediapipe-face-pose+lk-flow"
+        if caps["mediapipeTasks"]
+        else "motion-heuristic"
+    )
     work_dir = tempfile.mkdtemp(prefix="clyra-face-", dir=cache_root)
-    detector = pose_detector = None
+    detector = pose_detector = ultra_detector = None
     iou_tracker = SimpleIoUTracker(max_missing=max(1, int(MAX_MISSING_MS / 1000.0 * max(1.0, float(fps)))))
     track_stats: Dict[str, Dict[str, Any]] = {}
     face_tracks: List[Dict[str, Any]] = []
@@ -2435,6 +2557,13 @@ def _analyse_proxy_stream(
     proxy_w = proxy_h = None
 
     try:
+        if caps.get("ultraFaceRfb320"):
+            try:
+                ultra_detector = _UltraFaceDetector()
+            except Exception:
+                # A broken optional model must never prevent rendering; the
+                # MediaPipe/profile/motion fallbacks below remain available.
+                ultra_detector = None
         if caps["mediapipeTasks"]:
             try:
                 detector = _mediapipe_landmarker(os.path.join(cache_root, "models"))
@@ -2496,11 +2625,16 @@ def _analyse_proxy_stream(
             )
             tracked: List[Dict[str, Any]] = []
             frame_source = "optical-flow"
-            if should_detect and detector is not None:
+            if should_detect:
                 try:
                     # VIDEO mode receives monotonically increasing media time,
                     # never worker completion time or React animation time.
-                    detections = _detect_mediapipe(detector, rgb, int(round(time_s * 1000)))
+                    detections = ultra_detector.detect(rgb) if ultra_detector is not None else []
+                    # Face landmarks are a refinement/fallback, not a required
+                    # dependency of the fast detector.  This keeps tracking
+                    # working in packaged workers where MediaPipe is absent.
+                    if not detections and detector is not None:
+                        detections = _detect_mediapipe(detector, rgb, int(round(time_s * 1000)))
                     bodies = _detect_pose_mediapipe(pose_detector, rgb, int(round(time_s * 1000))) if pose_detector is not None else []
                     detections = _attach_bodies_to_faces(detections, bodies)
                     if not detections and bodies:

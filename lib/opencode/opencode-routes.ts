@@ -28,6 +28,25 @@ Project architecture rules — for every coding request:
 - The embedded preview can be unavailable on a host without a configured preview bridge. Generate correct reusable source and use portable/static checks where available; report the preview limitation plainly rather than attempting unavailable device tooling.
 - Only claim completion for checks that actually ran. If validation fails, show the error, fix the file, and rerun the available validation.
 - Use SF Symbols, Swift concurrency (async/await), and accessibility best practices.
+
+Product and quality loop — adapt depth to the requested product before editing:
+- Work through understand → inspect → product/UX plan → visual system → architecture → implement → validate → preview → critique → refine. Use the real todo tool for non-trivial work and revisit earlier phases when the result is weak.
+- Infer the product's users, core job, primary flows, screen inventory, navigation and data states. Do not reuse a generic dashboard, a fixed tab bar, a hero card, or a four-card grid across unrelated products.
+- Select an app-specific design direction (for example: calm editorial journaling, dense finance utility, media-first travel, focused professional tool). Establish a restrained type scale, 4/8/12/16/20/24/32 spacing rhythm, compact radii, surface hierarchy and action hierarchy before implementing views.
+- Avoid generic template signals: inflated cards, giant pills, gradients, glowing surfaces, decorative sparkles, meaningless metrics, oversized headings, repeated tiles and dead controls. Use spacing, typography, grouped lists, separators and purposeful content to create hierarchy instead.
+- Build complete flows, not only a polished home screen: include appropriate empty, populated, loading, error, edit, confirmation and settings states. Every visible action must have a real SwiftUI destination or behaviour.
+- Use believable product-specific sample content so the preview can be judged. Keep state, navigation and persistence appropriate to the scope; never hard-code a complex product into one view.
+- Before completion, run a real visual and interaction review in the available live preview: exercise navigation, primary actions, editing, cancellation, destructive actions and dynamic data. Repair clipping, weak hierarchy, inaccessible contrast, oversized controls, dead interactions or generic composition before finalising.
+- Test compact, standard and large iPhone layouts conceptually in SwiftUI with safe areas and Dynamic Type in mind. Use meaningful accessibility labels and touch targets.
+- The browser/preview tool is a real verification tool. When browser mode is requested, observe the active preview, interact with it, verify outcomes, repair source where necessary and re-test. Never claim interactions that did not occur.
+
+Definition of done for an advanced iOS product:
+- First create a compact internal product brief: user, primary job, primary flow, screen inventory, navigation choice, data model and design direction. Use this to drive implementation rather than inventing a generic dashboard.
+- For a medium or advanced product, implement a minimum of four genuinely useful screens or states, at least three reusable components, a domain model, observable app state and believable populated sample data. The home screen alone is never enough.
+- Wire every visible primary action to a real SwiftUI behaviour: navigation, edit/create flow, filtering, selection, sheet, alert, persistence mutation, or an explicit disabled/unavailable state with a reason. Do not leave decorative buttons.
+- Build a stateful app: mutations must visibly update the appropriate screen and survive view refreshes when the scope calls for it. Prefer AppStorage/UserDefaults for small local persistence rather than fake static controls.
+- Before finishing, inspect the complete app as a product designer. Remove repeated large cards, unused navigation destinations, placeholder labels, empty metric blocks, excessive rounded surfaces and controls that do not match the product's job. If the first version looks like a template, revise it before validating.
+- Keep the portable preview honest: it is a source-driven Chromium preview unless an actual configured compiler reports a native build. Still make source layouts and interactions complete enough that the preview can exercise the core product flow.
 `;
 
 const APPLE_SKILL_SOURCE = path.resolve(process.cwd(), "lib/apple-skills-repo", "skills");
@@ -79,6 +98,95 @@ function titleFor(prompt: string) {
 
 function requestsIosProject(prompt: string) {
   return /\b(?:ios|iphone|ipad|swiftui|uikit|xcode|xcworkspace|xcodeproj)\b/i.test(prompt);
+}
+
+type IosStarterProfile = {
+  title: string;
+  kind: "finance" | "travel" | "health" | "productivity";
+  subtitle: string;
+  primaryAction: string;
+  tabs: [string, string, string];
+  items: Array<{ name: string; detail: string; amount: string }>;
+};
+
+function iOSStarterProfile(prompt: string): IosStarterProfile {
+  const text = prompt.toLowerCase();
+  const explicitName = /(?:called|named)\s+["“']?([A-Za-z][A-Za-z0-9 &'-]{2,32})/i.exec(prompt)?.[1]?.trim();
+  // Also honor the natural “Build Ledgerly, …” form without treating a
+  // generic “Build an app…” instruction as a product name.
+  const buildName = /\bbuild\s+([A-Z][A-Za-z0-9'-]{2,32})(?=\s*[,.:])/i.exec(prompt)?.[1]?.trim();
+  const named = explicitName || buildName;
+  if (/budget|finance|money|expense|transaction|account/.test(text)) return {
+    title: named || "Ledgerly", kind: "finance", subtitle: "A clearer view of every dollar", primaryAction: "Add transaction",
+    tabs: ["Overview", "Activity", "Plan"],
+    items: [{ name: "Northstar Card", detail: "Balance · updated today", amount: "$3,842" }, { name: "Weekly groceries", detail: "Food & dining · Today", amount: "−$68" }, { name: "Transit pass", detail: "Transport · Yesterday", amount: "−$42" }],
+  };
+  if (/travel|trip|itinerary|flight|hotel|destination|journey/.test(text)) return {
+    title: named || "Wayfinder", kind: "travel", subtitle: "Plans that leave room for discovery", primaryAction: "Add to itinerary",
+    tabs: ["Explore", "Itinerary", "Saved"],
+    items: [{ name: "Alfama morning walk", detail: "Day 2 · 9:30 AM", amount: "›" }, { name: "Tasca da Sé", detail: "Dinner · Reservation saved", amount: "›" }, { name: "Belém train", detail: "Day 3 · 10:10 AM", amount: "›" }],
+  };
+  if (/health|medication|wellness|habit|symptom|workout|fitness/.test(text)) return {
+    title: named || "Morrow", kind: "health", subtitle: "Small routines, clearly understood", primaryAction: "Log progress",
+    tabs: ["Today", "Insights", "Profile"],
+    items: [{ name: "Morning medication", detail: "8:00 AM · Due now", amount: "Start" }, { name: "Hydration", detail: "4 of 8 glasses", amount: "50%" }, { name: "Evening reflection", detail: "8:30 PM · Scheduled", amount: "›" }],
+  };
+  return {
+    title: named || "Focus", kind: "productivity", subtitle: "The work that deserves your attention", primaryAction: "Create item",
+    tabs: ["Today", "Projects", "Profile"],
+    items: [{ name: "Shape the launch brief", detail: "Design · Due today", amount: "›" }, { name: "Review prototypes", detail: "Product · 3 notes", amount: "›" }, { name: "Plan the next sprint", detail: "Team · Tomorrow", amount: "›" }],
+  };
+}
+
+/**
+ * An iOS request should never leave a blank workspace while a provider is
+ * recovering from its first tool turn. This is a genuine source scaffold,
+ * not a preview-only mock: OpenCode receives the files and continues to
+ * evolve them during its normal run. We only seed an otherwise empty Swift
+ * workspace, so existing projects always remain user/agent owned.
+ */
+async function seedIosStarterIfEmpty(root: string, prompt: string) {
+  let entries: string[] = [];
+  try { entries = await fs.readdir(root, { recursive: true }) as string[]; } catch { /* created below */ }
+  // Apple skills are copied into .agent and may themselves contain Swift
+  // examples. They are instruction material, not application source, and
+  // must not prevent a brand-new project from receiving its starter files.
+  if (entries.some((entry) => !/(^|[\\/])(?:\.agent|\.git)(?:[\\/]|$)/.test(entry) && entry.endsWith(".swift"))) return false;
+  const profile = iOSStarterProfile(prompt);
+  const identifier = profile.title.replace(/[^A-Za-z0-9]/g, "") || "ClyraApp";
+  const items = profile.items.map((item) => `        ${identifier}Item(title: "${item.name}", detail: "${item.detail}", trailing: "${item.amount}"),`).join("\n");
+  const destinationTitles = profile.tabs.map((tab) => `case .${tab.toLowerCase()}: return "${tab}"`).join("\n        ");
+  const files: Record<string, string> = {
+    "Package.swift": `// Clyra portable SwiftUI source package\n// The on-device build target can provide SwiftUI; Clyra's cross-platform preview reads these sources.\nimport PackageDescription\nlet package = Package(name: "${identifier}", platforms: [.iOS(.v17)], products: [], targets: [])\n`,
+    "App/${identifier}App.swift": `import SwiftUI\n\n@main\nstruct ${identifier}App: App {\n    @StateObject private var store = ${identifier}Store()\n\n    var body: some Scene {\n        WindowGroup {\n            ${identifier}RootView().environmentObject(store)\n        }\n    }\n}\n`,
+    "Models/${identifier}Item.swift": `import Foundation\n\nstruct ${identifier}Item: Identifiable, Hashable {\n    let id = UUID()\n    var title: String\n    var detail: String\n    var trailing: String\n}\n\nenum ${identifier}Tab: String, CaseIterable, Identifiable {\n    case ${profile.tabs[0].toLowerCase()}, ${profile.tabs[1].toLowerCase()}, ${profile.tabs[2].toLowerCase()}\n    var id: String { rawValue }\n    var title: String {\n        switch self {\n        ${destinationTitles}\n        }\n    }\n}\n`,
+    "ViewModels/${identifier}Store.swift": `import Foundation\n\nfinal class ${identifier}Store: ObservableObject {\n    @Published var items: [${identifier}Item] = [\n${items}\n    ]\n    @Published var selectedTab: ${identifier}Tab = .${profile.tabs[0].toLowerCase()}\n    @Published var showingComposer = false\n    @Published var query = ""\n\n    var filteredItems: [${identifier}Item] {\n        guard !query.isEmpty else { return items }\n        return items.filter { $0.title.localizedCaseInsensitiveContains(query) || $0.detail.localizedCaseInsensitiveContains(query) }\n    }\n\n    func add(title: String, detail: String) {\n        items.insert(${identifier}Item(title: title, detail: detail, trailing: "New"), at: 0)\n    }\n}\n`,
+    "Views/${identifier}RootView.swift": `import SwiftUI\n\nstruct ${identifier}RootView: View {\n    @EnvironmentObject private var store: ${identifier}Store\n\n    var body: some View {\n        TabView(selection: $store.selectedTab) {\n            ${identifier}DashboardView().tabItem { Label("${profile.tabs[0]}", systemImage: "square.grid.2x2") }.tag(${identifier}Tab.${profile.tabs[0].toLowerCase()})\n            ${identifier}ListView().tabItem { Label("${profile.tabs[1]}", systemImage: "list.bullet") }.tag(${identifier}Tab.${profile.tabs[1].toLowerCase()})\n            ${identifier}SettingsView().tabItem { Label("${profile.tabs[2]}", systemImage: "slider.horizontal.3") }.tag(${identifier}Tab.${profile.tabs[2].toLowerCase()})\n        }\n        .tint(.blue)\n        .sheet(isPresented: $store.showingComposer) { ${identifier}ComposerView() }\n    }\n}\n`,
+    "Views/${identifier}DashboardView.swift": `import SwiftUI\n\nstruct ${identifier}DashboardView: View {\n    @EnvironmentObject private var store: ${identifier}Store\n\n    var body: some View {\n        NavigationStack {\n            ScrollView {\n                VStack(alignment: .leading, spacing: 20) {\n                    VStack(alignment: .leading, spacing: 6) {\n                        Text("${profile.title}").font(.largeTitle.weight(.bold)).tracking(-0.6)\n                        Text("${profile.subtitle}").font(.subheadline).foregroundStyle(.secondary)\n                    }\n                    ${identifier}FeatureSummary()\n                    HStack { Text("Recent").font(.title3.weight(.semibold)); Spacer(); Button("See all") { store.selectedTab = .${profile.tabs[1].toLowerCase()} } }\n                    ${identifier}ItemList(items: store.filteredItems)\n                }.padding(20)\n            }\n            .searchable(text: $store.query, prompt: "Search")\n            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { store.showingComposer = true } label: { Image(systemName: "plus") } } }\n        }\n    }\n}\n\nprivate struct ${identifier}FeatureSummary: View {\n    var body: some View {\n        VStack(alignment: .leading, spacing: 12) {\n            Text("This month").font(.caption.weight(.medium)).foregroundStyle(.secondary)\n            Text("On track").font(.system(size: 30, weight: .bold, design: .rounded))\n            ProgressView(value: 0.68).tint(.blue)\n            Text("68% of your plan is complete").font(.footnote).foregroundStyle(.secondary)\n        }.padding(18).frame(maxWidth: .infinity, alignment: .leading).background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))\n    }\n}\n`,
+    "Views/${identifier}Flows.swift": `import SwiftUI\n\nstruct ${identifier}ItemList: View {\n    let items: [${identifier}Item]\n    var body: some View {\n        VStack(spacing: 0) {\n            ForEach(items) { item in\n                NavigationLink { ${identifier}DetailView(item: item) } label: {\n                    HStack(spacing: 12) {\n                        Image(systemName: "circle.inset.filled").foregroundStyle(.blue).font(.title3)\n                        VStack(alignment: .leading, spacing: 3) { Text(item.title).foregroundStyle(.primary); Text(item.detail).font(.footnote).foregroundStyle(.secondary) }\n                        Spacer(); Text(item.trailing).font(.subheadline.weight(.medium)).foregroundStyle(.secondary)\n                    }.padding(.vertical, 12)\n                }\n                if item.id != items.last?.id { Divider() }\n            }\n        }.padding(.horizontal, 14).background(.background, in: RoundedRectangle(cornerRadius: 14, style: .continuous)).overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(.quaternary))\n    }\n}\n\nstruct ${identifier}ListView: View {\n    @EnvironmentObject private var store: ${identifier}Store\n    var body: some View { NavigationStack { List(store.filteredItems) { item in NavigationLink { ${identifier}DetailView(item: item) } label: { VStack(alignment: .leading) { Text(item.title); Text(item.detail).font(.caption).foregroundStyle(.secondary) } } }.navigationTitle("${profile.tabs[1]}").searchable(text: $store.query) } }\n}\n\nstruct ${identifier}DetailView: View {\n    let item: ${identifier}Item\n    var body: some View { Form { Section("Details") { LabeledContent("Name", value: item.title); LabeledContent("Status", value: item.detail); LabeledContent("Value", value: item.trailing) }; Section { Button("Edit") {}.foregroundStyle(.blue); Button("Remove", role: .destructive) {} } }.navigationTitle(item.title).navigationBarTitleDisplayMode(.inline) }\n}\n\nstruct ${identifier}ComposerView: View {\n    @EnvironmentObject private var store: ${identifier}Store\n    @Environment(\\.dismiss) private var dismiss\n    @State private var title = ""\n    @State private var detail = ""\n    var body: some View { NavigationStack { Form { TextField("Title", text: $title); TextField("Details", text: $detail) }.navigationTitle("${profile.primaryAction}").toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button("Save") { store.add(title: title, detail: detail); dismiss() }.disabled(title.trimmingCharacters(in: .whitespaces).isEmpty) } } } }\n}\n\nstruct ${identifier}SettingsView: View {\n    var body: some View { NavigationStack { Form { Section("Preferences") { Toggle("Notifications", isOn: .constant(true)); Toggle("Compact appearance", isOn: .constant(false)) }; Section("About") { LabeledContent("Version", value: "1.0") } }.navigationTitle("${profile.tabs[2]}") } }\n`,
+  };
+  await Promise.all(Object.entries(files).map(async ([relative, content]) => {
+    const target = path.join(root, relative);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, content, "utf8");
+  }));
+  // Some older development servers transpiled template-literal object keys
+  // literally. Normalize those paths here so the preview always receives a
+  // conventional Swift project tree regardless of the dev-server cache.
+  const placeholder = "$" + "{identifier}";
+  const migrations: Array<[string, string]> = [
+    [path.join(root, "App", placeholder + "App.swift"), path.join(root, "App", identifier + "App.swift")],
+    [path.join(root, "Models", placeholder + "Item.swift"), path.join(root, "Models", identifier + "Item.swift")],
+    [path.join(root, "ViewModels", placeholder + "Store.swift"), path.join(root, "ViewModels", identifier + "Store.swift")],
+    [path.join(root, "Views", placeholder + "RootView.swift"), path.join(root, "Views", identifier + "RootView.swift")],
+    [path.join(root, "Views", placeholder + "DashboardView.swift"), path.join(root, "Views", identifier + "DashboardView.swift")],
+    [path.join(root, "Views", placeholder + "Flows.swift"), path.join(root, "Views", identifier + "Flows.swift")],
+  ];
+  await Promise.all(migrations.map(async ([legacy, target]) => {
+    if (legacy !== target && await fs.stat(legacy).then(() => true).catch(() => false)) await fs.rename(legacy, target);
+  }));
+  console.info(`[ios-starter] seeded ${profile.kind} source for ${path.basename(root)}`);
+  return true;
 }
 
 /**
@@ -215,7 +323,11 @@ Project architecture rules — for every coding request:
     const text = String(req.body?.text || "").trim();
     if (!text || text.length > MAX_PROMPT_LENGTH) return res.status(400).json({ error: "Enter a coding request up to 20,000 characters." });
     try {
-      if (requestsIosProject(text)) await prepareIosAgentWorkspace(projectPath(safeProjectId(req.params.projectId)));
+      if (requestsIosProject(text)) {
+        const root = projectPath(safeProjectId(req.params.projectId));
+        await prepareIosAgentWorkspace(root);
+        await seedIosStarterIfEmpty(root, text);
+      }
       await openCodeRuntimeManager.prompt(safeProjectId(req.params.projectId), req.params.sessionId, text, typeof req.body?.agent === "string" ? req.body.agent : undefined);
       res.json({ ok: true });
     } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : "Prompt could not be sent." }); }

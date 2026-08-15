@@ -1,6 +1,6 @@
 import { Component, useCallback, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { motion } from "motion/react";
-import { LoaderCircle, PanelBottomClose, PanelBottomOpen, Pencil, Plus, TerminalSquare, X } from "lucide-react";
+import { LoaderCircle, PanelBottomClose, PanelBottomOpen, Pencil, Plus, Terminal as TerminalIcon, X } from "lucide-react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -154,6 +154,10 @@ function TerminalPanelInner({ projectId, open, height, onHeightChange, onToggle,
     const existingTimer = startupTimersRef.current.get(tabId);
     if (existingTimer) window.clearTimeout(existingTimer);
     startupTimersRef.current.set(tabId, window.setTimeout(() => {
+      // A prompt can arrive on the first socket tick while a reconnect timer
+      // from a preceding project selection is still pending. Never paint a
+      // failure over a terminal that has received real shell output.
+      if (outputRef.current.get(tabId)) return;
       setTabs((items) => items.map((item) => item.id === tabId && item.busy ? { ...item, failed: true, busy: false } : item));
     }, 2000));
   }, [fit, projectId]);
@@ -161,10 +165,27 @@ function TerminalPanelInner({ projectId, open, height, onHeightChange, onToggle,
   useEffect(() => {
     if (!hostReady) return;
     if (!termRef.current && mountRef.current) {
-      const term = new Terminal({ convertEol: false, cursorBlink: true, cursorStyle: "underline", scrollback: 10_000, fontFamily: '"SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, monospace', fontSize: 12.5, lineHeight: 1.4, theme: TERM_THEME, allowProposedApi: true });
+      const term = new Terminal({
+        convertEol: false,
+        cursorBlink: true,
+        // A terminal cursor belongs on the character baseline. An underline
+        // reads like a broken input field in a light shell, while this thin
+        // bar is the familiar native zsh / PowerShell insertion point.
+        cursorStyle: "bar",
+        cursorWidth: 1,
+        scrollback: 10_000,
+        fontFamily: '"SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, monospace',
+        fontSize: 12.5,
+        lineHeight: 1.4,
+        theme: TERM_THEME,
+        allowProposedApi: true,
+      });
       const fitAddon = new FitAddon();
       term.loadAddon(fitAddon);
       term.open(mountRef.current);
+      // Make the whole shell surface reliably editable after a click, rather
+      // than requiring users to hunt for xterm's hidden textarea.
+      mountRef.current.addEventListener("pointerdown", () => term.focus());
       term.onData((data) => bridgeRef.current?.write(activeRef.current, data));
       term.onScroll((viewportY) => {
         const buffer = term.buffer.active;
@@ -275,7 +296,7 @@ function TerminalPanelInner({ projectId, open, height, onHeightChange, onToggle,
     <div className="flex h-8 items-center gap-1 border-b border-black/[0.055] px-2.5" role="tablist" aria-label="Terminal sessions">
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
         {tabs.map((tab) => <button key={tab.id} type="button" role="tab" aria-selected={tab.id === activeTab} onClick={() => { setActiveTab(tab.id); if (!open) onToggle(); }} className={`group relative flex h-7 min-w-[120px] max-w-[220px] items-center gap-1.5 rounded-[7px] px-2.5 text-left text-[11.5px] transition-colors duration-150 ${tab.id === activeTab ? "bg-black/[0.055] text-[#292B30]" : "text-[#85878C] hover:bg-black/[0.03] hover:text-[#4D4F54]"}`}>
-          {tab.busy ? <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin" strokeWidth={1.7} /> : <TerminalSquare className="h-3.5 w-3.5 shrink-0" strokeWidth={1.7} />}
+          {tab.busy ? <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin" strokeWidth={1.7} /> : <TerminalIcon className="h-3.5 w-3.5 shrink-0" strokeWidth={1.7} />}
           {editingTab === tab.id ? <input ref={tabInputRef} value={tabLabel} aria-label="Rename terminal" onClick={(event) => event.stopPropagation()} onChange={(event) => setTabLabel(event.target.value)} onBlur={() => renameTab(tab.id)} onKeyDown={(event) => { if (event.key === "Enter") renameTab(tab.id); if (event.key === "Escape") setEditingTab(null); }} className="min-w-0 flex-1 bg-transparent text-[11.5px] outline-none" /> : <span className="min-w-0 flex-1 truncate">{tab.label}</span>}{tab.failed ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#C24949]" /> : null}
           <span className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-100 group-hover:opacity-100">
             <span role="button" aria-label={`Rename ${tab.label}`} onClick={(event) => { event.stopPropagation(); setTabLabel(tab.label); setEditingTab(tab.id); }} className="flex h-4 w-4 items-center justify-center rounded text-[#92949A] hover:bg-black/[0.07]"><Pencil className="h-2.5 w-2.5" /></span>

@@ -102,8 +102,11 @@ export function StudyDockItem({
         aria-expanded={hasPopup ? expanded : undefined}
       >
         <motion.span
-          animate={reducedMotion ? undefined : { scale: hovered ? 1.075 : 1, y: hovered ? -0.5 : 0 }}
-          transition={{ type: "spring", stiffness: 580, damping: 38, mass: 0.42 }}
+          // Keep every dock slot optically fixed. A quiet tint change is more
+          // useful here than magnification, which makes the vertical rail feel
+          // unsettled while a user scans between study tools.
+          animate={reducedMotion ? undefined : { opacity: hovered ? 0.96 : 1 }}
+          transition={{ duration: 0.14, ease: [0.22, 1, 0.36, 1] }}
           className="grid h-9 w-9 place-items-center rounded-[11px]"
         >
           <Icon className="h-[18px] w-[18px]" strokeWidth={1.7} />

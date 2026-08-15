@@ -17,6 +17,15 @@ export type VibeProject = {
   platform?: "web" | "ios";
 };
 
+export type ProjectGitStatus = {
+  initialized: boolean;
+  branch: string | null;
+  remoteUrl: string | null;
+  ahead: number;
+  behind: number;
+  changes: Array<{ path: string; status: "A" | "M" | "D" | "R" | "?"; staged: boolean }>;
+};
+
 export type IosSimulatorInfo = {
   udid: string;
   name: string;
@@ -140,6 +149,30 @@ export const api = {
       body: JSON.stringify({ name }),
     }).then((r) => r.project),
 
+  githubStatus: () => json<{ connected: boolean; account: { login: string; avatarUrl?: string } | null; authAvailable: boolean; message: string }>("/api/vibe/github/status"),
+
+  projectGitStatus: (id: string) => json<ProjectGitStatus>(`/api/vibe/projects/${enc(id)}/git/status`),
+
+  initProjectGit: (id: string) => json<ProjectGitStatus>(`/api/vibe/projects/${enc(id)}/git/init`, { method: "POST" }),
+
+  stageProjectGitPath: (id: string, path: string, staged: boolean) => json<ProjectGitStatus>(`/api/vibe/projects/${enc(id)}/git/stage`, {
+    method: "POST", body: JSON.stringify({ path, staged }),
+  }),
+
+  commitProjectGit: (id: string, message: string) => json<{ oid: string; status: ProjectGitStatus }>(`/api/vibe/projects/${enc(id)}/git/commit`, {
+    method: "POST", body: JSON.stringify({ message }),
+  }),
+
+  projectGitBranches: (id: string) => json<{ current: string | null; branches: string[] }>(`/api/vibe/projects/${enc(id)}/git/branches`),
+
+  createProjectGitBranch: (id: string, name: string) => json<{ current: string | null; branches: string[] }>(`/api/vibe/projects/${enc(id)}/git/branches`, {
+    method: "POST", body: JSON.stringify({ name }),
+  }),
+
+  checkoutProjectGitBranch: (id: string, branch: string) => json<{ current: string | null; branches: string[] }>(`/api/vibe/projects/${enc(id)}/git/checkout`, {
+    method: "POST", body: JSON.stringify({ branch }),
+  }),
+
   iosStatus: () => json<IosStatus>("/api/ios/status"),
 
   swiftWasmStatus: () => json<SwiftWasmStatus>("/api/swift-wasm/status"),
@@ -227,6 +260,30 @@ export const api = {
     json<{ project: VibeProject; files: Array<{ path: string; content: string }>; plan: string }>(
       `/api/vibe/projects/${enc(id)}`,
     ),
+
+  writeProjectFile: (id: string, path: string, content: string) =>
+    json<{ ok: boolean; files: Array<{ path: string; content: string }> }>(`/api/vibe/projects/${enc(id)}/files`, {
+      method: "PUT",
+      body: JSON.stringify({ path, content }),
+    }),
+
+  createProjectFolder: (id: string, path: string) =>
+    json<{ ok: boolean }>(`/api/vibe/projects/${enc(id)}/folders`, {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    }),
+
+  deleteProjectFile: (id: string, path: string, recursive = false) =>
+    json<{ ok: boolean }>(`/api/vibe/projects/${enc(id)}/files`, {
+      method: "DELETE",
+      body: JSON.stringify({ path, recursive }),
+    }),
+
+  moveProjectPath: (id: string, from: string, to: string) =>
+    json<{ ok: boolean; files: Array<{ path: string; content: string }> }>(`/api/vibe/projects/${enc(id)}/paths`, {
+      method: "PATCH",
+      body: JSON.stringify({ from, to }),
+    }),
 
   openCodeStatus: () =>
     json<{ status: string; model?: string; serverUrl?: string; error?: string }>(

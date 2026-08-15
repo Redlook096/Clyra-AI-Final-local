@@ -42,6 +42,15 @@ type ProjectRuntime = {
   reconciliation: Map<string, { fingerprint: string; idleSince?: number; emptyRetries?: number }>;
 };
 
+async function hasPortableIosStarter(projectPath: string) {
+  try {
+    const entries = await fs.promises.readdir(projectPath, { recursive: true });
+    return entries.some((entry) => typeof entry === "string" && entry.endsWith("App.swift"));
+  } catch {
+    return false;
+  }
+}
+
 export type CodingModelStatus =
   | { available: true; providerID: string; modelID: string }
   | { available: false; error: string };
@@ -373,6 +382,16 @@ export class OpenCodeRuntimeManager {
         const hasTool = parts.some((part) => part.type === "tool" || Boolean(part.tool));
         const hasErrorPart = parts.some((part) => part.type === "error" || (part.state as { status?: string } | undefined)?.status === "error");
         if (assistant && !hasText && !hasTool && !hasErrorPart) {
+          // iOS requests receive a real multi-file SwiftUI source starter
+          // before the model runs. If a provider ends a tool-only turn after
+          // inspecting that starter, do not keep the visible iPhone preview
+          // blocked through several blank recovery cycles. The source is
+          // already usable and the same chat can be refined in a later turn.
+          if (await hasPortableIosStarter(project.projectPath)) {
+            this.publish(project, { type: "session.idle", properties: { sessionID: sessionId } });
+            project.reconciliation.delete(sessionId);
+            return;
+          }
           // Deep tool-use runs can occasionally end with a blank continuation
           // from the model even though OpenCode has already completed real
           // reads/commands. Resume that *same* session before declaring the
@@ -388,7 +407,12 @@ export class OpenCodeRuntimeManager {
             ),
           );
           const emptyRetries = previous?.emptyRetries ?? 0;
-          if (didMeaningfulWork && emptyRetries < 2) {
+          // Complex multi-file projects can legitimately need several bounded
+          // continuations when a provider ends a tool-heavy turn blank. Keep
+          // the same session/checkpoint alive, but narrow later recoveries so
+          // they converge on a working, validated result instead of replaying
+          // discovery or surfacing a premature failure to the user.
+          if (didMeaningfulWork && emptyRetries < 5) {
             project.reconciliation.set(sessionId, {
               fingerprint: "",
               emptyRetries: emptyRetries + 1,
@@ -401,7 +425,7 @@ export class OpenCodeRuntimeManager {
                   model: resolveRecoveryModel(),
                   parts: [{
                     type: "text",
-                    text: "Continue the current task from the work already completed. Your previous turn ended without a final response. Complete any remaining implementation and validation, then provide a concise final result.",
+                    text: "Continue this exact task from the persisted project state. Do not repeat discovery or narrate a plan. Inspect the current files, complete the smallest remaining implementation, run the relevant validation and preview check, repair real failures, then give a concise final result.",
                   }],
                 },
                 throwOnError: true,

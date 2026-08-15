@@ -7,32 +7,32 @@
  */
 export const CLIP_EDITOR = {
   /** Base page background. */
-  bg: "#FFFFFF",
+  bg: "#F6F6F3",
   /** Secondary panel background (fields, quiet wells). */
-  panel: "#FBFCFE",
+  panel: "#FBFBF9",
   /** Primary text — dark navy. */
-  textPrimary: "#17213A",
+  textPrimary: "#1D1D1F",
   /** Secondary text. */
-  textSecondary: "#697790",
+  textSecondary: "#5F6368",
   /** Muted/metadata text. */
-  textMuted: "#8A96AA",
+  textMuted: "#868B91",
   /** Standard 1px border. */
-  border: "#E3E8F0",
+  border: "#E5E5E2",
   /** Extra-light separator for row dividers. */
-  separator: "#EDF0F5",
+  separator: "#ECECE9",
   /** Primary action blue. */
-  blue: "#1677FF",
+  blue: "#0A66D8",
   /** Selected surface — pale blue. */
-  selected: "#EAF2FF",
+  selected: "#EDF5FF",
   /** Hover surface. */
-  hover: "#F5F8FC",
+  hover: "#F1F2F2",
   /** Karaoke active-word highlight used by the FFmpeg burn-in. */
   karaoke: "#FFD54A",
 } as const;
 
-/** Inter-first UI stack; monospace is reserved for timecodes. */
+/** Native desktop typography; monospace is reserved for timecodes. */
 export const CLIP_EDITOR_FONT =
-  'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+  '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, "Helvetica Neue", Arial, sans-serif';
 
 export const CLIP_EDITOR_MONO =
   'ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace';

@@ -9,6 +9,8 @@ import { Conversation } from "./Conversation";
 import { Composer, type ComposerAttachment, type ComposerCommand, type ComposerContext } from "./Composer";
 import { RightPanel, usePreview, type RightTab } from "./RightPanel";
 import { TerminalPanel } from "./TerminalPanel";
+import { GitHubPopover } from "./GitHubPopover";
+import { ProjectExportPopover } from "./ProjectExportPopover";
 import { formatTokens } from "./format";
 
 const WIDTH_KEY = "clyra-code:conversation-width";
@@ -82,6 +84,7 @@ export default function ClyraCodeWorkspace() {
   const [creating, setCreating] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [previewContentVisible, setPreviewContentVisible] = useState(false);
   const [previewFullscreen, setPreviewFullscreen] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(200);
   const [agentActivityCount, setAgentActivityCount] = useState(0);
@@ -253,6 +256,18 @@ export default function ClyraCodeWorkspace() {
   }, [activeProject?.name, preview.session?.url]);
   const hasConversation = state.log.length > 0;
 
+  // Keep preview content out of the width animation.  The pane itself glides
+  // in first; the browser or iPhone surface then fades up at its final width,
+  // so an iPhone is never visibly stretched while the sidebar opens.
+  useEffect(() => {
+    if (!rightPanelOpen) {
+      setPreviewContentVisible(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setPreviewContentVisible(true), 150);
+    return () => window.clearTimeout(timer);
+  }, [rightPanelOpen]);
+
   // A blank project gives the welcome workspace all available width. Selecting
   // an existing thread or sending the first prompt activates the preview.
   useEffect(() => {
@@ -398,28 +413,31 @@ export default function ClyraCodeWorkspace() {
         onRemoveProject={hideProject}
       />
       {!sidebarCollapsed ? <div className="cc-resize-handle" aria-hidden /> : null}
-      {sidebarCollapsed ? <button type="button" aria-label="Expand sidebar" title="Expand sidebar" onClick={toggleSidebarCollapsed} className="absolute left-2 top-1.5 z-30 flex h-[31px] w-[31px] items-center justify-center rounded-[9px] text-[#5F6368] transition-colors duration-150 hover:bg-black/[0.045]"><PanelLeftOpen className="h-[16px] w-[16px]" strokeWidth={1.6} /></button> : null}
 
-      <button
-        type="button"
-        aria-label={rightPanelOpen ? "Close preview" : "Open preview"}
-        title={rightPanelOpen ? "Close preview" : "Open preview"}
-        onClick={() => setRightPanelOpen((open) => !open)}
-        className="absolute right-2 top-1.5 z-40 flex h-[37px] w-[37px] items-center justify-center rounded-[10px] text-[#5F6368] transition-colors duration-150 hover:bg-black/[0.045]"
-      >
-        {rightPanelOpen ? <PanelRightClose className="h-[18px] w-[18px]" strokeWidth={1.65} /> : <PanelRightOpen className="h-[18px] w-[18px]" strokeWidth={1.65} />}
-      </button>
-      {desktopProject && preview.session?.url && canLaunchElectronPreview ? (
+      <div className="absolute right-1 top-1.5 z-40 flex h-[37px] items-center gap-0.5">
+        {activeProject && state.platform === "ios" ? <ProjectExportPopover projectId={activeProject.id} projectName={activeProject.name} ios /> : null}
+        {activeProject && state.platform !== "ios" ? <GitHubPopover projectId={activeProject.id} projectName={activeProject.name} /> : null}
+        {desktopProject && preview.session?.url && canLaunchElectronPreview ? (
+          <button
+            type="button"
+            onClick={() => void launchDesktopPreview()}
+            className="flex h-[30px] items-center gap-1.5 rounded-[8px] px-2.5 text-[11.5px] font-medium text-[#3977F6] transition-colors duration-150 hover:bg-[#3977F6]/[0.07]"
+            title="Launch this desktop project in Electron"
+          >
+            <Play className="h-[12px] w-[12px]" fill="currentColor" strokeWidth={1.8} />
+            Launch app
+          </button>
+        ) : null}
         <button
           type="button"
-          onClick={() => void launchDesktopPreview()}
-          className="absolute right-[47px] top-[7px] z-40 flex h-[30px] items-center gap-1.5 rounded-[8px] px-2.5 text-[11.5px] font-medium text-[#3977F6] transition-colors duration-150 hover:bg-[#3977F6]/[0.07]"
-          title="Launch this desktop project in Electron"
+          aria-label={rightPanelOpen ? "Close preview" : "Open preview"}
+          title={rightPanelOpen ? "Close preview" : "Open preview"}
+          onClick={() => setRightPanelOpen((open) => !open)}
+          className="flex h-[37px] w-[37px] items-center justify-center rounded-[10px] text-[#5F6368] transition-colors duration-150 hover:bg-black/[0.045]"
         >
-          <Play className="h-[12px] w-[12px]" fill="currentColor" strokeWidth={1.8} />
-          Launch app
+          {rightPanelOpen ? <PanelRightClose className="h-[18px] w-[18px]" strokeWidth={1.65} /> : <PanelRightOpen className="h-[18px] w-[18px]" strokeWidth={1.65} />}
         </button>
-      ) : null}
+      </div>
 
       {/* -------- centre: agent conversation -------- */}
       <motion.section
@@ -438,6 +456,17 @@ export default function ClyraCodeWorkspace() {
         ) : null}
 
         <header className="relative flex h-[44px] shrink-0 items-center gap-2 border-b border-black/[0.055] bg-white/[0.92] px-3.5 backdrop-blur-[16px]">
+          {sidebarCollapsed ? (
+            <button
+              type="button"
+              aria-label="Expand sidebar"
+              title="Expand sidebar"
+              onClick={toggleSidebarCollapsed}
+              className="flex h-[31px] w-[31px] shrink-0 items-center justify-center rounded-[9px] text-[#5F6368] transition-colors duration-150 hover:bg-black/[0.045]"
+            >
+              <PanelLeftOpen className="h-[16px] w-[16px]" strokeWidth={1.6} />
+            </button>
+          ) : null}
           {activeProject ? (
             <>
               <div className="min-w-0 flex-1">
@@ -564,31 +593,38 @@ export default function ClyraCodeWorkspace() {
       <motion.div
         initial={false}
         animate={rightPanelOpen
-          ? { flexGrow: 1, flexBasis: 0, width: "auto", x: 0, opacity: 1 }
-          : { flexGrow: 0, flexBasis: 0, width: 0, x: 8, opacity: 0 }}
-        transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+          ? { flexGrow: 1, flexBasis: 0, x: 0, opacity: 1 }
+          : { flexGrow: 0, flexBasis: 0, x: 12, opacity: 0 }}
+        transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
         className={cn("flex min-h-0 min-w-0 overflow-hidden", !rightPanelOpen && "pointer-events-none")}
         aria-hidden={!rightPanelOpen || undefined}
       >
           <div className="cc-resize-handle" data-active={dragging || undefined} onPointerDown={onDragStart} role="separator" aria-orientation="vertical" />
-          <RightPanel
-            state={state}
-            actionList={actionList}
-            tab={rightTab}
-            onTabChange={(tab) => { setRightTab(tab); if (tab !== "changes") setFocusFile(null); }}
-            preview={preview}
-            onAddContext={(context) => setContexts((prev) => (prev.some((item) => item.detail === context.detail) ? prev : [...prev, context]))}
-            focusFile={focusFile}
-            agentRunning={running}
-            onOpenTerminal={() => setTerminalOpen(true)}
-            platform={state.platform}
-            relaunchSignal={relaunchSignal}
-            onVisualEdit={(instruction) => void startRun(instruction)}
-            onVisualSourceEdit={recordVisualEdit}
-            onPreviewError={handlePreviewError}
-            fullscreen={previewFullscreen}
-            onToggleFullscreen={() => setPreviewFullscreen((value) => !value)}
-          />
+          <motion.div
+            className="flex min-h-0 min-w-0 flex-1"
+            initial={false}
+            animate={{ opacity: previewContentVisible ? 1 : 0, x: previewContentVisible ? 0 : 8 }}
+            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <RightPanel
+              state={state}
+              actionList={actionList}
+              tab={rightTab}
+              onTabChange={(tab) => { setRightTab(tab); if (tab !== "changes") setFocusFile(null); }}
+              preview={preview}
+              onAddContext={(context) => setContexts((prev) => (prev.some((item) => item.detail === context.detail) ? prev : [...prev, context]))}
+              focusFile={focusFile}
+              agentRunning={running}
+              onOpenTerminal={() => setTerminalOpen(true)}
+              platform={state.platform}
+              relaunchSignal={relaunchSignal}
+              onVisualEdit={(instruction) => void startRun(instruction)}
+              onVisualSourceEdit={recordVisualEdit}
+              onPreviewError={handlePreviewError}
+              fullscreen={previewFullscreen}
+              onToggleFullscreen={() => setPreviewFullscreen((value) => !value)}
+            />
+          </motion.div>
       </motion.div>
       </div>
 

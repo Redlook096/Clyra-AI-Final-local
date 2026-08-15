@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 import express from "express";
+import archiver from "archiver";
 import path from "path";
 import {
   clipperOutputDir,
@@ -67,6 +68,7 @@ import { registerVoiceRoutes, attachVoiceWebSocket } from "./backend/voice";
 import { attachTerminalWebSocket } from "./lib/terminal-ws";
 import { detectMobileSwiftProject, registerMobilePreviewRoutes } from "./lib/mobile-preview-routes";
 import { registerSwiftWasmRoutes } from "./lib/swift-wasm-routes";
+import { gitService } from "./lib/github/git-service";
 import { registerPreviewProxy, attachPreviewUpgrades } from "./lib/preview-proxy";
 import { registerCreatorTtsRoutes, stopCreatorTtsWorker } from "./backend/creator-tts/service";
 import {
@@ -240,6 +242,21 @@ async function listProjectFiles(id: string) {
 
   await walk(root);
   return files.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/** Resolve a user-selected project-relative path without ever allowing the
+ * Files workbench to escape its current project directory. */
+function projectFilePath(projectId: string, requestedPath: string) {
+  const root = path.resolve(projectRoot(projectId), "files");
+  const relative = String(requestedPath ?? "").replaceAll("\\", "/").replace(/^\/+/, "");
+  if (!relative || relative.split("/").some((segment) => !segment || segment === "." || segment === "..")) {
+    throw new Error("A valid project-relative path is required.");
+  }
+  const resolved = path.resolve(root, relative);
+  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
+    throw new Error("File path must remain inside the active project.");
+  }
+  return resolved;
 }
 
 function buildStaticProjectHtml(files: Array<{ path: string; content: string }>) {
@@ -3078,6 +3095,184 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
       plan = "";
     }
     res.json({ project: metadata, files, plan });
+  });
+
+  // Source exports stream directly from the project root. This keeps the
+  // Vibe Coder export control useful on both Electron and the browser without
+  // exposing the host filesystem or including caches, Git metadata or secrets.
+  app.get("/api/vibe/projects/:id/export", async (req, res) => {
+    const projectId = safeProjectId(String(req.params.id ?? ""));
+    const metadata = await readProjectMetadata(projectId);
+    if (!metadata) return res.status(404).json({ error: "Project not found" });
+    const name = slugifyProjectName(metadata.name || "clyra-project") || "clyra-project";
+    res.status(200);
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename=\"${name}.zip\"`);
+    const archive = archiver("zip", { zlib: { level: 9 } });
+    archive.on("warning", (error) => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.warn("[vibe export]", error); });
+    archive.on("error", (error) => {
+      if (!res.headersSent) res.status(500);
+      res.end();
+      console.warn("[vibe export]", error);
+    });
+    archive.pipe(res);
+    archive.glob("**/*", {
+      cwd: path.join(projectRoot(projectId), "files"),
+      dot: true,
+      ignore: [".git/**", "node_modules/**", ".clyra-build/**", "dist/**", "build/**", ".env", ".env.*"],
+    });
+    await archive.finalize();
+  });
+
+  // The Files workbench uses these narrowly-scoped mutations rather than a
+  // second in-memory editor. Every edit lands in the active project and is
+  // subsequently visible to the agent, preview, diffs and project backup.
+  app.put("/api/vibe/projects/:id/files", async (req, res) => {
+    const projectId = safeProjectId(String(req.params.id ?? ""));
+    const metadata = await readProjectMetadata(projectId);
+    if (!metadata) return res.status(404).json({ error: "Project not found" });
+    try {
+      const filePath = projectFilePath(projectId, String(req.body?.path ?? ""));
+      const content = String(req.body?.content ?? "");
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, content, "utf8");
+      res.json({ ok: true, files: await listProjectFiles(projectId) });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Could not save file" });
+    }
+  });
+
+  app.post("/api/vibe/projects/:id/folders", async (req, res) => {
+    const projectId = safeProjectId(String(req.params.id ?? ""));
+    const metadata = await readProjectMetadata(projectId);
+    if (!metadata) return res.status(404).json({ error: "Project not found" });
+    try {
+      const folderPath = projectFilePath(projectId, String(req.body?.path ?? ""));
+      await fs.mkdir(folderPath, { recursive: true });
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Could not create folder" });
+    }
+  });
+
+  app.delete("/api/vibe/projects/:id/files", async (req, res) => {
+    const projectId = safeProjectId(String(req.params.id ?? ""));
+    const metadata = await readProjectMetadata(projectId);
+    if (!metadata) return res.status(404).json({ error: "Project not found" });
+    try {
+      const filePath = projectFilePath(projectId, String(req.body?.path ?? ""));
+      await fs.rm(filePath, { force: true, recursive: Boolean(req.body?.recursive) });
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Could not remove file" });
+    }
+  });
+
+  app.patch("/api/vibe/projects/:id/paths", async (req, res) => {
+    const projectId = safeProjectId(String(req.params.id ?? ""));
+    const metadata = await readProjectMetadata(projectId);
+    if (!metadata) return res.status(404).json({ error: "Project not found" });
+    try {
+      const from = projectFilePath(projectId, String(req.body?.from ?? ""));
+      const to = projectFilePath(projectId, String(req.body?.to ?? ""));
+      if (from === to) return res.json({ ok: true, files: await listProjectFiles(projectId) });
+      await fs.mkdir(path.dirname(to), { recursive: true });
+      await fs.rename(from, to);
+      res.json({ ok: true, files: await listProjectFiles(projectId) });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Could not rename path" });
+    }
+  });
+
+  // Source control stays server-side: the renderer receives status, hashes and
+  // file paths only—never a credential or a shell command.  isomorphic-git
+  // makes these local operations work the same way on Windows and macOS.
+  app.get("/api/vibe/github/status", (_req, res) => {
+    const clientId = String(process.env.CLYRA_GITHUB_CLIENT_ID || "").trim();
+    res.json({
+      connected: false,
+      account: null,
+      authAvailable: Boolean(clientId),
+      message: clientId
+        ? "GitHub authorization is ready to connect."
+        : "GitHub authorization has not been configured for this Clyra installation.",
+    });
+  });
+
+  app.get("/api/vibe/projects/:id/git/status", async (req, res) => {
+    const projectId = safeProjectId(String(req.params.id ?? ""));
+    const metadata = await readProjectMetadata(projectId);
+    if (!metadata) return res.status(404).json({ error: "Project not found" });
+    try {
+      res.json(await gitService.status(path.join(projectRoot(projectId), "files")));
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Could not read source-control status." });
+    }
+  });
+
+  app.post("/api/vibe/projects/:id/git/init", async (req, res) => {
+    const projectId = safeProjectId(String(req.params.id ?? ""));
+    const metadata = await readProjectMetadata(projectId);
+    if (!metadata) return res.status(404).json({ error: "Project not found" });
+    try {
+      res.json(await gitService.init(path.join(projectRoot(projectId), "files")));
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Could not initialise source control." });
+    }
+  });
+
+  app.post("/api/vibe/projects/:id/git/stage", async (req, res) => {
+    const projectId = safeProjectId(String(req.params.id ?? ""));
+    const metadata = await readProjectMetadata(projectId);
+    if (!metadata) return res.status(404).json({ error: "Project not found" });
+    try {
+      res.json(await gitService.stage(path.join(projectRoot(projectId), "files"), String(req.body?.path || ""), Boolean(req.body?.staged)));
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Could not update staging." });
+    }
+  });
+
+  app.post("/api/vibe/projects/:id/git/commit", async (req, res) => {
+    const projectId = safeProjectId(String(req.params.id ?? ""));
+    const metadata = await readProjectMetadata(projectId);
+    if (!metadata) return res.status(404).json({ error: "Project not found" });
+    try {
+      const commit = await gitService.commit(
+        path.join(projectRoot(projectId), "files"),
+        String(req.body?.message || "").slice(0, 240),
+        {
+          name: String(process.env.CLYRA_GIT_AUTHOR_NAME || "Clyra User").slice(0, 120),
+          email: String(process.env.CLYRA_GIT_AUTHOR_EMAIL || "user@clyra.local").slice(0, 180),
+        },
+      );
+      res.json(commit);
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Could not create a commit." });
+    }
+  });
+
+  app.get("/api/vibe/projects/:id/git/branches", async (req, res) => {
+    const projectId = safeProjectId(String(req.params.id ?? ""));
+    const metadata = await readProjectMetadata(projectId);
+    if (!metadata) return res.status(404).json({ error: "Project not found" });
+    try { res.json(await gitService.branches(path.join(projectRoot(projectId), "files"))); }
+    catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : "Could not list branches." }); }
+  });
+
+  app.post("/api/vibe/projects/:id/git/branches", async (req, res) => {
+    const projectId = safeProjectId(String(req.params.id ?? ""));
+    const metadata = await readProjectMetadata(projectId);
+    if (!metadata) return res.status(404).json({ error: "Project not found" });
+    try { res.json(await gitService.createBranch(path.join(projectRoot(projectId), "files"), String(req.body?.name || ""))); }
+    catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : "Could not create the branch." }); }
+  });
+
+  app.post("/api/vibe/projects/:id/git/checkout", async (req, res) => {
+    const projectId = safeProjectId(String(req.params.id ?? ""));
+    const metadata = await readProjectMetadata(projectId);
+    if (!metadata) return res.status(404).json({ error: "Project not found" });
+    try { res.json(await gitService.checkout(path.join(projectRoot(projectId), "files"), String(req.body?.branch || ""))); }
+    catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : "Could not switch branches." }); }
   });
 
   app.patch("/api/vibe/projects/:id", async (req, res) => {

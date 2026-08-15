@@ -125,7 +125,9 @@ export function Composer({
 
   const submit = useCallback(async () => {
     const text = value.trim();
-    if (!text && attachments.length === 0) return;
+    // Context chips are real request metadata. In particular, "Add error to
+    // chat" must be sendable without forcing the user to type filler text.
+    if (!text && attachments.length === 0 && contexts.length === 0) return;
     const contextBlock = contexts.length ? `${contexts.map((context) => `[${context.label}] ${context.detail}`).join("\n")}\n\n` : "";
     const submitted = await Promise.resolve(onSubmit(contextBlock + text, attachments, command ?? undefined));
     if (!submitted) return;
@@ -181,7 +183,7 @@ export function Composer({
           </div>
           <span className="text-[10.5px] font-medium text-[#9A9CA0]">Clyra</span><span className="flex-1" />
           <button type="button" aria-label="Voice input" onClick={() => textareaRef.current?.focus()} className="flex h-6 w-6 items-center justify-center rounded-[7px] text-[#85878C] transition-colors hover:bg-black/[0.045] hover:text-[#34363A]"><Mic className="h-3.5 w-3.5" strokeWidth={1.65} /></button>
-          {running ? <button type="button" onClick={onStop} aria-label="Stop" className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-[#242528] text-white transition-colors duration-150 hover:bg-[#17181A] active:scale-[0.96]"><Square className="h-[10px] w-[10px]" fill="currentColor" /></button> : <button type="button" onClick={submit} disabled={!value.trim() && attachments.length === 0} aria-label="Send" className={cn("flex h-[30px] w-[30px] items-center justify-center rounded-full transition-all duration-150 active:scale-[0.96]", value.trim() || attachments.length ? "bg-[#3977F6] text-white hover:bg-[#2E68E5]" : "bg-[#F0F0EF] text-[#B7B8BA]")}><ArrowUp className="h-3.5 w-3.5" strokeWidth={2.15} /></button>}
+          {running ? <button type="button" onClick={onStop} aria-label="Stop" className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-[#242528] text-white transition-colors duration-150 hover:bg-[#17181A] active:scale-[0.96]"><Square className="h-[10px] w-[10px]" fill="currentColor" /></button> : <button type="button" onClick={submit} disabled={!value.trim() && attachments.length === 0 && contexts.length === 0} aria-label="Send" className={cn("flex h-[30px] w-[30px] items-center justify-center rounded-full transition-all duration-150 active:scale-[0.96]", value.trim() || attachments.length || contexts.length ? "bg-[#3977F6] text-white hover:bg-[#2E68E5]" : "bg-[#F0F0EF] text-[#B7B8BA]")}><ArrowUp className="h-3.5 w-3.5" strokeWidth={2.15} /></button>}
         </div>
         <AnimatePresence>{commandQuery !== null && visibleCommands.length ? <motion.div initial={{ opacity: 0, y: 4, scale: 0.985 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 3, scale: 0.985 }} transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }} className="clyra-command-palette absolute bottom-[calc(100%+7px)] left-0 z-40 w-full overflow-hidden rounded-[10px] border border-black/[0.08] bg-white p-1 shadow-[0_10px_24px_rgba(15,23,42,0.11)]">{visibleCommands.map((item, index) => { const Icon = item.icon; return <button key={item.id} type="button" onMouseEnter={() => setCommandIndex(index)} onClick={() => selectCommand(item.id)} className={cn("flex h-9 w-full items-center gap-2 rounded-[6px] px-2.5 text-left transition-colors", index === commandIndex ? "bg-black/[0.035]" : "hover:bg-black/[0.035]")}><Icon className="h-3.5 w-3.5 text-[#5F6368]" strokeWidth={1.65} /><span className="min-w-0 flex-1"><span className="block text-[11.5px] font-medium text-[#4B4D52]">/{item.id}</span></span><span className="truncate text-[10.5px] text-[#96989D]">{item.description}</span></button>; })}</motion.div> : null}</AnimatePresence>
       </div>

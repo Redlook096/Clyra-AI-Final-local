@@ -117,11 +117,14 @@ export const AgentFileEdit = memo(function AgentFileEdit({
   action,
   onOpenFile,
   onClosed,
+  settled = false,
 }: {
   action: AgentAction;
   onOpenFile?: (path: string) => void;
   /** Fires once when this box's lifecycle is complete (collapsed/failed). */
   onClosed?: (id: string) => void;
+  /** Expanded historical/complete phase: show static, never replay a diff. */
+  settled?: boolean;
 }) {
   const reducedMotion = useReducedMotion();
   const lines = useMemo(
@@ -137,6 +140,7 @@ export const AgentFileEdit = memo(function AgentFileEdit({
 
   // Historical rows (restored sessions / reopened tabs) render settled.
   const [historical] = useState(() => {
+    if (settled) return true;
     if (active) return false;
     const ended = action.endedAt ?? action.startedAt;
     return Date.now() - ended > 4000;

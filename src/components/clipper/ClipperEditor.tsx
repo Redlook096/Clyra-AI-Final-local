@@ -1,6 +1,7 @@
 import {
   AlertCircle,
   AudioLines,
+  Captions,
   ChevronsLeft,
   ChevronsRight,
   Copy,
@@ -13,11 +14,11 @@ import {
   Pause,
   Plus,
   Redo2,
+  RefreshCw,
   Scissors,
   Search,
   SkipBack,
   SkipForward,
-  Sparkles,
   Trash2,
   Type,
   Undo2,
@@ -26,6 +27,7 @@ import {
   ZoomIn,
   ZoomOut,
   MapPin,
+  GripVertical,
 } from "lucide-react";
 import {
   useCallback,
@@ -88,6 +90,69 @@ function wordLabel(item: EditorWord) {
   return String(item.word || item.text || "").trim();
 }
 
+function SoundFxLibrary() {
+  const [query, setQuery] = useState("");
+  const [previewing, setPreviewing] = useState<ClipSfxAssetId | null>(null);
+  const previewRef = useRef<HTMLAudioElement | null>(null);
+  const sounds = useMemo(() => CLIP_SFX_ASSETS.filter((asset) => {
+    const haystack = `${asset.label} ${asset.hint}`.toLowerCase();
+    return haystack.includes(query.trim().toLowerCase());
+  }), [query]);
+
+  useEffect(() => () => previewRef.current?.pause(), []);
+
+  const insert = (assetId: ClipSfxAssetId) => {
+    window.dispatchEvent(new CustomEvent("clyra:clipper-place-sfx", { detail: { assetId } }));
+  };
+  const preview = (asset: (typeof CLIP_SFX_ASSETS)[number]) => {
+    previewRef.current?.pause();
+    const audio = new Audio(asset.url);
+    previewRef.current = audio;
+    setPreviewing(asset.id);
+    audio.onended = () => setPreviewing(null);
+    void audio.play().catch(() => setPreviewing(null));
+  };
+
+  return (
+    <section className="flex shrink-0 flex-col px-5 pb-4 pt-5" style={{ borderBottom: `1px solid ${CLIP_EDITOR.border}` }} aria-label="Sound FX library">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-[13px] font-semibold" style={{ color: CLIP_EDITOR.textPrimary }}>Sound FX</p>
+          <p className="mt-0.5 text-[11px]" style={{ color: CLIP_EDITOR.textMuted }}>Drag or insert at the playhead</p>
+        </div>
+        <span className="grid h-7 w-7 place-items-center rounded-[8px]" style={{ background: "#F2F5FA", color: CLIP_EDITOR.blue }}><AudioLines size={14} strokeWidth={ICON_STROKE} /></span>
+      </div>
+      <label className="mt-3 flex h-8 items-center gap-2 rounded-[8px] bg-[#F7F8FA] px-2.5" style={{ boxShadow: "inset 0 0 0 1px rgba(15,23,42,.055)" }}>
+        <Search size={13} strokeWidth={ICON_STROKE} style={{ color: CLIP_EDITOR.textMuted }} />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search sounds" className="min-w-0 flex-1 bg-transparent text-[11.5px] outline-none placeholder:text-[#9A9DA3]" />
+      </label>
+      <div className="clipper-sfx-scroll mt-2.5 space-y-1" aria-label="Available sound effects">
+        {sounds.map((asset) => {
+          const active = previewing === asset.id;
+          return (
+            <div key={asset.id} className="clipper-sfx-library-row group flex items-center gap-2 rounded-[8px] px-2 py-1.5" draggable onDragStart={(event) => {
+              event.dataTransfer.setData(SFX_DRAG_MIME, asset.id);
+              event.dataTransfer.setData("text/plain", asset.label);
+              event.dataTransfer.effectAllowed = "copy";
+              window.dispatchEvent(new CustomEvent("clyra:clipper-sfx-drag", { detail: { assetId: asset.id } }));
+            }} onDragEnd={() => window.dispatchEvent(new CustomEvent("clyra:clipper-sfx-drag", { detail: { assetId: null } }))}>
+              <span className="clipper-sfx-grip grid h-6 w-3 shrink-0 place-items-center" aria-hidden><GripVertical size={13} strokeWidth={1.6} /></span>
+              <button type="button" onClick={() => preview(asset)} className="grid h-6 w-6 shrink-0 place-items-center rounded-[6px] transition-colors hover:bg-white" style={{ color: active ? CLIP_EDITOR.blue : CLIP_EDITOR.textSecondary }} aria-label={`Preview ${asset.label}`}>
+                {active ? <Pause size={12} strokeWidth={ICON_STROKE} /> : <Play size={12} strokeWidth={ICON_STROKE} className="ml-px" />}
+              </button>
+              <button type="button" onClick={() => insert(asset.id)} className="min-w-0 flex-1 text-left" title={`Insert ${asset.label} at playhead`}>
+                <span className="block truncate text-[11.5px] font-medium" style={{ color: CLIP_EDITOR.textPrimary }}>{asset.label}</span>
+                <span className="block truncate text-[10px]" style={{ color: CLIP_EDITOR.textMuted }}>{asset.hint} · {asset.nativeDuration.toFixed(1)}s</span>
+              </button>
+              <span className="pointer-events-none rounded-[5px] px-1.5 py-1 text-[9.5px] font-medium opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" style={{ background: "#EAF2FF", color: CLIP_EDITOR.blue }}>Drag</span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function parseSeconds(value?: string) {
   return Number(String(value || "").replace(/[^0-9.]/g, "")) || 0;
 }
@@ -142,6 +207,10 @@ function EditorTimeline({
   const [thumbs, setThumbs] = useState<string[]>([]);
   const [peaks, setPeaks] = useState<number[]>([]);
   const [waveState, setWaveState] = useState<"loading" | "ready">("loading");
+  const [sfxDropActive, setSfxDropActive] = useState(false);
+  const [sfxDropTime, setSfxDropTime] = useState<number | null>(null);
+  const [draggedSfx, setDraggedSfx] = useState<ClipSfxAssetId | null>(null);
+  const [sfxHintDismissed, setSfxHintDismissed] = useState(false);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const waveCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const sfxAudioRef = useRef<Map<string, HTMLAudioElement>>(new Map());
@@ -435,6 +504,25 @@ function EditorTimeline({
     seek(atTime);
   }, [seek, snapshot]);
 
+  useEffect(() => {
+    const onPlace = (event: Event) => {
+      const assetId = (event as CustomEvent<{ assetId?: ClipSfxAssetId }>).detail?.assetId;
+      if (!assetId || !CLIP_SFX_ASSETS.some((asset) => asset.id === assetId)) return;
+      placeSfxAt(assetId, snapping ? Math.round(currentTime * 10) / 10 : currentTime);
+    };
+    window.addEventListener("clyra:clipper-place-sfx", onPlace);
+    return () => window.removeEventListener("clyra:clipper-place-sfx", onPlace);
+  }, [currentTime, placeSfxAt, snapping]);
+
+  useEffect(() => {
+    const onDrag = (event: Event) => {
+      const assetId = (event as CustomEvent<{ assetId?: ClipSfxAssetId | null }>).detail?.assetId;
+      setDraggedSfx(assetId && CLIP_SFX_ASSETS.some((asset) => asset.id === assetId) ? assetId : null);
+    };
+    window.addEventListener("clyra:clipper-sfx-drag", onDrag);
+    return () => window.removeEventListener("clyra:clipper-sfx-drag", onDrag);
+  }, []);
+
   const addZoomAtPlayhead = (direction: "in" | "out") => {
     snapshot();
     const start = snapping ? Math.round(currentTime * 10) / 10 : currentTime;
@@ -588,7 +676,7 @@ function EditorTimeline({
   return (
     <section
       aria-label="Video timeline"
-      className="flex h-full min-h-0 w-full shrink-0 flex-col overflow-hidden bg-white"
+      className="relative flex h-full min-h-0 w-full shrink-0 flex-col overflow-hidden bg-white"
       style={{ borderTop: `1px solid #E2E8F0` }}
     >
       {/* Control bar */}
@@ -668,45 +756,6 @@ function EditorTimeline({
         </div>
       </div>
 
-      {/* Sound FX palette — drag onto the Audio track or click to drop at playhead */}
-      <div
-        className="flex shrink-0 items-center gap-2 overflow-x-auto px-3 py-2"
-        style={{ borderBottom: `1px solid ${CLIP_EDITOR.separator}`, background: "#F8FAFD" }}
-        aria-label="Sound effects"
-      >
-        <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide" style={{ color: CLIP_EDITOR.textMuted }}>
-          Sound FX
-        </span>
-        {CLIP_SFX_ASSETS.map((asset) => {
-          const colors = SFX_BLOCK_COLORS[asset.id];
-          return (
-            <button
-              key={asset.id}
-              type="button"
-              draggable
-              title={`${asset.label}: ${asset.hint}. Drag onto Audio or click to place at playhead.`}
-              onDragStart={(event) => {
-                event.dataTransfer.setData(SFX_DRAG_MIME, asset.id);
-                event.dataTransfer.effectAllowed = "copy";
-              }}
-              onClick={() => placeSfxAt(asset.id, snapping ? Math.round(currentTime * 10) / 10 : currentTime)}
-              className="flex h-[30px] shrink-0 items-center gap-1.5 rounded-[8px] px-2.5 text-[11px] font-semibold transition-colors duration-150 hover:brightness-[0.98]"
-              style={{
-                background: colors.fill,
-                color: colors.text,
-                boxShadow: `inset 0 0 0 1px ${colors.border}`,
-              }}
-            >
-              <AudioLines size={13} strokeWidth={ICON_STROKE} />
-              {asset.label}
-            </button>
-          );
-        })}
-        <span className="ml-1 shrink-0 text-[10.5px]" style={{ color: CLIP_EDITOR.textMuted }}>
-          Drag onto Audio · customise speed below
-        </span>
-      </div>
-
       {/* Track labels + tracks */}
       <div className="grid min-h-0 flex-1 grid-cols-[120px_minmax(0,1fr)]">
         <div className="bg-white" style={{ borderRight: `1px solid ${CLIP_EDITOR.border}` }}>
@@ -714,7 +763,7 @@ function EditorTimeline({
           {([
             ["Video", Video, trackHeights.video],
             ["Captions", Type, trackHeights.captions],
-            ["Audio", AudioLines, trackHeights.audio],
+            ["Sound FX", AudioLines, trackHeights.audio],
             ["Zoom", ZoomIn, trackHeights.zoom],
           ] as const).map(([label, Icon, height]) => (
             <div key={label} className="flex items-center gap-[10px] px-3" style={{ height, ...rowSeparator, color: "#53637D" }}>
@@ -775,13 +824,12 @@ function EditorTimeline({
               ))}
             </div>
 
-            {/* Caption word chips from real word durations */}
+            {/* Precise subtitle cue dots: each one seeks directly to its word. */}
             <div className="relative" style={{ height: trackHeights.captions, ...rowSeparator }}>
               {words.map((word, index) => {
                 const label = wordLabel(word);
                 if (!label || duration <= 0) return null;
                 const left = (Math.max(0, word.start) / duration) * 100;
-                const width = Math.max(0.6, ((Math.max(0.08, word.end - word.start)) / duration) * 100 - 0.18);
                 return (
                   <button
                     key={`${index}-${word.start}`}
@@ -789,32 +837,40 @@ function EditorTimeline({
                     title={label}
                     onClick={(event) => { event.stopPropagation(); onWordSelect?.(index); seek(word.start); }}
                     onPointerDown={(event) => event.stopPropagation()}
-                    className="absolute top-1/2 h-[33px] -translate-y-1/2 truncate rounded-[6px] bg-white px-[5px] text-left text-[10px] font-medium transition-colors duration-150 hover:bg-[#F5F8FC]"
-                    style={{ left: `${left}%`, width: `${width}%`, minWidth: 12, border: `1px solid ${CLIP_EDITOR.border}`, color: CLIP_EDITOR.textSecondary }}
-                  >
-                    {label}
-                  </button>
+                    aria-label={`Seek to subtitle ${label}`}
+                    className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-[#79A9E8] shadow-[0_1px_3px_rgba(15,23,42,.18)] transition-[transform,background-color] duration-150 hover:scale-150 hover:bg-[#0A66D8] focus-visible:scale-150"
+                    style={{ left: `${left}%` }}
+                  />
                 );
               })}
             </div>
 
             {/* Audio waveform + draggable sound FX clips */}
             <div
-              className="relative flex items-center bg-white"
+              className={cn("clipper-sfx-track relative flex items-center bg-white", sfxDropActive && "clipper-sfx-track--drop-active")}
               style={{ height: trackHeights.audio, ...rowSeparator }}
               onDragOver={(event) => {
                 if (event.dataTransfer.types.includes(SFX_DRAG_MIME)) {
                   event.preventDefault();
                   event.dataTransfer.dropEffect = "copy";
+                  setSfxDropActive(true);
+                  const raw = timeAtClientX(event.clientX);
+                  setSfxDropTime(snapping ? Math.round(raw * 10) / 10 : raw);
                 }
+              }}
+              onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) { setSfxDropActive(false); setSfxDropTime(null); }
               }}
               onDrop={(event) => {
                 const assetId = event.dataTransfer.getData(SFX_DRAG_MIME) as ClipSfxAssetId;
-                if (!CLIP_SFX_ASSETS.some((asset) => asset.id === assetId)) return;
                 event.preventDefault();
                 event.stopPropagation();
+                setSfxDropActive(false);
+                setSfxDropTime(null);
+                if (!CLIP_SFX_ASSETS.some((asset) => asset.id === assetId)) return;
                 const at = snapping ? Math.round(timeAtClientX(event.clientX) * 10) / 10 : timeAtClientX(event.clientX);
                 placeSfxAt(assetId, at);
+                setDraggedSfx(null);
               }}
             >
               {waveState === "ready" ? (
@@ -847,7 +903,7 @@ function EditorTimeline({
                       dragRef.current = { kind: "sfx-move", id: clip.id, grabOffset: grab };
                       scrollerRef.current?.setPointerCapture(event.pointerId);
                     }}
-                    className="absolute top-1/2 z-[5] flex h-[34px] -translate-y-1/2 items-center overflow-hidden rounded-[7px] px-2 text-left text-[10px] font-semibold"
+                    className="clipper-sfx-clip absolute top-1/2 z-[5] flex h-[34px] -translate-y-1/2 items-center overflow-hidden rounded-[7px] px-2 text-left text-[10px] font-semibold"
                     style={{
                       left: `${left}%`,
                       width: `${Math.max(width, 1.2)}%`,
@@ -863,9 +919,31 @@ function EditorTimeline({
                   </button>
                 );
               })}
+              {sfxDropActive && sfxDropTime !== null && duration > 0 ? (
+                <span
+                  className="pointer-events-none absolute bottom-0 top-0 z-10 w-px bg-[#3977F6]"
+                  style={{ left: `${(sfxDropTime / duration) * 100}%` }}
+                  aria-hidden
+                >
+                  <span className="absolute left-1 top-1 whitespace-nowrap rounded bg-[#3977F6] px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
+                    Drop {draggedSfx ? CLIP_SFX_ASSETS.find((asset) => asset.id === draggedSfx)?.label : "sound"} · {formatEditorTime(sfxDropTime)}
+                  </span>
+                </span>
+              ) : null}
               {!sfxClips.length ? (
-                <span className="pointer-events-none absolute left-3 top-2 z-[1] text-[10.5px]" style={{ color: CLIP_EDITOR.textMuted }}>
-                  Drag a Sound FX here
+                <span className="pointer-events-none absolute inset-0 z-[1] flex items-center justify-center">
+                  <span
+                    className="flex items-center gap-2 rounded-[8px] px-2.5 py-1 text-[10.5px] font-medium"
+                    style={{ background: sfxDropActive ? "#EAF2FF" : "rgba(255,255,255,.84)", color: sfxDropActive ? CLIP_EDITOR.blue : CLIP_EDITOR.textMuted, boxShadow: sfxDropActive ? "inset 0 0 0 1px rgba(57,119,246,.28)" : "inset 0 0 0 1px rgba(15,23,42,.05)" }}
+                  >
+                    <AudioLines size={13} strokeWidth={ICON_STROKE} />
+                    {sfxDropActive ? "Release to place sound" : "Drag a sound effect here"}
+                  </span>
+                </span>
+              ) : null}
+              {sfxClips.length && !sfxDropActive ? (
+                <span className="pointer-events-none absolute bottom-1 right-2 z-[1] flex items-center gap-1 text-[9.5px] font-medium" style={{ color: CLIP_EDITOR.textMuted }}>
+                  <AudioLines size={11} strokeWidth={ICON_STROKE} /> Drag another sound here
                 </span>
               ) : null}
             </div>
@@ -1070,6 +1148,13 @@ function EditorTimeline({
           </button>
         </div>
       ) : null}
+      {!sfxHintDismissed ? (
+        <div className="absolute bottom-3 left-[134px] z-40 flex items-center gap-2 rounded-[9px] border border-[#E3E7EB] bg-white px-3 py-2 text-[11px] text-[#59616A] shadow-[0_6px_18px_rgba(15,23,42,.08)]">
+          <AudioLines size={13} strokeWidth={ICON_STROKE} />
+          <span>Drag any effect from Sound FX onto this lane.</span>
+          <button type="button" onClick={() => setSfxHintDismissed(true)} className="ml-1 text-[#8B949E] transition-colors hover:text-[#1D1D1F]" aria-label="Dismiss sound effect tip">×</button>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -1087,6 +1172,8 @@ function WordTimingInspector({
   regenerateBusy,
   canRegenerate,
   onSeekWord,
+  captionStyle,
+  onCaptionStyleChange,
 }: {
   words: EditorWord[];
   activeIndex: number;
@@ -1096,25 +1183,29 @@ function WordTimingInspector({
   regenerateBusy: boolean;
   canRegenerate: boolean;
   onSeekWord: (index: number) => void;
+  captionStyle: CaptionStyle | null;
+  onCaptionStyleChange: (style: Partial<CaptionStyle>) => void;
 }) {
   const [allSelected, setAllSelected] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const activeWord = words[activeIndex];
   const totalSeconds = words.length ? Math.max(0, Math.max(...words.map((word) => word.end)) - Math.min(...words.map((word) => word.start))) : 0;
   const uppercaseTranscript = words.some((word) => /[A-Z]/.test(wordLabel(word))) && !words.some((word) => /[a-z]/.test(wordLabel(word)));
+  const wordMode = !/phrase/.test(String(captionStyle?.subtitle_style || "phrase-highlight"));
+  const [spaceWarning, setSpaceWarning] = useState(false);
 
   const copyTimestamp = async () => {
     try { await navigator.clipboard?.writeText(formatEditorTime(activeWord?.start || 0)); } catch { /* Clipboard access is optional. */ }
   };
 
   return (
-    <aside
-      className="flex h-full min-h-0 flex-col bg-white"
-      style={{ borderLeft: `1px solid ${CLIP_EDITOR.border}`, paddingLeft: 22, paddingRight: 22, paddingBottom: 22 }}
+    <section
+      className="flex min-h-0 flex-1 flex-col bg-white"
+      style={{ paddingLeft: 22, paddingRight: 22, paddingBottom: 22 }}
       aria-label="Word timing"
     >
       <div className="flex shrink-0 items-center gap-2" style={{ paddingTop: 34 }}>
-        <Sparkles size={15} strokeWidth={ICON_STROKE} style={{ color: CLIP_EDITOR.textPrimary }} />
+        <Captions size={15} strokeWidth={ICON_STROKE} style={{ color: CLIP_EDITOR.textPrimary }} />
         <p className="text-[14px]" style={{ fontWeight: 650, color: CLIP_EDITOR.textPrimary }}>Word timing</p>
       </div>
 
@@ -1138,7 +1229,28 @@ function WordTimingInspector({
         </button>
       </div>
 
-      <div className="scrollbar-none mt-[16px] min-h-0 flex-1 space-y-[3px] overflow-y-auto">
+      <div className="mt-3 shrink-0 rounded-[10px] border border-[#E6E8EA] bg-[#FAFAF9] p-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] font-medium" style={{ color: CLIP_EDITOR.textSecondary }}>Caption style</span>
+          <div className="flex rounded-[7px] bg-[#ECEEED] p-[2px]">
+            {[["word", "One word"], ["phrase-highlight", "Phrase"]].map(([value, label]) => (
+              <button key={value} type="button" onClick={() => onCaptionStyleChange({ subtitle_style: value })} className="rounded-[5px] px-2 py-1 text-[10px] font-medium" style={{ background: String(captionStyle?.subtitle_style || "phrase-highlight") === value ? "#fff" : "transparent", color: String(captionStyle?.subtitle_style || "phrase-highlight") === value ? CLIP_EDITOR.textPrimary : CLIP_EDITOR.textMuted, boxShadow: String(captionStyle?.subtitle_style || "phrase-highlight") === value ? "0 1px 2px rgba(0,0,0,.08)" : "none" }}>{label}</button>
+            ))}
+          </div>
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <label className="text-[10px]" style={{ color: CLIP_EDITOR.textMuted }}>Font
+            <select value={captionStyle?.font || "Montserrat"} onChange={(event) => onCaptionStyleChange({ font: event.target.value })} className="mt-1 h-7 w-full rounded-[6px] border border-[#E0E3E5] bg-white px-1.5 text-[10px] outline-none" style={{ color: CLIP_EDITOR.textPrimary }}><option>Montserrat</option><option>Arial</option><option>Impact</option><option>Helvetica Neue</option></select>
+          </label>
+          <label className="text-[10px]" style={{ color: CLIP_EDITOR.textMuted }}>Colour
+            <input aria-label="Subtitle colour" type="color" value={captionStyle?.text_colour || "#FFFFFF"} onChange={(event) => onCaptionStyleChange({ text_colour: event.target.value })} className="mt-1 h-7 w-full cursor-pointer rounded-[6px] border border-[#E0E3E5] bg-white p-1" />
+          </label>
+        </div>
+        <p className="mt-1.5 text-[10px]" style={{ color: CLIP_EDITOR.textMuted }}>Applies to all subtitles. Select a word to edit its text and timing.</p>
+      </div>
+      {spaceWarning ? <p role="status" className="mt-2 shrink-0 rounded-[7px] bg-[#FFF8E8] px-2 py-1.5 text-[10px] text-[#7A5A12]">One-word style cannot contain spaces. Choose Phrase for multi-word subtitles.</p> : null}
+
+      <div className="clipper-word-scroll mt-[16px] min-h-0 flex-1 space-y-[3px] overflow-y-auto pr-1" aria-label="Scrollable subtitle word list">
         {words.length ? words.map((word, index) => {
           const selected = activeIndex === index || allSelected;
           const editing = editingIndex === index;
@@ -1166,9 +1278,10 @@ function WordTimingInspector({
                   autoFocus
                   defaultValue={wordLabel(word)}
                   onClick={(event) => event.stopPropagation()}
-                  onBlur={(event) => { onChangeWord(index, event.target.value); setEditingIndex(null); }}
+                  onBlur={(event) => { onChangeWord(index, wordMode ? event.target.value.replace(/\s+/g, "") : event.target.value); setEditingIndex(null); }}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter") { onChangeWord(index, (event.target as HTMLInputElement).value); setEditingIndex(null); }
+                    if (wordMode && event.key === " ") { event.preventDefault(); setSpaceWarning(true); window.setTimeout(() => setSpaceWarning(false), 2600); }
+                    if (event.key === "Enter") { onChangeWord(index, wordMode ? (event.target as HTMLInputElement).value.replace(/\s+/g, "") : (event.target as HTMLInputElement).value); setEditingIndex(null); }
                     if (event.key === "Escape") setEditingIndex(null);
                   }}
                   className="h-[26px] w-full rounded-[6px] bg-white px-1.5 text-center text-[12px] outline-none"
@@ -1201,11 +1314,11 @@ function WordTimingInspector({
           className="mt-[18px] flex h-[47px] w-full items-center justify-center gap-2 rounded-[10px] bg-white text-[13px] font-medium transition-colors duration-150 hover:bg-[#F5F8FC] disabled:opacity-40"
           style={{ border: "1px solid #E1E7F0", color: CLIP_EDITOR.blue, fontWeight: 550 }}
         >
-          <Sparkles size={15} strokeWidth={ICON_STROKE} />
+          <RefreshCw size={14} strokeWidth={ICON_STROKE} className={regenerateBusy ? "animate-spin" : undefined} />
           {regenerateBusy ? "Regenerating…" : "Regenerate subtitles"}
         </button>
       </div>
-    </aside>
+    </section>
   );
 }
 
@@ -1229,6 +1342,7 @@ export default function ClipperEditor({
   activeWordIndex,
   onActiveWordIndex,
   captionStyle,
+  onCaptionStyleChange,
   captionsVisible,
   videoRef,
   currentTime,
@@ -1257,6 +1371,7 @@ export default function ClipperEditor({
   activeWordIndex: number;
   onActiveWordIndex: (index: number) => void;
   captionStyle: CaptionStyle | null;
+  onCaptionStyleChange: (style: Partial<CaptionStyle>) => void;
   captionsVisible: boolean;
   videoRef: MutableRefObject<HTMLVideoElement | null>;
   currentTime: number;
@@ -1408,7 +1523,7 @@ export default function ClipperEditor({
   const shell = (
     <div
       data-testid="clipper-results"
-      className="fixed inset-0 z-[10000] flex flex-col overflow-hidden bg-white"
+      className="clipper-editor fixed inset-0 z-[10000] flex flex-col overflow-hidden"
       style={{ fontFamily: CLIP_EDITOR_FONT, color: CLIP_EDITOR.textPrimary }}
     >
       <span aria-hidden className="h-[2px] w-full shrink-0" style={{ background: CLIP_EDITOR.blue }} />
@@ -1421,9 +1536,9 @@ export default function ClipperEditor({
       ) : null}
 
       {/* Three full-height columns. Timeline lives ONLY in the centre column, flush to the bottom. */}
-      <div className="grid min-h-0 flex-1 grid-cols-[286px_minmax(0,1fr)_377px] max-[1450px]:grid-cols-[248px_minmax(0,1fr)_340px]">
+      <div className="grid min-h-0 flex-1 grid-cols-[270px_minmax(0,1fr)_356px] max-[1450px]:grid-cols-[240px_minmax(0,1fr)_326px]">
         <aside
-          className="flex min-h-0 flex-col overflow-hidden"
+          className="clipper-sidebar flex min-h-0 flex-col overflow-hidden"
           style={{ borderRight: `1px solid ${CLIP_EDITOR.border}`, paddingLeft: 24, paddingRight: 20, paddingTop: 29 }}
           aria-label="Clips"
         >
@@ -1446,7 +1561,7 @@ export default function ClipperEditor({
               style={{ color: CLIP_EDITOR.textPrimary }}
             />
           </label>
-          <div className="scrollbar-none mt-[18px] min-h-0 flex-1 space-y-2 overflow-y-auto pb-4">
+          <div className="clipper-clips-scroll mt-[18px] min-h-0 flex-1 space-y-2 overflow-y-auto pb-4 pr-1" aria-label="Scrollable clip list">
             {filteredClips.map((clip) => {
               const active = selected?.id === clip.id;
               return (
@@ -1484,7 +1599,7 @@ export default function ClipperEditor({
           </div>
         </aside>
 
-        <main className="flex min-h-0 min-w-0 flex-col overflow-hidden" style={{ borderRight: `1px solid ${CLIP_EDITOR.border}` }}>
+        <main className="clipper-main flex min-h-0 min-w-0 flex-col overflow-hidden" style={{ borderRight: `1px solid ${CLIP_EDITOR.border}` }}>
           {selected ? (
             <>
               <header className="flex h-[90px] shrink-0 items-start justify-between" style={{ paddingLeft: 30, paddingRight: 25, paddingTop: 30 }}>
@@ -1502,7 +1617,7 @@ export default function ClipperEditor({
                         aria-label="Clip title"
                       />
                     ) : (
-                      <h1 className="truncate text-[15px]" style={{ fontWeight: 700, color: CLIP_EDITOR.textPrimary }}>{selected.title}</h1>
+                      <h1 className="truncate text-[21px] tracking-[-0.025em]" style={{ fontWeight: 650, color: CLIP_EDITOR.textPrimary }}>{selected.title}</h1>
                     )}
                     <button type="button" onClick={() => setEditingTitle(true)} className="grid h-6 w-6 shrink-0 place-items-center rounded-[6px] transition-colors duration-150 hover:bg-[#F5F8FC]" aria-label="Rename clip">
                       <Pencil size={15} strokeWidth={ICON_STROKE} style={{ color: CLIP_EDITOR.textMuted }} />
@@ -1622,6 +1737,7 @@ export default function ClipperEditor({
                           currentTime={currentTime}
                           activeWordIndex={activeWordIndex}
                           onWordClick={(index) => onActiveWordIndex(index)}
+                          onWordChange={onWordChange}
                         />
                       ) : null}
                       {faceTrackingEnabled ? (
@@ -1669,20 +1785,25 @@ export default function ClipperEditor({
           )}
         </main>
 
-        <WordTimingInspector
-          words={words}
-          activeIndex={activeWordIndex}
-          onSelect={onActiveWordIndex}
-          onChangeWord={onWordChange}
-          onRegenerate={onRegenerate}
-          regenerateBusy={regenerateBusy}
-          canRegenerate={Boolean(selected?.artifact_id) || words.length > 0}
-          onSeekWord={(index) => {
-            const word = words[index];
-            if (word && videoRef.current) videoRef.current.currentTime = Math.max(0, word.start);
-            if (word) onTimeChange(Math.max(0, word.start));
-          }}
-        />
+        <aside className="clipper-inspector flex min-h-0 flex-col bg-white" style={{ borderLeft: `1px solid ${CLIP_EDITOR.border}` }}>
+          <SoundFxLibrary />
+          <WordTimingInspector
+            words={words}
+            activeIndex={activeWordIndex}
+            onSelect={onActiveWordIndex}
+            onChangeWord={onWordChange}
+            onRegenerate={onRegenerate}
+            regenerateBusy={regenerateBusy}
+            canRegenerate={Boolean(selected?.artifact_id) || words.length > 0}
+            onSeekWord={(index) => {
+              const word = words[index];
+              if (word && videoRef.current) videoRef.current.currentTime = Math.max(0, word.start);
+              if (word) onTimeChange(Math.max(0, word.start));
+            }}
+            captionStyle={captionStyle}
+            onCaptionStyleChange={onCaptionStyleChange}
+          />
+        </aside>
       </div>
     </div>
   );

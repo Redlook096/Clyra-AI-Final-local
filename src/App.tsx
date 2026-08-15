@@ -6923,7 +6923,10 @@ Please analyze the code you just wrote and fix this error.`;
                 "transition-[grid-template-columns] duration-[720ms] ease-[cubic-bezier(0.32,0.72,0,1)]",
                 keepWorkspacePreviewLayout
                   ? "grid-cols-[minmax(360px,min(32vw,420px))_minmax(620px,1fr)]"
-                  : "grid-cols-[minmax(0,1fr)_0fr]",
+                  // A bare 0fr still honors the preview column's intrinsic
+                  // minimum width (including its padding), leaving a visible
+                  // gutter at the right edge when the panel is closed.
+                  : "grid-cols-[minmax(0,1fr)_minmax(0,0fr)]",
               )}
             >
               <div

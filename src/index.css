@@ -97,6 +97,117 @@
   }
 }
 
+/* Remastered working surfaces: the welcome and chat welcome deliberately keep
+   their existing composition. These refinements apply only once a study space
+   becomes an active canvas, material review, or inspector workflow. */
+.study-brain-shell {
+  --study-rail: #f7f7f8;
+  --study-workspace: #fbfbfc;
+  --study-hairline: rgba(28, 31, 36, .075);
+  --study-control: rgba(30, 34, 40, .045);
+  --study-control-hover: rgba(30, 34, 40, .072);
+}
+.study-dock {
+  border-radius: 18px !important;
+  background: rgba(248, 249, 250, .96) !important;
+  box-shadow: 0 1px 2px rgba(15,23,42,.022), 0 8px 24px rgba(15,23,42,.026) !important;
+}
+.study-dock-item {
+  transition: background-color 140ms cubic-bezier(.22,1,.36,1), color 140ms cubic-bezier(.22,1,.36,1) !important;
+}
+.study-dock-item:hover { background: rgba(29, 33, 39, .052) !important; }
+.study-dock-item--active { background: rgba(29, 33, 39, .07) !important; }
+.study-dock-popover { border-radius: 12px !important; box-shadow: 0 18px 36px rgba(15,23,42,.08) !important; }
+.study-brain-toolbar {
+  background: rgba(252,252,253,.86) !important;
+  border-bottom-color: var(--study-hairline) !important;
+}
+.study-brain-flow {
+  background-image: radial-gradient(circle at 1px 1px, rgba(84, 92, 104, .075) 1px, transparent 0) !important;
+  background-size: 24px 24px !important;
+}
+.study-brain-flow .react-flow__edge-path {
+  stroke: rgba(75, 84, 98, .34) !important;
+  stroke-width: 1.05px !important;
+}
+.study-brain-flow .react-flow__node { transition: filter 140ms cubic-bezier(.22,1,.36,1), transform 140ms cubic-bezier(.22,1,.36,1) !important; }
+.study-brain-flow .react-flow__node.selected { filter: drop-shadow(0 8px 16px rgba(37, 91, 175, .09)); }
+.study-brain-node, .study-source-node {
+  border-color: rgba(26, 31, 38, .085) !important;
+  box-shadow: 0 1px 2px rgba(15,23,42,.022), 0 6px 18px rgba(15,23,42,.026) !important;
+}
+.study-brain-node:hover, .study-source-node:hover { box-shadow: 0 3px 10px rgba(15,23,42,.05), 0 12px 25px rgba(15,23,42,.035) !important; }
+.study-canvas-toolbar {
+  border-radius: 12px !important;
+  border-color: rgba(29,33,39,.08) !important;
+  box-shadow: 0 1px 2px rgba(15,23,42,.025), 0 10px 24px rgba(15,23,42,.045) !important;
+}
+.study-canvas-tool, .study-canvas-view { border-radius: 7px !important; transition: background-color 120ms ease, color 120ms ease !important; }
+.study-canvas-popover { border-radius: 11px !important; box-shadow: 0 16px 36px rgba(15,23,42,.1) !important; }
+.study-left-project-panel, .study-brain-inspector {
+  background: rgba(249,250,251,.9) !important;
+  border-color: var(--study-hairline) !important;
+}
+.study-materials-workspace { background: var(--study-workspace); }
+.study-materials-nav, .study-materials-actions { background: rgba(248,249,250,.88) !important; }
+.study-materials-header h1 { letter-spacing: -.034em; }
+.study-materials-search:focus-within { border-color: rgba(57,119,246,.34); box-shadow: 0 0 0 3px rgba(57,119,246,.055); }
+.study-materials-overview__recent button,
+.study-materials-actions > button,
+.study-materials-nav__items button { transition: background-color 120ms ease, color 120ms ease !important; }
+.study-flashcard { box-shadow: 0 1px 2px rgba(15,23,42,.02) !important; }
+
+/* The clipper’s SFX library is a concrete source palette, not a collection of
+   generic buttons. The native HTML drag payload remains the source of truth. */
+.clipper-sfx-palette-item {
+  border: 1px solid transparent;
+  cursor: grab;
+  transition: transform 120ms cubic-bezier(.22,1,.36,1), filter 120ms ease, box-shadow 120ms ease !important;
+}
+.clipper-sfx-palette-item:hover { filter: saturate(1.06); box-shadow: 0 3px 9px rgba(15,23,42,.08) !important; }
+.clipper-sfx-palette-item:active { cursor: grabbing; transform: scale(.98); }
+.clipper-sfx-track { transition: background-color 150ms ease, box-shadow 150ms ease; }
+.clipper-sfx-track--drop-active {
+  background: #f2f7ff !important;
+  box-shadow: inset 0 0 0 1px rgba(57,119,246,.52), inset 0 0 0 4px rgba(57,119,246,.045);
+}
+.clipper-sfx-track--drop-active::before {
+  content: "";
+  position: absolute;
+  inset: 5px 7px;
+  border: 1px dashed rgba(57,119,246,.52);
+  border-radius: 7px;
+  pointer-events: none;
+}
+.clipper-sfx-clip {
+  transition: transform 120ms cubic-bezier(.22,1,.36,1), box-shadow 120ms ease, filter 120ms ease;
+}
+.clipper-sfx-clip:hover { filter: saturate(1.08); transform: translateY(-50%) scale(1.012); }
+.clipper-sfx-library-row {
+  cursor: grab;
+  transition: background-color 120ms ease, transform 120ms cubic-bezier(.22,1,.36,1);
+}
+.clipper-sfx-library-row:hover { background: #F4F6F8; }
+.clipper-sfx-library-row:active { cursor: grabbing; transform: scale(.985); }
+.clipper-sfx-grip { color: #A5ACB5; opacity: .72; }
+.clipper-sfx-library-row:hover .clipper-sfx-grip { color: #3977F6; opacity: 1; }
+
+/* Native terminal treatment: xterm owns input through its hidden textarea,
+   while the visible cursor remains a quiet, thin text insertion bar. */
+.xterm .xterm-cursor-layer .xterm-cursor-bar {
+  width: 1px !important;
+  background-color: #3977F6 !important;
+}
+.xterm-helper-textarea { caret-color: transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  .clipper-sfx-palette-item,
+  .clipper-sfx-track,
+  .clipper-sfx-clip,
+  .clipper-sfx-library-row { transition: none !important; }
+  .clipper-sfx-clip:hover { transform: translateY(-50%); }
+}
+
 /* Extra vertical room so scaled UI (transform) isn’t clipped at the bottom */
 .clyra-stage-safe {
   flex: 1 1 0%;
@@ -6578,6 +6689,81 @@ body,
   height: 3px;
   border-radius: 999px;
   background: #E3E8F0;
+}
+
+/* AI Clipper: a quiet desktop surface with deliberately restrained depth.
+   These styles are scoped so the editor remains a focused production tool
+   rather than inheriting the visual language of the surrounding workspace. */
+.clipper-editor {
+  color-scheme: light;
+  background: #f6f6f3;
+  font-optical-sizing: auto;
+  letter-spacing: -0.006em;
+}
+.clipper-editor > div {
+  background: #f6f6f3;
+}
+.clipper-sidebar,
+.clipper-inspector {
+  background: rgba(255, 255, 255, .94);
+}
+.clipper-main {
+  background: #fbfbf9;
+}
+.clipper-editor button,
+.clipper-editor input {
+  -webkit-tap-highlight-color: transparent;
+}
+.clipper-editor button:focus-visible,
+.clipper-editor input:focus-visible {
+  outline: 2px solid rgba(10, 102, 216, .42);
+  outline-offset: 2px;
+}
+.clipper-editor button {
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, opacity 160ms ease;
+}
+.clipper-clips-scroll,
+.clipper-sfx-scroll,
+.clipper-word-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #c8ccd0 transparent;
+}
+.clipper-clips-scroll::-webkit-scrollbar,
+.clipper-sfx-scroll::-webkit-scrollbar,
+.clipper-word-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.clipper-clips-scroll::-webkit-scrollbar-thumb,
+.clipper-sfx-scroll::-webkit-scrollbar-thumb,
+.clipper-word-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #c8ccd0;
+  background-clip: padding-box;
+}
+.clipper-word-scroll::-webkit-scrollbar-thumb:hover,
+.clipper-sfx-scroll::-webkit-scrollbar-thumb:hover,
+.clipper-clips-scroll::-webkit-scrollbar-thumb:hover {
+  background: #aeb4ba;
+  background-clip: padding-box;
+}
+.clipper-sfx-scroll {
+  max-height: min(31vh, 292px);
+  overflow-y: auto;
+  padding-right: 3px;
+}
+.clipper-word-scroll {
+  overscroll-behavior: contain;
+}
+@media (prefers-reduced-motion: reduce) {
+  .clipper-editor button,
+  .clipper-editor input { transition: none; }
+}
+@media (prefers-contrast: more) {
+  .clipper-editor { background: #fff; }
+  .clipper-sidebar,
+  .clipper-inspector,
+  .clipper-main { background: #fff; }
 }
 
 .study-brain-shell .clyra-user-message-entry {

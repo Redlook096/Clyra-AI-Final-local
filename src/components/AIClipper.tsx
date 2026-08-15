@@ -2549,6 +2549,21 @@ export default function AIClipper({
     }
   };
 
+  const changeCaptionStyle = (change: Partial<CaptionStyle>) => {
+    if (selected) {
+      setResults((items) => items.map((item) => item.id === selected.id
+        ? { ...item, caption_style: { ...(item.caption_style || selectedCaptionStyle), ...change } }
+        : item));
+      return;
+    }
+    setDraft((current) => ({
+      ...current,
+      ...(change.font ? { font: change.font } : {}),
+      ...(change.text_colour ? { colour: change.text_colour } : {}),
+      ...(change.subtitle_style ? { subtitleStyle: change.subtitle_style as SubtitleStyle } : {}),
+    }));
+  };
+
   const resultsView = (
     <ClipperEditor
       clips={filteredResults}
@@ -2566,6 +2581,7 @@ export default function AIClipper({
       activeWordIndex={activeCaptionIndex}
       onActiveWordIndex={setActiveCaptionIndex}
       captionStyle={selectedCaptionStyle}
+      onCaptionStyleChange={changeCaptionStyle}
       captionsVisible={Boolean(
         selected
         && selected.captions_enabled !== false

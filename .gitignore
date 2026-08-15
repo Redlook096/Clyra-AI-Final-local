@@ -11,6 +11,7 @@ _reference/
 .references/
 vibe-sandbox/
 vendor/opencode/
+vendor/Ultra-Light-Fast-Generic-Face-Detector-1MB/
 tmp/
 output/
 .cache/

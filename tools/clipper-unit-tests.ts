@@ -92,6 +92,8 @@ face_auto = face.face_tracking_config({"face_tracking": {"mode": "responsive", "
 face_low_power = face.face_tracking_config({"face_tracking": {"mode": "smooth", "trackingQuality": "low_power"}})
 face_locked = face.face_tracking_config({"face_tracking": {"mode": "smooth", "reframeMode": "locked_subject", "allowZoom": True}})
 caps = face.capability_report()
+ultraface_priors = face._ultraface_priors()
+ultraface_empty = face._UltraFaceDetector().detect(face.np.zeros((240, 320, 3), dtype=face.np.uint8))
 fixed = face.track_faces_and_build_crops(
     "ffmpeg",
     "/tmp/does-not-exist.mp4",
@@ -446,6 +448,8 @@ print(json.dumps({
     "faceOffFalseString": face_off_false_string,
     "faceDisabled": face_disabled,
     "faceCaps": caps,
+    "ultrafacePriorCount": int(ultraface_priors.shape[0]),
+    "ultrafaceEmpty": len(ultraface_empty),
     "faceFixed": fixed,
     "cropFilter": crop_filter,
     "zoomFilter": zoom_filter,
@@ -552,7 +556,9 @@ const payload = JSON.parse(output.trim()) as {
   faceOff: { enabled: boolean; mode: string; smartReframe?: boolean };
   faceOffFalseString: { enabled: boolean; mode: string; smartReframe?: boolean };
   faceDisabled: { enabled: boolean; mode: string };
-  faceCaps: { mediapipeTasks: boolean; fallback: string | null; poseLandmarker?: boolean; opencvOpticalFlow?: boolean };
+  faceCaps: { mediapipeTasks: boolean; fallback: string | null; poseLandmarker?: boolean; opencvOpticalFlow?: boolean; ultraFaceRfb320?: boolean };
+  ultrafacePriorCount: number;
+  ultrafaceEmpty: number;
   faceFixed: { faceTracking: { mode: string }; cropKeyframes: Array<{ width: number; height: number }> };
   cropFilter: string;
   zoomFilter: string;
@@ -737,6 +743,9 @@ assert(payload.alphaSmooth < payload.alphaFast, "smooth mode uses stronger smoot
 assert.equal(typeof payload.faceCaps.mediapipeTasks, "boolean", "capability report exposes MediaPipe Tasks flag");
 assert.equal(typeof payload.faceCaps.poseLandmarker, "boolean", "capability report exposes Pose Landmarker support");
 assert.equal(typeof payload.faceCaps.opencvOpticalFlow, "boolean", "capability report exposes optical-flow support");
+assert.equal(payload.faceCaps.ultraFaceRfb320, true, "the bundled UltraFace RFB-320 detector is available to the render worker");
+assert.equal(payload.ultrafacePriorCount, 4420, "UltraFace post-processing uses the detector's complete 320x240 prior set");
+assert.equal(payload.ultrafaceEmpty, 0, "UltraFace inference is safe for a face-free frame");
 assert.equal(payload.sceneOk.accepted, true, "high-coverage selected-person scene is accepted");
 assert.equal(payload.sceneBad.accepted, false, "empty selected-person scene is rejected");
 assert.deepEqual(payload.filtered.map((item) => item.id), ["a"], "candidates outside accepted face scenes are filtered");

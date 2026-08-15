@@ -2535,13 +2535,21 @@ function ReasoningCard({ item, reducedMotion }: { item: Extract<RunItem, { kind:
 function ActionRow({ item, reducedMotion }: { item: Extract<RunItem, { kind: "action" }>; reducedMotion: boolean }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const Icon = ACTION_ICONS[item.icon] || CircleHelp;
+  const action = item.label.split(" ")[0];
+  const detail = item.label.includes(" ") ? item.label.slice(item.label.indexOf(" ") + 1) : "";
   return (
     <motion.div initial={{ opacity: 0, x: -3 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: reducedMotion ? 0.01 : 0.14 }} className="px-0.5 py-0.5">
       <div className="flex items-center gap-2">
-        <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--atlas-text-tertiary)]" />
+        <motion.span
+          className="grid h-3.5 w-3.5 shrink-0 place-items-center text-[var(--atlas-clyra-blue)]"
+          animate={item.status === "running" && !reducedMotion ? { rotate: [0, -8, 8, 0], opacity: [0.75, 1, 0.75] } : { rotate: 0, opacity: 1 }}
+          transition={item.status === "running" ? { duration: 1.15, repeat: Infinity, ease: "easeInOut" } : { duration: 0.14 }}
+        >
+          <Icon className="h-3.5 w-3.5" />
+        </motion.span>
         <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium tracking-[-0.01em] text-[var(--atlas-text-primary)]">
-          <span className="text-[color:var(--atlas-clyra-blue,#2b6ef2)]">{item.label.split(" ")[0]}</span>
-          {item.label.includes(" ") ? ` ${item.label.slice(item.label.indexOf(" ") + 1)}` : ""}
+          <span className="text-[color:var(--atlas-clyra-blue,#2b6ef2)]">{action}</span>
+          {detail ? item.status === "running" ? <><span> </span><ShiningText text={detail} preset="thinkingChat" play={!reducedMotion} className="inline" /></> : ` ${detail}` : null}
         </span>
         {item.status === "running" ? (
           <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--atlas-clyra-blue)]" />

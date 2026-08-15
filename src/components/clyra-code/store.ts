@@ -210,6 +210,20 @@ function firstString(input: Record<string, unknown>, ...keys: string[]): string 
   return "";
 }
 
+/**
+ * Some providers occasionally mislabel scratch reasoning as a normal text
+ * part. It is not a user-facing response. Keep the transcript to concise
+ * public progress updates and tool facts rather than leaking a raw planning
+ * monologue into the chat.
+ */
+function looksLikeInternalScratchpad(text: string) {
+  const signals = [
+    /\b(?:let me|actually|hmm|wait,?|I'?ll first|I'?ll make|I'?ll create)\b/gi,
+    /\b(?:better:|simplest:|structure:)\b/gi,
+  ].reduce((count, pattern) => count + (text.match(pattern)?.length ?? 0), 0);
+  return text.length > 420 && signals >= 3;
+}
+
 export function useClyraCode() {
   const [state, setState] = useState<ClyraCodeState>(INITIAL);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -288,6 +302,11 @@ export function useClyraCode() {
         if (part.type === "text") {
           const text = String(part.text ?? "");
           if (!text) return;
+          if (looksLikeInternalScratchpad(text)) {
+            // The preceding reasoning row stays in place and settles into a
+            // compact Thought entry once the next real tool action arrives.
+            return;
+          }
           const entryId = `assistant-${part.messageID}-${part.id}`;
           setState((prev) => {
             // OpenCode replays the submitted user prompt as a part; the

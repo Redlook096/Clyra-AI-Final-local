@@ -61,6 +61,7 @@ export const AgentActionRow = memo(function AgentActionRow({
   onOpenFile,
   revisiting = false,
   onEditClosed,
+  settled = false,
 }: {
   action: AgentAction;
   onReplyPermission?: (permissionId: string, response: "allow" | "always" | "deny") => void;
@@ -70,6 +71,8 @@ export const AgentActionRow = memo(function AgentActionRow({
   /** A real read that follows an edit to the same file. */
   revisiting?: boolean;
   onEditClosed?: (id: string) => void;
+  /** Render an expanded completed phase without replaying its animation. */
+  settled?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const reduced = useReducedMotion();
@@ -80,6 +83,7 @@ export const AgentActionRow = memo(function AgentActionRow({
 
   // Historical rows (restored sessions / reopened tabs) render settled.
   const [historical] = useState(() => {
+    if (settled) return true;
     if (isActive) return false;
     const ended = action.endedAt ?? action.startedAt;
     return Date.now() - ended > 4000;
@@ -137,7 +141,7 @@ export const AgentActionRow = memo(function AgentActionRow({
   }
 
   if (isStreamingEdit) {
-    return <AgentFileEdit action={action} onOpenFile={onOpenFile} onClosed={onEditClosed} />;
+    return <AgentFileEdit action={action} onOpenFile={onOpenFile} onClosed={onEditClosed} settled={settled} />;
   }
 
   const completionLabel =
@@ -158,12 +162,12 @@ export const AgentActionRow = memo(function AgentActionRow({
       {...enterProps}
       layout
       transition={rowTransition}
-      className={cn("group", !isActive && !isError && "opacity-[0.78] transition-opacity duration-200")}
+      className={cn("group", !isActive && !isError && "opacity-[0.8] transition-opacity duration-200")}
     >
       <div
         className={cn(
-          "grid min-h-[24px] items-center gap-x-1.5 py-[2px] text-[12px] leading-[18px] tracking-[-0.006em]",
-          "grid-cols-[auto_minmax(0,1fr)_auto]",
+          "grid min-h-[28px] items-center gap-x-2 py-[2px] text-[14px] leading-5 tracking-normal",
+          "grid-cols-[max-content_minmax(0,1fr)_auto]",
           hasDetails && "cursor-pointer",
         )}
         onClick={
@@ -187,7 +191,9 @@ export const AgentActionRow = memo(function AgentActionRow({
                   ? "font-medium text-[#55575C]"
                   : "font-normal text-[#73757A]",
           )}
-          style={{ minWidth: verbs.min }}
+          // Compact command labels should sit next to their command, not in a
+          // wide faux-table column. File/terminal details still truncate.
+          style={{ minWidth: isTerminalAction ? undefined : verbs.min }}
         >
           {isTerminalAction ? <span aria-hidden className="mr-1 text-[#A0A2A6]">›</span> : null}
           <MorphLabel label={verb} settled={historical} />
@@ -199,8 +205,8 @@ export const AgentActionRow = memo(function AgentActionRow({
             tone={isActive && isFileAction ? "blue" : "neutral"}
             mono={isMonoTarget}
             className={cn(
-              "text-[11px] tracking-[-0.005em]",
-              !isActive && "text-[#505258]",
+            "text-[13px] tracking-normal",
+              !isActive && "text-[#6D7076]",
             )}
           />
           {isFileAction ? (
@@ -225,11 +231,11 @@ export const AgentActionRow = memo(function AgentActionRow({
               }
               showZero={action.kind !== "create" && action.kind !== "delete"}
               animate={!historical}
-              className="text-[10.75px] font-medium"
+              className="text-[13px] font-medium"
             />
           ) : null}
         </span>
-        <span className="flex items-center gap-1.5 text-[10.5px] text-[#A0A2A6]">
+        <span className="flex items-center gap-1.5 text-[13px] text-[#8A8D92]">
           {duration !== null && duration > 900 ? (
             <span className="cc-counter whitespace-nowrap tabular-nums">
               {formatDuration(duration)}
@@ -253,7 +259,7 @@ export const AgentActionRow = memo(function AgentActionRow({
             initial={historical ? { opacity: 1, y: 0 } : { opacity: 0, y: 3 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.18, ease: AGENT_EASE }}
-            className="ml-[1px] pb-[2px] text-[11.75px] leading-[18px] text-[#65796A]"
+            className="ml-[1px] pb-[2px] text-[13px] leading-5 text-[#65796A]"
           >
             ✓ {completionLabel}
           </motion.div>
@@ -262,7 +268,7 @@ export const AgentActionRow = memo(function AgentActionRow({
       {isError && action.error ? (
         <div
           className={cn(
-            "ml-[1px] max-w-[600px] pb-[2px] text-[11.75px] leading-[17px] text-[#787A7F]",
+            "ml-[1px] max-w-[600px] pb-[2px] text-[13px] leading-5 text-[#8A8D92]",
             historical && "opacity-100",
           )}
         >

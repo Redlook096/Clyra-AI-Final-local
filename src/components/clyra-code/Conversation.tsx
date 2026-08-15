@@ -57,22 +57,22 @@ function ThinkingEvent({ entry }: { entry: Extract<LogEntry, { type: "reasoning"
         )}
       >
         {!dropShimmer ? (
-          <div className={cn("flex min-w-0 items-center gap-1.5 transition-opacity duration-300 ease-out", completed && "opacity-0")} aria-hidden={completed || undefined}>
-            <ShiningText text={summary || "Thinking"} play className="truncate text-[12px] font-medium tracking-[-0.01em]" />
+          <div className={cn("flex min-w-0 items-center gap-2 transition-opacity duration-300 ease-out", completed && "opacity-0")} aria-hidden={completed || undefined}>
+            <ShiningText text={summary || "Thinking"} play className="truncate text-[14px] font-medium leading-5 tracking-normal" />
           </div>
         ) : null}
         <AnimatePresence>
           {completed ? (
             <motion.div key="completed" className={cn("flex items-center gap-1.5", !dropShimmer && "absolute inset-0")} initial={settled ? { opacity: 1, x: 0 } : { opacity: 0, x: -3 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.22, ease: AGENT_EASE }}>
               {summary ? <motion.span aria-hidden animate={{ rotate: expanded ? 90 : 0 }} transition={{ duration: 0.18, ease: AGENT_EASE }} className="inline-flex w-3 justify-center text-[#A0A2A6]"><ChevronRight className="h-3 w-3" /></motion.span> : <span className="w-3" />}
-              <span className="text-[11.75px] text-[#85878C]">Thought for {seconds}s</span>
+            <span className="text-[13px] leading-5 text-[#8A8D92]">Thought · {seconds}s</span>
             </motion.div>
           ) : null}
         </AnimatePresence>
       </button>
       <AnimatePresence initial={false}>
         {completed && expanded && summary ? (
-          <motion.p initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2, ease: AGENT_EASE }} className="ml-4 max-w-[620px] overflow-hidden pb-1 pt-0.5 text-[11.5px] leading-[1.5] text-[#74767A]">
+          <motion.p initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2, ease: AGENT_EASE }} className="ml-4 max-w-[620px] overflow-hidden pb-1 pt-0.5 text-[13px] leading-5 text-[#8A8D92]">
             {summary}
           </motion.p>
         ) : null}
@@ -94,10 +94,29 @@ function dedupeConsecutiveAssistantEntries(entries: LogEntry[]) {
  * real tool phase is present. Keep meaningful completed thoughts expandable,
  * but suppress one-second noise so a run never becomes a column of repeats. */
 function suppressBriefThoughts(entries: LogEntry[]) {
-  return entries.filter((entry) => {
-    if (entry.type !== "reasoning" || !entry.endedAt) return true;
-    return entry.endedAt - entry.ts >= 1500;
-  });
+  // Providers can emit several small reasoning summaries before any tool has
+  // actually started. They are one continuous thought, not three separate UI
+  // events. Keep a single row using the first timestamp and latest summary.
+  const compacted: LogEntry[] = [];
+  for (const entry of entries) {
+    if (entry.type !== "reasoning") {
+      compacted.push(entry);
+      continue;
+    }
+    const previous = compacted.at(-1);
+    if (previous?.type === "reasoning") {
+      compacted[compacted.length - 1] = {
+        ...entry,
+        id: `${previous.id}:${entry.id}`,
+        ts: previous.ts,
+        text: entry.text?.trim() || previous.text,
+        endedAt: entry.endedAt ?? previous.endedAt,
+      };
+      continue;
+    }
+    compacted.push(entry);
+  }
+  return compacted;
 }
 
 /** Bottom-of-transcript thinking gap while the next reasoning phase is pending. */
@@ -247,7 +266,76 @@ export function CompletionSummary({
 
 type TranscriptItem =
   | { type: "entry"; entry: LogEntry; id: string }
-  | { type: "phase"; id: string; actions: AgentAction[]; ts: number };
+  | { type: "phase"; id: string; actions: AgentAction[]; thoughts: Extract<LogEntry, { type: "reasoning" }>[]; ts: number };
+
+/**
+ * Keeps the activity stream readable during a busy OpenCode phase. A later
+ * action is not mounted until the prior action has finished its visible
+ * lifecycle; streaming edit boxes explicitly release this queue after their
+ * own smooth collapse. The 500ms hand-off makes each real event legible.
+ */
+function SequencedActionRows({
+  actions,
+  thoughts,
+  onOpenFile,
+  revisitedActionIds,
+  instant = false,
+}: {
+  actions: AgentAction[];
+  thoughts: Extract<LogEntry, { type: "reasoning" }>[];
+  onOpenFile: (path: string) => void;
+  revisitedActionIds: Set<string>;
+  instant?: boolean;
+}) {
+  const reduced = useReducedMotion();
+  const [revealed, setRevealed] = useState(() => (instant ? actions.length : Math.min(1, actions.length)));
+  const releaseTimer = useRef<number | null>(null);
+  const releasing = useRef(false);
+  const current = actions[Math.max(0, revealed - 1)];
+
+  useEffect(() => {
+    setRevealed((value) => instant ? actions.length : Math.min(Math.max(value, actions.length ? 1 : 0), actions.length));
+  }, [actions.length, instant]);
+  useEffect(() => () => { if (releaseTimer.current) window.clearTimeout(releaseTimer.current); }, []);
+
+  const releaseNext = () => {
+    if (instant || releasing.current || revealed >= actions.length) return;
+    releasing.current = true;
+    releaseTimer.current = window.setTimeout(() => {
+      releasing.current = false;
+      setRevealed((value) => Math.min(actions.length, value + 1));
+    }, reduced ? 0 : 500);
+  };
+
+  useEffect(() => {
+    if (instant || !current || revealed >= actions.length) return;
+    const editing = /^(edit|create)$/.test(current.kind);
+    const running = current.status === "active" || current.status === "queued";
+    // Edit cards control their own close animation and call releaseNext. All
+    // other settled real actions receive the same calm 0.5s hand-off.
+    if (!editing && !running) releaseNext();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.id, current?.status, revealed, actions.length, instant]);
+
+  // Thoughts are compacted by phase too: the latest provider summary is the
+  // useful one, and it appears only after the final visible action.
+  const latestThought = thoughts.at(-1);
+  return (
+    <>
+      {actions.slice(0, revealed).map((action) => (
+        <AgentActionRow
+          key={action.id}
+          action={action}
+          onOpenFile={onOpenFile}
+          revisiting={revisitedActionIds.has(action.id)}
+          onEditClosed={action.id === current?.id ? releaseNext : undefined}
+          settled={instant}
+        />
+      ))}
+      {revealed >= actions.length && latestThought ? <ThinkingEvent key={latestThought.id} entry={latestThought} /> : null}
+    </>
+  );
+}
 
 function phaseLabel(actions: AgentAction[]) {
   const reads = actions.filter((action) => action.kind === "read").length;
@@ -274,31 +362,57 @@ function phaseLabel(actions: AgentAction[]) {
 
 function PhaseGroup({
   actions,
+  thoughts,
   onOpenFile,
   revisitedActionIds,
   historical,
   defaultExpanded,
 }: {
   actions: AgentAction[];
+  thoughts: Extract<LogEntry, { type: "reasoning" }>[];
   onOpenFile: (path: string) => void;
   revisitedActionIds: Set<string>;
   historical?: boolean;
   defaultExpanded?: boolean;
 }) {
   const [manuallyExpanded, setManuallyExpanded] = useState(false);
-  const active = actions.some((action) => action.status === "active" || action.status === "queued");
+  const active = actions.some((action) => action.status === "active" || action.status === "queued") || thoughts.some((thought) => !thought.endedAt);
   const [expanded, setExpanded] = useState(Boolean(defaultExpanded) || active);
+  // A run must read as a live stream first.  Only after every action in this
+  // contiguous phase has settled do we replace the individual rows with its
+  // compact summary.  This avoids the old behaviour where "Explored…" was
+  // rendered before the user had actually seen the final read/command.
+  const [summaryVisible, setSummaryVisible] = useState(Boolean(defaultExpanded) || historical);
   const reduced = useReducedMotion();
   const label = phaseLabel(actions);
   useEffect(() => {
-    if (active) setExpanded(true);
-    else if (!manuallyExpanded) setExpanded(Boolean(defaultExpanded));
-  }, [active, defaultExpanded, manuallyExpanded]);
+    if (active) {
+      setSummaryVisible(false);
+      setExpanded(true);
+      return;
+    }
+    if (manuallyExpanded) return;
+    // Let the final row (and its completed Thought) remain visible long
+    // enough to be read, then compact the entire finished phase together.
+    const timer = window.setTimeout(() => {
+      setSummaryVisible(true);
+      setExpanded(Boolean(defaultExpanded));
+    }, reduced ? 0 : 560);
+    return () => window.clearTimeout(timer);
+  }, [active, defaultExpanded, manuallyExpanded, reduced]);
+
+  if (!summaryVisible) {
+    return (
+      <motion.div {...(reduced || historical ? {} : ROW_ENTER)} layout className="py-[2px]">
+        <SequencedActionRows actions={actions} thoughts={thoughts} onOpenFile={onOpenFile} revisitedActionIds={revisitedActionIds} />
+      </motion.div>
+    );
+  }
   return (
     <motion.div
       {...(reduced || historical ? {} : ROW_ENTER)}
       layout
-      className="py-[2px] text-[11.75px] text-[#75777C] opacity-[0.82] transition-opacity duration-200"
+      className="py-[2px] text-[14px] leading-5 text-[#73757A] opacity-[0.84] transition-opacity duration-200"
     >
       <button
         type="button"
@@ -315,7 +429,7 @@ function PhaseGroup({
           ›
         </motion.span>
         <span>{label.text}</span>
-        {(label.additions || label.deletions) ? <DiffCounters additions={label.additions} deletions={label.deletions} animate={false} className="text-[10.5px] font-medium" /> : null}
+        {(label.additions || label.deletions) ? <DiffCounters additions={label.additions} deletions={label.deletions} animate={false} className="text-[13px] font-medium" /> : null}
       </button>
       <AnimatePresence initial={false}>
         {expanded ? (
@@ -326,14 +440,7 @@ function PhaseGroup({
             transition={{ duration: 0.22, ease: AGENT_EASE }}
             className="ml-4 overflow-hidden"
           >
-            {actions.map((action) => (
-              <AgentActionRow
-                key={action.id}
-                action={action}
-                onOpenFile={onOpenFile}
-                revisiting={revisitedActionIds.has(action.id)}
-              />
-            ))}
+            <SequencedActionRows actions={actions} thoughts={thoughts} onOpenFile={onOpenFile} revisitedActionIds={revisitedActionIds} instant />
           </motion.div>
         ) : null}
       </AnimatePresence>
@@ -478,18 +585,26 @@ export function Conversation({
         continue;
       }
       const grouped: AgentAction[] = [action];
+      const thoughts: Extract<LogEntry, { type: "reasoning" }>[] = [];
       let cursor = index + 1;
       while (cursor < log.length) {
         const candidate = log[cursor];
+        // Reasoning belongs under the action phase it follows. It should not
+        // prematurely split a real OpenCode phase into several summaries.
+        if (candidate.type === "reasoning") {
+          thoughts.push(candidate);
+          cursor += 1;
+          continue;
+        }
         if (candidate.type !== "action") break;
         const candidateAction = state.actions[candidate.actionId];
         if (!candidateAction) break;
         grouped.push(candidateAction);
         cursor += 1;
       }
-      const active = grouped.some((item) => item.status === "active" || item.status === "queued");
-      if (grouped.length > 1 || active) {
-        next.push({ type: "phase", id: `phase-${grouped[0].id}-${grouped.at(-1)?.id}`, actions: grouped, ts: entry.ts });
+      const active = grouped.some((item) => item.status === "active" || item.status === "queued") || thoughts.some((thought) => !thought.endedAt);
+      if (grouped.length > 1 || active || thoughts.length) {
+        next.push({ type: "phase", id: `phase-${grouped[0].id}-${grouped.at(-1)?.id}`, actions: grouped, thoughts, ts: entry.ts });
         index = cursor;
       } else {
         next.push({ type: "entry", entry, id: entry.id });
@@ -514,6 +629,7 @@ export function Conversation({
                 <PhaseGroup
                   key={item.id}
                   actions={item.actions}
+                  thoughts={item.thoughts}
                   onOpenFile={onOpenFile}
                   revisitedActionIds={revisitedActionIds}
                   historical={Date.now() - item.ts > 4000}
@@ -543,7 +659,7 @@ export function Conversation({
                 >
                   <div
                     data-invert-ignore="true"
-                    className="cc-user-prompt max-w-[82%] whitespace-pre-wrap rounded-[11px] px-[11px] py-[9px] text-[13px] leading-[1.45] text-[#26272A]"
+                    className="cc-user-prompt max-w-[82%] whitespace-pre-wrap rounded-[11px] px-[12px] py-[10px] text-[16px] leading-6 text-[#2F3033]"
                   >
                     {entry.text}
                   </div>
@@ -556,8 +672,8 @@ export function Conversation({
                   key={entry.id}
                   {...(reduced || !fresh ? {} : SUBTLE_ENTER)}
                   className={cn(
-                    "text-[13px] font-normal leading-[1.55] tracking-[-0.008em] text-[#2A2B2E]",
-                    "[&_p]:my-[7px] [&_ul]:my-[7px] [&_ol]:my-[7px] [&_li]:my-[2px] [&_pre]:my-2 [&_code]:text-[11px]",
+                    "text-[16px] font-normal leading-6 tracking-normal text-[#2F3033]",
+                    "[&_p]:my-[10px] [&_ul]:my-[10px] [&_ol]:my-[10px] [&_li]:my-[3px] [&_pre]:my-2 [&_code]:text-[13px]",
                     "[&_strong]:font-medium",
                     nextKindGap ? "mt-3" : "mt-1.5",
                   )}

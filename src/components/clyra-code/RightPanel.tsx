@@ -1,16 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
+import Editor, { type OnMount } from "@monaco-editor/react";
 import {
   ArrowLeft,
   ArrowRight,
   ChevronDown,
   ExternalLink,
+  FileCode2,
+  FilePlus2,
   FileText,
+  Folder,
+  FolderOpen,
+  FolderPlus,
   Globe,
   Maximize2,
   Minimize2,
   RotateCw,
+  Save,
   Search,
+  Pencil,
+  Trash2,
+  X,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { ShiningText } from "../ShiningText";
@@ -392,21 +402,36 @@ function IosPreviewView({
   useEffect(() => { void api.swiftWasmStatus().then(setStatus).catch(() => undefined); }, []);
   useEffect(() => {
     if (!projectId) return;
-    if (agentRunning) { setPhase("waiting"); return; }
     let cancelled = false;
-    void api.swiftWasmReadiness(projectId).then((readiness) => {
-      if (cancelled) return;
-      if (!readiness.ready) { setPhase("waiting"); return; }
-      if (launchRef.current !== `${projectId}:${relaunchSignal}`) {
-        launchRef.current = `${projectId}:${relaunchSignal}`;
-        void build();
-      }
-    }).catch(() => !cancelled && setPhase("waiting"));
-    return () => { cancelled = true; };
+    let retry: number | undefined;
+    const checkReadiness = () => {
+      void api.swiftWasmReadiness(projectId).then((readiness) => {
+        if (cancelled) return;
+        if (!readiness.ready) {
+          setPhase("waiting");
+          // A coding agent can create the first Swift file after this pane
+          // mounts. Keep checking lightly instead of requiring the user to
+          // press Reload once the source is actually ready.
+          retry = window.setTimeout(checkReadiness, 700);
+          return;
+        }
+        if (launchRef.current !== `${projectId}:${relaunchSignal}`) {
+          launchRef.current = `${projectId}:${relaunchSignal}`;
+          void build();
+        }
+      }).catch(() => {
+        if (!cancelled) {
+          setPhase("waiting");
+          retry = window.setTimeout(checkReadiness, 1000);
+        }
+      });
+    };
+    checkReadiness();
+    return () => { cancelled = true; if (retry !== undefined) window.clearTimeout(retry); };
   }, [agentRunning, build, projectId, relaunchSignal]);
 
-  const loading = agentRunning || phase === "waiting" || phase === "building";
-  const title = agentRunning ? "Building your SwiftUI app…" : phase === "building" ? "Updating local preview…" : "Preparing SwiftUI preview…";
+  const loading = phase === "waiting" || phase === "building";
+  const title = phase === "building" ? "Updating local preview…" : "Preparing SwiftUI preview…";
   return <div className="flex min-h-0 flex-1 flex-col">
     <div className="flex h-[40px] items-center gap-1 border-b border-[color:var(--border-subtle)] px-2.5">
       <span className="flex h-7 items-center rounded-[7px] px-2 text-[11.5px] font-medium text-[#505258]">iPhone 16</span>
@@ -888,83 +913,194 @@ function ChangesView({
 /* Files view                                                          */
 /* ------------------------------------------------------------------ */
 
+type WorkspaceFile = { path: string; content: string };
+type FileTreeNode = { name: string; path: string; children: Map<string, FileTreeNode>; file?: WorkspaceFile };
+
+function fileLanguage(filePath: string) {
+  const extension = filePath.split(".").pop()?.toLowerCase();
+  return ({ ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", json: "json", css: "css", html: "html", md: "markdown", swift: "swift", yml: "yaml", yaml: "yaml", sh: "shell", zsh: "shell" } as Record<string, string>)[extension ?? ""] ?? "plaintext";
+}
+
+function buildFileTree(files: WorkspaceFile[]) {
+  const root: FileTreeNode = { name: "", path: "", children: new Map() };
+  for (const file of files) {
+    let node = root;
+    const segments = file.path.split("/").filter(Boolean);
+    segments.forEach((segment, index) => {
+      const nextPath = node.path ? `${node.path}/${segment}` : segment;
+      let next = node.children.get(segment);
+      if (!next) {
+        next = { name: segment, path: nextPath, children: new Map() };
+        node.children.set(segment, next);
+      }
+      if (index === segments.length - 1) next.file = file;
+      node = next;
+    });
+  }
+  return root;
+}
+
 function FilesView({ projectId, diffs }: { projectId: string | null; diffs: FileDiff[] }) {
-  const [files, setFiles] = useState<Array<{ path: string; content: string }>>([]);
+  const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
+  const [openFiles, setOpenFiles] = useState<string[]>([]);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
 
-  useEffect(() => {
-    if (!projectId) return;
-    void api
-      .getProject(projectId)
-      .then((data) => setFiles(data.files ?? []))
-      .catch(() => setFiles([]));
-  }, [projectId, diffs.length]);
+  const refresh = useCallback(async () => {
+    if (!projectId) { setFiles([]); return; }
+    const data = await api.getProject(projectId).catch(() => null);
+    // Agent checkpoints and bundled skills are implementation detail; the
+    // workbench should open on the actual project source, not a wall of
+    // harness metadata.
+    const next = (data?.files ?? []).filter((file) => !file.path.startsWith(".agent/"));
+    setFiles(next);
+    setSelected((current) => current && next.some((file) => file.path === current) ? current : next[0]?.path ?? null);
+  }, [projectId]);
+
+  useEffect(() => { void refresh(); }, [refresh, diffs.length]);
 
   const changed = useMemo(() => new Set(diffs.map((d) => stripFilePrefix(d.file))), [diffs]);
-  const filtered = files.filter((file) =>
-    file.path.toLowerCase().includes(query.trim().toLowerCase()),
-  );
+  const tree = useMemo(() => buildFileTree(files), [files]);
   const selectedFile = files.find((file) => file.path === selected) ?? null;
 
+  useEffect(() => {
+    if (!selectedFile) { setDraft(""); return; }
+    setDraft(selectedFile.content);
+    setOpenFiles((current) => current.includes(selectedFile.path) ? current : [...current, selectedFile.path]);
+  }, [selectedFile?.path]);
+
+  const selectFile = useCallback((filePath: string) => setSelected(filePath), []);
+  const save = useCallback(async () => {
+    if (!projectId || !selected) return;
+    setSaving(true);
+    try {
+      const result = await api.writeProjectFile(projectId, selected, draft);
+      setFiles(result.files);
+    } finally { setSaving(false); }
+  }, [draft, projectId, selected]);
+
+  const createFile = useCallback(async () => {
+    if (!projectId) return;
+    const requested = window.prompt("New file path", "src/Untitled.ts");
+    if (!requested?.trim()) return;
+    const result = await api.writeProjectFile(projectId, requested.trim(), "");
+    setFiles(result.files);
+    setSelected(requested.trim());
+  }, [projectId]);
+
+  const createFolder = useCallback(async () => {
+    if (!projectId) return;
+    const requested = window.prompt("New folder path", "src/components");
+    if (!requested?.trim()) return;
+    await api.createProjectFolder(projectId, requested.trim());
+    await refresh();
+  }, [projectId, refresh]);
+
+  const removeSelected = useCallback(async () => {
+    if (!projectId || !selected || !window.confirm(`Remove ${selected}?`)) return;
+    await api.deleteProjectFile(projectId, selected);
+    setOpenFiles((current) => current.filter((path) => path !== selected));
+    setSelected(null);
+    await refresh();
+  }, [projectId, refresh, selected]);
+
+  const renamePath = useCallback(async (path: string) => {
+    if (!projectId) return;
+    const nextPath = window.prompt("Rename path", path)?.trim();
+    if (!nextPath || nextPath === path) return;
+    const result = await api.moveProjectPath(projectId, path, nextPath);
+    const visibleFiles = result.files.filter((file) => !file.path.startsWith(".agent/"));
+    setFiles(visibleFiles);
+    setSelected((current) => current === path ? nextPath : current);
+    setOpenFiles((current) => current.map((item) => item === path ? nextPath : item));
+  }, [projectId]);
+
+  const removePath = useCallback(async (path: string, folder = false) => {
+    if (!projectId || !window.confirm(`Remove ${folder ? "folder" : "file"} ${path}?`)) return;
+    await api.deleteProjectFile(projectId, path, folder);
+    setOpenFiles((current) => current.filter((item) => item !== path && !item.startsWith(`${path}/`)));
+    setSelected((current) => current === path || current?.startsWith(`${path}/`) ? null : current);
+    await refresh();
+  }, [projectId, refresh]);
+
+  const handleEditorMount: OnMount = useCallback((editor, monaco) => {
+    // Monaco normally shows an empty widget for a brand-new Swift file until
+    // it has language-server data. Keep one quiet, useful local completion
+    // source available so the editor behaves like an IDE from the first key.
+    const disposable = monaco.languages.registerCompletionItemProvider("*", {
+      triggerCharacters: [".", "<", "@", "("],
+      provideCompletionItems: (model, position) => {
+        const range = model.getWordUntilPosition(position);
+        const editRange = {
+          startLineNumber: position.lineNumber,
+          endLineNumber: position.lineNumber,
+          startColumn: range.startColumn,
+          endColumn: range.endColumn,
+        };
+        const language = model.getLanguageId();
+        const entries = language === "swift"
+          ? ["VStack", "HStack", "ZStack", "Text", "Button", "TextField", "NavigationStack", "@State", ".padding()", ".frame(width:height:)"]
+          : language === "typescript" || language === "javascript"
+            ? ["const", "function", "return", "useState", "useEffect", "async", "export default"]
+            : ["class", "function", "return", "import", "const"];
+        return { suggestions: entries.map((label) => ({
+          label,
+          kind: monaco.languages.CompletionItemKind.Keyword,
+          insertText: label,
+          range: editRange,
+          detail: "Clyra code suggestion",
+          sortText: `0-${label}`,
+        })) };
+      },
+    });
+    // Deliberately suggest after any source change: compact Monaco suggestions
+    // make a single typed character useful without changing the editor model.
+    editor.onDidChangeModelContent(() => {
+      window.setTimeout(() => editor.trigger("clyra", "editor.action.triggerSuggest", {}), 0);
+    });
+    requestAnimationFrame(() => editor.trigger("clyra", "editor.action.triggerSuggest", {}));
+    editor.onDidDispose(() => disposable.dispose());
+  }, []);
+
+  const renderNode = (node: FileTreeNode, depth = 0): React.ReactNode[] => {
+    const children = [...node.children.values()].sort((a, b) => Number(Boolean(a.file)) - Number(Boolean(b.file)) || a.name.localeCompare(b.name));
+    return children.flatMap((child) => {
+      if (child.file) {
+        if (query && !child.path.toLowerCase().includes(query.toLowerCase())) return [];
+        return <div key={child.path} style={{ paddingLeft: 12 + depth * 14 }} className={cn("group flex h-[26px] items-center pr-1.5", selected === child.path ? "bg-black/[0.045]" : "hover:bg-black/[0.03]")}><button type="button" onClick={() => selectFile(child.path)} title={child.path} className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left"><FileCode2 className="h-[12px] w-[12px] shrink-0 text-[#85878C]" strokeWidth={1.55} /><span className="truncate text-[11.5px] text-[#5C5F64]">{child.name}</span>{changed.has(child.path) ? <span className="ml-auto h-1 w-1 shrink-0 rounded-full bg-[#3977F6]" /> : null}</button><button type="button" onClick={(event) => { event.stopPropagation(); void renamePath(child.path); }} title={`Rename ${child.name}`} className="invisible ml-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-[5px] text-[#7D8086] opacity-0 transition-[opacity,background-color] duration-100 hover:bg-black/[0.05] group-hover:visible group-hover:opacity-100"><Pencil className="h-[11px] w-[11px]" strokeWidth={1.6} /></button><button type="button" onClick={(event) => { event.stopPropagation(); void removePath(child.path); }} title={`Remove ${child.name}`} className="invisible ml-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-[5px] text-[#8A6262] opacity-0 transition-[opacity,background-color] duration-100 hover:bg-[#C24949]/[0.08] group-hover:visible group-hover:opacity-100"><Trash2 className="h-[11px] w-[11px]" strokeWidth={1.6} /></button></div>;
+      }
+      const hidden = collapsedFolders.has(child.path);
+      const descendants = renderNode(child, depth + 1);
+      if (query && descendants.length === 0) return [];
+      return [<div key={`${child.path}-folder`} style={{ paddingLeft: 11 + depth * 14 }} className="group flex h-[27px] items-center pr-1.5 text-[11.75px] font-medium text-[#55585D] transition-colors hover:bg-black/[0.03]"><button type="button" onClick={() => setCollapsedFolders((current) => { const next = new Set(current); if (next.has(child.path)) next.delete(child.path); else next.add(child.path); return next; })} className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left"><ChevronDown className={cn("h-[11px] w-[11px] shrink-0 transition-transform duration-150", hidden && "-rotate-90")} strokeWidth={1.65} />{hidden ? <Folder className="h-[13px] w-[13px] text-[#777A80]" strokeWidth={1.5} /> : <FolderOpen className="h-[13px] w-[13px] text-[#777A80]" strokeWidth={1.5} />}<span className="truncate">{child.name}</span></button><button type="button" onClick={(event) => { event.stopPropagation(); void renamePath(child.path); }} title={`Rename ${child.name}`} className="invisible ml-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-[5px] text-[#7D8086] opacity-0 transition-[opacity,background-color] duration-100 hover:bg-black/[0.05] group-hover:visible group-hover:opacity-100"><Pencil className="h-[11px] w-[11px]" strokeWidth={1.6} /></button><button type="button" onClick={(event) => { event.stopPropagation(); void removePath(child.path, true); }} title={`Remove ${child.name}`} className="invisible ml-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-[5px] text-[#8A6262] opacity-0 transition-[opacity,background-color] duration-100 hover:bg-[#C24949]/[0.08] group-hover:visible group-hover:opacity-100"><Trash2 className="h-[11px] w-[11px]" strokeWidth={1.6} /></button></div>, ...(hidden ? [] : descendants)];
+    });
+  };
+
   return (
-    <div className="flex min-h-0 flex-1">
-      <div className="flex w-[240px] shrink-0 flex-col border-r border-[color:var(--border-subtle)]">
-        <div className="flex items-center gap-1.5 border-b border-[color:var(--border-subtle)] px-3 py-2">
-          <Search className="h-[13px] w-[13px] text-[color:var(--text-tertiary)]" />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search files"
-            className="w-full bg-transparent text-[12px] outline-none placeholder:text-[color:var(--text-tertiary)]"
-          />
-        </div>
-        <div className="cc-scroll min-h-0 flex-1 overflow-y-auto py-1">
-          {filtered.length ? (
-            filtered.map((file) => (
-              <button
-                key={file.path}
-                type="button"
-                onClick={() => setSelected(file.path)}
-                title={file.path}
-                className={cn(
-                  "flex w-full items-center gap-1.5 px-3 py-[4px] text-left transition-colors",
-                  selected === file.path
-                    ? "bg-[color:var(--surface-selected)]"
-                    : "hover:bg-[color:var(--surface-hover)]",
-                )}
-              >
-                <FileText className="h-[12px] w-[12px] shrink-0 text-[color:var(--text-disabled)]" />
-                <span className="cc-mono truncate text-[11px] text-[color:var(--text-secondary)]">
-                  {file.path}
-                </span>
-                {changed.has(file.path) ? (
-                  <span className="ml-auto h-[5px] w-[5px] shrink-0 rounded-full bg-[color:var(--accent-blue)]" />
-                ) : null}
-              </button>
-            ))
-          ) : (
-            <p className="px-3 py-2 text-[11.5px] text-[color:var(--text-tertiary)]">
-              {files.length ? "No matches." : "No files yet."}
-            </p>
-          )}
-        </div>
-      </div>
-      <div className="cc-scroll min-h-0 flex-1 overflow-auto">
-        {selectedFile ? (
-          <>
-            <div className="cc-mono sticky top-0 border-b border-[color:var(--border-subtle)] bg-white/95 px-4 py-2 text-[11px] text-[color:var(--text-tertiary)] backdrop-blur">
-              {selectedFile.path.split("/").join(" / ")}
-            </div>
-            <pre className="cc-mono whitespace-pre-wrap px-4 py-3 text-[11.5px] leading-[1.6] text-[color:var(--text-secondary)]">
-              {selectedFile.content}
-            </pre>
-          </>
-        ) : (
-          <div className="flex h-full items-center justify-center">
-            <p className="text-[12px] text-[color:var(--text-tertiary)]">Select a file to preview.</p>
+    <div className="flex min-h-0 flex-1 bg-white">
+      <div className="flex w-[218px] shrink-0 flex-col border-r border-black/[0.06]">
+        <div className="flex h-[42px] items-center gap-1.5 border-b border-black/[0.06] px-2.5">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-[7px] bg-black/[0.025] px-2 py-1.5 focus-within:bg-black/[0.04]">
+            <Search className="h-[12px] w-[12px] text-[#96989D]" strokeWidth={1.7} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search files" className="min-w-0 flex-1 bg-transparent text-[11.5px] text-[#55575C] outline-none placeholder:text-[#9A9CA0]" />
+            {query ? <button type="button" onClick={() => setQuery("")} className="text-[#92949A] hover:text-[#52545A]"><X className="h-[12px] w-[12px]" /></button> : null}
           </div>
-        )}
+          <button type="button" onClick={() => void createFile()} title="New file" className="flex h-[27px] w-[27px] items-center justify-center rounded-[7px] text-[#66696F] transition-colors hover:bg-black/[0.045]"><FilePlus2 className="h-[14px] w-[14px]" strokeWidth={1.55} /></button>
+          <button type="button" onClick={() => void createFolder()} title="New folder" className="flex h-[27px] w-[27px] items-center justify-center rounded-[7px] text-[#66696F] transition-colors hover:bg-black/[0.045]"><FolderPlus className="h-[14px] w-[14px]" strokeWidth={1.55} /></button>
+        </div>
+        <div className="cc-scroll min-h-0 flex-1 overflow-y-auto py-1.5">{files.length ? renderNode(tree) : <p className="px-3 py-3 text-[11.5px] text-[#989AA0]">No files yet.</p>}</div>
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex h-[34px] items-end gap-1 border-b border-black/[0.06] px-2 pt-1.5">
+          <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto">
+            {openFiles.map((filePath) => <button key={filePath} type="button" onClick={() => selectFile(filePath)} className={cn("group flex h-[27px] max-w-[190px] shrink-0 items-center gap-1.5 rounded-t-[7px] px-2 text-[11.5px] transition-colors", selected === filePath ? "bg-black/[0.055] text-[#36383D]" : "text-[#84868B] hover:bg-black/[0.03]")}><FileCode2 className="h-[11px] w-[11px] shrink-0" strokeWidth={1.55} /><span className="truncate">{filePath.split("/").at(-1)}</span><span role="button" aria-label={`Close ${filePath}`} onClick={(event) => { event.stopPropagation(); setOpenFiles((current) => current.filter((path) => path !== filePath)); if (selected === filePath) setSelected(openFiles.find((path) => path !== filePath) ?? null); }} className="ml-0.5 rounded p-0.5 opacity-0 transition-opacity hover:bg-black/[0.06] group-hover:opacity-100"><X className="h-[10px] w-[10px]" /></span></button>)}
+          </div>
+          {selectedFile ? <><button type="button" onClick={() => void save()} disabled={saving || draft === selectedFile.content} title="Save file" className="mb-0.5 flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[7px] text-[#5F6368] transition-colors hover:bg-black/[0.045] disabled:opacity-35"><Save className="h-[13px] w-[13px]" strokeWidth={1.55} /></button><button type="button" onClick={() => void removeSelected()} title="Remove file" className="mb-0.5 flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[7px] text-[#7A5656] transition-colors hover:bg-[#C24949]/[0.08]"><Trash2 className="h-[13px] w-[13px]" strokeWidth={1.55} /></button></> : null}
+        </div>
+        {selectedFile ? <div className="min-h-0 flex-1"><Editor height="100%" path={selectedFile.path} language={fileLanguage(selectedFile.path)} value={draft} onChange={(value) => setDraft(value ?? "")} onMount={handleEditorMount} theme="vs" options={{ fontSize: 12, lineHeight: 19, fontFamily: '"SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, monospace', minimap: { enabled: false }, padding: { top: 12, bottom: 12 }, scrollBeyondLastLine: false, renderLineHighlight: "gutter", suggestOnTriggerCharacters: true, quickSuggestions: { other: true, comments: true, strings: true }, tabSize: 2, automaticLayout: true, smoothScrolling: true, wordWrap: "off", overviewRulerBorder: false }} /></div> : <div className="flex h-full items-center justify-center"><p className="text-[12px] text-[#999BA0]">Select a file to edit.</p></div>}
       </div>
     </div>
   );
@@ -1175,7 +1311,7 @@ export function RightPanel({
 
   return (
     <section className={cn("relative flex min-h-0 min-w-0 flex-1 flex-col bg-[color:var(--preview-background)] transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]", fullscreen && "fixed inset-0 z-[100] bg-white shadow-2xl")}>
-      <div className="relative flex h-[42px] items-center gap-1 border-b border-[color:var(--border-subtle)] px-2.5">
+      <div className="relative flex h-[42px] min-w-max items-center gap-1 border-b border-[color:var(--border-subtle)] px-2.5">
         {tabs.map((entry) => {
           const Icon = entry.icon;
           const selected = tab === entry.id;

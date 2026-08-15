@@ -545,7 +545,17 @@ function ThemePreviewMock({ theme }: { theme: "ios_dark" | "ios_light" }) {
   );
 }
 
-function LoadingScreen({ stage, onCancel }: { stage: string; onCancel?: () => void }) {
+function LoadingScreen({
+  stage,
+  onCancel,
+  eyebrow = "Clyra creator",
+  title = "Building your project",
+}: {
+  stage: string;
+  onCancel?: () => void;
+  eyebrow?: string;
+  title?: string;
+}) {
   return createPortal(
     <motion.div
       initial={{ opacity: 0 }}
@@ -556,8 +566,8 @@ function LoadingScreen({ stage, onCancel }: { stage: string; onCancel?: () => vo
       <div className="w-full max-w-[460px]">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-[.18em] text-slate-400">Clyra creator</p>
-            <h2 className="mt-2 text-[28px] font-semibold tracking-[-.02em] text-slate-950">Building your project</h2>
+            <p className="text-[10px] font-bold uppercase tracking-[.18em] text-slate-400">{eyebrow}</p>
+            <h2 className="mt-2 text-[28px] font-semibold tracking-[-.02em] text-slate-950">{title}</h2>
           </div>
           {onCancel ? (
             <IconButton label="Cancel" onClick={onCancel}>
@@ -1726,6 +1736,15 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-white text-[#111318]">
+      <AnimatePresence>
+        {generating ? (
+          <LoadingScreen
+            eyebrow="Clyra script"
+            title={project.type === "fake_text_story" ? "Writing your message story" : "Writing your script"}
+            stage="Shaping a paced, editable first draft"
+          />
+        ) : null}
+      </AnimatePresence>
       <AnimatePresence>{renderProgress !== null ? <RenderOverlay progress={renderProgress} onCancel={() => renderTask.current?.abort()} /> : null}</AnimatePresence>
       <AnimatePresence>{resultUrl ? <RenderResult url={resultUrl} title={project.name} onClose={() => setResultUrl("")} /> : null}</AnimatePresence>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-8 sm:py-8 xl:px-12 xl:py-10">

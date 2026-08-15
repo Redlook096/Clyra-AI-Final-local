@@ -89,6 +89,7 @@ export default function SubtitleOverlay({
   currentTime,
   activeWordIndex,
   onWordClick,
+  onWordChange,
 }: {
   words: OverlayWord[];
   style?: CaptionStyle | null;
@@ -96,9 +97,12 @@ export default function SubtitleOverlay({
   /** Word currently selected in the inspector (subtle ring). */
   activeWordIndex?: number;
   onWordClick?: (wordIndex: number) => void;
+  /** Direct preview edits are committed to the same word state as the inspector. */
+  onWordChange?: (wordIndex: number, text: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [box, setBox] = useState({ width: 0, height: 0 });
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
   useLayoutEffect(() => {
     const node = containerRef.current;
     if (!node) return;
@@ -195,17 +199,47 @@ export default function SubtitleOverlay({
           {display.tokens.map((token, position) => (
             <span key={`${token.index}-${token.start}`}>
               {position > 0 ? " " : ""}
-              <span
-                role={onWordClick ? "button" : undefined}
-                onClick={onWordClick ? (event) => { event.stopPropagation(); onWordClick(token.index); } : undefined}
-                className={onWordClick ? "pointer-events-auto cursor-pointer rounded-[3px] transition-[background-color] duration-150 hover:bg-white/10" : undefined}
-                style={{
-                  color: token.active && phraseMode ? resolved.active_colour : resolved.text_colour,
-                  boxShadow: activeWordIndex === token.index ? `0 0 0 ${Math.max(1, 1.5 * scale * 4)}px ${CLIP_EDITOR.blue}66` : undefined,
-                }}
-              >
-                {token.text}
-              </span>
+              {editingIndex === token.index ? (
+                <input
+                  autoFocus
+                  defaultValue={token.text}
+                  onClick={(event) => event.stopPropagation()}
+                  onBlur={(event) => {
+                    onWordChange?.(token.index, event.currentTarget.value.trim() || token.text);
+                    setEditingIndex(null);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") event.currentTarget.blur();
+                    if (event.key === "Escape") setEditingIndex(null);
+                  }}
+                  aria-label={`Edit subtitle ${token.text}`}
+                  className="pointer-events-auto inline-block min-w-[2.5em] rounded-[4px] bg-black/45 px-1 text-center font-inherit uppercase outline-none"
+                  style={{
+                    width: `${Math.max(3.5, token.text.length + 1)}ch`,
+                    color: resolved.text_colour,
+                    border: `1px solid ${CLIP_EDITOR.blue}`,
+                    fontSize: "inherit",
+                    lineHeight: "inherit",
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onWordClick?.(token.index);
+                    setEditingIndex(token.index);
+                  }}
+                  title="Edit subtitle"
+                  className={onWordClick || onWordChange ? "pointer-events-auto cursor-text rounded-[3px] px-px transition-[background-color,box-shadow] duration-150 hover:bg-white/12 focus-visible:outline-none" : "pointer-events-none"}
+                  style={{
+                    color: token.active && phraseMode ? resolved.active_colour : resolved.text_colour,
+                    boxShadow: activeWordIndex === token.index ? `0 0 0 ${Math.max(1, 1.5 * scale * 4)}px ${CLIP_EDITOR.blue}66` : undefined,
+                  }}
+                >
+                  {token.text}
+                </button>
+              )}
             </span>
           ))}
         </p>

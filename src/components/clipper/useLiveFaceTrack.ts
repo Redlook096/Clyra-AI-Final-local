@@ -30,8 +30,8 @@ const WASM_CDN = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/w
 const MODEL_CDN =
   "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite";
 
-/** Higher alpha = snappier follow (nods, quick pans). */
-const SMOOTH_ALPHA = 0.42;
+/** Frame-by-frame follow with a small damping pass — responsive without shake. */
+const SMOOTH_ALPHA = 0.62;
 const HEADROOM = 0.18;
 const DEFAULT_ZOOM = 1.55;
 
@@ -72,6 +72,7 @@ function pickBest(
   }>,
   videoW: number,
   videoH: number,
+  previous: FaceTrackPoint | null,
 ): FaceTrackPoint | null {
   let best: FaceTrackPoint | null = null;
   let bestScore = 0;
@@ -80,11 +81,13 @@ function pickBest(
     if (!box || box.width <= 0 || box.height <= 0) continue;
     const score = detection.categories?.[0]?.score ?? 0.5;
     const area = (box.width / videoW) * (box.height / videoH);
-    const rank = score * (0.35 + area);
-    if (rank <= bestScore) continue;
-    bestScore = rank;
     const cx = (box.originX + box.width / 2) / videoW;
     const cy = (box.originY + box.height * (0.5 - HEADROOM)) / videoH;
+    const distance = previous ? Math.hypot(cx * 100 - previous.x, cy * 100 - previous.y) / 100 : 0;
+    // Once a subject is acquired, continuity beats a momentarily larger face.
+    const rank = score * (0.35 + area) - Math.min(0.42, distance * 0.82);
+    if (rank <= bestScore) continue;
+    bestScore = rank;
     // Tighter crop when the face is small so the subject stays dominant.
     const faceFrac = Math.max(box.width / videoW, box.height / videoH);
     const zoom = Math.min(2.4, Math.max(1.25, DEFAULT_ZOOM * (0.22 / Math.max(0.08, faceFrac))));
@@ -140,14 +143,14 @@ export function useLiveFaceTrack(
       try {
         if (detector) {
           const result = detector.detectForVideo(video, performance.now());
-          const next = pickBest(result.detections || [], video.videoWidth || 1, video.videoHeight || 1);
+          const next = pickBest(result.detections || [], video.videoWidth || 1, video.videoHeight || 1, smoothRef.current);
           if (next) {
             const prev = smoothRef.current;
             const smoothed: FaceTrackPoint = prev
               ? {
                   x: lerp(prev.x, next.x, SMOOTH_ALPHA),
                   y: lerp(prev.y, next.y, SMOOTH_ALPHA),
-                  zoom: lerp(prev.zoom, next.zoom, SMOOTH_ALPHA * 0.7),
+                  zoom: lerp(prev.zoom, next.zoom, 0.34),
                   confidence: next.confidence,
                 }
               : next;
