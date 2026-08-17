@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="color-scheme" content="light" />
+    <title>Clyra screen transition</title>
+    <style>
+      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+      canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; }
+      @media (prefers-reduced-motion: reduce) { canvas { opacity: .38; } }
+    </style>
+  </head>
+  <body><canvas id="ripple" aria-hidden="true"></canvas><script src="../src/ui/screen-ripple.js"></script></body>
+</html>

@@ -7,6 +7,7 @@
  * follow with essentially no perceptible lag.
  */
 import { useEffect, useRef, useState } from "react";
+import { lowMemoryVideoMode, SmartCameraSolver } from "../../lib/clipper/smart-camera";
 
 export type FaceTrackPoint = {
   /** 0–100 object-position X (face centre). */
@@ -30,8 +31,6 @@ const WASM_CDN = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/w
 const MODEL_CDN =
   "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite";
 
-/** Frame-by-frame follow with a small damping pass — responsive without shake. */
-const SMOOTH_ALPHA = 0.62;
 const HEADROOM = 0.18;
 const DEFAULT_ZOOM = 1.55;
 
@@ -59,10 +58,6 @@ async function loadDetector(): Promise<Detector | null> {
     }
   })();
   return detectorPromise;
-}
-
-function lerp(from: number, to: number, alpha: number) {
-  return from + (to - from) * alpha;
 }
 
 function pickBest(
@@ -113,10 +108,14 @@ export function useLiveFaceTrack(
   const smoothRef = useRef<FaceTrackPoint | null>(null);
   const rafRef = useRef<number | null>(null);
   const lastTsRef = useRef(-1);
+  const lastDetectionAtRef = useRef(0);
+  const solverRef = useRef(new SmartCameraSolver());
+  const intervalRef = useRef(lowMemoryVideoMode() ? 170 : 125);
 
   useEffect(() => {
     if (!enabled || !video) {
       smoothRef.current = null;
+      solverRef.current.reset();
       setPoint(null);
       if (rafRef.current != null) {
         video?.cancelVideoFrameCallback?.(rafRef.current as never);
@@ -140,22 +139,36 @@ export function useLiveFaceTrack(
         return;
       }
       lastTsRef.current = now;
+      if (now - lastDetectionAtRef.current < intervalRef.current) {
+        schedule();
+        return;
+      }
+      lastDetectionAtRef.current = now;
       try {
         if (detector) {
           const result = detector.detectForVideo(video, performance.now());
           const next = pickBest(result.detections || [], video.videoWidth || 1, video.videoHeight || 1, smoothRef.current);
           if (next) {
             const prev = smoothRef.current;
-            const smoothed: FaceTrackPoint = prev
-              ? {
-                  x: lerp(prev.x, next.x, SMOOTH_ALPHA),
-                  y: lerp(prev.y, next.y, SMOOTH_ALPHA),
-                  zoom: lerp(prev.zoom, next.zoom, 0.34),
-                  confidence: next.confidence,
-                }
-              : next;
+            const movement = prev ? Math.hypot(next.x - prev.x, next.y - prev.y) : 0;
+            // Stable shots spend less compute on repeated detections. Fast
+            // movement or uncertain observations temporarily increases cadence.
+            intervalRef.current = lowMemoryVideoMode()
+              ? movement > 7 || next.confidence < 0.6 ? 105 : 180
+              : movement > 7 || next.confidence < 0.6 ? 68 : movement < 1.4 ? 175 : 112;
+            const solved = solverRef.current.update({ ...next, timestampMs: now });
+            const smoothed: FaceTrackPoint = {
+              x: solved.x,
+              y: solved.y,
+              zoom: solved.zoom,
+              confidence: solved.confidence,
+            };
             smoothRef.current = smoothed;
             setPoint(smoothed);
+          } else {
+            // Confidence loss asks the detector to reacquire promptly without
+            // moving the existing virtual camera to an unrelated target.
+            intervalRef.current = lowMemoryVideoMode() ? 110 : 70;
           }
         }
       } catch {

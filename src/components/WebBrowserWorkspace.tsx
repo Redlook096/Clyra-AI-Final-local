@@ -55,6 +55,7 @@ import { cn } from "../lib/utils";
 import { getElectronDesktop, isElectronRuntime, requestElectronBrowser } from "../lib/electron-runtime";
 import { ElectronWebContentsSurface } from "./ElectronWebContentsSurface";
 import { BrowserStartPage, isBrowserStartPageUrl } from "./BrowserStartPage";
+import { AiOrb } from "./AiOrb";
 import { ShiningBrainIcon, ShiningText, ThinkingDots } from "./ShiningText";
 
 type AgentStatus =
@@ -1467,9 +1468,9 @@ export default function WebBrowserWorkspace() {
               <motion.button
                 key={tab.id}
                 layout="position"
-                initial={{ opacity: 0, scale: 0.98, x: -12 }}
+                initial={{ opacity: 0, scale: 0.99, x: -2 }}
                 animate={{ opacity: 1, scale: 1, x: 0 }}
-                exit={{ opacity: 0, scale: 0.98, x: -12 }}
+                exit={{ opacity: 0, scale: 0.99, x: -2 }}
                 transition={{ type: "spring", stiffness: 440, damping: 34, mass: 0.5 }}
                 type="button"
                 onPointerEnter={() => setHoveredBrowserTabId(tab.id)}
@@ -1485,9 +1486,9 @@ export default function WebBrowserWorkspace() {
                   "group/tab isolate relative mb-0 flex min-w-[170px] max-w-[210px] items-center gap-2 overflow-hidden px-[15px] text-left font-medium transition-[background-color,color] duration-150 ease-out",
                   tab.active && !activeInternalTab
                     ? agentOwnsTab
-                      ? "h-[36px] rounded-t-[10px] bg-transparent text-[var(--atlas-text-secondary)]"
-                      : "h-[36px] rounded-t-[10px] bg-[var(--atlas-tab-active)] text-[var(--atlas-text-primary)]"
-                    : "mb-px h-[34px] rounded-[9px] text-[var(--atlas-text-secondary)]",
+                      ? "mb-[3px] h-[34px] rounded-[12px] bg-transparent text-[var(--atlas-text-secondary)]"
+                      : "mb-[3px] h-[34px] rounded-[12px] bg-[var(--atlas-tab-active)] text-[var(--atlas-text-primary)] shadow-[0_1px_3px_rgba(15,23,42,.08)]"
+                    : "mb-[3px] h-[34px] rounded-[11px] text-[var(--atlas-text-secondary)]",
                   agentOwnsTab && "clyra-browser-agent-tab",
                 )}
                 style={{ fontSize: "13px" }}
@@ -1530,9 +1531,9 @@ export default function WebBrowserWorkspace() {
                 <motion.button
                   key={tab.id}
                   layout="position"
-                  initial={{ opacity: 0, scale: 0.98, x: -12 }}
+                  initial={{ opacity: 0, scale: 0.99, x: -2 }}
                   animate={{ opacity: 1, scale: 1, x: 0 }}
-                  exit={{ opacity: 0, scale: 0.98, x: -12 }}
+                  exit={{ opacity: 0, scale: 0.99, x: -2 }}
                   transition={{ type: "spring", stiffness: 440, damping: 34, mass: 0.5 }}
                   type="button"
                   onPointerEnter={() => setHoveredBrowserTabId(tab.id)}
@@ -1541,8 +1542,8 @@ export default function WebBrowserWorkspace() {
                   className={cn(
                     "group/tab isolate relative mb-0 flex min-w-[170px] max-w-[210px] items-center gap-2 overflow-hidden px-[15px] text-left text-[13px] font-medium transition-[background-color,color] duration-150 ease-out",
                     selected
-                      ? "h-[36px] rounded-t-[10px] bg-[var(--atlas-tab-active)] text-[var(--atlas-text-primary)]"
-                      : "mb-px h-[34px] rounded-[9px] text-[var(--atlas-text-secondary)]",
+                      ? "mb-[3px] h-[34px] rounded-[12px] bg-[var(--atlas-tab-active)] text-[var(--atlas-text-primary)] shadow-[0_1px_3px_rgba(15,23,42,.08)]"
+                      : "mb-[3px] h-[34px] rounded-[11px] text-[var(--atlas-text-secondary)]",
                   )}
                 >
                   {hoveredBrowserTabId === tab.id && !selected ? <motion.span layoutId="browser-tab-hover" transition={{ type: "spring", stiffness: 580, damping: 42, mass: 0.42 }} className="pointer-events-none absolute inset-0 rounded-[9px] bg-black/[0.045]" /> : null}
@@ -1587,17 +1588,15 @@ export default function WebBrowserWorkspace() {
           <form onSubmit={(event) => void navigate(event)} className="relative min-w-0 flex-1 px-1.5">
             <div
               className={cn(
-                "group/omnibox flex h-9 items-center transition-[background-color,box-shadow,border-radius] duration-150",
+                "group/omnibox flex h-9 w-full items-center gap-2 rounded-[15px] border border-black/[0.055] bg-white/90 px-3 transition-[background-color,box-shadow,border-color] duration-200 ease-[cubic-bezier(.22,1,.36,1)]",
                 omniboxFocused
-                  ? "w-full gap-2 rounded-[10px] bg-white px-3 shadow-[inset_0_0_0_1px_var(--atlas-divider)]"
-                  : "w-full justify-center gap-0 rounded-[10px] bg-transparent px-3 hover:bg-black/[0.035]",
+                  ? "border-[var(--atlas-clyra-blue)]/20 bg-white shadow-[0_4px_16px_rgba(31,71,140,.08),0_0_0_3px_rgba(35,104,245,.055)]"
+                  : "shadow-[0_1px_2px_rgba(0,0,0,.025)] hover:bg-white",
               )}
             >
-              {omniboxFocused ? (
-                browserState?.secure
-                  ? <LockKeyhole className="h-4 w-4 shrink-0 text-[var(--atlas-text-tertiary)]" strokeWidth={1.8} />
-                  : <Search className="h-4 w-4 shrink-0 text-[var(--atlas-text-tertiary)]" />
-              ) : null}
+              {browserState?.secure && !showStartPage
+                ? <LockKeyhole className="h-3.5 w-3.5 shrink-0 text-[var(--atlas-text-tertiary)]" strokeWidth={1.65} />
+                : <Search className="h-3.5 w-3.5 shrink-0 text-[var(--atlas-text-tertiary)]" strokeWidth={1.65} />}
               <input
                 data-browser-omnibox
                 value={omniboxFocused ? address : restingHost}
@@ -1622,7 +1621,7 @@ export default function WebBrowserWorkspace() {
                   "min-w-0 flex-1 bg-transparent outline-none",
                   omniboxFocused
                     ? "text-left text-[13px] font-medium text-[var(--atlas-text-primary)]"
-                    : "cursor-text text-center text-[13px] font-medium text-[var(--atlas-text-tertiary)]",
+                    : "cursor-text text-left text-[13px] font-medium text-[var(--atlas-text-secondary)]",
                 )}
                 placeholder="Search or enter address"
                 aria-label="Address and search bar"
@@ -1697,14 +1696,15 @@ export default function WebBrowserWorkspace() {
               });
             }}
             className={cn(
-              "ml-0.5 flex h-8 shrink-0 items-center gap-1 rounded-[9px] px-3 text-[12px] font-medium transition-[background-color,color] duration-150",
+              "ml-0.5 flex h-8 shrink-0 items-center gap-1.5 rounded-[10px] px-2.5 text-[12px] font-medium transition-[background-color,color,transform] duration-150 active:scale-[0.97]",
               sideOpen && sideView === "agent"
                 ? "bg-black/[0.04] text-[var(--atlas-clyra-blue)]"
                 : "bg-transparent text-[var(--atlas-clyra-blue)] hover:bg-black/[0.035]",
             )}
             aria-label={sideOpen ? "Hide Ask Clyra" : "Ask Clyra"}
           >
-            Ask Clyra
+            <AiOrb className="h-5 w-5" state={isAgentBusy ? "thinking" : "idle"} />
+            <span className="hidden xl:inline">Ask Clyra</span>
           </button>
         </div>
 

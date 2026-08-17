@@ -1,5 +1,6 @@
 /**
- * Study Pal entry — Study Brain canvas workspace.
- * Kept as StudyPalWorkspace for App.tsx / vite chunk compatibility.
+ * Study Pal entry. Kept stable for App.tsx lazy-loading compatibility.
+ * The former canvas remains in the codebase as a migration reference, while
+ * Study Pal now opens its editable, AI-native workspace.
  */
-export { default } from "./study-brain/StudyBrainWorkspace";
+export { default } from "./StudyPalWorkspaceNew";

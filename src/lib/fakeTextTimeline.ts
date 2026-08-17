@@ -86,10 +86,10 @@ export const IMESSAGE_TOKENS = Object.freeze({
   // The floating conversation is an overlay on top of gameplay, not a full
   // screen phone mock-up. These gutters make that relationship obvious while
   // leaving enough room for a natural iMessage bubble width.
-  floatingPanelTopInset: 205,
-  floatingPanelSideInset: 135,
-  floatingPanelRadius: 28,
-  headerHeight: 155,
+  floatingPanelTopInset: 211,
+  floatingPanelSideInset: 126,
+  floatingPanelRadius: 36,
+  headerHeight: 152,
   sideInset: 20,
   headerSideInset: 26,
   messageTopInset: 16,
@@ -100,15 +100,15 @@ export const IMESSAGE_TOKENS = Object.freeze({
   // Around 60% of the compact floating surface. This keeps long text
   // recognisably iMessage-sized instead of turning the overlay into a web
   // chat panel.
-  bubbleMaxWidth: 490,
-  bubbleMinimumHeight: 64,
+  bubbleMaxWidth: 530,
+  bubbleMinimumHeight: 48,
   bubbleHorizontalPadding: 16,
-  bubbleVerticalPadding: 9,
-  bubbleRadius: 18,
-  sameSenderGap: 9,
-  senderSwitchGap: 10,
-  messageLineHeight: 30,
-  messageFontSize: 25,
+  bubbleVerticalPadding: 11,
+  bubbleRadius: 27,
+  sameSenderGap: 12,
+  senderSwitchGap: 13,
+  messageLineHeight: 27,
+  messageFontSize: 24,
   typingMinimumMs: 0,
   typingMaximumMs: 0,
   // The iMessage card is deliberately a stable recording surface.  A new

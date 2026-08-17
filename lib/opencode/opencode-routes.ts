@@ -24,7 +24,7 @@ Project architecture rules — for every coding request:
   App/  Views/  Components/  Models/  ViewModels/  Services/  Utilities/  Resources/  Tests/
 - Use real SwiftUI and a portable Swift Package (Package.swift). Keep views small, focused and reusable.
 - Reuse existing views and models instead of rebuilding them. Revisit and edit multiple files during the run when needed.
-- Apple guidance lives in .agent/skills/ — apply its design guidance where compatible with ElementaryUI.
+- Apple guidance lives in .agent/skills/ — consult the bundled Apple Skills, Claude Code Apple Skills, SwiftUI expert guidance, and **swiftui-design-skill/SKILL.md** before designing an iOS interface. Use its anti-template review and app-specific visual direction, not a generic starter layout.
 - The embedded preview can be unavailable on a host without a configured preview bridge. Generate correct reusable source and use portable/static checks where available; report the preview limitation plainly rather than attempting unavailable device tooling.
 - Only claim completion for checks that actually ran. If validation fails, show the error, fix the file, and rerun the available validation.
 - Use SF Symbols, Swift concurrency (async/await), and accessibility best practices.
@@ -36,9 +36,15 @@ Product and quality loop — adapt depth to the requested product before editing
 - Avoid generic template signals: inflated cards, giant pills, gradients, glowing surfaces, decorative sparkles, meaningless metrics, oversized headings, repeated tiles and dead controls. Use spacing, typography, grouped lists, separators and purposeful content to create hierarchy instead.
 - Build complete flows, not only a polished home screen: include appropriate empty, populated, loading, error, edit, confirmation and settings states. Every visible action must have a real SwiftUI destination or behaviour.
 - Use believable product-specific sample content so the preview can be judged. Keep state, navigation and persistence appropriate to the scope; never hard-code a complex product into one view.
+- For apps that need primary destinations, prefer the provided FloatingTabBar component: a restrained floating, translucent bottom navigation material that lets content scroll beneath it, uses safe-area spacing, and can gently recede while content is being read. Do not use it for every app; choose navigation based on the product.
 - Before completion, run a real visual and interaction review in the available live preview: exercise navigation, primary actions, editing, cancellation, destructive actions and dynamic data. Repair clipping, weak hierarchy, inaccessible contrast, oversized controls, dead interactions or generic composition before finalising.
 - Test compact, standard and large iPhone layouts conceptually in SwiftUI with safe areas and Dynamic Type in mind. Use meaningful accessibility labels and touch targets.
 - The browser/preview tool is a real verification tool. When browser mode is requested, observe the active preview, interact with it, verify outcomes, repair source where necessary and re-test. Never claim interactions that did not occur.
+
+Execution discipline:
+- Read swiftui-design-skill/SKILL.md plus only the references directly relevant to this app, then begin implementation immediately. Do not inspect the host filesystem outside the project, shell configuration, environment variables, provider configuration, or simulator tooling; this is a local source/preview workspace, not an environment-diagnosis task.
+- After Package.swift and the existing views are known, make the first meaningful product edit within the next three tool calls. Keep working in focused multi-file edits rather than repeatedly listing files.
+- The generated starter is a previewable baseline only. Adapt it to the requested app and create real task-specific changes before completion; never report it as the finished product unchanged.
 
 Definition of done for an advanced iOS product:
 - First create a compact internal product brief: user, primary job, primary flow, screen inventory, navigation choice, data model and design direction. Use this to drive implementation rather than inventing a generic dashboard.
@@ -50,7 +56,9 @@ Definition of done for an advanced iOS product:
 `;
 
 const APPLE_SKILL_SOURCE = path.resolve(process.cwd(), "lib/apple-skills-repo", "skills");
+const CLAUDE_APPLE_SKILL_SOURCE = path.resolve(process.cwd(), "lib/claude-code-apple-skills", "skills");
 const SWIFTUI_SKILL_SOURCE = path.resolve(process.cwd(), "lib/swiftui-agent-skill-repo", "skills", "swiftui-expert-skill");
+const SWIFTUI_DESIGN_SKILL_SOURCE = path.resolve(process.cwd(), "lib/swiftui-design-skill");
 
 /**
  * Project workspaces live inside Clyra's data dir, which the parent repo
@@ -102,7 +110,7 @@ function requestsIosProject(prompt: string) {
 
 type IosStarterProfile = {
   title: string;
-  kind: "finance" | "travel" | "health" | "productivity";
+  kind: "finance" | "travel" | "health" | "food" | "productivity";
   subtitle: string;
   primaryAction: string;
   tabs: [string, string, string];
@@ -115,21 +123,28 @@ function iOSStarterProfile(prompt: string): IosStarterProfile {
   // Also honor the natural “Build Ledgerly, …” form without treating a
   // generic “Build an app…” instruction as a product name.
   const buildName = /\bbuild\s+([A-Z][A-Za-z0-9'-]{2,32})(?=\s*[,.:])/i.exec(prompt)?.[1]?.trim();
-  const named = explicitName || buildName;
+  const named = (explicitName || buildName)?.replace(/\s+(?:for|with|a|an|the)\b.*$/i, "").trim();
+  if (/travel|trip|itinerary|flight|hotel|destination|journey/.test(text)) return {
+    title: named || "Wayfinder", kind: "travel", subtitle: /japan|tokyo|kyoto|osaka/.test(text) ? "Japan, one considered day at a time" : "Plans that leave room for discovery", primaryAction: "Add to itinerary",
+    tabs: ["Explore", "Itinerary", "Saved"],
+    items: /japan|tokyo|kyoto|osaka/.test(text)
+      ? [{ name: "Shinkansen to Kyoto", detail: "Day 4 · 9:12 AM · Reserved", amount: "›" }, { name: "Kiyomizu-dera at sunrise", detail: "Day 5 · Saved place", amount: "›" }, { name: "Nishiki Market tasting walk", detail: "Day 5 · 12:30 PM", amount: "›" }]
+      : [{ name: "Alfama morning walk", detail: "Day 2 · 9:30 AM", amount: "›" }, { name: "Tasca da Sé", detail: "Dinner · Reservation saved", amount: "›" }, { name: "Belém train", detail: "Day 3 · 10:10 AM", amount: "›" }],
+  };
   if (/budget|finance|money|expense|transaction|account/.test(text)) return {
     title: named || "Ledgerly", kind: "finance", subtitle: "A clearer view of every dollar", primaryAction: "Add transaction",
     tabs: ["Overview", "Activity", "Plan"],
     items: [{ name: "Northstar Card", detail: "Balance · updated today", amount: "$3,842" }, { name: "Weekly groceries", detail: "Food & dining · Today", amount: "−$68" }, { name: "Transit pass", detail: "Transport · Yesterday", amount: "−$42" }],
   };
-  if (/travel|trip|itinerary|flight|hotel|destination|journey/.test(text)) return {
-    title: named || "Wayfinder", kind: "travel", subtitle: "Plans that leave room for discovery", primaryAction: "Add to itinerary",
-    tabs: ["Explore", "Itinerary", "Saved"],
-    items: [{ name: "Alfama morning walk", detail: "Day 2 · 9:30 AM", amount: "›" }, { name: "Tasca da Sé", detail: "Dinner · Reservation saved", amount: "›" }, { name: "Belém train", detail: "Day 3 · 10:10 AM", amount: "›" }],
-  };
   if (/health|medication|wellness|habit|symptom|workout|fitness/.test(text)) return {
     title: named || "Morrow", kind: "health", subtitle: "Small routines, clearly understood", primaryAction: "Log progress",
     tabs: ["Today", "Insights", "Profile"],
     items: [{ name: "Morning medication", detail: "8:00 AM · Due now", amount: "Start" }, { name: "Hydration", detail: "4 of 8 glasses", amount: "50%" }, { name: "Evening reflection", detail: "8:30 PM · Scheduled", amount: "›" }],
+  };
+  if (/meal|recipe|grocery|grocer|food|cook|cooking|nutrition|restaurant|kitchen/.test(text)) return {
+    title: named || "Table", kind: "food", subtitle: "Thoughtful meals, one week at a time", primaryAction: "Add meal",
+    tabs: ["Today", "Plan", "List"],
+    items: [{ name: "Miso salmon bowls", detail: "Tuesday dinner · 30 min", amount: "›" }, { name: "Market vegetables", detail: "Shopping list · 7 items", amount: "7" }, { name: "Lemon ricotta pasta", detail: "Friday dinner · Saved", amount: "›" }],
   };
   return {
     title: named || "Focus", kind: "productivity", subtitle: "The work that deserves your attention", primaryAction: "Create item",
@@ -161,7 +176,8 @@ async function seedIosStarterIfEmpty(root: string, prompt: string) {
     "App/${identifier}App.swift": `import SwiftUI\n\n@main\nstruct ${identifier}App: App {\n    @StateObject private var store = ${identifier}Store()\n\n    var body: some Scene {\n        WindowGroup {\n            ${identifier}RootView().environmentObject(store)\n        }\n    }\n}\n`,
     "Models/${identifier}Item.swift": `import Foundation\n\nstruct ${identifier}Item: Identifiable, Hashable {\n    let id = UUID()\n    var title: String\n    var detail: String\n    var trailing: String\n}\n\nenum ${identifier}Tab: String, CaseIterable, Identifiable {\n    case ${profile.tabs[0].toLowerCase()}, ${profile.tabs[1].toLowerCase()}, ${profile.tabs[2].toLowerCase()}\n    var id: String { rawValue }\n    var title: String {\n        switch self {\n        ${destinationTitles}\n        }\n    }\n}\n`,
     "ViewModels/${identifier}Store.swift": `import Foundation\n\nfinal class ${identifier}Store: ObservableObject {\n    @Published var items: [${identifier}Item] = [\n${items}\n    ]\n    @Published var selectedTab: ${identifier}Tab = .${profile.tabs[0].toLowerCase()}\n    @Published var showingComposer = false\n    @Published var query = ""\n\n    var filteredItems: [${identifier}Item] {\n        guard !query.isEmpty else { return items }\n        return items.filter { $0.title.localizedCaseInsensitiveContains(query) || $0.detail.localizedCaseInsensitiveContains(query) }\n    }\n\n    func add(title: String, detail: String) {\n        items.insert(${identifier}Item(title: title, detail: detail, trailing: "New"), at: 0)\n    }\n}\n`,
-    "Views/${identifier}RootView.swift": `import SwiftUI\n\nstruct ${identifier}RootView: View {\n    @EnvironmentObject private var store: ${identifier}Store\n\n    var body: some View {\n        TabView(selection: $store.selectedTab) {\n            ${identifier}DashboardView().tabItem { Label("${profile.tabs[0]}", systemImage: "square.grid.2x2") }.tag(${identifier}Tab.${profile.tabs[0].toLowerCase()})\n            ${identifier}ListView().tabItem { Label("${profile.tabs[1]}", systemImage: "list.bullet") }.tag(${identifier}Tab.${profile.tabs[1].toLowerCase()})\n            ${identifier}SettingsView().tabItem { Label("${profile.tabs[2]}", systemImage: "slider.horizontal.3") }.tag(${identifier}Tab.${profile.tabs[2].toLowerCase()})\n        }\n        .tint(.blue)\n        .sheet(isPresented: $store.showingComposer) { ${identifier}ComposerView() }\n    }\n}\n`,
+    "Views/${identifier}RootView.swift": `import SwiftUI\n\nstruct ${identifier}RootView: View {\n    @EnvironmentObject private var store: ${identifier}Store\n\n    var body: some View {\n        ZStack(alignment: .bottom) {\n            Group {\n                switch store.selectedTab {\n                case .${profile.tabs[0].toLowerCase()}: ${identifier}DashboardView()\n                case .${profile.tabs[1].toLowerCase()}: ${identifier}ListView()\n                case .${profile.tabs[2].toLowerCase()}: ${identifier}SettingsView()\n                }\n            }\n            .frame(maxWidth: .infinity, maxHeight: .infinity)\n\n            ${identifier}FloatingTabBar(selection: $store.selectedTab)\n                .padding(.horizontal, 16)\n                .padding(.bottom, 8)\n        }\n        .tint(.blue)\n        .sheet(isPresented: $store.showingComposer) { ${identifier}ComposerView() }\n    }\n}\n`,
+    "Components/${identifier}FloatingTabBar.swift": `import SwiftUI\n\n/// A quiet floating navigation material. Content remains visible behind it;\n/// callers can hide it during immersive flows rather than adding another bar.\nstruct ${identifier}FloatingTabBar: View {\n    @Binding var selection: ${identifier}Tab\n\n    private let items: [(tab: ${identifier}Tab, title: String, icon: String)] = [\n        (.${profile.tabs[0].toLowerCase()}, "${profile.tabs[0]}", "square.grid.2x2"),\n        (.${profile.tabs[1].toLowerCase()}, "${profile.tabs[1]}", "list.bullet"),\n        (.${profile.tabs[2].toLowerCase()}, "${profile.tabs[2]}", "slider.horizontal.3")\n    ]\n\n    var body: some View {\n        HStack(spacing: 4) {\n            ForEach(Array(items.enumerated()), id: \\.offset) { _, item in\n                Button { withAnimation(.snappy(duration: 0.24)) { selection = item.tab } } label: {\n                    Label(item.title, systemImage: item.icon)\n                        .font(.footnote.weight(selection == item.tab ? .semibold : .regular))\n                        .foregroundStyle(selection == item.tab ? Color.primary : Color.secondary)\n                        .frame(maxWidth: .infinity)\n                        .padding(.vertical, 10)\n                        .contentShape(Rectangle())\n                }\n                .buttonStyle(.plain)\n                .accessibilityAddTraits(selection == item.tab ? .isSelected : [])\n            }\n        }\n        .padding(5)\n        .background(.ultraThinMaterial, in: Capsule(style: .continuous))\n        .overlay(Capsule(style: .continuous).stroke(.white.opacity(0.45), lineWidth: 0.7))\n        .shadow(color: .black.opacity(0.10), radius: 12, y: 5)\n        .accessibilityElement(children: .contain)\n    }\n}\n`,
     "Views/${identifier}DashboardView.swift": `import SwiftUI\n\nstruct ${identifier}DashboardView: View {\n    @EnvironmentObject private var store: ${identifier}Store\n\n    var body: some View {\n        NavigationStack {\n            ScrollView {\n                VStack(alignment: .leading, spacing: 20) {\n                    VStack(alignment: .leading, spacing: 6) {\n                        Text("${profile.title}").font(.largeTitle.weight(.bold)).tracking(-0.6)\n                        Text("${profile.subtitle}").font(.subheadline).foregroundStyle(.secondary)\n                    }\n                    ${identifier}FeatureSummary()\n                    HStack { Text("Recent").font(.title3.weight(.semibold)); Spacer(); Button("See all") { store.selectedTab = .${profile.tabs[1].toLowerCase()} } }\n                    ${identifier}ItemList(items: store.filteredItems)\n                }.padding(20)\n            }\n            .searchable(text: $store.query, prompt: "Search")\n            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { store.showingComposer = true } label: { Image(systemName: "plus") } } }\n        }\n    }\n}\n\nprivate struct ${identifier}FeatureSummary: View {\n    var body: some View {\n        VStack(alignment: .leading, spacing: 12) {\n            Text("This month").font(.caption.weight(.medium)).foregroundStyle(.secondary)\n            Text("On track").font(.system(size: 30, weight: .bold, design: .rounded))\n            ProgressView(value: 0.68).tint(.blue)\n            Text("68% of your plan is complete").font(.footnote).foregroundStyle(.secondary)\n        }.padding(18).frame(maxWidth: .infinity, alignment: .leading).background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))\n    }\n}\n`,
     "Views/${identifier}Flows.swift": `import SwiftUI\n\nstruct ${identifier}ItemList: View {\n    let items: [${identifier}Item]\n    var body: some View {\n        VStack(spacing: 0) {\n            ForEach(items) { item in\n                NavigationLink { ${identifier}DetailView(item: item) } label: {\n                    HStack(spacing: 12) {\n                        Image(systemName: "circle.inset.filled").foregroundStyle(.blue).font(.title3)\n                        VStack(alignment: .leading, spacing: 3) { Text(item.title).foregroundStyle(.primary); Text(item.detail).font(.footnote).foregroundStyle(.secondary) }\n                        Spacer(); Text(item.trailing).font(.subheadline.weight(.medium)).foregroundStyle(.secondary)\n                    }.padding(.vertical, 12)\n                }\n                if item.id != items.last?.id { Divider() }\n            }\n        }.padding(.horizontal, 14).background(.background, in: RoundedRectangle(cornerRadius: 14, style: .continuous)).overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(.quaternary))\n    }\n}\n\nstruct ${identifier}ListView: View {\n    @EnvironmentObject private var store: ${identifier}Store\n    var body: some View { NavigationStack { List(store.filteredItems) { item in NavigationLink { ${identifier}DetailView(item: item) } label: { VStack(alignment: .leading) { Text(item.title); Text(item.detail).font(.caption).foregroundStyle(.secondary) } } }.navigationTitle("${profile.tabs[1]}").searchable(text: $store.query) } }\n}\n\nstruct ${identifier}DetailView: View {\n    let item: ${identifier}Item\n    var body: some View { Form { Section("Details") { LabeledContent("Name", value: item.title); LabeledContent("Status", value: item.detail); LabeledContent("Value", value: item.trailing) }; Section { Button("Edit") {}.foregroundStyle(.blue); Button("Remove", role: .destructive) {} } }.navigationTitle(item.title).navigationBarTitleDisplayMode(.inline) }\n}\n\nstruct ${identifier}ComposerView: View {\n    @EnvironmentObject private var store: ${identifier}Store\n    @Environment(\\.dismiss) private var dismiss\n    @State private var title = ""\n    @State private var detail = ""\n    var body: some View { NavigationStack { Form { TextField("Title", text: $title); TextField("Details", text: $detail) }.navigationTitle("${profile.primaryAction}").toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button("Save") { store.add(title: title, detail: detail); dismiss() }.disabled(title.trimmingCharacters(in: .whitespaces).isEmpty) } } } }\n}\n\nstruct ${identifier}SettingsView: View {\n    var body: some View { NavigationStack { Form { Section("Preferences") { Toggle("Notifications", isOn: .constant(true)); Toggle("Compact appearance", isOn: .constant(false)) }; Section("About") { LabeledContent("Version", value: "1.0") } }.navigationTitle("${profile.tabs[2]}") } }\n`,
   };
@@ -202,10 +218,31 @@ async function prepareIosAgentWorkspace(root: string) {
       recursive: true,
       force: true,
     }).catch(() => undefined);
+    // This MIT-licensed skill library gives iOS runs the additional product,
+    // SwiftUI, design, testing, accessibility and release-review guidance.
+    // It is copied into the selected workspace only; the renderer never sees
+    // a private credential or a host-specific Apple toolchain.
+    await fs.cp(CLAUDE_APPLE_SKILL_SOURCE, path.join(root, ".agent", "skills", "claude-code-apple-skills"), {
+      recursive: true,
+      force: true,
+    }).catch(() => undefined);
     await fs.cp(SWIFTUI_SKILL_SOURCE, path.join(root, ".agent", "skills", "swiftui-expert"), {
       recursive: true,
       force: true,
     }).catch(() => undefined);
+    // Copy the runnable skill payload explicitly rather than copying the
+    // repository directory.  `fs.cp` can silently skip a nested git worktree
+    // on some hosts; that previously left an iOS agent with a prompt pointing
+    // at a missing SKILL.md.
+    const destination = path.join(root, ".agent", "skills", "swiftui-design-skill");
+    await fs.rm(destination, { recursive: true, force: true });
+    await fs.mkdir(destination, { recursive: true });
+    await fs.copyFile(path.join(SWIFTUI_DESIGN_SKILL_SOURCE, "SKILL.md"), path.join(destination, "SKILL.md"));
+    for (const directory of ["references", "templates"]) {
+      const source = path.join(SWIFTUI_DESIGN_SKILL_SOURCE, directory);
+      const exists = await fs.stat(source).then(() => true).catch(() => false);
+      if (exists) await fs.cp(source, path.join(destination, directory), { recursive: true, force: true });
+    }
   } catch {
     /* Skills are optional context, not a runtime prerequisite. */
   }
@@ -251,6 +288,10 @@ export function registerOpenCodeRoutes(app: Application) {
 
 Be an adaptive expert coding agent like Cursor or Codex. Understand intent → investigate → plan across files → act → inspect → adapt → validate until complete.
 No fixed tool-call quota. Scale effort to the request. Read before editing. Prefer production-quality work. Fix failures after checks.
+
+Research-before-build policy:
+- When a request names or links a current public product, website, framework, library, API, repository, brand, or versioned design system, research authoritative public sources before implementation. Prefer the official site, docs, organisation/repository and release notes; do not build from stale memory or random screenshots.
+- Then inspect this project, plan the adaptation, implement, run the relevant checks, open the preview, compare and correct visible issues. Keep research out of simple local refactors where external context adds no value.
 
 Project architecture rules — for every coding request:
 - Inspect the existing project structure first (list files, read configs) and match its framework and conventions.

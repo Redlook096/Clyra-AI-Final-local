@@ -37,6 +37,7 @@ import {
   ChevronRight,
   FileUp,
   Folder,
+  Gamepad2,
   Globe,
   GraduationCap,
   Heart,
@@ -243,6 +244,11 @@ const loadStudyPalWorkspace = () =>
     default: () => <WorkspaceImportFailure name="Study Pal" />,
   }));
 const StudyPalWorkspace = lazy(loadStudyPalWorkspace);
+const loadForgeWorkspace = () =>
+  import("./components/forge/ForgeWorkspace").catch(() => ({
+    default: () => <WorkspaceImportFailure name="Clyra Forge" />,
+  }));
+const ForgeWorkspace = lazy(loadForgeWorkspace);
 
 function prepareVibeForBoot(
   onProgress?: (update: VibeBootProgressUpdate) => void,
@@ -272,16 +278,30 @@ function prepareVibeForBoot(
 
     report(0, 0.05);
     const vibeChunk = loadVibeCoderWorkspace();
+    // The Vibe workspace is lazy and is not required for the initial Chat
+    // home. Continue warming it without making launch progress wait on a
+    // large optional feature bundle.
+    void vibeChunk.catch(() => undefined);
     report(1, 0.16);
 
     // The visible Vibe experience is the native OpenCode surface.  Only warm
     // the Vibe bundle and its own status endpoint; the removed M1 harness
     // must not lengthen app startup or decide whether this workspace opens.
-    const routesWarm = fetch("/api/opencode/status", { cache: "no-store" }).catch(() => null);
+    // This endpoint is opportunistic warmup only. It must never hold the
+    // launch progress open after the visible application is already ready.
+    const routesWarm = new Promise<null>((resolve) => {
+      const timeout = window.setTimeout(() => resolve(null), 850);
+      void fetch("/api/opencode/status", { cache: "no-store" })
+        .catch(() => null)
+        .finally(() => {
+          window.clearTimeout(timeout);
+          resolve(null);
+        });
+    });
 
     report(2, 0.28);
     const stopEarlyPulse = pulse(2, 0.28, 0.50, 480);
-    await Promise.allSettled([vibeChunk, routesWarm]);
+    await routesWarm;
     stopEarlyPulse();
     report(3, 0.54);
 
@@ -293,7 +313,7 @@ function prepareVibeForBoot(
   return vibeBootPreparation;
 }
 
-type WorkspaceTabId = "chat" | "vibe" | "clip" | "browser" | "study" | "companion" | CreatorMode;
+type WorkspaceTabId = "chat" | "vibe" | "clip" | "browser" | "forge" | "study" | "companion" | CreatorMode;
 type AppAgentId = "vibe" | "browse" | "clip" | "study" | "fake-text" | "would-rather";
 type GoogleToolId = "gmail" | "calendar" | "docs" | "sheets" | "slides" | "drive";
 type AppAgentStatus = "queued" | "running" | "ready" | "needs_input" | "failed";
@@ -314,7 +334,7 @@ const WORKSPACE_TAB_ORDER: WorkspaceTabId[] = [
   "vibe",
   "clip",
   "browser",
-  "study",
+  "forge",
   "fake-text",
   "would-rather",
 ];
@@ -334,7 +354,7 @@ function readEmbeddedWorkspace(): WorkspaceTabId {
   const tool = params.get("embedTool");
   if (tool === "browse" || tool === "browser") return "browser";
   if (tool === "fake-text" || tool === "would-rather") return tool;
-  if (tool === "vibe" || tool === "clip" || tool === "study" || tool === "companion") return tool;
+  if (tool === "vibe" || tool === "clip" || tool === "forge" || tool === "study" || tool === "companion") return tool;
   return "chat";
 }
 const WORKSPACE_TAB_WIDTH = 105;
@@ -424,88 +444,402 @@ function formatRecentUpdate(updatedAt: number) {
   return `Updated ${Math.round(elapsedHours / 24)}d ago`;
 }
 
-type BootOverlayState =
-  | "booting"
-  | "orb_up"
-  | "progress"
-  | "progress_complete"
-  | "complete";
+type BootOverlayState = "holding" | "ripple" | "complete";
+
+/**
+ * One NameDrop-style, top-edge optical pressure wave. The SVG displacement filter is
+ * applied once to the application surface, so it refracts the rendered UI
+ * without touching layout, hit targets, or each component individually.
+ */
+function StartupSpatialRipple() {
+  const mapRef = useRef<SVGFEImageElement>(null);
+  const shineRef = useRef<HTMLCanvasElement>(null);
+  const shaderRef = useRef<HTMLCanvasElement>(null);
+
+  useLayoutEffect(() => {
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // The visual stage is the one continuous sheet that reacts. Keeping the
+    // overlay outside this target makes the shine stay optically attached to
+    // the deformation rather than warping the overlay itself.
+    const surface = document.querySelector<HTMLElement>(".clyra-screen-stage") || document.getElementById("root");
+    if (!surface || reducedMotion) return;
+
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) return;
+
+    // A small displacement map keeps the one-second effect inexpensive while
+    // the browser bilinearly smooths it across the full application surface.
+    const mapSize = 64;
+    canvas.width = mapSize;
+    canvas.height = mapSize;
+    const map = context.createImageData(mapSize, mapSize);
+    const originalFilter = surface.style.filter;
+    // This is one filter on the visual stage, not per-component transforms.
+    // The map is intentionally small and updates at 30fps; Chromium scales it
+    // in the compositor while the shader carries the 60–120Hz optical crest.
+    const useLiveDisplacement = CSS.supports("filter", "url(#clyra-namedrop-ripple-filter)");
+    const duration = 1_020;
+    const started = performance.now();
+    let frame = 0;
+    let finished = false;
+    let lastMapAt = -Infinity;
+    let canvasWidth = 0;
+    let canvasHeight = 0;
+    let gl: WebGL2RenderingContext | null = null;
+    let shaderProgram: WebGLProgram | null = null;
+    let shaderBuffer: WebGLBuffer | null = null;
+    let shaderCanvasWidth = 0;
+    let shaderCanvasHeight = 0;
+
+    const compileShader = (type: number, source: string) => {
+      if (!gl) return null;
+      const shader = gl.createShader(type);
+      if (!shader) return null;
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (gl.getShaderParameter(shader, gl.COMPILE_STATUS)) return shader;
+      gl.deleteShader(shader);
+      return null;
+    };
+
+    const shaderCanvas = shaderRef.current;
+    if (shaderCanvas) {
+      gl = shaderCanvas.getContext("webgl2", { alpha: true, antialias: false, premultipliedAlpha: true });
+      if (gl) {
+        const vertex = compileShader(gl.VERTEX_SHADER, `#version 300 es
+          in vec2 position;
+          void main() { gl_Position = vec4(position, 0.0, 1.0); }
+        `);
+        const fragment = compileShader(gl.FRAGMENT_SHADER, `#version 300 es
+          precision highp float;
+          uniform vec2 resolution;
+          uniform vec2 origin;
+          uniform float radius;
+          uniform float energy;
+          uniform float buildUp;
+          out vec4 outColor;
+          float bell(float x, float width) { return exp(-pow(x / width, 2.0) * 2.4); }
+          void main() {
+            vec2 p = vec2(gl_FragCoord.x, resolution.y - gl_FragCoord.y);
+            float sd = length(p - origin) - radius;
+            float leading = bell(sd - 7.0, 4.0);
+            float blue = bell(sd, 14.0);
+            float core = bell(sd + 0.5, 5.0);
+            float tail = bell(sd + 24.0, 36.0);
+            float recoil = bell(sd + 68.0, 10.0) * 0.16;
+            vec2 contactPoint = vec2(origin.x, 4.0);
+            vec2 contactDelta = p - contactPoint;
+            float contact = exp(-dot(contactDelta, contactDelta) / 760.0) * buildUp;
+            float alpha = clamp((leading * 0.22 + blue * 0.34 + core * 0.64 + tail * 0.065 + recoil * 0.1) * energy + contact * 0.78, 0.0, 0.8);
+            vec3 colour = vec3(0.66, 0.85, 1.0) * leading
+              + vec3(0.39, 0.71, 1.0) * blue
+              + vec3(0.96, 0.99, 1.0) * core
+              + vec3(0.58, 0.79, 1.0) * tail
+              + vec3(0.82, 0.93, 1.0) * recoil
+              + vec3(0.96, 0.99, 1.0) * contact;
+            colour /= max(leading + blue + core + tail + recoil + contact, 0.0001);
+            outColor = vec4(colour * alpha, alpha);
+          }
+        `);
+        if (vertex && fragment) {
+          shaderProgram = gl.createProgram();
+          if (shaderProgram) {
+            gl.attachShader(shaderProgram, vertex);
+            gl.attachShader(shaderProgram, fragment);
+            gl.linkProgram(shaderProgram);
+            if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+              gl.deleteProgram(shaderProgram);
+              shaderProgram = null;
+            }
+          }
+          gl.deleteShader(vertex);
+          gl.deleteShader(fragment);
+        }
+        if (shaderProgram) {
+          shaderBuffer = gl.createBuffer();
+          gl.bindBuffer(gl.ARRAY_BUFFER, shaderBuffer);
+          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+          gl.enable(gl.BLEND);
+          gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        }
+      }
+    }
+
+    // Paint the white launch surface before the browser's next compositing
+    // opportunity. This closes the one-frame transparent gap between the
+    // progress handoff and the first travelling crest.
+    const initialShine = shineRef.current;
+    if (initialShine) {
+      const initialDpr = Math.min(1.5, window.devicePixelRatio || 1);
+      canvasWidth = Math.max(1, Math.round(window.innerWidth * initialDpr));
+      canvasHeight = Math.max(1, Math.round(window.innerHeight * initialDpr));
+      initialShine.width = canvasWidth;
+      initialShine.height = canvasHeight;
+      const initialContext = initialShine.getContext("2d");
+      initialContext?.setTransform(initialDpr, 0, 0, initialDpr, 0, 0);
+      initialContext && (initialContext.fillStyle = "#fff");
+      initialContext?.fillRect(0, 0, window.innerWidth, window.innerHeight);
+    }
+
+    const settle = () => {
+      if (finished) return;
+      finished = true;
+      cancelAnimationFrame(frame);
+      if (useLiveDisplacement) surface.style.filter = originalFilter;
+      const shine = shineRef.current;
+      shine?.getContext("2d")?.clearRect(0, 0, shine.width, shine.height);
+      if (gl && shaderProgram) {
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        if (shaderBuffer) gl.deleteBuffer(shaderBuffer);
+        gl.deleteProgram(shaderProgram);
+      }
+    };
+
+    const drawMap = (radius: number, progress: number) => {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const originX = width / 2;
+      const originY = -Math.max(38, height * 0.08);
+      const maxRadius = Math.max(
+        Math.hypot(originX, originY),
+        Math.hypot(width - originX, originY),
+        Math.hypot(originX, height - originY),
+        Math.hypot(width - originX, height - originY),
+      ) + 36;
+      const waveWidth = 58 + 46 * progress;
+      const energy = progress < 0.76 ? 1 : Math.max(0, 1 - (progress - 0.76) / 0.24);
+      const pixels = map.data;
+
+      for (let y = 0; y < mapSize; y += 1) {
+        const pointY = ((y + 0.5) / mapSize) * height - originY;
+        for (let x = 0; x < mapSize; x += 1) {
+          const pointX = ((x + 0.5) / mapSize) * width - originX;
+          const distance = Math.hypot(pointX, pointY);
+          const relativeCrest = (distance - radius) / waveWidth;
+          const crest = Math.exp(-Math.pow(relativeCrest, 2) * 6.2);
+          // Compression is slightly tighter before the crest and releases more
+          // gradually behind it, avoiding a symmetrical, synthetic wave.
+          const asymmetricPressure = relativeCrest > 0 ? 0.56 : 0.78;
+          const falloff = Math.min(1, distance / Math.max(18, maxRadius * 0.12));
+          const recoil = Math.exp(-Math.pow((distance - (radius - waveWidth * 0.82)) / (waveWidth * 0.3), 2) * 4.4) * 0.14;
+          const magnitude = (crest * asymmetricPressure + recoil) * falloff * energy * 142;
+          const unit = Math.max(1, distance);
+          const index = (y * mapSize + x) * 4;
+          pixels[index] = Math.round(128 + (pointX / unit) * magnitude);
+          pixels[index + 1] = Math.round(128 + (pointY / unit) * magnitude);
+          pixels[index + 2] = 128;
+          pixels[index + 3] = 255;
+        }
+      }
+      context.putImageData(map, 0, 0);
+      mapRef.current?.setAttribute("href", canvas.toDataURL("image/png"));
+    };
+
+    const drawShine = (radius: number, progress: number) => {
+      const shine = shineRef.current;
+      if (!shine) return;
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const dpr = Math.min(1.5, window.devicePixelRatio || 1);
+      const targetWidth = Math.max(1, Math.round(width * dpr));
+      const targetHeight = Math.max(1, Math.round(height * dpr));
+      if (canvasWidth !== targetWidth || canvasHeight !== targetHeight) {
+        canvasWidth = targetWidth;
+        canvasHeight = targetHeight;
+        shine.width = targetWidth;
+        shine.height = targetHeight;
+      }
+      const shineContext = shine.getContext("2d");
+      if (!shineContext) return;
+      shineContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+      shineContext.clearRect(0, 0, width, height);
+
+      const sourceX = width / 2;
+      // Keep the source just beyond the top edge. The first visible portion is
+      // therefore a broad crest entering the glass, rather than a complete
+      // on-screen circle.
+      const sourceY = -Math.max(38, height * 0.08);
+      const energy = progress < 0.07
+        ? (progress / 0.07) * 0.25
+        : progress < 0.14
+          ? 0.25 + ((progress - 0.07) / 0.07) * 0.6
+          : progress < 0.2
+            ? 0.85 + ((progress - 0.14) / 0.06) * 0.15
+            : progress < 0.7
+              ? 0.96
+              : progress < 0.8
+                ? 0.96 - ((progress - 0.7) / 0.1) * 0.14
+                : progress < 0.9
+                  ? 0.82 - ((progress - 0.8) / 0.1) * 0.27
+                  : Math.max(0, 0.55 - ((progress - 0.9) / 0.1) * 0.55);
+      const waveWidth = 58 + 46 * progress;
+
+      if (gl && shaderProgram && shaderCanvas) {
+        const shaderDpr = Math.min(1.5, window.devicePixelRatio || 1);
+        const targetShaderWidth = Math.max(1, Math.round(width * shaderDpr));
+        const targetShaderHeight = Math.max(1, Math.round(height * shaderDpr));
+        if (shaderCanvasWidth !== targetShaderWidth || shaderCanvasHeight !== targetShaderHeight) {
+          shaderCanvasWidth = targetShaderWidth;
+          shaderCanvasHeight = targetShaderHeight;
+          shaderCanvas.width = targetShaderWidth;
+          shaderCanvas.height = targetShaderHeight;
+          gl.viewport(0, 0, targetShaderWidth, targetShaderHeight);
+        }
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.useProgram(shaderProgram);
+        gl.bindBuffer(gl.ARRAY_BUFFER, shaderBuffer);
+        const position = gl.getAttribLocation(shaderProgram, "position");
+        gl.enableVertexAttribArray(position);
+        gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+        gl.uniform2f(gl.getUniformLocation(shaderProgram, "resolution"), targetShaderWidth, targetShaderHeight);
+        gl.uniform2f(gl.getUniformLocation(shaderProgram, "origin"), sourceX * shaderDpr, sourceY * shaderDpr);
+        gl.uniform1f(gl.getUniformLocation(shaderProgram, "radius"), radius * shaderDpr);
+        gl.uniform1f(gl.getUniformLocation(shaderProgram, "energy"), energy);
+        const buildUp = progress < 0.17 ? Math.sin((progress / 0.17) * Math.PI) : 0;
+        gl.uniform1f(gl.getUniformLocation(shaderProgram, "buildUp"), buildUp);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
+      // The surface is revealed by the same expanding pressure geometry as the
+      // crest. This is a moving aperture, not an opacity fade: untouched areas
+      // remain white until the wave has physically passed them.
+      shineContext.fillStyle = "#fff";
+      shineContext.fillRect(0, 0, width, height);
+      shineContext.save();
+      shineContext.globalCompositeOperation = "destination-out";
+      shineContext.beginPath();
+      shineContext.arc(sourceX, sourceY, Math.max(0, radius - waveWidth * 0.62), 0, Math.PI * 2);
+      shineContext.fill();
+      shineContext.restore();
+      const drawArc = (arcRadius: number, lineWidth: number, color: string) => {
+        if (arcRadius <= 0) return;
+        shineContext.beginPath();
+        // Only render the lower-facing portion of the radial wave. It is still
+        // calculated from a single top-centre origin, but this avoids the
+        // recognisable "sonar ring" silhouette at the viewport edge.
+        shineContext.arc(sourceX, sourceY, arcRadius, Math.PI * 0.04, Math.PI * 0.96);
+        shineContext.lineWidth = lineWidth;
+        shineContext.lineCap = "round";
+        shineContext.strokeStyle = color;
+        shineContext.stroke();
+      };
+
+      // All envelopes share one moving radius, so the result reads as one
+      // glass pressure ridge rather than several independent ripple rings.
+      // The visual front is intentionally one crest: a barely-there blue
+      // refraction band, a thin cool leading edge, then a white highlight.
+      // Avoiding an echo keeps this from reading as concentric sonar rings.
+      drawArc(radius - waveWidth * 0.5, Math.max(82, waveWidth * 1.2), `rgba(116, 194, 255, ${0.052 * energy})`);
+      drawArc(radius + 10, 10, `rgba(10, 132, 255, ${0.16 * energy})`);
+      drawArc(radius, Math.max(34, waveWidth * 0.52), `rgba(120, 199, 255, ${0.22 * energy})`);
+      drawArc(radius - 2, 13, `rgba(248, 252, 255, ${0.62 * energy})`);
+      drawArc(radius - 4, 3, `rgba(255, 255, 255, ${0.88 * energy})`);
+      // A subdued trailing recovery line supplies the physical release without
+      // turning into a second pulse or an obvious concentric ring.
+      if (progress > 0.18) {
+        const recoilRadius = Math.max(0, radius - Math.max(62, height * 0.07));
+        drawArc(recoilRadius, 28, `rgba(151, 210, 255, ${0.045 * energy})`);
+        drawArc(recoilRadius, 3, `rgba(237, 249, 255, ${0.12 * energy})`);
+      }
+
+      if (progress < 0.18) {
+        const glow = shineContext.createRadialGradient(sourceX, sourceY, 0, sourceX, sourceY, 150);
+        const activation = Math.sin((progress / 0.18) * Math.PI) * 0.2;
+        glow.addColorStop(0, `rgba(255, 255, 255, ${activation})`);
+        glow.addColorStop(0.36, `rgba(100, 181, 255, ${activation * 0.62})`);
+        glow.addColorStop(1, "rgba(100, 181, 255, 0)");
+        shineContext.fillStyle = glow;
+        shineContext.fillRect(sourceX - 150, sourceY - 8, 300, 190);
+      }
+    };
+
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - started) / duration);
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const originY = -Math.max(38, height * 0.08);
+      const topDistance = -originY;
+      const maxRadius = Math.max(
+        Math.hypot(width / 2, originY),
+        Math.hypot(width / 2, height - originY),
+      ) + 36;
+      // Contact reaches the top edge first, then releases into one quick,
+      // monotonic pass through the full surface.
+      const contactProgress = Math.min(1, progress / 0.17);
+      const releaseProgress = Math.max(0, (progress - 0.17) / 0.83);
+      const contactRadius = topDistance * (1 - Math.pow(1 - contactProgress, 2.1));
+      const releaseRadius = (maxRadius - topDistance) * (1 - Math.pow(1 - releaseProgress, 1.36));
+      const radius = contactRadius + releaseRadius;
+      drawShine(radius, progress);
+      // The shine runs at native frame rate. The intentionally tiny DOM
+      // refraction map refreshes at ~30fps to protect typing and scrolling.
+      if (useLiveDisplacement && (now - lastMapAt >= 32 || progress === 1)) {
+        drawMap(radius, progress);
+        lastMapAt = now;
+      }
+      if (progress < 1) frame = requestAnimationFrame(tick);
+      else settle();
+    };
+
+    if (useLiveDisplacement) {
+      surface.style.filter = originalFilter
+        ? `${originalFilter} url(#clyra-namedrop-ripple-filter)`
+        : "url(#clyra-namedrop-ripple-filter)";
+    }
+    const onVisibilityChange = () => {
+      if (document.hidden) settle();
+    };
+    frame = requestAnimationFrame(tick);
+    document.addEventListener("visibilitychange", onVisibilityChange, { once: true });
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      settle();
+    };
+  }, []);
+
+  return (
+    <>
+      <svg className="clyra-ripple-filter-definitions" aria-hidden="true" focusable="false">
+        <filter id="clyra-namedrop-ripple-filter" x="-2%" y="-2%" width="104%" height="104%" colorInterpolationFilters="sRGB">
+          <feImage ref={mapRef} x="0" y="0" width="100%" height="100%" result="rippleMap" preserveAspectRatio="none" />
+          <feDisplacementMap in="SourceGraphic" in2="rippleMap" scale="7" xChannelSelector="R" yChannelSelector="G" />
+        </filter>
+      </svg>
+      <canvas ref={shineRef} className="clyra-startup-wave" aria-hidden="true" />
+      <canvas ref={shaderRef} className="clyra-startup-wave clyra-startup-wave--shader" aria-hidden="true" />
+    </>
+  );
+}
 
 function BootIntroOverlay({
   state,
   progress,
-  stage,
-  shinePass,
 }: {
   state: BootOverlayState;
   progress: number;
-  stage: number;
-  shinePass: number;
 }) {
-  const isComplete = state === "progress_complete";
-  const bootStages = [...VIBE_BOOT_STAGE_LABELS];
-  const showProgressTrack = state !== "booting";
-  const showStatus = (state === "progress" && stage >= 0) || isComplete;
-  const stageLabel = isComplete
-    ? "Clyra is ready"
-    : bootStages[Math.min(Math.max(stage, 0), bootStages.length - 1)];
+  const progressRail = (
+    <div className="clyra-boot-progress clyra-boot-progress--intro" role="progressbar" aria-label="Preparing Clyra" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)}>
+      <div className="clyra-boot-progress__track">
+        <motion.div
+          className="clyra-boot-progress__fill"
+          initial={false}
+          animate={{ scaleX: progress }}
+          transition={{ duration: 0.34, ease: [0.22, 1, 0.36, 1] }}
+        />
+      </div>
+    </div>
+  );
 
+  if (state === "ripple") {
+    return <div className="clyra-boot-overlay clyra-boot-overlay--ripple"><StartupSpatialRipple /></div>;
+  }
   return (
-    <motion.div
-      className="clyra-boot-overlay"
-      initial={{ opacity: 1 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: isComplete ? 0.72 : 0.32, ease: [0.16, 1, 0.3, 1] }}
-    >
-      <motion.div
-        className="clyra-boot-overlay__content"
-        initial={{ opacity: 1 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.48, ease: [0.16, 1, 0.3, 1] }}
-      >
-        <AnimatePresence initial={false}>
-          {showProgressTrack ? <motion.div
-            className={cn("clyra-boot-progress", isComplete && "clyra-boot-progress--complete")}
-            initial={{ opacity: 0, y: 4, scaleX: 0.985 }}
-            animate={{ opacity: 1, y: 0, scaleX: 1 }}
-              exit={{ opacity: 0, y: -2 }}
-              transition={{ duration: 0.58, ease: [0.16, 1, 0.3, 1] }}
-            >
-              <div className="clyra-boot-progress__track">
-                <motion.div
-                  className="clyra-boot-progress__fill"
-                  initial={false}
-                  animate={{ scaleX: progress }}
-                  transition={{ duration: isComplete ? 0.9 : 0.55, ease: [0.22, 1, 0.36, 1] }}
-                >
-                  {!isComplete ? <span className="clyra-boot-progress__shine" /> : null}
-                </motion.div>
-              </div>
-              {showStatus ? (
-                <motion.span
-                  className="clyra-boot-progress__label"
-                  initial={{ opacity: 0, y: 3 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.42, ease: [0.22, 1, 0.36, 1] }}
-                >
-                  <AnimatePresence mode="wait" initial={false}>
-                    <motion.span
-                      key={stageLabel}
-                      initial={{ opacity: 0, y: 2 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -2 }}
-                      transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-                    >
-                      {stageLabel}
-                    </motion.span>
-                  </AnimatePresence>
-                </motion.span>
-              ) : null}
-            </motion.div> : null}
-        </AnimatePresence>
-      </motion.div>
-    </motion.div>
+    <div className="clyra-boot-overlay clyra-boot-overlay--progress">
+      {progressRail}
+    </div>
   );
 }
 
@@ -2442,110 +2776,69 @@ export default function App() {
       window.visualViewport?.removeEventListener("resize", updateViewportWidth);
     };
   }, []);
-  type IntroState =
-    | "booting"
-    | "orb_up"
-    | "progress"
-    | "progress_complete"
-    | "complete";
   // Embedded production tools (including Fake Text's renderer-preview route)
   // do not depend on the Vibe coding stack. Do not cover their first frame
   // with a potentially long M1 preload: it makes video-time screenshots and
   // exports appear blank even though the template has rendered underneath.
   const isEmbeddedToolRoute = typeof window !== "undefined"
     && Boolean(new URLSearchParams(window.location.search).get("embedTool"));
-  const [introState, setIntroState] = useState<IntroState>(() => isEmbeddedToolRoute ? "complete" : "booting");
+  const [introState, setIntroState] = useState<BootOverlayState>(() => isEmbeddedToolRoute ? "complete" : "holding");
   const [introProgress, setIntroProgress] = useState(0);
-  const [introStage, setIntroStage] = useState(-1);
-  const [introShinePass, setIntroShinePass] = useState(0);
-  const isBootOverlayVisible =
-    introState === "booting" ||
-    introState === "orb_up" ||
-    introState === "progress" ||
-    introState === "progress_complete";
+  const isBootOverlayVisible = introState !== "complete";
+
+  // The static document-level cover remains until this first layout commit,
+  // where the React-owned boot surface is already in place beneath it.
+  useLayoutEffect(() => {
+    document.getElementById("clyra-preboot-surface")?.remove();
+  }, []);
 
   useEffect(() => {
     if (isEmbeddedToolRoute) return;
-    // Drive the boot bar from real Vibe preload work so the first message never
-    // waits on a cold M1 start. A short visual floor keeps the sequence calm
-    // when warmup finishes instantly.
+    // The visible progress tracks the real preload phases. The handoff never
+    // begins mid-load, so the final fill genuinely represents readiness.
     let cancelled = false;
+    let finished = false;
     const timers: number[] = [];
+    const startedAt = performance.now();
     const schedule = (delay: number, callback: () => void) => {
       timers.push(window.setTimeout(callback, delay));
     };
-    const bootStartedAt = performance.now();
-    const minimumBootMs = 600;
-    let latestProgress = 0;
-    let latestStage = -1;
-    let preparationDone = false;
-    let preparationReady = false;
     vibeBootPreparation = null;
 
-    const applyProgress = (progress: number, stage: number) => {
+    const beginRipple = () => {
       if (cancelled) return;
-      latestProgress = Math.max(latestProgress, Math.min(1, progress));
-      latestStage = Math.max(latestStage, stage);
-      setIntroProgress(latestProgress);
-      if (latestStage >= 0) setIntroStage(latestStage);
-      // Keep one continuous shine loop — remounting on every tick freezes the shimmer.
-    };
-
-    const finishBoot = () => {
-      if (cancelled) return;
-      setIntroProgress(1);
-      setIntroStage(VIBE_BOOT_STAGE_LABELS.length - 1);
-      setIntroState("progress_complete");
-      schedule(260, () => {
+      setIntroState("ripple");
+      // Keep the optical handoff mounted through its full 980ms pass, then
+      // release the surface without a separate fade.
+      schedule(1_020, () => {
         if (cancelled) return;
         setIntroState("complete");
         setIsSidebarOpen(true);
       });
     };
 
-    const maybeFinish = () => {
-      if (!preparationDone || cancelled) return;
-      const elapsed = performance.now() - bootStartedAt;
-      const waitMore = Math.max(0, minimumBootMs - elapsed);
-      schedule(waitMore, () => {
-        applyProgress(1, VIBE_BOOT_STAGE_LABELS.length - 1);
-        finishBoot();
-      });
+    const completePreparation = (ready: boolean) => {
+      if (finished || cancelled) return;
+      finished = true;
+      markVibeBootReady(ready);
+      setIntroProgress(1);
+      // Keep the final fill on screen long enough to settle, with a short
+      // calm floor on fast local startups rather than a fake fixed loader.
+      const remainingFloor = Math.max(0, 950 - (performance.now() - startedAt));
+      schedule(Math.max(280, remainingFloor), beginRipple);
     };
-
-    schedule(80, () => {
-      if (cancelled) return;
-      setIntroState("orb_up");
-    });
-    schedule(180, () => {
-      if (cancelled) return;
-      setIntroState("progress");
-      setIntroStage(0);
-      setIntroProgress(0.04);
-    });
 
     void prepareVibeForBoot((update) => {
       if (cancelled) return;
-      applyProgress(update.progress, update.stage);
+      setIntroProgress((current) => Math.max(current, Math.min(0.97, update.progress)));
     }).then((result) => {
-      preparationDone = true;
-      preparationReady = result.ready;
-      markVibeBootReady(preparationReady);
-      maybeFinish();
+      completePreparation(result.ready);
     }).catch(() => {
-      preparationDone = true;
-      preparationReady = false;
-      markVibeBootReady(false);
-      maybeFinish();
+      completePreparation(false);
     });
-
-    // Safety valve: never strand the splash if warmup hangs past the await race.
-    schedule(52_000, () => {
-      if (preparationDone || cancelled) return;
-      preparationDone = true;
-      markVibeBootReady(false);
-      maybeFinish();
-    });
+    // The shell remains usable even if an optional local warmup endpoint is
+    // unavailable. This is a genuine readiness timeout, not simulated progress.
+    schedule(4_000, () => completePreparation(false));
 
     return () => {
       cancelled = true;
@@ -3363,10 +3656,12 @@ export default function App() {
       setShowCommandPalette(false);
       requestAnimationFrame(() => textareaRef.current?.blur());
     };
-    window.addEventListener("keydown", handleGlobalKeyDown);
+    // Rich embedded workspaces can stop events before they reach `window`.
+    // The launcher is global, so listen on the capture path too.
+    document.addEventListener("keydown", handleGlobalKeyDown, true);
     window.addEventListener("message", handleWorkspaceMessage);
     return () => {
-      window.removeEventListener("keydown", handleGlobalKeyDown);
+      document.removeEventListener("keydown", handleGlobalKeyDown, true);
       window.removeEventListener("message", handleWorkspaceMessage);
     };
   }, [isAppLauncherOpen, isTaskViewOpen, openTaskView]);
@@ -5791,6 +6086,7 @@ Please analyze the code you just wrote and fix this error.`;
     activeWorkspaceTab === "clip" || selectedCommand?.id === "clip";
   const isBrowserWorkspace = activeWorkspaceTab === "browser";
   const isCompanionWorkspace = activeWorkspaceTab === "companion";
+  const isForgeWorkspace = activeWorkspaceTab === "forge";
   const isStudyWorkspace = activeWorkspaceTab === "study";
   const creatorMode: CreatorMode | null =
     activeWorkspaceTab === "would-rather" ||
@@ -5826,6 +6122,8 @@ Please analyze the code you just wrote and fix this error.`;
         ? "browser"
         : isCompanionWorkspace
           ? "companion"
+        : isForgeWorkspace
+          ? "forge"
         : isStudyWorkspace
           ? "study"
         : creatorMode ??
@@ -5872,7 +6170,7 @@ Please analyze the code you just wrote and fix this error.`;
       ? Math.max(420, viewportWidth - sidebarClearancePx)
       : viewportWidth;
   const centeredContentWidth =
-    isBrowserWorkspace || isCompanionWorkspace || isStudyWorkspace
+    isBrowserWorkspace || isCompanionWorkspace || isForgeWorkspace || isStudyWorkspace
       ? Math.min(1280, Math.max(0, effectiveWorkspaceViewport - 32))
       : isClipWorkspace
         ? Math.min(820, Math.max(0, effectiveWorkspaceViewport - 32))
@@ -6232,6 +6530,7 @@ Please analyze the code you just wrote and fix this error.`;
             vibe: { label: "Vibe Coder", icon: <Code2 className="h-3.5 w-3.5" /> },
             clip: { label: "AI Clipper", icon: <Scissors className="h-3.5 w-3.5" /> },
             browser: { label: "Browser", icon: <Globe className="h-3.5 w-3.5" /> },
+            forge: { label: "Clyra Forge", icon: <Gamepad2 className="h-3.5 w-3.5" /> },
             companion: { label: "Companion", icon: <AppWindow className="h-3.5 w-3.5" /> },
             study: { label: "Study Pal", icon: <GraduationCap className="h-3.5 w-3.5" /> },
             "fake-text": { label: "Text Story", icon: <MessagesSquare className="h-3.5 w-3.5" /> },
@@ -6254,8 +6553,6 @@ Please analyze the code you just wrote and fix this error.`;
               <BootIntroOverlay
                 state={introState}
                 progress={introProgress}
-                stage={introStage}
-                shinePass={introShinePass}
               />
             ) : null}
           </AnimatePresence>,
@@ -7000,6 +7297,7 @@ Please analyze the code you just wrote and fix this error.`;
                         !isClipWorkspace &&
                         !isBrowserWorkspace &&
                         !isCompanionWorkspace &&
+                        !isForgeWorkspace &&
                         !isStudyWorkspace &&
                         !isCreatorWorkspace &&
                         "justify-center",
@@ -7043,6 +7341,10 @@ Please analyze the code you just wrote and fix this error.`;
                       ) : isCompanionWorkspace ? (
                         <Suspense fallback={null}>
                           <ScreenCompanionWorkspace />
+                        </Suspense>
+                      ) : isForgeWorkspace ? (
+                        <Suspense fallback={null}>
+                          <ForgeWorkspace />
                         </Suspense>
                       ) : isStudyWorkspace ? (
                         <Suspense fallback={null}>
@@ -7331,6 +7633,7 @@ Please analyze the code you just wrote and fix this error.`;
                           !isClipWorkspace &&
                           !isBrowserWorkspace &&
                           !isCompanionWorkspace &&
+                          !isForgeWorkspace &&
                           !isStudyWorkspace &&
                           !isCreatorWorkspace &&
                           !isVibeWorkspace && (

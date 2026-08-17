@@ -44,9 +44,9 @@ const second = buildIMessageTimeline(fixture);
 
 equal(IMESSAGE_CANVAS.width, 1080, "The logical iMessage canvas must remain 1080px wide");
 equal(IMESSAGE_CANVAS.height, 1920, "The logical iMessage canvas must remain 1920px high");
-equal(IMESSAGE_TOKENS.floatingPanelSideInset, 135, "The floating card must remain 810px wide on a 1080px export");
-equal(IMESSAGE_TOKENS.floatingPanelTopInset, 205, "The floating card must retain the compact upper-video placement");
-equal(IMESSAGE_TOKENS.headerHeight, 155, "The header must use the compact iMessage export height");
+equal(IMESSAGE_TOKENS.floatingPanelSideInset, 126, "The floating card must remain 76.7% wide on a 1080px export");
+equal(IMESSAGE_TOKENS.floatingPanelTopInset, 211, "The floating card must sit approximately 11% down the gameplay frame");
+equal(IMESSAGE_TOKENS.headerHeight, 152, "The header must use the compact iMessage export height");
 equal(IMESSAGE_TOKENS.bubbleEntranceMs, 0, "Messages must enter as settled bubbles without flicker");
 equal(JSON.stringify(first), JSON.stringify(second), "The timeline must be deterministic for the same script");
 equal(first.events.length, fixture.length, "Each script message needs exactly one event");
@@ -103,7 +103,7 @@ equal(
 const singleMessageGeometry = getIMessageFloatingPanelGeometry(singleMessageLayout);
 check(singleMessageGeometry.x > 0, "A floating iMessage sheet must reveal gameplay at its left edge");
 check(singleMessageGeometry.width < IMESSAGE_CANVAS.width, "A floating iMessage sheet must never cover the entire gameplay canvas");
-equal(singleMessageGeometry.width, 810, "The floating card must occupy 75% of a 1080px export");
+equal(singleMessageGeometry.width, 828, "The floating card must occupy approximately 76.7% of a 1080px export");
 equal(singleMessageGeometry.x, IMESSAGE_CANVAS.width - singleMessageGeometry.x - singleMessageGeometry.width, "Floating sheet gutters must remain balanced on both sides");
 equal(singleMessageGeometry.y, IMESSAGE_TOKENS.floatingPanelTopInset, "Floating sheet top inset must come from shared geometry");
 equal(singleMessageGeometry.height, singleMessageLayout.panelHeight, "A short sheet geometry must preserve the content-fit panel height");

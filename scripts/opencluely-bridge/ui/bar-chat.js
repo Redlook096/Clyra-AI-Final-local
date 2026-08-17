@@ -1,1156 +1,268 @@
-/**
- * Light frosted OpenCluely bar:
- *  - Ask → expand width then chat (normal Q&A)
- *  - Auto Answer → expand + screenshot vision with initiative
- *  - X collapses back to the compact pill
- *  - Drag handle moves the whole window; opens centered at top
- */
-(function () {
-  const HISTORY_KEY = 'opencluely_bar_chat_v2';
-  const GREETING = 'Hi, how can I help you?';
-  // The command bar and its drawer are one spatial object.  A fixed desktop
-  // column means neither its apparent width nor any control positions change
-  // when chat opens or collapses.
-  const BAR_WIDTH = 560;
-  const MIN_BAR_W = 60;
-  const COLLAPSED_H = 56;
-  const DRAWER_H = 360;
-  // Keep in sync with --oc-dur-w / --oc-dur-h — Ask snaps open vertically only
-  const DUR_W = 0;
-  const DUR_H = 0;
-
-  const shell = document.getElementById('ocShell');
-  const tab = document.getElementById('commandTab');
-  const drawer = document.getElementById('chatDrawer');
-  const messagesEl = document.getElementById('barChatMessages');
-  const inputEl = document.getElementById('barChatInput');
-  const sendBtn = document.getElementById('barChatSend');
-  const closeBtn = document.getElementById('ocCloseBtn');
-  const askBtn = document.getElementById('ocAskBtn');
-  const autoBtn = document.getElementById('ocAutoBtn');
-  const controlBtn = document.getElementById('ocControlBtn');
-  const stealthWrap = document.getElementById('ocStealthWrap');
-  const stealthSwitch = document.getElementById('ocStealthSwitch');
-  const modeLabel = document.getElementById('chatModeLabel');
-  const modeHint = document.getElementById('chatModeHint');
-
-  if (!shell || !drawer || !messagesEl) {
-    console.warn('[BarChat] missing shell elements');
-    return;
-  }
-
-  let open = false;
-  let wide = false;
-  let mode = 'ask'; // 'ask' | 'auto' | 'control'
-  let history = [];
-  let animating = false;
-  let controlling = false;
-  let taskPromptMode = false;
-  let stealthOn = false;
-  const STEALTH_KEY = 'opencluely_stealth_v1';
-
-  // Stealth = dark chrome. Stealth off = always light (ignore OS dark preference).
-  function syncThemeClass() {
-    try {
-      document.documentElement.classList.toggle('oc-stealth', stealthOn);
-      document.documentElement.classList.toggle('oc-dark', stealthOn);
-      document.documentElement.classList.toggle('oc-force-light', !stealthOn);
-    } catch (_) {
-      /* ignore */
-    }
-  }
-
-  const AUTO_PROMPT =
-    "Look at what's on my screen right now. Use your initiative: if there is a question, quiz, problem, coding prompt, form field, or anything the user likely needs answered or solved, answer it directly and helpfully. If there is no clear question, briefly say what you see and the most useful next step. Read text literally; do not invent content that is not visible.";
-
-  function loadHistory() {
-    messagesEl.innerHTML = '';
-    history = [];
-    // One clean greeting only — never replay old spam from previous sessions.
-    try {
-      localStorage.removeItem('opencluely_bar_chat_v1');
-      localStorage.removeItem(HISTORY_KEY);
-    } catch (_) {
-      /* ignore */
-    }
-    addMessage(GREETING, 'assistant', true);
-    history = [{ type: 'assistant', text: GREETING }];
-    saveHistory();
-  }
-
-  function updateCloseIcon() {
-    if (!closeBtn) return;
-    const collapseMode = open || taskPromptMode;
-    closeBtn.classList.toggle('is-collapse', collapseMode);
-    if (collapseMode) {
-      closeBtn.title = 'Collapse chat';
-      closeBtn.setAttribute('aria-label', 'Collapse chat');
-    } else {
-      closeBtn.title = 'Close';
-      closeBtn.setAttribute('aria-label', 'Close');
-    }
-  }
-
-  function saveHistory() {
-    try {
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(-80)));
-    } catch (_) {
-      /* ignore */
-    }
-  }
-
-  function escapeHtml(value) {
-    return String(value || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
-  }
-
-  // A deliberately small, safe Markdown renderer. It covers the formatting
-  // people naturally use in a command bar without giving model output an HTML
-  // execution path: headings, lists, quotes, code, emphasis and strikeout.
-  function formatInlineMarkdown(value) {
-    return String(value || '')
-      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/__([^_\n]+)__/g, '<strong>$1</strong>')
-      .replace(/~~([^~\n]+)~~/g, '<s>$1</s>')
-      .replace(/(^|[^\w])\*([^*\n]+)\*/g, '$1<em>$2</em>')
-      .replace(/(^|[^\w])_([^_\n]+)_/g, '$1<em>$2</em>');
-  }
-
-  function formatMarkdown(text) {
-    const fenced = [];
-    const escaped = escapeHtml(text).replace(/```(?:[^\n]*)\n?([\s\S]*?)```/g, (_match, code) => {
-      const token = `\u0000CODE${fenced.length}\u0000`;
-      fenced.push(`<pre><code>${code.replace(/^\n|\n$/g, '')}</code></pre>`);
-      return token;
-    });
-    const lines = escaped.split(/\r?\n/);
-    let html = '';
-    let list = null;
-    const closeList = () => {
-      if (list) html += `</${list}>`;
-      list = null;
-    };
-
-    for (const rawLine of lines) {
-      const codeMatch = rawLine.match(/^\u0000CODE(\d+)\u0000$/);
-      const ordered = rawLine.match(/^\s*\d+\.\s+(.+)$/);
-      const unordered = rawLine.match(/^\s*[-*+]\s+(.+)$/);
-      const heading = rawLine.match(/^(#{1,3})\s+(.+)$/);
-      const quote = rawLine.match(/^&gt;\s?(.+)$/);
-      if (codeMatch) {
-        closeList();
-        html += fenced[Number(codeMatch[1])] || '';
-      } else if (heading) {
-        closeList();
-        html += `<h${heading[1].length}>${formatInlineMarkdown(heading[2])}</h${heading[1].length}>`;
-      } else if (quote) {
-        closeList();
-        html += `<blockquote>${formatInlineMarkdown(quote[1])}</blockquote>`;
-      } else if (ordered || unordered) {
-        const kind = ordered ? 'ol' : 'ul';
-        if (list !== kind) {
-          closeList();
-          html += `<${kind}>`;
-          list = kind;
-        }
-        html += `<li>${formatInlineMarkdown((ordered || unordered)[1])}</li>`;
-      } else if (!rawLine.trim()) {
-        closeList();
-      } else {
-        closeList();
-        html += `<p>${formatInlineMarkdown(rawLine)}</p>`;
-      }
-    }
-    closeList();
-    return html || '<p></p>';
-  }
-
-  let lastAssistantText = '';
-  let lastAssistantAt = 0;
-  /** SoftStream-style paint cursor for live LLM chunks */
-  let streamState = null;
-
-  const THINKING_HTML =
-    '<div class="oc-thinking-status" aria-live="polite">' +
-    '<span class="oc-thinking-icon" aria-hidden="true">' +
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' +
-    '<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>' +
-    '<path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/>' +
-    '<path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/>' +
-    '<path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/>' +
-    '<path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/>' +
-    '<path d="M3.023 10.125a4 4 0 0 0 2.477 1.375"/><path d="M18.5 11.5a4 4 0 0 0 2.477-1.375"/>' +
-    '<path d="M8.5 17.5a3 3 0 0 0 2.5 1"/><path d="M13 18.5a3 3 0 0 0 2.5-1"/>' +
-    '</svg></span>' +
-    '<span class="oc-thinking-wave">Thinking</span>' +
-    '<span class="oc-thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>' +
-    '</div>';
-
-  function stopStreamPaint() {
-    if (streamState?.raf != null) {
-      cancelAnimationFrame(streamState.raf);
-      streamState.raf = null;
-    }
-  }
-
-  function clearStreamMessage({ keepDom = false } = {}) {
-    stopStreamPaint();
-    if (!keepDom && streamState?.el?.isConnected) {
-      streamState.el.remove();
-    }
-    streamState = null;
-  }
-
-  function scheduleStreamPaint() {
-    if (!streamState || streamState.raf != null) return;
-    streamState.raf = requestAnimationFrame(() => {
-      if (!streamState) return;
-      streamState.raf = null;
-      const target = streamState.target;
-      let current = streamState.shown;
-      if (current.length > target.length) {
-        current = target;
-      } else if (current.length < target.length) {
-        let steps = target.length - current.length > 64 ? 4 : 2;
-        while (steps-- > 0 && current.length < target.length) {
-          const rem = target.slice(current.length);
-          const match = rem.match(/^(?:\s*\S{1,18}|\s+|[\s\S]{1,12})/);
-          current += match?.[0] ?? rem.slice(0, 8);
-        }
-      }
-      streamState.shown = current;
-      if (streamState.textEl) {
-        streamState.textEl.textContent = current;
-      }
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-      if (streamState.finalizing && current.length >= target.length) {
-        finalizeStreamMessage(target);
-        return;
-      }
-      if (current.length < target.length) scheduleStreamPaint();
-    });
-  }
-
-  function ensureStreamMessage(messageId) {
-    hideThinking();
-    if (streamState?.el?.isConnected) {
-      if (messageId && !streamState.messageId) streamState.messageId = messageId;
-      return streamState;
-    }
-    const messageDiv = document.createElement('div');
-    messageDiv.className = 'message assistant oc-print is-streaming oc-msg-rise oc-msg-rise--assistant';
-    messageDiv.id = 'bar-streaming';
-    const paint = document.createElement('div');
-    paint.className = 'message-text oc-stream-paint';
-    const body = document.createElement('span');
-    body.className = 'oc-stream-paint__body';
-    const caret = document.createElement('span');
-    caret.className = 'oc-stream-paint__caret';
-    caret.setAttribute('aria-hidden', 'true');
-    paint.appendChild(body);
-    paint.appendChild(caret);
-    messageDiv.appendChild(paint);
-    messagesEl.appendChild(messageDiv);
-    streamState = {
-      el: messageDiv,
-      textEl: body,
-      caret,
-      target: '',
-      shown: '',
-      raf: null,
-      messageId: messageId || null,
-      finalizing: false,
-    };
-    return streamState;
-  }
-
-  function appendStreamChunk(delta, messageId) {
-    const chunk = String(delta || '');
-    if (!chunk) return;
-    const state = ensureStreamMessage(messageId);
-    state.target += chunk;
-    scheduleStreamPaint();
-  }
-
-  function finalizeStreamMessage(fullText) {
-    const t = String(fullText || streamState?.target || '').trim();
-    stopStreamPaint();
-    if (!t) {
-      clearStreamMessage();
-      return;
-    }
-    const now = Date.now();
-    if (t === lastAssistantText && now - lastAssistantAt < 5000) {
-      clearStreamMessage();
-      return;
-    }
-    lastAssistantText = t;
-    lastAssistantAt = now;
-
-    const el = streamState?.el;
-    if (el?.isConnected) {
-      el.classList.remove('is-streaming');
-      const textDiv = el.querySelector('.message-text') || document.createElement('div');
-      textDiv.className = 'message-text';
-      textDiv.innerHTML = formatMarkdown(t);
-      el.innerHTML = '';
-      el.appendChild(textDiv);
-      streamState?.caret?.remove();
-    } else {
-      addMessage(t, 'assistant');
-      streamState = null;
-      return;
-    }
-    history.push({ type: 'assistant', text: t });
-    saveHistory();
-    streamState = null;
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  }
-
-  function addMessage(text, type = 'user', skipPersist = false) {
-    const t = String(text || '').trim();
-    if (!t) return;
-    // Drop duplicate assistant bubbles from dual IPC paths / double broadcast
-    if (type === 'assistant') {
-      const now = Date.now();
-      if (t === lastAssistantText && now - lastAssistantAt < 5000) return;
-      lastAssistantText = t;
-      lastAssistantAt = now;
-      // Prefer finalizing an in-flight stream instead of a second bubble
-      if (streamState?.el?.isConnected) {
-        streamState.target = t;
-        streamState.finalizing = true;
-        scheduleStreamPaint();
-        return;
-      }
-    }
-    const messageDiv = document.createElement('div');
-    // Assistant: plain print (no bubble) like Clyra chat tool.
-    // User: App Launcher / Clyra chat bubble (#aec7f1) + move-up entry.
-    if (type === 'assistant') {
-      messageDiv.className = 'message assistant oc-print oc-msg-rise oc-msg-rise--assistant';
-    } else if (type === 'user') {
-      messageDiv.className = 'message user oc-user-bubble oc-msg-rise';
-      if (!messagesEl.querySelector('.message.user')) {
-        messageDiv.classList.add('oc-user-bubble--first');
-      }
-    } else {
-      messageDiv.className = `message ${type} oc-msg-rise oc-msg-rise--assistant`;
-    }
-    const textDiv = document.createElement('div');
-    textDiv.className = 'message-text';
-    if (type === 'assistant' || type === 'system') textDiv.innerHTML = formatMarkdown(t);
-    else textDiv.textContent = t;
-    messageDiv.appendChild(textDiv);
-    messagesEl.appendChild(messageDiv);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-    if (!skipPersist) {
-      history.push({ type, text: t });
-      saveHistory();
-    }
-  }
-
-  function showThinking() {
-    // Dots + shimmer only while the model is thinking (before first token).
-    if (streamState?.el?.isConnected) return;
-    hideThinking();
-    shell.classList.add('is-thinking');
-    const thinkingDiv = document.createElement('div');
-    thinkingDiv.className = 'message assistant oc-print thinking';
-    thinkingDiv.id = 'bar-thinking';
-    thinkingDiv.innerHTML = THINKING_HTML;
-    messagesEl.appendChild(thinkingDiv);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  }
-
-  function hideThinking() {
-    document.getElementById('bar-thinking')?.remove();
-    shell.classList.remove('is-thinking');
-  }
-
-  function measureShell() {
-    if (!open) return { width: measureCollapsedTabWidth(), height: COLLAPSED_H };
-    const rect = shell.getBoundingClientRect();
-    const tabRect = tab?.getBoundingClientRect();
-    const contentW = Math.ceil(Math.max(rect.width, tabRect?.width || 0, shell.scrollWidth || 0));
-    const contentH = Math.ceil(Math.max(rect.height, shell.scrollHeight || 0, COLLAPSED_H));
-    return {
-      // Keep the controls fully inside the visible work area. CSS supplies the
-      // same limit; this protects the native Electron resize path as well.
-      width: Math.max(MIN_BAR_W, contentW),
-      height: Math.max(COLLAPSED_H, contentH),
-    };
-  }
-
-  function measureCollapsedTabWidth() {
-    // Never derive width from `scrollWidth`: labels can be hidden by a narrow
-    // viewport while the native window is animating, which was the source of
-    // the compact bar shrinking after a chat collapse. The main process still
-    // clamps this request for genuinely narrow displays.
-    return BAR_WIDTH;
-  }
-
-  let lastResize = { w: 0, h: 0 };
-  let resizeChain = Promise.resolve();
-  let queuedResize = null;
-
-  // Match CSS --oc-ease so Electron bounds and drawer height stay locked.
-  function cubicBezierEase(t, p1x = 0.22, p1y = 1, p2x = 0.36, p2y = 1) {
-    const x = Math.max(0, Math.min(1, t));
-    // Solve Bézier x(u)=x for u via Newton, then evaluate y(u).
-    let u = x;
-    for (let i = 0; i < 6; i++) {
-      const u2 = u * u;
-      const u3 = u2 * u;
-      const cx = 3 * p1x;
-      const bx = 3 * (p2x - p1x) - cx;
-      const ax = 1 - cx - bx;
-      const xu = ax * u3 + bx * u2 + cx * u;
-      const dx = 3 * ax * u2 + 2 * bx * u + cx;
-      if (Math.abs(dx) < 1e-6) break;
-      u -= (xu - x) / dx;
-      u = Math.max(0, Math.min(1, u));
-    }
-    const u2 = u * u;
-    const u3 = u2 * u;
-    const cy = 3 * p1y;
-    const by = 3 * (p2y - p1y) - cy;
-    const ay = 1 - cy - by;
-    return ay * u3 + by * u2 + cy * u;
-  }
-
-  function resizeWindowNow(width, height, { recenter = false, growFromTopCenter = false } = {}) {
-    if (!window.electronAPI?.resizeWindow) return Promise.resolve();
-    const w = Math.max(60, Math.round(width));
-    const h = Math.max(28, Math.round(height));
-    // Coalesce: keep only the latest size so rAF never waits on a backlog of IPC.
-    queuedResize = { w, h, recenter, growFromTopCenter };
-    resizeChain = resizeChain
-      .catch(() => {})
-      .then(async () => {
-        while (queuedResize) {
-          const job = queuedResize;
-          queuedResize = null;
-          if (
-            Math.abs(job.w - lastResize.w) < 1 &&
-            Math.abs(job.h - lastResize.h) < 1 &&
-            job.recenter !== true &&
-            job.recenter !== 'x' &&
-            !job.growFromTopCenter
-          ) {
-            continue;
-          }
-          lastResize = { w: job.w, h: job.h };
-          await window.electronAPI.resizeWindow(job.w, job.h, {
-            recenter: job.recenter,
-            growFromTopCenter: job.growFromTopCenter,
-          });
-        }
-      });
-    return resizeChain;
-  }
-
-  async function measureAndResize({ recenter = false } = {}) {
-    await new Promise((r) => requestAnimationFrame(r));
-    const { width, height } = measureShell();
-    await resizeWindowNow(width, height, { recenter });
-  }
-
-  /**
-   * Drive Electron window bounds in lockstep with CSS (single rAF, awaited IPC).
-   * recenter: false | 'x' (keep Y, center horizontally) | true (center at top)
-   */
-  async function animateBounds(fromW, fromH, toW, toH, durationMs, { growFromTopCenter = true } = {}) {
-    const start = performance.now();
-    const dw = Math.abs(toW - fromW);
-    const dh = Math.abs(toH - fromH);
-    // Prefer reduced motion or no-op deltas: snap once.
-    const reduce =
-      typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (reduce || durationMs <= 0 || (dw < 2 && dh < 2)) {
-      await resizeWindowNow(toW, toH, { growFromTopCenter });
-      return;
-    }
-    // Grow from top-center every frame: width L/R equally, height only downward.
-    while (true) {
-      const t = Math.min(1, (performance.now() - start) / durationMs);
-      const e = cubicBezierEase(t);
-      const w = Math.round(fromW + (toW - fromW) * e);
-      const h = Math.round(fromH + (toH - fromH) * e);
-      void resizeWindowNow(w, h, { growFromTopCenter: true });
-      if (t >= 1) break;
-      await new Promise((r) => requestAnimationFrame(r));
-    }
-    await resizeWindowNow(toW, toH, { growFromTopCenter: true });
-  }
-
-  async function expandToChat(nextMode) {
-    // IPC updates can arrive while a reply is streaming. Re-sizing an already
-    // open drawer is visually equivalent to hiding it for a frame, so update
-    // the mode in place instead.
-    if (open && !taskPromptMode) {
-      setModeUI(nextMode || mode || 'ask');
-      updateCloseIcon();
-      return;
-    }
-    if (animating) {
-      animating = false;
-      shell.classList.remove('is-animating');
-    }
-    animating = true;
-    mode = nextMode;
-
-    try {
-      // Grow down only. The reading surface and compact bar share one fixed
-      // column, so all toolbar controls remain at their original coordinates.
-      const keepW = measureCollapsedTabWidth();
-      wide = false;
-      open = true;
-      shell.style.setProperty('--oc-chat-width', `${keepW}px`);
-      shell.classList.remove('is-wide');
-      shell.classList.add('is-chat-open');
-      drawer.setAttribute('aria-hidden', 'false');
-      setModeUI(nextMode);
-      updateCloseIcon();
-      notifyDrawer(true, { recenter: false });
-      await resizeWindowNow(keepW, COLLAPSED_H + DRAWER_H, { growFromTopCenter: true });
-    } finally {
-      shell.classList.remove('is-animating');
-      animating = false;
-    }
-
-    if (nextMode === 'ask') {
-      requestAnimationFrame(() => inputEl?.focus());
-    }
-  }
-
-  async function collapse(opts = {}) {
-    const hideIfAlreadyCollapsed = Boolean(opts.hideIfAlreadyCollapsed);
-    if (animating) animating = false;
-    if (!open && !wide && !taskPromptMode && !controlling) {
-      if (hideIfAlreadyCollapsed) {
-        try {
-          await window.electronAPI?.hideAllWindows?.();
-        } catch (_) {
-          /* ignore */
-        }
-      }
-      return;
-    }
-    animating = true;
-    askBtn?.classList.remove('is-active');
-    autoBtn?.classList.remove('is-active');
-
-    try {
-      if (taskPromptMode) {
-        taskPromptMode = false;
-        shell.classList.remove('is-control-compose', 'is-task-prompt');
-        clearInlineControlInput();
-        updateCloseIcon();
-      }
-
-      const from = measureShell();
-      open = false;
-      wide = false;
-      shell.classList.remove('is-chat-open', 'is-wide');
-      shell.style.removeProperty('--oc-chat-width');
-      drawer.setAttribute('aria-hidden', 'true');
-      updateCloseIcon();
-      notifyDrawer(false, { recenter: false });
-
-      await new Promise((r) => requestAnimationFrame(r));
-      const pillW = measureCollapsedTabWidth();
-      await resizeWindowNow(pillW, COLLAPSED_H, { growFromTopCenter: true });
-      updateCloseIcon();
-    } finally {
-      shell.classList.remove('is-animating');
-      animating = false;
-    }
-  }
-
-  function notifyDrawer(openState, opts = {}) {
-    try {
-      window.electronAPI?.setChatDrawerOpen?.(openState, opts);
-    } catch (_) {
-      /* ignore */
-    }
-  }
-
-  function setModeUI(next) {
-    mode = next;
-    askBtn?.classList.toggle('is-active', mode === 'ask' && open && !controlling);
-    autoBtn?.classList.toggle('is-active', mode === 'auto' && open && !controlling);
-    if (modeLabel) {
-      modeLabel.textContent =
-        mode === 'auto' ? 'Auto Answer' : mode === 'control' ? 'Take Control' : 'Ask';
-    }
-    if (modeHint) {
-      modeHint.textContent =
-        mode === 'auto'
-          ? 'Reading your screen…'
-          : mode === 'control'
-            ? 'Describe the task for the AI…'
-            : 'Type a question…';
-    }
-  }
-
-  function applyStealthUI(enabled, { persist = true, notifyMain = true } = {}) {
-    stealthOn = Boolean(enabled);
-    document.documentElement.classList.toggle('oc-stealth', stealthOn);
-    syncThemeClass();
-    stealthWrap?.classList.toggle('is-on', stealthOn);
-    if (stealthSwitch) {
-      stealthSwitch.setAttribute('aria-checked', stealthOn ? 'true' : 'false');
-    }
-    if (persist) {
-      try {
-        localStorage.setItem(STEALTH_KEY, stealthOn ? '1' : '0');
-      } catch (_) {
-        /* ignore */
-      }
-    }
-    if (notifyMain) {
-      try {
-        window.electronAPI?.setStealthMode?.(stealthOn);
-      } catch (_) {
-        /* ignore */
-      }
-    }
-  }
-
-  /** Instant show — no expand/squish boot; drawer expand stays smooth. */
-  async function snapShow() {
-    shell.classList.remove('is-boot-squish', 'is-boot-fade', 'is-boot-expand');
-    for (const el of shell.querySelectorAll('.oc-boot-hide, .oc-stealth-wrap, .oc-actions, .oc-close')) {
-      try {
-        el.style.opacity = '';
-        el.style.transform = '';
-        el.style.pointerEvents = 'auto';
-      } catch (_) {
-        /* ignore */
-      }
-    }
-    await measureAndResize({ recenter: true });
-  }
-
-  function setControlButtonState(isControlling) {
-    controlling = Boolean(isControlling);
-    shell.classList.toggle('is-controlling', controlling);
-    if (!controlBtn) return;
-    if (controlling) {
-      controlBtn.classList.add('oc-stop');
-      controlBtn.classList.remove('oc-control');
-      controlBtn.title = 'Stop AI control';
-      controlBtn.setAttribute('aria-label', 'Stop AI control');
-      // Keep Stop visible inside the collapsed pill; hide other actions via CSS
-      controlBtn.style.display = '';
-    } else {
-      controlBtn.classList.add('oc-control');
-      controlBtn.classList.remove('oc-stop');
-      controlBtn.title = 'Let OpenCluely control your machine';
-      controlBtn.setAttribute('aria-label', 'Take Control');
-    }
-  }
-
-  function inlineControlInput() {
-    return document.getElementById('ocInlineControlInput');
-  }
-
-  function clearInlineControlInput() {
-    const el = inlineControlInput();
-    if (el) el.value = '';
-  }
-
-  async function enterTaskPrompt() {
-    if (controlling) return;
-    // Never soft-fail Take Control because an expand left animating=true.
-    animating = false;
-    shell.classList.remove('is-animating');
-    setModeUI('control');
-    // Stay on the original collapsed pill — hide buttons, reveal type space.
-    taskPromptMode = true;
-    open = false;
-    wide = false;
-    shell.classList.remove('is-chat-open', 'is-wide', 'is-task-prompt', 'is-fading-out', 'is-fading-in', 'is-shaking');
-    shell.classList.add('is-control-compose');
-    drawer.setAttribute('aria-hidden', 'true');
-    updateCloseIcon();
-    const el = inlineControlInput();
-    let placeholder = 'What should the AI do on your computer?';
-    try {
-      const status = await window.electronAPI?.getDesktopControlStatus?.();
-      if (status && (status.driver === 'none' || status.ok === false || status.accessibility === false)) {
-        placeholder =
-          status.platform === 'linux'
-            ? 'Install xdotool to enable Take Control on Linux'
-            : status.platform === 'darwin'
-              ? 'Enable Accessibility for OpenCluely in System Settings'
-              : 'Desktop control is unavailable on this machine';
-      }
-    } catch (_) {
-      /* ignore */
-    }
-    if (el) {
-      el.placeholder = placeholder;
-      el.focus();
-    }
-    await measureAndResize({ recenter: false });
-  }
-
-  async function exitTaskPromptToControl(task) {
-    animating = true;
-    taskPromptMode = false;
-    shell.classList.remove('is-control-compose', 'is-task-prompt', 'is-fading-out', 'is-fading-in');
-    // Stay collapsed — only Stop remains visible via is-controlling
-    open = false;
-    wide = false;
-    shell.classList.remove('is-chat-open', 'is-wide');
-    drawer.setAttribute('aria-hidden', 'true');
-    setControlButtonState(true);
-    setModeUI('control');
-    updateCloseIcon();
-    clearInlineControlInput();
-    const status = document.getElementById('ocControlStatus');
-    if (status) status.textContent = 'AI controlling…';
-    measureAndResize();
-    try {
-      const result = await window.electronAPI?.startDesktopControl?.(task);
-      if (result && result.ok === false) throw new Error(result.error || 'Desktop control could not start.');
-    } catch (error) {
-      setControlButtonState(false);
-      if (status) status.textContent = '';
-      shell.classList.add('is-control-compose');
-      taskPromptMode = true;
-      const el = inlineControlInput();
-      if (el) {
-        el.value = '';
-        el.placeholder = `Failed: ${error.message}`;
-      }
-    }
-    await wait(80);
-    animating = false;
-  }
-
-  async function stopControlFromBar() {
-    hideThinking();
-    try {
-      await window.electronAPI?.stopDesktopControl?.();
-    } catch (_) {
-      /* ignore */
-    }
-    setControlButtonState(false);
-    const status = document.getElementById('ocControlStatus');
-    if (status) status.textContent = '';
-    shell.classList.remove('is-control-compose', 'is-task-prompt');
-    taskPromptMode = false;
-    updateCloseIcon();
-    measureAndResize();
-    if (modeHint) modeHint.textContent = 'Control ended';
-  }
-
-  function wait(ms) {
-    return new Promise((r) => setTimeout(r, ms));
-  }
-
-  async function sendCurrent() {
-    const text = (inputEl?.value || '').trim();
-    const inlineText = (inlineControlInput()?.value || '').trim();
-    if (taskPromptMode) {
-      const task = inlineText || text;
-      if (!task) return;
-      clearInlineControlInput();
-      if (inputEl) inputEl.value = '';
-      await exitTaskPromptToControl(task);
-      return;
-    }
-    if (!text) return;
-    if (!open) await expandToChat('ask');
-    clearStreamMessage();
-    addMessage(text, 'user');
-    inputEl.value = '';
-    autoGrow();
-    showThinking();
-    try {
-      await window.electronAPI?.sendChatMessage?.(text);
-    } catch (error) {
-      hideThinking();
-      clearStreamMessage();
-      addMessage(`Failed to send: ${error.message}`, 'error');
-    }
-  }
-
-  async function runAutoAnswer() {
-    await expandToChat('auto');
-    clearStreamMessage();
-    addMessage('Auto Answer — reading your screen…', 'system');
-    showThinking();
-    try {
-      // Prefer dedicated control endpoint when available
-      const res = await fetch('http://127.0.0.1:3847/auto-answer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: AUTO_PROMPT }),
-      });
-      if (!res.ok) {
-        // Fallback: chat path that triggers screenshot vision
-        await window.electronAPI?.sendChatMessage?.(AUTO_PROMPT);
-      }
-    } catch (_) {
-      try {
-        await window.electronAPI?.sendChatMessage?.(AUTO_PROMPT);
-      } catch (error) {
-        hideThinking();
-        addMessage(`Auto Answer failed: ${error.message}`, 'error');
-      }
-    }
-  }
-
-  function autoGrow() {
-    if (!inputEl) return;
-    inputEl.style.height = 'auto';
-    inputEl.style.height = Math.min(inputEl.scrollHeight, 96) + 'px';
-  }
-
-  // Buttons
-  askBtn?.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    if (open && mode === 'ask') {
-      inputEl?.focus();
-      return;
-    }
-    // Immediate expand-down — no artificial delay
-    void expandToChat('ask');
-  });
-
-  autoBtn?.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    void runAutoAnswer();
-  });
-
-  controlBtn?.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    if (controlling) {
-      await stopControlFromBar();
-      return;
-    }
-    await enterTaskPrompt();
-  });
-
-  const toggleStealth = (e) => {
-    try {
-      e?.preventDefault?.();
-      e?.stopPropagation?.();
-    } catch (_) {
-      /* ignore */
-    }
-    // Ignore non-primary buttons; avoid double-toggle from nested bubble.
-    if (e?.button != null && e.button !== 0) return;
-    applyStealthUI(!stealthOn);
-    measureAndResize();
-  };
-  // Single pointerup on the wrap only — pointerdown+click on wrap+switch
-  // was double-firing and cancelling the toggle (looked "broken").
-  stealthWrap?.addEventListener('pointerup', toggleStealth);
-  try {
-    if (stealthWrap) {
-      stealthWrap.style.pointerEvents = 'auto';
-      stealthWrap.style.webkitAppRegion = 'no-drag';
-    }
-    if (stealthSwitch) {
-      stealthSwitch.style.pointerEvents = 'auto';
-      stealthSwitch.style.webkitAppRegion = 'no-drag';
-    }
-  } catch (_) {
-    /* ignore */
-  }
-  // Force interactive hit-targets (legacy boot classes must never block clicks).
-  for (const el of shell.querySelectorAll('.oc-boot-hide, .oc-stealth-wrap, .oc-actions, .oc-close')) {
-    try {
-      el.style.pointerEvents = 'auto';
-    } catch (_) {
-      /* ignore */
-    }
-  }
-
-  async function handleCloseClick(e) {
-    try {
-      e?.preventDefault?.();
-      e?.stopPropagation?.();
-    } catch (_) {
-      /* ignore */
-    }
-    if (taskPromptMode) {
-      taskPromptMode = false;
-      shell.classList.remove('is-control-compose', 'is-task-prompt', 'is-wide', 'is-fading-in', 'is-fading-out');
-      open = false;
-      wide = false;
-      clearInlineControlInput();
-      if (inputEl) inputEl.placeholder = 'Type a message… (Shift+Enter for newline)';
-      notifyDrawer(false);
-      updateCloseIcon();
-      measureAndResize();
-      return;
-    }
-    // Chat open → chevron collapses chat (does not hide the pill)
-    if (open || wide) {
-      if (controlling) await stopControlFromBar();
-      await collapse({ hideIfAlreadyCollapsed: false });
-      return;
-    }
-    if (controlling) {
-      await stopControlFromBar();
-      return;
-    }
-    // Fully collapsed X → hide overlay
-    await collapse({ hideIfAlreadyCollapsed: true });
-  }
-  // pointerup only — click + pointerup double-fires and can cancel collapse.
-  closeBtn?.addEventListener('pointerup', handleCloseClick);
-
-  sendBtn?.addEventListener('click', () => sendCurrent());
-  inputEl?.addEventListener('input', autoGrow);
-  inputEl?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendCurrent();
-    }
-  });
-  // Ensure Electron window can receive keystrokes when clicking the composer.
-  const focusComposer = () => {
-    try {
-      window.electronAPI?.enableWindowInteraction?.();
-    } catch (_) {
-      /* ignore */
-    }
-    try {
-      window.electronAPI?.focusMainWindow?.();
-    } catch (_) {
-      /* ignore */
-    }
-    // Focus after main process activates the BrowserWindow.
-    setTimeout(() => {
-      try {
-        inputEl?.focus({ preventScroll: true });
-      } catch (_) {
-        inputEl?.focus();
-      }
-    }, 30);
-  };
-  inputEl?.addEventListener('pointerdown', focusComposer);
-  document.querySelector('.oc-composer')?.addEventListener('pointerdown', focusComposer);
-
-  const inlineEl = inlineControlInput();
-  inlineEl?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      sendCurrent();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      closeBtn?.click();
-    }
-  });
-  inlineEl?.addEventListener('mousedown', (e) => e.stopPropagation());
-  inlineEl?.addEventListener('pointerdown', (e) => e.stopPropagation());
-
-  // Main-process open/close (single listener — avoid double collapse/hide)
-  function onDrawerToggle(_event, payload) {
-    if (payload && typeof payload.open === 'boolean') {
-      if (payload.open) {
-        // Already expanded — do not re-run expand animation (race with showLLMLoading).
-        if (open) {
-          setModeUI(mode || 'ask');
-          return;
-        }
-        void expandToChat(mode || 'ask');
-      } else {
-        void collapse({ hideIfAlreadyCollapsed: false });
-      }
-    }
-  }
-  if (window.electronAPI?.onToggleChatDrawer) {
-    window.electronAPI.onToggleChatDrawer(onDrawerToggle);
-  } else {
-    window.electronAPI?.receive?.('toggle-chat-drawer', onDrawerToggle);
-  }
-
-  // Responses — prefer transcription-llm-response only (main also used to
-  // broadcast llm-response for the same reply, which doubled bubbles).
+/* Clyra Intelligence Bar.  It is deliberately one surface: every state below
+ * is driven by the native bridge and resizes the same overlay window. */
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const ui = Object.fromEntries(['shell','bar','orb','barTitle','quickInput','quickSend','screenButton','voiceButton','plusButton','closeButton','moreButton','pauseControl','stopControl','panel','controlCapsule','controlState','controlAction','controlTime','controlMenuButton','statusRow','statusText','statusDots','microWave','response','identity','responseText','quickActions','attachment','composerWrap','composer','sendButton','addButton','screenMenu','addMenu','commandMenu','controlMenu','confirm','confirmText','approveControl','cancelControl','controlPause','controlTakeover','controlContinue','controlStop','voiceView','voiceState','voiceTime','wave','muteVoice','voiceScreen','endVoice','endVoiceFooter','imageInput','fileInput'].map((id) => [id, $(id)]));
   const api = window.electronAPI;
-  if (api) {
-    api.onTranscriptionLlmResponseStart?.((_e, data) => {
-      // Ask / Auto open drawer immediately; show Thinking (not a spinner).
-      if (!open) void expandToChat(mode || 'ask');
-      clearStreamMessage();
-      showThinking();
-    });
-    api.onTranscriptionLlmResponseChunk?.((_e, data) => {
-      if (!open) expandToChat(mode || 'ask');
-      appendStreamChunk(data?.delta || data?.chunk || data?.text || '', data?.messageId);
-    });
-    api.onTranscriptionLlmResponse?.((_e, data) => {
-      hideThinking();
-      const text = data?.response || data?.text || '';
-      if (text) {
-        if (!open) expandToChat(mode || 'ask');
-        if (streamState?.el?.isConnected || (streamState?.target && streamState.target.length)) {
-          ensureStreamMessage(data?.messageId);
-          streamState.target = text;
-          streamState.finalizing = true;
-          scheduleStreamPaint();
-        } else {
-          addMessage(text, 'assistant');
-        }
-        if (modeHint && mode === 'auto') modeHint.textContent = 'Answer ready';
-      } else {
-        clearStreamMessage();
-      }
-    });
-    // Fallback only when transcription channel is unavailable
-    if (typeof api.onTranscriptionLlmResponse !== 'function') {
-      api.onLlmResponse?.((_e, data) => {
-        hideThinking();
-        clearStreamMessage();
-        const text = data?.response || data?.text || '';
-        if (text) {
-          if (!open) expandToChat(mode || 'ask');
-          addMessage(text, 'assistant');
-        }
-      });
-    }
-    api.onOcrError?.((_e, data) => {
-      hideThinking();
-      clearStreamMessage();
-      addMessage(data?.error || 'Screenshot failed', 'error');
-    });
-    api.onSessionCleared?.(() => {
-      clearStreamMessage();
-      hideThinking();
-      history = [];
-      messagesEl.innerHTML = '';
-      addMessage(GREETING, 'assistant', true);
-      history = [{ type: 'assistant', text: GREETING }];
-      saveHistory();
-    });
-    function controlIcon(kind) {
-      const icons = {
-        eye: '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/>',
-        cursor: '<path d="m5 3 13 8-6 1.5L10.5 19 8 8.5 5 3Z"/>',
-        keyboard: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M6 10h.01M9 10h.01M12 10h.01M15 10h.01M18 10h.01M7 14h7M17 14h1"/>',
-        scroll: '<path d="M12 3v18M7 8l5-5 5 5M17 16l-5 5-5-5"/>',
-        terminal: '<path d="m5 7 4 4-4 4M11 15h8"/>',
-        check: '<path d="m5 12 4.2 4L19 6"/>',
-        alert: '<path d="M12 3 2.8 20h18.4L12 3Z"/><path d="M12 9v4M12 17h.01"/>',
-      };
-      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[kind] || icons.eye}</svg>`;
-    }
+  const State = Object.freeze({ IDLE:'IDLE', EXPANDED:'EXPANDED', CAPTURING_SCREEN:'CAPTURING_SCREEN', SELECTING_REGION:'SELECTING_REGION', LISTENING:'LISTENING', TRANSCRIBING:'TRANSCRIBING', THINKING:'THINKING', SPEAKING:'SPEAKING', REQUESTING_CONTROL:'REQUESTING_CONTROL', CONTROLLING:'CONTROLLING', WAITING_FOR_PAGE:'WAITING_FOR_PAGE', WAITING_FOR_USER:'WAITING_FOR_USER', WAITING_FOR_APPROVAL:'WAITING_FOR_APPROVAL', PAUSED:'PAUSED', USER_TAKEOVER:'USER_TAKEOVER', MINIMISING:'MINIMISING', MINIMISED:'MINIMISED', RESTORING:'RESTORING', FAILED:'FAILED', STOPPED:'STOPPED' });
+  let state = State.IDLE, attachment = null, selectedText = '', pendingControlTask = '', micStream = null, audioContext = null, analyser = null, voiceFrame = 0, voiceStartedAt = 0, voiceClock = 0, muted = false, controlStartedAt = 0, controlClock = 0, streamText = '', lastAnswer = '';
 
-    function renderControlStatus(data) {
-      const status = document.getElementById('ocControlStatus');
-      if (!status) return;
-      const action = String(data?.action?.action || '').toLowerCase();
-      const kind = data?.status === 'error' || data?.status === 'blocked'
-        ? 'alert'
-        : data?.status === 'done'
-          ? 'check'
-          : data?.status === 'bash'
-            ? 'terminal'
-            : action === 'type' || action === 'key'
-              ? 'keyboard'
-              : action === 'scroll'
-                ? 'scroll'
-                : action.includes('click') || action === 'mouse_move'
-                  ? 'cursor'
-                  : 'eye';
-      status.className = `oc-control-status is-${kind}`;
-      status.replaceChildren();
-      const glyph = document.createElement('span');
-      glyph.className = 'oc-control-status__icon';
-      glyph.innerHTML = controlIcon(kind);
-      const label = document.createElement('span');
-      label.className = 'oc-control-status__text';
-      label.textContent = String(data?.message || 'AI is observing your screen…').slice(0, 96);
-      status.append(glyph, label);
-    }
-
-    api.onControlStatus?.((_e, data) => {
-      // Do not clear Thinking on every step tick — only when control ends/errors.
-      if (data?.status === 'running') {
-        hideThinking();
-        setControlButtonState(true);
-        renderControlStatus(data);
-      } else if (data?.status === 'step' && data.message) {
-        renderControlStatus(data);
-      } else if (['action', 'thinking', 'response', 'bash', 'blocked'].includes(data?.status)) {
-        renderControlStatus(data);
-      } else if (data?.status === 'done') {
-        hideThinking();
-        setControlButtonState(false);
-        document.getElementById('ocControlStatus')?.replaceChildren();
-        if (data.message) addMessage(String(data.message), 'system');
-      } else if (data?.status === 'stopped') {
-        hideThinking();
-        setControlButtonState(false);
-        document.getElementById('ocControlStatus')?.replaceChildren();
-      } else if (data?.status === 'error') {
-        hideThinking();
-        setControlButtonState(false);
-        renderControlStatus(data);
-        addMessage(String(data.message || 'Take Control failed'), 'error');
-      }
-    });
-    api.onResearchStatus?.((_e, data) => {
-      if (data?.message) {
-        if (!open) expandToChat(mode || 'ask');
-        addMessage(data.message, 'system');
-        if (data.phase === 'searching' || data.phase === 'synthesizing') showThinking();
-        else hideThinking();
-      }
-    });
-    api.onStealthModeChanged?.((_e, data) => {
-      if (typeof data?.stealth === 'boolean') {
-        applyStealthUI(data.stealth, { persist: true, notifyMain: false });
-        measureAndResize();
-      }
-    });
-  }
-
-  // Fit collapsed pill on load — snap show (no expand boot) + stealth restore
-  loadHistory();
-  setControlButtonState(false);
-  try {
-    stealthOn = localStorage.getItem(STEALTH_KEY) === '1';
-  } catch (_) {
-    stealthOn = false;
-  }
-  applyStealthUI(stealthOn, { persist: false, notifyMain: true });
-  try {
-    matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', syncThemeClass);
-  } catch (_) {
-    /* ignore */
-  }
-
-  (async () => {
-    await snapShow();
-    window.electronAPI?.setChatDrawerOpen?.(false);
-    window.electronAPI?.notifyMainWindowReady?.();
-    // Re-apply stealth to main once window is ready (content protection)
-    if (stealthOn) applyStealthUI(true, { persist: false, notifyMain: true });
-  })();
-
-  window.barChat = {
-    isOpen: () => open,
-    expandToChat,
-    collapse,
-    runAutoAnswer,
-    measureAndResize,
-    enterTaskPrompt,
-    stopControlFromBar,
-    setStealth: applyStealthUI,
-    isStealth: () => stealthOn,
+  const isControl = () => [State.CONTROLLING, State.PAUSED, State.USER_TAKEOVER].includes(state);
+  const show = (element, visible) => { element.hidden = !visible; };
+  const formatAnswer = (value) => {
+    // Responses originate in the model pipeline. Escape first, then allow a
+    // deliberately tiny, safe subset of markdown so a short screen answer
+    // reads like native prose instead of exposing literal ** markers.
+    const escaped = String(value || '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return escaped
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n/g, '<br>');
   };
+  const barIdentity = (label = '') => { const active = Boolean(label); show(ui.barTitle, active); ui.barTitle.textContent = label; const copy = ui.quickInput.closest('.bar-copy'); if (copy) copy.hidden = active; };
+  const setOrb = (next = 'idle', level = .12) => {
+    ui.orb.className = `orb ${next}`;
+    ui.orb.style.setProperty('--orb-level', Math.max(.06, Math.min(.95, level)).toFixed(2));
+  };
+  const setState = (next, detail = '') => {
+    state = next; ui.shell.dataset.state = next;
+    const orbState = next === State.LISTENING ? 'listening' : next === State.SPEAKING ? 'speaking' : [State.THINKING, State.CAPTURING_SCREEN, State.SELECTING_REGION].includes(next) ? 'thinking' : 'idle';
+    setOrb(orbState);
+    if (next === State.THINKING) status('Thinking…', 'thinking');
+    if (next === State.CAPTURING_SCREEN) status(detail || 'Reading screen…', 'thinking');
+    if (next === State.SELECTING_REGION) status('Select area…', 'thinking');
+  };
+  const status = (text = '', mode = '') => {
+    const visible = Boolean(text);
+    ui.statusRow.classList.toggle('show', visible);
+    ui.statusText.textContent = text;
+    ui.statusDots.textContent = mode === 'thinking' ? '•••' : '';
+    ui.microWave.style.display = mode === 'voice' ? 'flex' : 'none';
+  };
+  const resize = async (height, width = 480) => {
+    const h = Math.max(56, Math.min(550, Math.round(height)));
+    try { await api?.resizeWindow?.(width, h, { growFromTopCenter:true }); } catch (_) {}
+  };
+  const closeMenus = () => [ui.screenMenu, ui.addMenu, ui.commandMenu, ui.controlMenu].forEach((menu) => menu?.classList.remove('show'));
+  const composerHeight = () => Math.min(92, Math.max(19, ui.composer.scrollHeight || 19));
+  const setExpanded = async (open, { height, focus = false } = {}) => {
+    ui.shell.dataset.expanded = String(Boolean(open));
+    ui.shell.classList.toggle('compact-control', false);
+    ui.voiceView.classList.remove('show');
+    if (!open) { await resize(56); return; }
+    await resize(height || 170, 480);
+    if (focus) requestAnimationFrame(() => ui.composer.focus());
+  };
+  const cleanAnswer = () => {
+    streamText = ''; lastAnswer = ''; ui.responseText.textContent = ''; ui.responseText.classList.remove('streaming'); ui.identity.hidden = true;
+    ui.quickActions.classList.remove('show'); ui.quickActions.replaceChildren(); status('');
+  };
+  const baseIdle = async () => {
+    closeMenus(); stopVoiceVisuals(); cleanAnswer(); ui.controlCapsule.classList.remove('show'); ui.attachment.classList.remove('show');
+    attachment = null; selectedText = ''; barIdentity(''); ui.quickInput.value = ''; ui.composer.value = ''; ui.quickInput.placeholder = 'Ask Clyra or type a task…'; show(ui.quickSend, false); show(ui.screenButton, true); show(ui.voiceButton, true); show(ui.plusButton, true); show(ui.closeButton, true); show(ui.moreButton, false); show(ui.pauseControl, false); show(ui.stopControl, false);
+    setState(State.IDLE); await setExpanded(false);
+  };
+  const showComposer = async (placeholder = 'Ask a follow-up…', focus = true) => {
+    ui.composer.placeholder = placeholder; await setExpanded(true, { height: 112, focus });
+  };
+  const makeAction = (label, onClick, kind = '') => { const button = document.createElement('button'); button.type = 'button'; button.className = `chip ${kind}`; button.textContent = label; button.onclick = onClick; return button; };
+  const showAnswer = async (text, { streaming = false, actions = [] } = {}) => {
+    barIdentity('Clyra'); show(ui.quickSend, false); show(ui.screenButton, false); show(ui.voiceButton, false); show(ui.plusButton, false); show(ui.closeButton, true); show(ui.moreButton, true);
+    // The header already carries Clyra's identity; repeating another orb in
+    // every answer wastes the compact vertical rhythm of the bar.
+    ui.identity.hidden = true; ui.responseText.innerHTML = formatAnswer(text); ui.responseText.classList.toggle('streaming', streaming); lastAnswer = text || lastAnswer;
+    ui.quickActions.replaceChildren(...actions.map(({label, onClick, kind}) => makeAction(label, onClick, kind)));
+    ui.quickActions.classList.toggle('show', actions.length > 0);
+    status(''); const chars = (text || '').length; const height = Math.min(510, Math.max(156, 118 + Math.min(220, Math.ceil(chars / 52) * 20) + (actions.length ? 42 : 0)));
+    await setExpanded(true, { height });
+  };
+  const responseActions = () => [
+    { label:'Copy', onClick:() => api?.copyToClipboard?.(lastAnswer) },
+    { label:'Explain more', onClick:() => { ui.composer.value = 'Explain more about that.'; send(); } },
+    { label:'⋯', kind:'more', onClick:() => closeMenus() },
+  ];
+  const transformSelectedText = async (action) => {
+    if (!selectedText) return;
+    await beginThinking(`${action}…`);
+    try {
+      const result = await api?.transformSelectedText?.({ text:selectedText, action });
+      if (!result?.ok) throw new Error(result?.error || 'Clyra could not transform the selection.');
+      const replacement = result.response;
+      await showAnswer(replacement, { actions:[
+        { label:'Replace', onClick:async () => { const replaced = await api?.replaceSelectedText?.(replacement); if (replaced?.ok === false) { await showAnswer(replaced.error, { actions:responseActions() }); setState(State.FAILED); } else { selectedText = ''; await baseIdle(); } } },
+        { label:'Copy', onClick:() => api?.copyToClipboard?.(replacement) },
+        { label:'Cancel', onClick:() => { selectedText = ''; baseIdle(); } },
+      ] });
+      setState(State.EXPANDED);
+    } catch (error) { await showAnswer(error?.message || 'Clyra could not transform the selection.', { actions:responseActions() }); setState(State.FAILED); }
+  };
+  const showSelectedTextActions = async (text) => {
+    selectedText = String(text || '').trim();
+    if (!selectedText) return;
+    cleanAnswer(); barIdentity('Improve selected text…'); show(ui.screenButton, false); show(ui.voiceButton, true); show(ui.plusButton, false); show(ui.closeButton, true); show(ui.moreButton, false);
+    ui.quickActions.replaceChildren(...['Improve','Rewrite','Shorter','Fix grammar','Ask Clyra'].map((label) => makeAction(label, () => transformSelectedText(label))));
+    ui.quickActions.classList.add('show'); setState(State.WAITING_FOR_USER); await setExpanded(true, { height:122 });
+  };
+  const beginThinking = async (text = 'Thinking…') => {
+    cleanAnswer(); barIdentity(text); show(ui.quickSend, false); show(ui.screenButton, false); show(ui.voiceButton, false); show(ui.plusButton, false); show(ui.closeButton, true); show(ui.moreButton, false); status('', ''); setState(State.THINKING, text); await setExpanded(false);
+  };
+  const attach = async (data) => {
+    attachment = data; ui.attachment.replaceChildren();
+    if (data?.preview) { const image = new Image(); image.src = data.preview; image.alt = data?.label || 'Attached context'; ui.attachment.append(image); }
+    const label = document.createElement('span'); label.innerHTML = `<b>${data?.label || 'Screen attached'}</b>`; ui.attachment.append(label);
+    const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '×'; remove.setAttribute('aria-label','Remove attachment'); remove.onclick = () => { attachment = null; ui.attachment.classList.remove('show'); };
+    ui.attachment.append(remove); ui.attachment.classList.add('show'); await showComposer('Ask about this screen…', true); setState(State.EXPANDED);
+  };
+  const send = async (value = ui.composer.value || ui.quickInput.value) => {
+    let text = String(value || '').trim(); if (!text) return;
+    if (isControl()) {
+      ui.composer.value = ''; ui.quickInput.value = ''; ui.controlAction.textContent = `Updating task · ${text}`; setState(State.CONTROLLING);
+      try { const result = await api?.steerDesktopControl?.(text); if (result?.ok === false) throw new Error(result.error || 'The active task could not be updated.'); }
+      catch (error) { ui.controlAction.textContent = error?.message || 'The active task could not be updated.'; setState(State.FAILED); }
+      return;
+    }
+    if (attachment?.kind === 'text' && attachment.text) text = `${text}\n\n[Attached file: ${attachment.name || 'document'}]\n${attachment.text.slice(0, 160000)}`;
+    ui.composer.value = ''; ui.quickInput.value = ''; show(ui.quickSend, false); await beginThinking(attachment ? 'Reading screen…' : 'Thinking…');
+    try { await api?.sendChatMessage?.(text); } catch (error) { await showAnswer(error?.message || 'Clyra could not send that request.', { actions: responseActions() }); setState(State.FAILED); }
+  };
+  const performContextAction = async (action) => {
+    closeMenus();
+    if (action === 'voice') return startVoice();
+    if (action === 'control') return requestControl();
+    if (action === 'attach-image') { await resize(56, 480); ui.imageInput.click(); return; }
+    if (action === 'attach-file') { await resize(56, 480); ui.fileInput.click(); return; }
+    if (action === 'search') { await showComposer('Search the web…'); ui.composer.value = '/search '; updateComposer(); return; }
+    if (action === 'create-task') { await showComposer('Describe the task…'); ui.composer.value = 'Create a task to '; updateComposer(); return; }
+    if (action === 'open-chat') { await showComposer('Ask Clyra anything…'); setState(State.EXPANDED); return; }
+    if (action === 'area') {
+      setState(State.SELECTING_REGION); await setExpanded(true, { height: 86 });
+      try { const result = await api?.beginRegionSelection?.(); if (result?.ok === false) throw new Error(result.error || 'Area selection is unavailable.'); } catch (error) { await showAnswer(error?.message || 'Clyra could not start area selection.', { actions: responseActions() }); setState(State.FAILED); }
+      return;
+    }
+    await beginThinking(action === 'window' ? 'Capturing current window…' : 'Capturing current screen…');
+    try { const result = action === 'window' ? await api?.captureCurrentWindow?.() : await api?.captureCurrentScreen?.(); if (!result?.ok) throw new Error(result?.error || 'The screen could not be captured.'); await attach(result); }
+    catch (error) { await showAnswer(error?.message || 'Screen capture failed.', { actions: responseActions() }); setState(State.FAILED); }
+  };
+  const requestControl = async () => {
+    closeMenus(); const task = String(ui.composer.value || ui.quickInput.value || '').trim();
+    if (!task) { await showComposer('Describe the task Clyra should complete…'); return; }
+    pendingControlTask = task; ui.confirmText.textContent = `Clyra will try to complete “${task.slice(0, 140)}”. You can pause or stop it immediately.`; ui.shell.dataset.expanded = 'true'; ui.confirm.classList.add('show'); setState(State.REQUESTING_CONTROL); await resize(190, 480);
+  };
+  const startControlClock = () => { controlStartedAt = Date.now(); clearInterval(controlClock); controlClock = setInterval(() => { const seconds = Math.floor((Date.now() - controlStartedAt) / 1000); ui.controlTime.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2,'0')}`; }, 1000); };
+  const controlSurface = async (expanded = false) => {
+    // The compact control bar owns the status. When opened, the same header
+    // keeps that identity while the panel adds only the observable action and
+    // steering composer — never a duplicate idle input plus a second capsule.
+    barIdentity(expanded ? (ui.controlState.textContent || 'Controlling · Working…') : ''); ui.controlCapsule.classList.add('show'); ui.quickInput.value = ''; ui.composer.placeholder = 'Tell Clyra what to do next…';
+    show(ui.screenButton, false); show(ui.voiceButton, false); show(ui.plusButton, false); show(ui.closeButton, false); show(ui.moreButton, false); show(ui.quickSend, false); show(ui.pauseControl, true); show(ui.stopControl, true);
+    ui.bar.dataset.control = ui.controlState.textContent || 'Controlling · Working…'; ui.shell.classList.toggle('compact-control', !expanded); ui.shell.dataset.expanded = String(expanded);
+    await resize(expanded ? 132 : 56, 480); if (expanded) ui.composer.focus();
+  };
+  const approveControl = async () => {
+    ui.confirm.classList.remove('show'); const task = pendingControlTask; pendingControlTask = ''; ui.composer.value = ''; ui.quickInput.value = '';
+    ui.controlState.textContent = 'Controlling · Starting…'; ui.controlAction.textContent = 'Preparing an approved session…'; setState(State.CONTROLLING); startControlClock(); await controlSurface(false);
+    try { const result = await api?.startDesktopControl?.(task); if (result?.ok === false) throw new Error(result.error || 'Computer control is unavailable.'); }
+    catch (error) { clearInterval(controlClock); await showAnswer(error?.message || 'Computer control could not start.', { actions: responseActions() }); setState(State.FAILED); }
+  };
+  const stopControl = async () => { await api?.stopDesktopControl?.(); clearInterval(controlClock); ui.controlCapsule.classList.remove('show'); await showAnswer('Control stopped.', { actions: responseActions() }); setState(State.STOPPED); };
+  const pauseControl = async () => {
+    if (state === State.PAUSED || state === State.USER_TAKEOVER) { const result = await api?.resumeDesktopControl?.(); if (!result?.ok) return; ui.controlState.textContent = 'Controlling · Continuing…'; ui.controlAction.textContent = 'Re-observing the current screen…'; ui.pauseControl.title = 'Pause'; setState(State.CONTROLLING); await controlSurface(true); return; }
+    const result = await api?.pauseDesktopControl?.(); if (result?.ok) { ui.controlState.textContent = 'Clyra paused'; ui.controlAction.textContent = 'You have control. Continue when ready.'; ui.pauseControl.title = 'Continue'; setState(State.PAUSED); await controlSurface(true); }
+  };
+  const makeBars = (host, count) => { host.replaceChildren(); for (let i = 0; i < count; i++) host.append(document.createElement('i')); };
+  const animateVoice = () => {
+    if (!analyser) return; const samples = new Uint8Array(analyser.fftSize); const bars = [...ui.wave.children], micro = [...ui.microWave.children];
+    const draw = () => { analyser.getByteTimeDomainData(samples); let sum = 0; for (const sample of samples) sum += (sample - 128) ** 2; const level = Math.min(1, Math.sqrt(sum / samples.length) / 44); setOrb(state === State.SPEAKING ? 'speaking' : 'listening', level); ui.shell.style.setProperty('--audio-level', level.toFixed(3)); [...bars, ...micro].forEach((bar, index) => { const center = (index % (bars.length || 1)) / Math.max(1, bars.length - 1); const shaped = (1 - Math.abs(center - .5) * .48) * (index % 3 ? 1 : .72); bar.style.height = `${Math.max(4, 4 + level * 29 * shaped)}px`; }); voiceFrame = requestAnimationFrame(draw); }; draw();
+  };
+  const stopVoiceVisuals = () => { cancelAnimationFrame(voiceFrame); clearInterval(voiceClock); voiceFrame = 0; analyser = null; audioContext?.close?.().catch(() => {}); audioContext = null; micStream?.getTracks().forEach((track) => track.stop()); micStream = null; ui.voiceView.classList.remove('show'); ui.shell.style.setProperty('--audio-level', '0'); };
+  const startVoice = async () => {
+    closeMenus(); cleanAnswer(); makeBars(ui.wave, 35); makeBars(ui.microWave, 15); ui.voiceState.textContent = 'Listening…'; ui.voiceView.classList.add('show'); ui.shell.dataset.expanded = 'true'; ui.controlCapsule.classList.remove('show'); show(ui.screenButton, false); show(ui.voiceButton, false); show(ui.plusButton, false); show(ui.closeButton, false); await resize(158, 400); setState(State.LISTENING); voiceStartedAt = Date.now(); clearInterval(voiceClock); voiceClock = setInterval(() => { const seconds = Math.floor((Date.now() - voiceStartedAt) / 1000); ui.voiceTime.textContent = `${String(Math.floor(seconds / 60)).padStart(2,'0')}:${String(seconds % 60).padStart(2,'0')}`; }, 1000);
+    try { const result = await api?.startOverlayVoiceCall?.(); if (result?.ok === false) throw new Error(result.error); micStream = await navigator.mediaDevices.getUserMedia({ audio:true }); audioContext = new AudioContext(); analyser = audioContext.createAnalyser(); analyser.fftSize = 128; audioContext.createMediaStreamSource(micStream).connect(analyser); animateVoice(); }
+    catch (error) { ui.voiceState.textContent = 'Microphone unavailable'; setState(State.FAILED); }
+  };
+  const endVoice = async () => { await api?.endOverlayVoiceCall?.(); await baseIdle(); };
+  const toggleMute = () => { muted = !muted; micStream?.getAudioTracks().forEach((track) => { track.enabled = !muted; }); ui.muteVoice.querySelector('span').textContent = muted ? 'Unmute' : 'Mute'; ui.voiceState.textContent = muted ? 'Microphone muted' : 'Listening…'; };
+  const updateInput = () => { const hasText = Boolean(ui.quickInput.value.trim()); show(ui.quickSend, hasText); show(ui.screenButton, !hasText); show(ui.voiceButton, !hasText); show(ui.plusButton, !hasText); show(ui.closeButton, !hasText); show(ui.moreButton, false); if (hasText && !ui.shell.dataset.expanded) ui.shell.dataset.expanded = 'false'; };
+  const updateComposer = () => { ui.composer.style.height = 'auto'; ui.composer.style.height = `${composerHeight()}px`; const value = ui.composer.value.trim(); ui.commandMenu.classList.toggle('show', value === '/' || /^\/(?:s|v|c)/i.test(value)); if (!isControl()) resize(Math.max(112, 96 + composerHeight())); };
+  const fileToBase64 = async (file) => {
+    const bytes = new Uint8Array(await file.arrayBuffer()); let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+    return btoa(binary);
+  };
+  const attachImageFile = async (file) => {
+    if (!file) return;
+    await beginThinking('Attaching image…');
+    try {
+      const result = await api?.attachLocalImage?.({ name:file.name, mimeType:file.type, base64:await fileToBase64(file) });
+      if (!result?.ok) throw new Error(result?.error || 'The image could not be attached.');
+      await attach(result);
+    } catch (error) { await showAnswer(error?.message || 'The image could not be attached.', { actions:responseActions() }); setState(State.FAILED); }
+    finally { ui.imageInput.value = ''; }
+  };
+  const attachTextFile = async (file) => {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      if (text.length > 160000) throw new Error('This file is too large. Choose a text file under 160 KB.');
+      await attach({ kind:'text', name:file.name, label:file.name, text });
+    } catch (error) { await showAnswer(error?.message || 'The file could not be attached.', { actions:responseActions() }); setState(State.FAILED); }
+    finally { ui.fileInput.value = ''; }
+  };
+  const toggleMenu = async (menu) => {
+    const willOpen = !menu.classList.contains('show'); closeMenus(); menu.classList.toggle('show', willOpen);
+    if (willOpen) await resize(menu === ui.addMenu ? 470 : menu === ui.screenMenu ? 280 : 260, 480);
+    else if (ui.shell.dataset.expanded !== 'true' && !isControl()) await resize(56, 480);
+    if (willOpen) requestAnimationFrame(() => menu.querySelector('button')?.focus({ preventScroll:true }));
+  };
+  const handleMenuKeys = (event) => {
+    const menu = event.currentTarget; const rows = [...menu.querySelectorAll('button:not([disabled])')]; const index = Math.max(0, rows.indexOf(document.activeElement));
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); rows[(index + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length]?.focus(); }
+    else if (event.key === 'Home') { event.preventDefault(); rows[0]?.focus(); }
+    else if (event.key === 'End') { event.preventDefault(); rows.at(-1)?.focus(); }
+    else if (event.key === 'Escape') { event.preventDefault(); closeMenus(); if (ui.shell.dataset.expanded !== 'true' && !isControl()) resize(56, 480); ui.quickInput.focus(); }
+  };
+
+  ui.quickInput.addEventListener('focus', () => { if (!isControl()) setState(State.EXPANDED); });
+  ui.quickInput.addEventListener('input', updateInput);
+  ui.quickInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); send(ui.quickInput.value); } if (event.key === 'Escape') baseIdle(); });
+  ui.quickSend.onclick = () => send(ui.quickInput.value); ui.sendButton.onclick = () => send();
+  ui.composer.addEventListener('input', updateComposer); ui.composer.addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send(); } if (event.key === 'Escape') closeMenus(); });
+  ui.screenButton.onclick = (event) => { event.stopPropagation(); toggleMenu(ui.screenMenu); };
+  ui.voiceButton.onclick = startVoice; ui.plusButton.onclick = (event) => { event.stopPropagation(); toggleMenu(ui.addMenu); }; ui.closeButton.onclick = () => api?.quit?.(); ui.endVoice.onclick = endVoice; ui.endVoiceFooter.onclick = endVoice; ui.muteVoice.onclick = toggleMute; ui.voiceScreen.onclick = () => performContextAction('screen');
+  ui.moreButton.onclick = (event) => { event.stopPropagation(); toggleMenu(ui.addMenu); };
+  ui.addButton.onclick = (event) => { event.stopPropagation(); toggleMenu(ui.addMenu); };
+  ui.imageInput.addEventListener('change', () => attachImageFile(ui.imageInput.files?.[0]));
+  ui.fileInput.addEventListener('change', () => attachTextFile(ui.fileInput.files?.[0]));
+  ui.pauseControl.onclick = pauseControl; ui.stopControl.onclick = stopControl; ui.controlMenuButton.onclick = () => ui.controlMenu.classList.toggle('show');
+  ui.bar.addEventListener('click', (event) => {
+    if (isControl() && !event.target.closest('button')) void controlSurface(true);
+  });
+  ui.controlPause.onclick = pauseControl; ui.controlTakeover.onclick = async () => { await pauseControl(); setState(State.USER_TAKEOVER); }; ui.controlContinue.onclick = pauseControl; ui.controlStop.onclick = stopControl;
+  ui.approveControl.onclick = approveControl; ui.cancelControl.onclick = () => { ui.confirm.classList.remove('show'); baseIdle(); };
+  document.querySelectorAll('[data-action]').forEach((button) => { button.onclick = () => performContextAction(button.dataset.action); });
+  document.querySelectorAll('[data-command]').forEach((button) => { button.onclick = () => performContextAction(button.dataset.command === 'select' ? 'area' : button.dataset.command); });
+  document.querySelectorAll('.menu').forEach((menu) => menu.addEventListener('keydown', handleMenuKeys));
+  document.addEventListener('pointerdown', (event) => { if (!event.target.closest('.menu') && !event.target.closest('#screenButton') && !event.target.closest('#plusButton') && !event.target.closest('#moreButton') && !event.target.closest('#addButton') && !event.target.closest('#controlMenuButton')) { const hadMenu = [...document.querySelectorAll('.menu')].some((menu) => menu.classList.contains('show')); closeMenus(); if (hadMenu && ui.shell.dataset.expanded !== 'true' && !isControl()) resize(56, 480); } });
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { if (ui.confirm.classList.contains('show')) ui.confirm.classList.remove('show'); else if ([...document.querySelectorAll('.menu')].some((menu) => menu.classList.contains('show'))) closeMenus(); else if (ui.shell.dataset.expanded === 'true') baseIdle(); } });
+
+  api?.onScreenContextAttached?.((_event, data) => { if (data?.preview || data?.label) attach(data); });
+  api?.onSelectedTextContext?.((_event, data = {}) => { if (data.error) { showAnswer(data.error, { actions:[{ label:'Try again', onClick:() => baseIdle() }] }); setState(State.FAILED); } else showSelectedTextActions(data.text); });
+  api?.onTranscriptionLlmResponseStart?.(() => beginThinking(attachment ? 'Reading screen…' : 'Thinking…'));
+  api?.onTranscriptionLlmResponseChunk?.((_event, data) => { streamText += data?.delta || data?.chunk || data?.text || ''; showAnswer(streamText, { streaming:true }); setState(State.THINKING); });
+  api?.onTranscriptionLlmResponse?.((_event, data) => { const text = data?.response || data?.text || streamText || ''; streamText = ''; attachment = null; ui.attachment.classList.remove('show'); showAnswer(text, { actions:responseActions() }); setState(State.EXPANDED); });
+  api?.onLlmError?.((_event, data = {}) => { const message = String(data.error || 'Clyra could not reach the AI service.'); showAnswer(message, { actions:[{ label:'Try again', onClick:() => { ui.composer.value = 'Try that request again.'; send(); } }, { label:'Settings', onClick:() => api?.showSettings?.() }] }); setState(State.FAILED); });
+  api?.onOcrError?.((_event, data) => { showAnswer(data?.error || 'Screen capture failed.', { actions:responseActions() }); setState(State.FAILED); });
+  api?.onControlStatus?.((_event, data = {}) => {
+    const message = String(data.message || 'Working…');
+    if (['running','step','action','thinking','bash','response'].includes(data.status)) { ui.controlState.textContent = `Controlling · ${message}`; ui.controlAction.textContent = message; setState(State.CONTROLLING); if (!controlClock) startControlClock(); controlSurface(ui.shell.dataset.expanded === 'true' && !ui.shell.classList.contains('compact-control')); }
+    else if (data.status === 'paused') { ui.controlState.textContent = 'Clyra paused'; ui.controlAction.textContent = message; setState(State.PAUSED); controlSurface(true); }
+    else if (['done','stopped'].includes(data.status)) { clearInterval(controlClock); ui.controlCapsule.classList.remove('show'); showAnswer(message || 'Done.', { actions:responseActions() }); setState(data.status === 'done' ? State.EXPANDED : State.STOPPED); }
+    else if (data.status === 'error') { clearInterval(controlClock); showAnswer(message || 'Computer control failed.', { actions:responseActions() }); setState(State.FAILED); }
+  });
+  api?.onVoiceCallState?.((_event, data = {}) => { if (data.state === 'thinking') { ui.voiceState.textContent = 'Thinking…'; setState(State.THINKING); } else if (data.state === 'listening') { ui.voiceState.textContent = 'Listening…'; setState(State.LISTENING); } else if (data.state === 'speaking') { ui.voiceState.textContent = 'Speaking…'; setState(State.SPEAKING); } else if (data.state === 'ended') endVoice(); });
+  api?.onToggleChatDrawer?.((_event, payload) => { if (payload?.open) showComposer('Ask a follow-up…', false); else baseIdle(); });
+
+  setOrb('idle'); baseIdle(); api?.notifyMainWindowReady?.();
+  window.barChat = { isOpen: () => ui.shell.dataset.expanded === 'true', expandToChat: () => showComposer(), collapse: baseIdle, runAutoAnswer: () => performContextAction('screen'), enterTaskPrompt: requestControl, stopControlFromBar: stopControl };
 })();

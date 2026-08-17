@@ -34,16 +34,20 @@ class WindowManager {
     // Window binding properties
     this.bindWindows = false; // Disabled on Linux-friendly Clyra bridge to avoid resize recursion
     this.chatDrawerOpen = false; // Chat expands under the centered main bar (no separate panel)
-    this.mainCollapsedMaxWidth = 560; // Stable visual width for bar and drawer.
-    // The conversation retains the compact bar's measured width.
-    this.mainExpandedWidth = 560;
+    // The overlay is one compact intelligence bar. It only grows to the
+    // answer/control surface width when real content needs it.
+    this.mainCollapsedMaxWidth = 500;
+    this.mainExpandedWidth = 480;
     this.windowGap = 10; // Small gap between windows
     this.boundWindowsPosition = { x: 0, y: 0 }; // Track position of bound windows
     this.stealthEnabled = false;
+    this.regionSelection = null;
+    this.rippleWindow = null;
+    this.pendingRippleAction = null;
     
     this.windowConfigs = {
       main: {
-        width: 560,
+        width: 480,
         height: 56,
         useContentSize: true,
         file: 'index.html',
@@ -318,7 +322,6 @@ class WindowManager {
         ...(process.platform === 'darwin' ? { level: 'floating' } : {}),
         // Additional macOS flags for better always-on-top behavior
         ...(process.platform === 'darwin' && {
-          type: 'panel',
           acceptFirstMouse: true,
           disableAutoHideCursor: true
         })
@@ -339,7 +342,6 @@ class WindowManager {
         backgroundColor: '#00000000',
         ...(process.platform === 'darwin' ? { level: 'floating' } : {}),
         ...(process.platform === 'darwin' && {
-          type: 'panel',
           acceptFirstMouse: true,
           disableAutoHideCursor: true
         })
@@ -358,7 +360,7 @@ class WindowManager {
   resizable: true,
     // Compact bar can collapse; expanded chat drawer needs room for all controls
     minWidth: 60,
-    maxWidth: Math.max(this.windowConfigs.main.width, this.mainExpandedWidth || 560, 560),
+    maxWidth: Math.max(this.windowConfigs.main.width, this.mainExpandedWidth || 480, 480),
         minimizable: false,
         maximizable: false,
         closable: false,
@@ -1082,12 +1084,75 @@ class WindowManager {
     }
 
     if (this.isVisible) {
-      this.hideAllWindows();
+      // Minimising is a real spatial transition, not an abrupt disappearance.
+      this.playScreenRipple({ direction: 'out', after: 'hide-main' });
     } else {
-      this.showAllWindows();
+      this.playScreenRipple({ direction: 'in', after: 'show-main' });
     }
     
     return this.isVisible;
+  }
+
+  async playScreenRipple({ direction = 'out', after = null, intensity = 1 } = {}) {
+    const display = this.currentDisplay || screen.getDisplayNearestPoint(screen.getCursorScreenPoint()) || screen.getPrimaryDisplay();
+    const bounds = display.workArea || display.bounds;
+    this.pendingRippleAction = after;
+    let win = this.rippleWindow;
+    if (!win || win.isDestroyed()) {
+      win = new BrowserWindow({
+        x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
+        frame: false, transparent: true, backgroundColor: '#00000000',
+        focusable: false, skipTaskbar: true, resizable: false, movable: false,
+        alwaysOnTop: true, hasShadow: false, visibleOnAllWorkspaces: true,
+        webPreferences: { ...config.get('window.webPreferences'), backgroundThrottling: false },
+      });
+      win.setIgnoreMouseEvents(true, { forward: true });
+      try { win.setAlwaysOnTop(true, process.platform === 'darwin' ? 'screen-saver' : 'floating', 1); } catch (_) { win.setAlwaysOnTop(true); }
+      try { win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (_) { /* unsupported */ }
+      win.on('closed', () => { if (this.rippleWindow === win) this.rippleWindow = null; });
+      await win.loadFile(path.join(process.cwd(), 'html', 'ripple.html'));
+      this.rippleWindow = win;
+    } else {
+      win.setBounds(bounds);
+    }
+    win.showInactive();
+    win.webContents.send('screen-ripple', { direction, intensity, originX: .5, originY: -.075 });
+    return true;
+  }
+
+  finishScreenRipple() {
+    const action = this.pendingRippleAction;
+    this.pendingRippleAction = null;
+    if (action === 'hide-main') this.hideAllWindows();
+    if (action === 'show-main') this.showAllWindows();
+    const win = this.rippleWindow;
+    if (win && !win.isDestroyed()) win.hide();
+  }
+
+  async beginRegionSelection() {
+    if (this.regionSelection && !this.regionSelection.isDestroyed()) return { ok: true, existing: true };
+    const display = this.currentDisplay || screen.getDisplayNearestPoint(screen.getCursorScreenPoint()) || screen.getPrimaryDisplay();
+    const bounds = display.bounds;
+    const win = new BrowserWindow({
+      x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
+      frame: false, transparent: true, backgroundColor: '#00000000', alwaysOnTop: true,
+      skipTaskbar: true, resizable: false, movable: false, focusable: true, hasShadow: false,
+      visibleOnAllWorkspaces: true,
+      webPreferences: { ...config.get('window.webPreferences'), backgroundThrottling: false },
+    });
+    try { win.setAlwaysOnTop(true, process.platform === 'darwin' ? 'screen-saver' : 'floating', 2); } catch (_) { win.setAlwaysOnTop(true); }
+    try { win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (_) { /* unsupported */ }
+    win.on('closed', () => { if (this.regionSelection === win) this.regionSelection = null; });
+    await win.loadFile(path.join(process.cwd(), 'html', 'region-select.html'));
+    win.show(); win.focus();
+    this.regionSelection = win;
+    return { ok: true, display: { id: display.id, bounds, scaleFactor: display.scaleFactor || 1 } };
+  }
+
+  endRegionSelection() {
+    const win = this.regionSelection;
+    this.regionSelection = null;
+    if (win && !win.isDestroyed()) win.close();
   }
 
   setInteractive(interactive) {
@@ -1744,9 +1809,9 @@ class WindowManager {
     const display = this.currentDisplay || screen.getPrimaryDisplay();
     const availableWidth = Math.max(360, Number(display?.workArea?.width || display?.bounds?.width || 720) - 24);
     if (this.chatDrawerOpen) {
-      return Math.min(availableWidth, Math.max(this.mainExpandedWidth || 560, 520));
+      return Math.min(availableWidth, Math.max(this.mainExpandedWidth || 480, 420));
     }
-    return Math.min(availableWidth, Math.max(this.mainCollapsedMaxWidth || 720, 360));
+    return Math.min(availableWidth, Math.max(this.mainCollapsedMaxWidth || 440, 360));
   }
 
   centerMainWindowAtTop() {

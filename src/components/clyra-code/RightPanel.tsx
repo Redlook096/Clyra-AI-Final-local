@@ -1031,7 +1031,7 @@ function FilesView({ projectId, diffs }: { projectId: string | null; diffs: File
     // it has language-server data. Keep one quiet, useful local completion
     // source available so the editor behaves like an IDE from the first key.
     const disposable = monaco.languages.registerCompletionItemProvider("*", {
-      triggerCharacters: [".", "<", "@", "("],
+      triggerCharacters: [".", "<", "@", "(", "[", "\"", "'"],
       provideCompletionItems: (model, position) => {
         const range = model.getWordUntilPosition(position);
         const editRange = {
@@ -1045,7 +1045,7 @@ function FilesView({ projectId, diffs }: { projectId: string | null; diffs: File
           ? ["VStack", "HStack", "ZStack", "Text", "Button", "TextField", "NavigationStack", "@State", ".padding()", ".frame(width:height:)"]
           : language === "typescript" || language === "javascript"
             ? ["const", "function", "return", "useState", "useEffect", "async", "export default"]
-            : ["class", "function", "return", "import", "const"];
+          : ["class", "function", "return", "import", "const", "let", "if", "for"];
         return { suggestions: entries.map((label) => ({
           label,
           kind: monaco.languages.CompletionItemKind.Keyword,
@@ -1059,7 +1059,11 @@ function FilesView({ projectId, diffs }: { projectId: string | null; diffs: File
     // Deliberately suggest after any source change: compact Monaco suggestions
     // make a single typed character useful without changing the editor model.
     editor.onDidChangeModelContent(() => {
-      window.setTimeout(() => editor.trigger("clyra", "editor.action.triggerSuggest", {}), 0);
+      // Trigger after every typed character. The provider above always offers
+      // context-safe basics, so users never get an empty IDE-style popup.
+      window.setTimeout(() => {
+        if (editor.hasTextFocus()) editor.trigger("clyra", "editor.action.triggerSuggest", {});
+      }, 36);
     });
     requestAnimationFrame(() => editor.trigger("clyra", "editor.action.triggerSuggest", {}));
     editor.onDidDispose(() => disposable.dispose());
@@ -1100,7 +1104,7 @@ function FilesView({ projectId, diffs }: { projectId: string | null; diffs: File
           </div>
           {selectedFile ? <><button type="button" onClick={() => void save()} disabled={saving || draft === selectedFile.content} title="Save file" className="mb-0.5 flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[7px] text-[#5F6368] transition-colors hover:bg-black/[0.045] disabled:opacity-35"><Save className="h-[13px] w-[13px]" strokeWidth={1.55} /></button><button type="button" onClick={() => void removeSelected()} title="Remove file" className="mb-0.5 flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[7px] text-[#7A5656] transition-colors hover:bg-[#C24949]/[0.08]"><Trash2 className="h-[13px] w-[13px]" strokeWidth={1.55} /></button></> : null}
         </div>
-        {selectedFile ? <div className="min-h-0 flex-1"><Editor height="100%" path={selectedFile.path} language={fileLanguage(selectedFile.path)} value={draft} onChange={(value) => setDraft(value ?? "")} onMount={handleEditorMount} theme="vs" options={{ fontSize: 12, lineHeight: 19, fontFamily: '"SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, monospace', minimap: { enabled: false }, padding: { top: 12, bottom: 12 }, scrollBeyondLastLine: false, renderLineHighlight: "gutter", suggestOnTriggerCharacters: true, quickSuggestions: { other: true, comments: true, strings: true }, tabSize: 2, automaticLayout: true, smoothScrolling: true, wordWrap: "off", overviewRulerBorder: false }} /></div> : <div className="flex h-full items-center justify-center"><p className="text-[12px] text-[#999BA0]">Select a file to edit.</p></div>}
+        {selectedFile ? <div className="cc-code-editor min-h-0 flex-1 overflow-hidden"><Editor height="100%" path={selectedFile.path} language={fileLanguage(selectedFile.path)} value={draft} onChange={(value) => setDraft(value ?? "")} onMount={handleEditorMount} theme="vs" options={{ fontSize: 12, lineHeight: 19, fontFamily: '"SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, monospace', minimap: { enabled: false }, padding: { top: 12, bottom: 12 }, scrollBeyondLastLine: false, renderLineHighlight: "gutter", suggestOnTriggerCharacters: true, quickSuggestions: { other: true, comments: true, strings: true }, suggest: { showIcons: true, showStatusBar: false, preview: false, selectionMode: "whenQuickSuggestion" }, fixedOverflowWidgets: false, tabSize: 2, automaticLayout: true, smoothScrolling: true, wordWrap: "off", overviewRulerBorder: false }} /></div> : <div className="flex h-full items-center justify-center"><p className="text-[12px] text-[#999BA0]">Select a file to edit.</p></div>}
       </div>
     </div>
   );

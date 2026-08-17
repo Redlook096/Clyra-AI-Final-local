@@ -36,6 +36,7 @@ import {
   useMemo,
   useRef,
   useState,
+  memo,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
@@ -49,6 +50,7 @@ import {
   playCreatorCue,
   playCreatorSpeech,
   playCreatorVoicePreview,
+  primeCreatorAudio,
   prefetchCreatorVoicePreviews,
   renderMessageStoryVideo,
   renderStoryVideo,
@@ -970,6 +972,25 @@ function WouldRatherPreview({
   );
 }
 
+const MessageGameplayLayer = memo(function MessageGameplayLayer({ project, isPlaying, playbackMs }: { project: FakeTextProject; isPlaying: boolean; playbackMs: number }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (isPlaying) void video.play().catch(() => undefined);
+    else video.pause();
+  }, [isPlaying, project.gameplay?.src]);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || isPlaying || !Number.isFinite(video.duration) || video.duration <= 0) return;
+    const nextTime = (playbackMs / 1_000) % video.duration;
+    if (Math.abs(video.currentTime - nextTime) > .12) video.currentTime = nextTime;
+  }, [isPlaying, playbackMs, project.gameplay?.src]);
+  if (project.gameplay) return <video ref={videoRef} data-testid="fake-text-gameplay" src={project.gameplay.src} poster={project.gameplay.poster} muted loop playsInline preload="metadata" aria-label={`${project.gameplay.category} gameplay background`} className="absolute inset-0 h-full w-full object-cover" />;
+  if (project.background) return <img src={project.background} alt="" className="absolute inset-0 h-full w-full object-cover" />;
+  return <div className="absolute inset-0 bg-[linear-gradient(155deg,#328d68,#2a7659_52%,#205844)]" />;
+}, (previous, next) => previous.project.gameplay?.src === next.project.gameplay?.src && previous.project.background === next.project.background && previous.isPlaying === next.isPlaying && (next.isPlaying || previous.playbackMs === next.playbackMs));
+
 function MessagePreview({
   project,
   isPlaying = false,
@@ -984,7 +1005,6 @@ function MessagePreview({
   visible?: number;
   windowStart?: number;
 }) {
-  const gameplayVideo = useRef<HTMLVideoElement | null>(null);
   const messageScroll = useRef<HTMLDivElement | null>(null);
   const timeline = useMemo(() => buildIMessageTimeline(project.messages, project.playbackRate), [project.messages, project.playbackRate]);
   // The active editor always supplies media time, including zero. Treat that
@@ -1022,20 +1042,6 @@ function MessagePreview({
     : { panel: "#000000", header: "#1c1c1e", incoming: "#2c2c2e", outgoing: "#0a84ff", incomingText: "#f5f5f7", contact: "#d8d8dc", accent: "#0a84ff", avatar: "#aab0bb" };
 
   useEffect(() => {
-    const video = gameplayVideo.current;
-    if (!video) return;
-    if (isPlaying) void video.play().catch(() => undefined);
-    else video.pause();
-  }, [isPlaying, project.gameplay?.src]);
-
-  useEffect(() => {
-    const video = gameplayVideo.current;
-    if (!video || isPlaying || !Number.isFinite(video.duration) || video.duration <= 0) return;
-    const nextTime = (safePlaybackMs / 1_000) % video.duration;
-    if (Math.abs(video.currentTime - nextTime) > 0.12) video.currentTime = nextTime;
-  }, [isPlaying, safePlaybackMs, project.gameplay?.src]);
-
-  useEffect(() => {
     const container = messageScroll.current;
     if (!container || !isTimelineControlled) return;
     // The header never participates in the scroll.  Resolve the destination
@@ -1047,25 +1053,7 @@ function MessagePreview({
 
   return (
     <div data-testid="fake-text-preview" className="relative h-full w-full overflow-hidden bg-[#2a7659]">
-      {project.gameplay ? (
-        <video
-          ref={gameplayVideo}
-          data-testid="fake-text-gameplay"
-          key={project.gameplay.src}
-          src={project.gameplay.src}
-          poster={project.gameplay.poster}
-          muted
-          loop
-          playsInline
-          preload="metadata"
-          aria-label={`${project.gameplay.category} gameplay background`}
-          className="absolute inset-0 h-full w-full object-cover"
-        />
-      ) : project.background ? (
-        <img src={project.background} alt="" className="absolute inset-0 h-full w-full object-cover" />
-      ) : (
-        <div className="absolute inset-0 bg-[linear-gradient(155deg,#328d68,#2a7659_52%,#205844)]" />
-      )}
+      <MessageGameplayLayer project={project} isPlaying={isPlaying} playbackMs={safePlaybackMs} />
       <div
         data-testid="imessage-conversation-canvas"
         // Height is already derived from the deterministic media timeline
@@ -1084,14 +1072,14 @@ function MessagePreview({
         }}
       >
           <div data-testid="imessage-header" className="relative shrink-0 border-b border-white/[.04]" style={{ height: panelGeometry.headerHeight, backgroundColor: palette.header }}>
-            <div className="absolute left-[3.2%] top-1/2 flex -translate-y-1/2 items-center gap-[.49cqw]" style={{ color: palette.accent }}>
-              <span className="text-[3.33cqw] font-light leading-none">‹</span><span className="grid h-[4cqw] w-[4cqw] place-items-center rounded-full bg-[#0a84ff] text-[2.1cqw] font-medium text-white">99</span>
+            <div className="absolute left-[3.05%] top-1/2 flex -translate-y-1/2 items-center gap-[.35cqw]" style={{ color: palette.accent }}>
+              <span className="text-[3.05cqw] font-light leading-none">‹</span><span className="text-[2.05cqw] font-medium leading-none">99</span>
             </div>
-            <div className="absolute left-1/2 top-[6%] flex -translate-x-1/2 flex-col items-center">
-              <span className="grid h-[5.93cqw] w-[5.93cqw] place-items-center rounded-full text-[2.6cqw] font-medium text-white" style={{ backgroundColor: palette.avatar }}>{(project.participants[0].name || "Unknown").slice(0, 1).toUpperCase()}</span>
-              <span className="mt-[.74cqw] whitespace-nowrap text-[2.4cqw] font-semibold leading-none" style={{ color: palette.contact }}>{project.participants[0].name || "Unknown"} ›</span>
+            <div className="absolute left-1/2 top-[5%] flex -translate-x-1/2 flex-col items-center">
+              <span className="grid h-[7.5cqw] w-[7.5cqw] place-items-center rounded-full text-[2.65cqw] font-normal text-white" style={{ backgroundColor: palette.avatar }}>{(project.participants[0].name || "Unknown").slice(0, 1).toUpperCase()}</span>
+              <span className="mt-[.55cqw] whitespace-nowrap text-[2.22cqw] font-semibold leading-none" style={{ color: palette.contact }}>{project.participants[0].name || "Unknown"} <span className="font-normal opacity-70">›</span></span>
             </div>
-            <Video className="absolute right-[3.5%] top-1/2 h-[2.96cqw] w-[4.44cqw] -translate-y-1/2" style={{ color: palette.accent }} strokeWidth={1.7} />
+            <Video className="absolute right-[3.25%] top-1/2 h-[3.15cqw] w-[4.15cqw] -translate-y-1/2" style={{ color: palette.accent }} strokeWidth={1.55} />
           </div>
           <div ref={messageScroll} className="flex min-h-0 flex-1 flex-col overflow-y-auto px-[2.47%] pb-[1.296cqw] pt-[1.481cqw] [scrollbar-width:none]" style={{ backgroundColor: palette.panel }}>
               {shown.map((message, localIndex) => {
@@ -1101,13 +1089,13 @@ function MessagePreview({
                   key={message.id}
                   data-testid={`imessage-bubble-${index}`}
                   className={cn(
-                    "flex min-h-[5.926cqw] w-fit max-w-[60.5%] items-center [overflow-wrap:anywhere] px-[1.481cqw] py-[.833cqw] text-[2.315cqw] font-normal leading-[1.2]",
+                    "flex min-h-[4.444cqw] w-fit max-w-[64%] items-center [overflow-wrap:anywhere] px-[1.481cqw] py-[1.019cqw] text-[2.222cqw] font-normal leading-[1.15]",
                     message.side === "right" ? "ml-auto text-white" : "",
                   )}
                   style={{
                     backgroundColor: message.side === "right" ? palette.outgoing : palette.incoming,
                     color: message.side === "right" ? "#ffffff" : palette.incomingText,
-                    borderRadius: "1.667cqw",
+                    borderRadius: "2.5cqw",
                     // Messages and the content-fit bottom edge commit at the
                     // same media timestamp. Keeping every existing row fixed
                     // avoids flicker and list movement during export/scrubs.
@@ -1413,6 +1401,7 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
   const previewFrame = useRef<number | null>(null);
   const renderTask = useRef<AbortController | null>(null);
   const importInput = useRef<HTMLInputElement | null>(null);
+  const previewStage = useRef<HTMLDivElement | null>(null);
   const duration = creatorProjectDuration(project);
   const templateSteps: TemplateStep[] = project.type === "fake_text_story"
     ? ["script", "theme", "gameplay", "audio"]
@@ -1454,6 +1443,7 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
       stopPreview();
       return;
     }
+    primeCreatorAudio();
     const controller = new AbortController();
     playback.current = controller;
     setCurrentTime(0);
@@ -1859,14 +1849,14 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
           <aside className="rounded-[22px] border border-[#e2e5ea] bg-white px-6 py-7 shadow-[0_12px_38px_rgba(15,23,42,.045)] sm:px-8 xl:h-[640px]">
             <div className="min-h-[66px] border-b border-[#e2e5ea]"><h2 className="text-[clamp(22px,2vw,28px)] font-semibold tracking-0">Video Preview</h2></div>
             <div className="mt-6 grid place-items-center">
-              <div className="creator-preview-stage relative aspect-[9/16] w-[min(100%,264px)] overflow-hidden rounded-[15px] bg-[#2a7659] shadow-[0_18px_44px_rgba(15,23,42,.18)]">
+              <div ref={previewStage} className="creator-preview-stage relative aspect-[9/16] w-[min(100%,264px)] overflow-hidden rounded-[15px] bg-[#2a7659] shadow-[0_18px_44px_rgba(15,23,42,.18)]">
                 {preview}
                 <div className="absolute inset-x-0 bottom-0 z-40 bg-gradient-to-t from-black/70 via-black/20 to-transparent px-3 pb-3 pt-12 text-white">
                   <div className="flex items-center gap-2.5">
                     <button type="button" onClick={() => void playPreview()} aria-label={playing ? "Pause preview" : "Play preview"} className="grid h-7 w-7 shrink-0 place-items-center rounded-full transition-colors hover:bg-white/15">{playing ? <Pause className="h-4 w-4 fill-current" /> : <Play className="h-4 w-4 fill-current" />}</button>
                     <Volume2 className="h-4 w-4 shrink-0" />
                     <span className="text-[11px] font-medium tabular-nums">{formatTime(currentTime)} / {formatTime(duration)}</span>
-                    <button type="button" aria-label="Full screen preview" onClick={() => document.documentElement.requestFullscreen?.()} className="ml-auto grid h-7 w-7 place-items-center rounded-full transition-colors hover:bg-white/15"><Maximize2 className="h-4 w-4" /></button>
+                    <button type="button" aria-label="Full screen preview" onClick={() => { const stage = previewStage.current; if (!stage) return; if (document.fullscreenElement === stage) void document.exitFullscreen(); else void stage.requestFullscreen?.(); }} className="ml-auto grid h-7 w-7 place-items-center rounded-full transition-colors hover:bg-white/15"><Maximize2 className="h-4 w-4" /></button>
                   </div>
                   <input aria-label="Video time scrubber" type="range" min="0" max={Math.max(1, duration)} value={Math.min(currentTime, duration)} onChange={(event) => seekPreview(Number(event.target.value))} className="mt-2 h-1 w-full cursor-pointer accent-white" />
                 </div>
@@ -1979,6 +1969,7 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
       stopPreview();
       return;
     }
+    primeCreatorAudio();
     const controller = new AbortController();
     playback.current = controller;
     setPlaying(true);

@@ -678,7 +678,13 @@ export function VoiceCallOverlay({
               transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1], delay: 0.04 }}
               className="clyra-voice-orb-stage"
             >
-              <AiOrb colorTheme={orbColorTheme} introActive={false} />
+              <AiOrb
+                colorTheme={orbColorTheme}
+                introActive={false}
+                state={error ? "error" : status === "connecting" ? "connecting" : status === "listening" ? "listening" : status === "thinking" ? "thinking" : status === "speaking" ? "speaking" : "idle"}
+                level={muted ? 0 : micLevel}
+                signalRef={waveformSignalRef}
+              />
             </motion.div>
 
             <motion.div

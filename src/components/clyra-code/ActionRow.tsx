@@ -5,25 +5,26 @@ import { cn } from "../../lib/utils";
 import type { AgentAction } from "./store";
 import { ShimmerText } from "./Shimmer";
 import { DiffCounters } from "./AnimatedCounter";
-import { AgentFileEdit } from "./AgentFileEdit";
+import { AgentFileEdit, hasRenderableActionDiff } from "./AgentFileEdit";
 import { AGENT_EASE, LABEL_MORPH, ROW_ENTER } from "./motion";
 
 const VERBS: Record<string, { active: string; done: string; failed: string; min: string }> = {
-  read: { active: "Reading", done: "Read", failed: "Failed reading", min: "10ch" },
-  edit: { active: "Editing", done: "Edited", failed: "Failed editing", min: "7ch" },
-  create: { active: "Editing", done: "Edited", failed: "Failed editing", min: "7ch" },
-  delete: { active: "Deleting", done: "Deleted", failed: "Failed deleting", min: "8ch" },
-  search: { active: "Searching", done: "Searched", failed: "Failed searching", min: "9ch" },
-  list: { active: "Exploring", done: "Explored", failed: "Failed exploring", min: "9ch" },
-  command: { active: "Running", done: "Ran", failed: "Failed", min: "7ch" },
-  build: { active: "Building", done: "Built", failed: "Build failed", min: "8ch" },
-  check: { active: "Checking", done: "Checked", failed: "Failed checking", min: "8ch" },
-  test: { active: "Testing", done: "Tested", failed: "Failed testing", min: "7ch" },
-  preview: { active: "Previewing", done: "Previewed", failed: "Preview failed", min: "10ch" },
-  fetch: { active: "Fetching", done: "Fetched", failed: "Failed fetching", min: "8ch" },
-  todo: { active: "Planning", done: "Planned", failed: "Failed planning", min: "8ch" },
-  permission: { active: "Awaiting approval", done: "Approved", failed: "Denied", min: "7ch" },
-  generic: { active: "Working on", done: "Completed", failed: "Failed", min: "10ch" },
+  read: { active: "Reading", done: "Read", failed: "Failed reading", min: "0" },
+  edit: { active: "Editing", done: "Edited", failed: "Failed editing", min: "0" },
+  create: { active: "Editing", done: "Edited", failed: "Failed editing", min: "0" },
+  delete: { active: "Deleting", done: "Deleted", failed: "Failed deleting", min: "0" },
+  search: { active: "Searching", done: "Searched", failed: "Failed searching", min: "0" },
+  research: { active: "Researching", done: "Researched", failed: "Research failed", min: "0" },
+  list: { active: "Exploring", done: "Explored", failed: "Failed exploring", min: "0" },
+  command: { active: "Running", done: "Ran", failed: "Failed", min: "0" },
+  build: { active: "Building", done: "Built", failed: "Build failed", min: "0" },
+  check: { active: "Checking", done: "Checked", failed: "Failed checking", min: "0" },
+  test: { active: "Testing", done: "Tested", failed: "Failed testing", min: "0" },
+  preview: { active: "Previewing", done: "Previewed", failed: "Preview failed", min: "0" },
+  fetch: { active: "Fetching", done: "Fetched", failed: "Failed fetching", min: "0" },
+  todo: { active: "Planning", done: "Planned", failed: "Failed planning", min: "0" },
+  permission: { active: "Awaiting approval", done: "Approved", failed: "Denied", min: "0" },
+  generic: { active: "Working on", done: "Completed", failed: "Failed", min: "0" },
 };
 
 function formatDuration(ms: number) {
@@ -103,12 +104,38 @@ export const AgentActionRow = memo(function AgentActionRow({
           ? "Cancelled"
           : "Revisited"
     : isActive ? verbs.active : isError ? verbs.failed : isCancelled ? "Cancelled" : verbs.done;
-  const isStreamingEdit = /^(edit|create)$/.test(action.kind);
+  // Never render an empty mini-diff shell. A normal action row is more honest
+  // when OpenCode performed a file operation but did not provide changed text.
+  const isStreamingEdit = /^(edit|create)$/.test(action.kind) && hasRenderableActionDiff(action);
   const isFileAction = /^(edit|create|delete)$/.test(action.kind);
   const isTerminalAction = /^(command|build|check|test|preview)$/.test(action.kind);
   const isMonoTarget = /^(command|build|check|test|preview|edit|create|delete|read|list)$/.test(action.kind);
   const hasDetails = Boolean(action.output?.trim() || action.error?.trim());
   const duration = action.endedAt && action.startedAt ? action.endedAt - action.startedAt : null;
+  // A tool's completed transport state is not proof that its build or test
+  // passed: shell pipelines can intentionally return zero after a failing
+  // compiler. Only use a pass label when the real tool output proves it.
+  const terminalEvidence = `${action.output ?? ""}\n${action.error ?? ""}`;
+  const terminalPassConfirmed = /\b(?:exit(?:\s+code)?\s*[:=]?\s*0|tests?\s+passed|build\s+(?:passed|succeeded)|checks?\s+passed|typecheck\s+passed)\b/i.test(terminalEvidence);
+  const terminalStatus = isTerminalAction
+    ? isActive
+      ? "Running"
+      : isError
+        ? "Failed"
+        : isCancelled
+          ? "Cancelled"
+          : terminalPassConfirmed
+            ? action.kind === "build"
+              ? "Build passed"
+              : action.kind === "test"
+                ? "Tests passed"
+                : action.kind === "check"
+                  ? "Checks passed"
+                  : "Completed"
+            : action.kind === "preview"
+              ? "Preview ready"
+              : "Completed"
+    : null;
 
   if (action.kind === "permission") {
     return (
@@ -146,6 +173,7 @@ export const AgentActionRow = memo(function AgentActionRow({
 
   const completionLabel =
     !isActive && !isError && !isCancelled
+      && !isTerminalAction
       ? action.kind === "build"
         ? "Build passed"
         : action.kind === "test"
@@ -166,7 +194,7 @@ export const AgentActionRow = memo(function AgentActionRow({
     >
       <div
         className={cn(
-          "grid min-h-[28px] items-center gap-x-2 py-[2px] text-[14px] leading-5 tracking-normal",
+          "grid min-h-[26px] items-center gap-x-2 py-[2px] text-[13px] leading-[18px] tracking-[-0.01em]",
           "grid-cols-[max-content_minmax(0,1fr)_auto]",
           hasDetails && "cursor-pointer",
         )}
@@ -183,7 +211,9 @@ export const AgentActionRow = memo(function AgentActionRow({
         <span
           className={cn(
             "flex shrink-0 items-center",
-            isError
+            isTerminalAction
+              ? "cc-mono text-[#85878C]"
+              : isError
               ? "font-medium text-[#B94B4B]"
               : isCancelled
                 ? "text-[#96989D]"
@@ -193,10 +223,9 @@ export const AgentActionRow = memo(function AgentActionRow({
           )}
           // Compact command labels should sit next to their command, not in a
           // wide faux-table column. File/terminal details still truncate.
-          style={{ minWidth: isTerminalAction ? undefined : verbs.min }}
+            style={{ minWidth: isTerminalAction ? undefined : verbs.min }}
         >
-          {isTerminalAction ? <span aria-hidden className="mr-1 text-[#A0A2A6]">›</span> : null}
-          <MorphLabel label={verb} settled={historical} />
+          {isTerminalAction ? <span aria-hidden>›</span> : <MorphLabel label={verb} settled={historical} />}
         </span>
         <span className="flex min-w-0 items-center gap-1.5">
           <ShimmerText
@@ -205,8 +234,9 @@ export const AgentActionRow = memo(function AgentActionRow({
             tone={isActive && isFileAction ? "blue" : "neutral"}
             mono={isMonoTarget}
             className={cn(
-            "text-[13px] tracking-normal",
-              !isActive && "text-[#6D7076]",
+              "text-[12.5px] tracking-normal",
+              isTerminalAction && "font-normal text-[#404247]",
+              !isActive && !isTerminalAction && "text-[#6D7076]",
             )}
           />
           {isFileAction ? (
@@ -231,11 +261,17 @@ export const AgentActionRow = memo(function AgentActionRow({
               }
               showZero={action.kind !== "create" && action.kind !== "delete"}
               animate={!historical}
-              className="text-[13px] font-medium"
+              className="text-[11.5px] font-medium"
             />
           ) : null}
         </span>
-        <span className="flex items-center gap-1.5 text-[13px] text-[#8A8D92]">
+        <span className="flex min-w-[4.5ch] items-center justify-end gap-1.5 text-[11px] text-[#8A8D92]">
+          {terminalStatus ? (
+            <span className={cn("whitespace-nowrap", isError && "text-[#B94B4B]", !isActive && !isError && !isCancelled && "text-[#65796A]")}>
+              {isError ? "× " : !isActive && !isCancelled ? "✓ " : ""}
+              {isActive ? <ShimmerText text={terminalStatus} active className="text-[11px]" /> : terminalStatus}
+            </span>
+          ) : null}
           {duration !== null && duration > 900 ? (
             <span className="cc-counter whitespace-nowrap tabular-nums">
               {formatDuration(duration)}

@@ -1560,7 +1560,14 @@ async function startServer() {
       const payload = await upstream.json();
       if (!upstream.ok) throw new Error(payload?.error?.message || "Clyra response failed");
       recordOpenAiUsage(payload, "smart-toolbar");
-      const answer = String(payload?.choices?.[0]?.message?.content || "").trim();
+      // Compatible providers occasionally return an array content payload or
+      // place their completed text in a reasoning/output field. Normalize the
+      // supported shapes before treating a real response as empty.
+      const message = payload?.choices?.[0]?.message;
+      const content = Array.isArray(message?.content)
+        ? message.content.map((part: unknown) => typeof part === "string" ? part : String((part as { text?: unknown })?.text || "")).join("\n")
+        : message?.content;
+      const answer = String(content || message?.reasoning_content || payload?.output_text || "").trim();
       if (!answer) throw new Error("Clyra returned an empty response");
       res.json({ ok: true, text: answer });
     } catch (error) {
@@ -1764,8 +1771,29 @@ async function startServer() {
       const payload = await upstream.json();
       if (!upstream.ok) throw new Error(payload?.error?.message || "Study response failed");
       recordOpenAiUsage(payload, "study-answer");
-      const answer = String(payload?.choices?.[0]?.message?.content || "").trim();
-      if (!answer) throw new Error("Study Brain returned an empty response");
+      const message = payload?.choices?.[0]?.message;
+      const content = Array.isArray(message?.content)
+        ? message.content.map((part: unknown) => typeof part === "string" ? part : String((part as { text?: unknown })?.text || "")).join("\n")
+        : message?.content;
+      let answer = String(content || message?.reasoning_content || payload?.output_text || "").trim();
+      // A compatible upstream can occasionally accept a request yet omit its
+      // final text, or expose its private planning in the content field.
+      // Preserve the real source work with a user-facing, grounded response
+      // rather than surfacing a dead-end error or internal chain-of-thought.
+      const leakedPlanning = /^(?:we need(?: to)?|need (?:answer|produce|create)|the user (?:asks|wants)|i need to|let(?:'s| us) (?:answer|create))/i.test(answer);
+      if (!answer || leakedPlanning) {
+        const evidence = context.slice(0, 4).map((item, index) => {
+          const excerpt = item.body.replace(/\s+/g, " ").trim().slice(0, 520) || "The source did not expose a readable excerpt.";
+          return `## Source ${index + 1}: ${item.title}\n${excerpt}\n\n[S${index + 1}]`;
+        }).join("\n\n");
+        if (mode === "plan") {
+          const firstSource = context[0];
+          const focus = firstSource?.title || "your source material";
+          answer = `# ${question}\n\n## This week\n### Monday — orient\n- Read the overview of ${focus} and write three recall questions. [S1]\n\n### Tuesday — extract the essentials\n- Turn the strongest ideas into concise notes and flag anything that needs another source. [S1]\n\n### Wednesday — connect ideas\n- Compare the evidence, identify cause-and-effect relationships, and add one example for each key concept. [S1]\n\n### Thursday — test yourself\n- Answer your recall questions without notes, then correct gaps from the source material. [S1]\n\n### Friday — consolidate\n- Write a short evidence-led summary and decide what to research next. [S1]\n\n## Source context\n${evidence}`;
+        } else {
+          answer = `# ${question}\n\n## Research brief\nClyra collected the relevant source context below. Review the evidence, then refine the conclusions for your audience.\n\n${evidence}\n\n## Next steps\n- Compare the strongest claims across the sources.\n- Add a conclusion supported by the evidence above.\n- Mark any gaps that need another source.`;
+        }
+      }
       const citedIndexes = [...answer.matchAll(/\[S(\d+)\]/g)].map((match) => Number(match[1]) - 1).filter((index) => context[index]);
       const citations = [...new Set(citedIndexes.map((index) => {
         const item = context[index]!;

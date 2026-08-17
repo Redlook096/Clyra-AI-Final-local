@@ -64,6 +64,22 @@ export function resolveCreatorVoice(value: unknown, fallback: CreatorVoice = "Ma
 }
 
 const voicePreviewUrlCache = new Map<CreatorVoice, string>();
+let creatorPlaybackContext: AudioContext | null = null;
+
+/**
+ * Reserve a real audio context while the user is still inside a click/keypress.
+ * Choice previews deliberately have a short visual lead-in, so waiting until the
+ * first spoken option can otherwise lose browser user-activation and make an
+ * otherwise valid narration silently fail.
+ */
+export function primeCreatorAudio() {
+  try {
+    creatorPlaybackContext ||= new AudioContext();
+    if (creatorPlaybackContext.state !== "running") void creatorPlaybackContext.resume();
+  } catch {
+    // `playBlobUrl` retains the HTMLAudio fallback for constrained runtimes.
+  }
+}
 
 export async function synthesizeCreatorSpeech(text: string, voice: CreatorVoice, signal?: AbortSignal): Promise<CreatorSpeech> {
   const response = await fetch("/api/creator/tts", {
@@ -91,6 +107,44 @@ async function playBlobUrl(
   signal?: AbortSignal,
   onPlaybackProgress?: (progress: number) => void,
 ) {
+  const context = creatorPlaybackContext;
+  if (context?.state === "running") {
+    try {
+      const encoded = await fetch(url, { signal }).then(async (response) => {
+        if (!response.ok) throw new Error("The narration audio could not be loaded");
+        return response.arrayBuffer();
+      });
+      const decoded = await context.decodeAudioData(encoded.slice(0));
+      await new Promise<void>((resolve, reject) => {
+        const source = context.createBufferSource();
+        source.buffer = decoded;
+        source.connect(context.destination);
+        let frame = 0;
+        const startedAt = context.currentTime;
+        const stop = () => { window.cancelAnimationFrame(frame); try { source.stop(); } catch { /* already stopped */ } };
+        const abort = () => { stop(); reject(new DOMException("Cancelled", "AbortError")); };
+        const report = () => {
+          const duration = decoded.duration || durationMs / 1000;
+          if (duration > 0) onPlaybackProgress?.(Math.max(0, Math.min(1, (context.currentTime - startedAt) / duration)));
+          frame = window.requestAnimationFrame(report);
+        };
+        signal?.addEventListener("abort", abort, { once: true });
+        source.addEventListener("ended", () => {
+          window.cancelAnimationFrame(frame);
+          signal?.removeEventListener("abort", abort);
+          onPlaybackProgress?.(1);
+          resolve();
+        }, { once: true });
+        source.start();
+        onPlaybackProgress?.(0);
+        frame = window.requestAnimationFrame(report);
+      });
+      return;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      // Decode support varies with installed codecs; retain the existing path.
+    }
+  }
   const audio = new Audio(url);
   let progressFrame = 0;
   const reportProgress = () => {
@@ -580,7 +634,7 @@ function drawMessageVideo(
   context.fillRect(x, y, width, height);
   context.fillStyle = colors.header;
   context.fillRect(x, y, width, headerHeight);
-  context.fillStyle = theme === "ios_dark" ? "#111111" : "rgba(15,23,42,.08)";
+  context.fillStyle = theme === "ios_dark" ? "rgba(255,255,255,.06)" : "rgba(15,23,42,.08)";
   context.fillRect(x, y + headerHeight - 1, width, 1);
 
   const blue = colors.accent;
@@ -590,18 +644,13 @@ function drawMessageVideo(
   context.lineWidth = 3;
   const headerMid = y + headerHeight / 2;
   const headerSide = imessageRenderToken(IMESSAGE_TOKENS.headerSideInset);
-  const avatarRadius = imessageRenderToken(31);
-  const badgeRadius = imessageRenderToken(20);
+  const avatarRadius = imessageRenderToken(40);
   context.beginPath();
   context.moveTo(x + headerSide + imessageRenderToken(8), headerMid - imessageRenderToken(17));
   context.lineTo(x + headerSide - imessageRenderToken(3), headerMid);
   context.lineTo(x + headerSide + imessageRenderToken(8), headerMid + imessageRenderToken(17));
   context.stroke();
-  context.beginPath();
-  context.arc(x + headerSide + imessageRenderToken(38), headerMid, badgeRadius, 0, Math.PI * 2);
   context.fillStyle = blue;
-  context.fill();
-  context.fillStyle = "#ffffff";
   context.font = `500 ${imessageRenderToken(20)}px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif`;
   context.textAlign = "center";
   context.fillText("99", x + headerSide + imessageRenderToken(38), headerMid + imessageRenderToken(7));

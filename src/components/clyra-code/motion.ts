@@ -13,13 +13,13 @@ export const LAYOUT_TRANSITION = {
   layout: { duration: 0.28, ease: AGENT_EASE },
 } as const;
 
-/** Every agent action gently slots into the transcript from the left. */
+/** Every agent action settles into the transcript with almost no travel. */
 export const ROW_ENTER = {
-  initial: { opacity: 0, x: -5 },
-  animate: { opacity: 1, x: 0 },
+  initial: { opacity: 0, y: 2 },
+  animate: { opacity: 1, y: 0 },
   transition: {
     opacity: { duration: 0.16, ease: AGENT_EASE },
-    x: { duration: 0.2, ease: AGENT_EASE },
+    y: { duration: 0.15, ease: AGENT_EASE },
   },
 } as const;
 

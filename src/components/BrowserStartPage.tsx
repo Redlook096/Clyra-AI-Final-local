@@ -1,6 +1,7 @@
-import { Search } from "lucide-react";
+import { ArrowUp, Mic, Search } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { cn } from "../lib/utils";
+import { AiOrb } from "./AiOrb";
 
 export type BrowserStartHistoryEntry = {
   id: string;
@@ -35,14 +36,60 @@ function hostnameOf(url: string) {
 function faviconFor(url: string) {
   const host = hostnameOf(url);
   if (!host) return "";
-  return `https://www.google.com/s2/favicons?domain=${encodeURIDomain(host)}&sz=64`;
+  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`;
 }
 
-function encodeURIDomain(host: string) {
-  return encodeURIComponent(host);
+function siteLabel(url: string) {
+  const host = hostnameOf(url);
+  const known: Record<string, string> = {
+    "google.com": "Google",
+    "youtube.com": "YouTube",
+    "apple.com": "Apple",
+    "github.com": "GitHub",
+    "mail.google.com": "Gmail",
+    "drive.google.com": "Drive",
+    "bing.com": "Bing",
+    "bestbuy.com": "Best Buy",
+    "ebay.com": "eBay",
+    "duckduckgo.com": "DuckDuckGo",
+  };
+  return known[host] || host.split(".")[0]?.replace(/^./, (value) => value.toUpperCase()) || "Site";
 }
 
-/** True when the tab should show the Atlas start page instead of a live site. */
+function entryTitle(entry: BrowserStartHistoryEntry) {
+  const raw = entry.title.trim();
+  try {
+    const parsed = new URL(entry.url);
+    if (hostnameOf(entry.url) === "google.com" && parsed.pathname === "/search") {
+      const query = (parsed.searchParams.get("q") || "").trim();
+      return query && !/^[:\d./]+$/.test(query) ? query : "Google search";
+    }
+  } catch {
+    // Keep the provider label below when malformed history is encountered.
+  }
+  if (!raw || /^https?:\/\//i.test(raw)) return siteLabel(entry.url);
+  return raw;
+}
+
+function relativeVisit(value: string) {
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return "Recent";
+  const elapsed = Math.max(0, Date.now() - time);
+  const minutes = Math.round(elapsed / 60_000);
+  if (minutes < 2) return "Now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? "Yesterday" : `${days}d`;
+}
+
+function shouldAskClyra(value: string) {
+  if (/^https?:\/\//i.test(value) || /^[\w-]+\.[a-z]{2,}(\/.*)?$/i.test(value)) return false;
+  return /\b(compare|summari[sz]e|research|organise|organize|my open tabs|this page|find (?:the|my)|fill (?:this|the)|take control|do it for me)\b/i.test(value);
+}
+
+/** True when the tab should show the Clyra start page instead of a live site. */
 export function isBrowserStartPageUrl(url?: string | null) {
   const value = String(url || "").trim();
   if (!value || value === "about:blank") return true;
@@ -62,29 +109,28 @@ export function isBrowserStartPageUrl(url?: string | null) {
 }
 
 const DEFAULT_SHORTCUTS = [
-  { id: "gmail", label: "Gmail", url: "https://mail.google.com/" },
+  { id: "google", label: "Google", url: "https://www.google.com/" },
   { id: "youtube", label: "YouTube", url: "https://www.youtube.com/" },
-  { id: "drive", label: "Drive", url: "https://drive.google.com/" },
+  { id: "apple", label: "Apple", url: "https://www.apple.com/" },
   { id: "github", label: "GitHub", url: "https://github.com/" },
-  { id: "reddit", label: "Reddit", url: "https://www.reddit.com/" },
-  { id: "calendar", label: "Calendar", url: "https://calendar.google.com/" },
+  { id: "gmail", label: "Gmail", url: "https://mail.google.com/" },
 ] as const;
 
 export function BrowserStartPage({
   history = [],
   bookmarks = [],
   onNavigate,
-  onAskAgent: _onAskAgent,
-  onOpenSettings: _onOpenSettings,
+  onAskAgent,
   className,
 }: BrowserStartPageProps) {
   const [query, setQuery] = useState("");
+  const [focused, setFocused] = useState(false);
 
   const shortcuts = useMemo(() => {
     if (bookmarks.length) {
       return bookmarks.slice(0, 6).map((bookmark) => ({
         id: bookmark.id,
-        label: bookmark.title || hostnameOf(bookmark.url) || "Bookmark",
+        label: bookmark.title || siteLabel(bookmark.url),
         url: bookmark.url,
       }));
     }
@@ -99,115 +145,113 @@ export function BrowserStartPage({
     const fromHistory = [...hosts.entries()]
       .sort((a, b) => b[1].count - a[1].count)
       .slice(0, 6)
-      .map(([host, item]) => ({
-        id: host,
-        label: item.title.length > 22 ? host : item.title,
-        url: item.url,
-      }));
+      .map(([host, item]) => ({ id: host, label: siteLabel(item.url), url: item.url }));
     return fromHistory.length >= 4 ? fromHistory : [...DEFAULT_SHORTCUTS];
   }, [bookmarks, history]);
 
   const recent = useMemo(() => {
     const seen = new Set<string>();
-    return history
-      .filter((entry) => {
-        const host = hostnameOf(entry.url);
-        if (!host || isBrowserStartPageUrl(entry.url)) return false;
-        const key = entry.url.split("#")[0] || entry.url;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
-      .slice(0, 5);
+    return history.filter((entry) => {
+      const host = hostnameOf(entry.url);
+      if (!host || isBrowserStartPageUrl(entry.url)) return false;
+      const key = entry.url.split("#")[0] || entry.url;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 4);
   }, [history]);
 
-  const submitSearch = (event?: FormEvent) => {
+  const submit = (event?: FormEvent) => {
     event?.preventDefault();
     const next = query.trim();
     if (!next) return;
-    onNavigate(next);
+    if (shouldAskClyra(next)) onAskAgent(next);
+    else onNavigate(next);
     setQuery("");
   };
 
+  const suggestions = useMemo(() => {
+    const first = recent[0];
+    return [
+      first ? `Continue exploring ${hostnameOf(first.url)}` : "Research something for me",
+      "Summarise my open tabs",
+    ];
+  }, [recent]);
+
   return (
-    <div
-      className={cn(
-        "clyra-browser-start absolute inset-0 z-[15] flex flex-col overflow-auto bg-[color:var(--clyra-canvas)] text-[color:var(--clyra-text)]",
-        className,
-      )}
-    >
-      <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
-        <div className="absolute left-1/2 top-[18%] h-[420px] w-[520px] -translate-x-1/2 rounded-full bg-[color:var(--clyra-accent)]/[0.045] blur-3xl" />
-      </div>
-
-      <div className="relative mx-auto flex w-full max-w-[560px] flex-1 flex-col items-center justify-center px-6 pb-16 pt-10">
-        <h1 className="text-[28px] font-medium tracking-[-0.04em] text-[color:var(--clyra-text)] sm:text-[32px]">
-          Clyra
+    <div className={cn("clyra-browser-start absolute inset-0 z-[15] overflow-auto bg-[#fafafa] text-[color:var(--clyra-text)]", className)}>
+      <div className="clyra-browser-start__light" aria-hidden />
+      <main className="relative mx-auto flex min-h-full w-full max-w-[760px] flex-col items-center justify-center px-7 py-16">
+        <AiOrb className="h-8 w-8" state={focused ? "thinking" : "idle"} />
+        <h1 className="mt-5 text-center text-[clamp(34px,4vw,42px)] font-semibold tracking-[-0.045em] text-[#202124]">
+          Where do you want to go?
         </h1>
-        <p className="mt-2 text-[13.5px] text-[color:var(--clyra-text-secondary)]">
-          Search the web or ask anything
-        </p>
+        <p className="mt-2 text-center text-[15px] text-[#74777d]">Search, browse, or ask Clyra.</p>
 
-        <form
-          onSubmit={submitSearch}
-          className="mt-8 flex h-11 w-full items-center gap-2.5 rounded-[10px] border border-[color:var(--clyra-border)] bg-white px-3.5 transition-[border-color,box-shadow] duration-150 focus-within:border-[color:var(--clyra-accent)]/35 focus-within:shadow-[0_0_0_3px_rgba(0,82,251,0.08)]"
-        >
-          <Search className="h-4 w-4 shrink-0 text-[color:var(--clyra-text-tertiary)]" strokeWidth={1.75} />
+        <form onSubmit={submit} className={cn("clyra-browser-start__composer mt-8 flex h-[56px] w-full items-center gap-3 px-4", focused && "is-focused")}>
+          <AiOrb className="h-[22px] w-[22px] shrink-0" state={focused ? "thinking" : "idle"} />
+          <Search className="h-4 w-4 shrink-0 text-[#9a9ca2]" strokeWidth={1.65} />
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search or enter address…"
-            className="min-w-0 flex-1 bg-transparent text-[14px] text-[color:var(--clyra-text)] outline-none placeholder:text-[color:var(--clyra-text-tertiary)]"
-            aria-label="Search or enter address"
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            placeholder="Search the web or ask Clyra…"
+            className="min-w-0 flex-1 bg-transparent text-[14px] text-[#24262a] outline-none placeholder:text-[#999ca2]"
+            aria-label="Search the web or ask Clyra"
             autoFocus
           />
+          {query.trim() ? (
+            <button type="submit" className="grid h-7 w-7 place-items-center rounded-full bg-[#1f2022] text-white transition-transform duration-100 active:scale-[0.94]" aria-label="Go">
+              <ArrowUp className="h-3.5 w-3.5" strokeWidth={1.8} />
+            </button>
+          ) : (
+            <button type="button" className="grid h-7 w-7 place-items-center rounded-[9px] text-[#8b8e94] transition-colors duration-150 hover:bg-black/[0.04] hover:text-[#33363a]" aria-label="Voice search">
+              <Mic className="h-4 w-4" strokeWidth={1.65} />
+            </button>
+          )}
         </form>
 
-        <div className="mt-8 grid w-full grid-cols-3 gap-x-4 gap-y-4 sm:grid-cols-6">
+        <div className="mt-7 flex flex-wrap justify-center gap-3">
           {shortcuts.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onNavigate(item.url)}
-              className="group flex flex-col items-center gap-2 rounded-[8px] px-1 py-2 transition-colors hover:bg-[color:var(--clyra-hover)]"
-            >
-              <span className="grid h-9 w-9 place-items-center overflow-hidden rounded-[8px] border border-[color:var(--clyra-border)] bg-white">
-                <img src={faviconFor(item.url)} alt="" className="h-4 w-4" />
+            <button key={item.id} type="button" onClick={() => onNavigate(item.url)} className="group flex w-[64px] flex-col items-center gap-2 text-center">
+              <span className="grid h-[52px] w-[52px] place-items-center overflow-hidden rounded-[15px] border border-black/[0.055] bg-white shadow-[0_1px_2px_rgba(0,0,0,.035)] transition-[transform,box-shadow,background-color] duration-150 ease-[cubic-bezier(.22,1,.36,1)] group-hover:-translate-y-px group-hover:bg-[#fefefe] group-hover:shadow-[0_5px_16px_rgba(0,0,0,.07)] group-active:translate-y-0">
+                <img src={faviconFor(item.url)} alt="" className="h-5 w-5" />
               </span>
-              <span className="max-w-full truncate text-[11.5px] text-[color:var(--clyra-text-secondary)] group-hover:text-[color:var(--clyra-text)]">
-                {item.label}
-              </span>
+              <span className="max-w-full truncate text-[11.5px] text-[#686b70] group-hover:text-[#27292d]">{item.label}</span>
             </button>
           ))}
         </div>
 
+        <section className="mt-11 w-full max-w-[640px]">
+          <p className="mb-2.5 text-[11px] font-medium text-[#8c8f95]">For you</p>
+          <div className="grid gap-1 sm:grid-cols-2">
+            {suggestions.map((suggestion) => (
+              <button key={suggestion} type="button" onClick={() => onAskAgent(suggestion)} className="flex h-10 items-center gap-2 rounded-[11px] px-2.5 text-left text-[12.5px] text-[#56595f] transition-colors duration-150 hover:bg-black/[0.032] hover:text-[#222428]">
+                <AiOrb className="h-[18px] w-[18px] shrink-0" />
+                <span className="truncate">{suggestion}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
         {recent.length ? (
-          <div className="mt-10 w-full">
-            <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.08em] text-[color:var(--clyra-text-tertiary)]">
-              Recent
-            </p>
-            <ul className="space-y-0.5">
+          <section className="mt-7 w-full max-w-[640px]">
+            <p className="mb-1.5 text-[11px] font-medium text-[#8c8f95]">Recent</p>
+            <ul>
               {recent.map((entry) => (
                 <li key={entry.id}>
-                  <button
-                    type="button"
-                    onClick={() => onNavigate(entry.url)}
-                    className="flex w-full items-center gap-2.5 rounded-[8px] px-2 py-2 text-left transition-colors hover:bg-[color:var(--clyra-hover)]"
-                  >
-                    <img src={faviconFor(entry.url)} alt="" className="h-3.5 w-3.5 shrink-0" />
-                    <span className="min-w-0 flex-1 truncate text-[12.5px] text-[color:var(--clyra-text)]">
-                      {entry.title || hostnameOf(entry.url)}
-                    </span>
-                    <span className="shrink-0 text-[11px] text-[color:var(--clyra-text-tertiary)]">
-                      {hostnameOf(entry.url)}
-                    </span>
+                  <button type="button" onClick={() => onNavigate(entry.url)} className="flex h-10 w-full items-center gap-2.5 rounded-[10px] px-2.5 text-left transition-colors duration-150 hover:bg-black/[0.032]">
+                    <img src={faviconFor(entry.url)} alt="" className="h-4 w-4 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate text-[12.5px] text-[#303237]">{entryTitle(entry)}</span>
+                    <span className="shrink-0 text-[11px] text-[#989ba0]">{hostnameOf(entry.url)} · {relativeVisit(entry.visitedAt)}</span>
                   </button>
                 </li>
               ))}
             </ul>
-          </div>
+          </section>
         ) : null}
-      </div>
+      </main>
     </div>
   );
 }

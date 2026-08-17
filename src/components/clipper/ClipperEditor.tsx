@@ -2,6 +2,9 @@ import {
   AlertCircle,
   AudioLines,
   Captions,
+  Check,
+  ChevronDown,
+  ChevronRight,
   ChevronsLeft,
   ChevronsRight,
   Copy,
@@ -39,6 +42,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import { AnimatePresence, motion } from "motion/react";
 import { cn } from "../../lib/utils";
 import {
   createZoomPinEffect,
@@ -90,7 +94,7 @@ function wordLabel(item: EditorWord) {
   return String(item.word || item.text || "").trim();
 }
 
-function SoundFxLibrary() {
+function SoundFxLibrary({ compact = false }: { compact?: boolean } = {}) {
   const [query, setQuery] = useState("");
   const [previewing, setPreviewing] = useState<ClipSfxAssetId | null>(null);
   const previewRef = useRef<HTMLAudioElement | null>(null);
@@ -114,14 +118,14 @@ function SoundFxLibrary() {
   };
 
   return (
-    <section className="flex shrink-0 flex-col px-5 pb-4 pt-5" style={{ borderBottom: `1px solid ${CLIP_EDITOR.border}` }} aria-label="Sound FX library">
-      <div className="flex items-center justify-between">
+    <section className={cn("flex shrink-0 flex-col px-5 pb-4", compact ? "pt-3" : "pt-5")} style={{ borderBottom: `1px solid ${CLIP_EDITOR.border}` }} aria-label="Sound FX library">
+      {!compact ? <div className="flex items-center justify-between">
         <div>
           <p className="text-[13px] font-semibold" style={{ color: CLIP_EDITOR.textPrimary }}>Sound FX</p>
           <p className="mt-0.5 text-[11px]" style={{ color: CLIP_EDITOR.textMuted }}>Drag or insert at the playhead</p>
         </div>
         <span className="grid h-7 w-7 place-items-center rounded-[8px]" style={{ background: "#F2F5FA", color: CLIP_EDITOR.blue }}><AudioLines size={14} strokeWidth={ICON_STROKE} /></span>
-      </div>
+      </div> : null}
       <label className="mt-3 flex h-8 items-center gap-2 rounded-[8px] bg-[#F7F8FA] px-2.5" style={{ boxShadow: "inset 0 0 0 1px rgba(15,23,42,.055)" }}>
         <Search size={13} strokeWidth={ICON_STROKE} style={{ color: CLIP_EDITOR.textMuted }} />
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search sounds" className="min-w-0 flex-1 bg-transparent text-[11.5px] outline-none placeholder:text-[#9A9DA3]" />
@@ -210,7 +214,7 @@ function EditorTimeline({
   const [sfxDropActive, setSfxDropActive] = useState(false);
   const [sfxDropTime, setSfxDropTime] = useState<number | null>(null);
   const [draggedSfx, setDraggedSfx] = useState<ClipSfxAssetId | null>(null);
-  const [sfxHintDismissed, setSfxHintDismissed] = useState(false);
+  const [sfxHintDismissed, setSfxHintDismissed] = useState(true);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const waveCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const sfxAudioRef = useRef<Map<string, HTMLAudioElement>>(new Map());
@@ -666,9 +670,29 @@ function EditorTimeline({
     for (let time = 0; time <= duration + 0.001; time += rulerTickSeconds) ticks.push(Math.min(time, duration));
     return ticks;
   }, [duration, rulerTickSeconds]);
+  const captionPhrases = useMemo(() => {
+    const phrases: Array<{ start: number; end: number; text: string; wordIndex: number }> = [];
+    let current: typeof phrases[number] | null = null;
+    words.forEach((word, wordIndex) => {
+      const text = wordLabel(word);
+      if (!text) return;
+      if (!current) current = { start: word.start, end: word.end, text, wordIndex };
+      else {
+        current.text += ` ${text}`;
+        current.end = word.end;
+      }
+      const wordCount = current.text.split(/\s+/).length;
+      if (wordCount >= 4 || /[.!?]$/.test(text)) {
+        phrases.push(current);
+        current = null;
+      }
+    });
+    if (current) phrases.push(current);
+    return phrases;
+  }, [words]);
 
   const playheadLeft = duration > 0 ? `${(currentTime / duration) * 100}%` : "0%";
-  const trackHeights = { ruler: 40, video: 58, captions: 42, audio: 66, zoom: 72 } as const;
+  const trackHeights = { ruler: 32, video: 52, captions: 40, audio: 55, zoom: 52 } as const;
   const rowSeparator = { borderBottom: `1px solid ${CLIP_EDITOR.separator}` } as const;
   const selectedZoom = zoomEffects.find((effect) => effect.id === selectedItem);
   const selectedSfx = sfxClips.find((clip) => clip.id === selectedItem);
@@ -763,7 +787,7 @@ function EditorTimeline({
           {([
             ["Video", Video, trackHeights.video],
             ["Captions", Type, trackHeights.captions],
-            ["Sound FX", AudioLines, trackHeights.audio],
+            ["Audio", AudioLines, trackHeights.audio],
             ["Zoom", ZoomIn, trackHeights.zoom],
           ] as const).map(([label, Icon, height]) => (
             <div key={label} className="flex items-center gap-[10px] px-3" style={{ height, ...rowSeparator, color: "#53637D" }}>
@@ -824,23 +848,23 @@ function EditorTimeline({
               ))}
             </div>
 
-            {/* Precise subtitle cue dots: each one seeks directly to its word. */}
+            {/* Human-readable caption phrases. Word precision remains in the caption inspector. */}
             <div className="relative" style={{ height: trackHeights.captions, ...rowSeparator }}>
-              {words.map((word, index) => {
-                const label = wordLabel(word);
-                if (!label || duration <= 0) return null;
-                const left = (Math.max(0, word.start) / duration) * 100;
+              {captionPhrases.map((phrase) => {
+                if (duration <= 0) return null;
+                const left = (Math.max(0, phrase.start) / duration) * 100;
+                const width = Math.max(2, ((phrase.end - phrase.start) / duration) * 100);
                 return (
                   <button
-                    key={`${index}-${word.start}`}
+                    key={`${phrase.wordIndex}-${phrase.start}`}
                     type="button"
-                    title={label}
-                    onClick={(event) => { event.stopPropagation(); onWordSelect?.(index); seek(word.start); }}
+                    title={phrase.text}
+                    onClick={(event) => { event.stopPropagation(); onWordSelect?.(phrase.wordIndex); seek(phrase.start); }}
                     onPointerDown={(event) => event.stopPropagation()}
-                    aria-label={`Seek to subtitle ${label}`}
-                    className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-[#79A9E8] shadow-[0_1px_3px_rgba(15,23,42,.18)] transition-[transform,background-color] duration-150 hover:scale-150 hover:bg-[#0A66D8] focus-visible:scale-150"
-                    style={{ left: `${left}%` }}
-                  />
+                    aria-label={`Seek to caption ${phrase.text}`}
+                    className="absolute top-[6px] h-[29px] overflow-hidden rounded-[7px] px-2 text-left text-[9px] font-semibold uppercase tracking-[.02em] transition-[background-color,box-shadow] duration-150 hover:bg-[#DDEAFF]"
+                    style={{ left: `${left}%`, width: `${width}%`, minWidth: 34, background: "#EAF2FF", color: "#3F6FAF", boxShadow: "inset 0 0 0 1px rgba(57,119,246,.14)" }}
+                  ><span className="block truncate">{phrase.text}</span></button>
                 );
               })}
             </div>
@@ -930,22 +954,18 @@ function EditorTimeline({
                   </span>
                 </span>
               ) : null}
-              {!sfxClips.length ? (
+              {!sfxClips.length && sfxDropActive ? (
                 <span className="pointer-events-none absolute inset-0 z-[1] flex items-center justify-center">
                   <span
                     className="flex items-center gap-2 rounded-[8px] px-2.5 py-1 text-[10.5px] font-medium"
                     style={{ background: sfxDropActive ? "#EAF2FF" : "rgba(255,255,255,.84)", color: sfxDropActive ? CLIP_EDITOR.blue : CLIP_EDITOR.textMuted, boxShadow: sfxDropActive ? "inset 0 0 0 1px rgba(57,119,246,.28)" : "inset 0 0 0 1px rgba(15,23,42,.05)" }}
                   >
                     <AudioLines size={13} strokeWidth={ICON_STROKE} />
-                    {sfxDropActive ? "Release to place sound" : "Drag a sound effect here"}
+                    Release to place sound
                   </span>
                 </span>
               ) : null}
-              {sfxClips.length && !sfxDropActive ? (
-                <span className="pointer-events-none absolute bottom-1 right-2 z-[1] flex items-center gap-1 text-[9.5px] font-medium" style={{ color: CLIP_EDITOR.textMuted }}>
-                  <AudioLines size={11} strokeWidth={ICON_STROKE} /> Drag another sound here
-                </span>
-              ) : null}
+              {null}
             </div>
 
             {/* Zoom pins: start → end band; drag pins to set duration/speed */}
@@ -1354,7 +1374,6 @@ export default function ClipperEditor({
   error,
   onDismissError,
   faceTrackingEnabled = false,
-  onFaceTrackingChange,
 }: {
   clips: EditorClip[];
   selected: EditorClip | undefined;
@@ -1384,11 +1403,13 @@ export default function ClipperEditor({
   onDismissError: () => void;
   /** Live MediaPipe face follow in the preview + render preference. */
   faceTrackingEnabled?: boolean;
-  onFaceTrackingChange?: (enabled: boolean) => void;
 }) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [playing, setPlaying] = useState(false);
+  const [inspectorMode, setInspectorMode] = useState<"overview" | "captions" | "reframe" | "sound" | "enhance">("overview");
+  const [exportSheetOpen, setExportSheetOpen] = useState(false);
+  const [captionAdvanced, setCaptionAdvanced] = useState(false);
   const [videoDuration, setVideoDuration] = useState(0);
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
   const [zoomEffects, setZoomEffects] = useState<ZoomPinEffect[]>([]);
@@ -1424,12 +1445,24 @@ export default function ClipperEditor({
   const videoSrc = selected ? srcFor(selected) : "";
 
   /* Butter-smooth pin zoom on the VIDEO only — subtitles stay siblings
-     and never inherit the scale transform. */
+     and never inherit the scale transform. Avoid a permanent RAF when no
+     live crop is active; that was needlessly repainting the preview. */
   useEffect(() => {
+    const node = videoRef.current;
+    const needsLiveTransform = faceTrackingEnabled || zoomEffects.length > 0;
+    if (!node) return;
+    if (!needsLiveTransform) {
+      node.style.objectFit = "contain";
+      node.style.objectPosition = "50% 50%";
+      node.style.transformOrigin = "50% 50%";
+      node.style.transform = "none";
+      node.style.willChange = "auto";
+      return;
+    }
     const apply = () => {
-      const node = videoRef.current;
-      if (!node) return;
-      const time = node.currentTime || 0;
+      const target = videoRef.current;
+      if (!target) return;
+      const time = target.currentTime || 0;
       const sample = evaluateZoomAtTime(zoomEffectsRef.current, time);
       const face = faceTrackingEnabled ? faceTrackRef.current : null;
       const baseZoom = face?.zoom ?? 1;
@@ -1438,28 +1471,28 @@ export default function ClipperEditor({
       const originX = sample.effectId || sample.progress > 0 ? sample.originX : (face?.x ?? 50);
       const originY = sample.effectId || sample.progress > 0 ? sample.originY : (face?.y ?? 50);
       if (face) {
-        node.style.objectFit = "cover";
-        node.style.objectPosition = `${face.x}% ${face.y}%`;
+        target.style.objectFit = "cover";
+        target.style.objectPosition = `${face.x}% ${face.y}%`;
       } else if (pinZoom !== 1 || sample.progress > 0) {
-        node.style.objectFit = "cover";
-        node.style.objectPosition = `${originX}% ${originY}%`;
+        target.style.objectFit = "cover";
+        target.style.objectPosition = `${originX}% ${originY}%`;
       } else {
-        node.style.objectFit = "contain";
-        node.style.objectPosition = "50% 50%";
+        target.style.objectFit = "contain";
+        target.style.objectPosition = "50% 50%";
       }
-      node.style.transformOrigin = `${originX}% ${originY}%`;
-      node.style.transform = `scale(${finalZoom})`;
-      node.style.willChange = "transform";
+      target.style.transformOrigin = `${originX}% ${originY}%`;
+      target.style.transform = `scale(${finalZoom})`;
+      target.style.willChange = "transform";
     };
 
     const tick = () => {
       apply();
-      zoomRafRef.current = requestAnimationFrame(tick);
+      if (!videoRef.current?.paused) zoomRafRef.current = requestAnimationFrame(tick);
     };
     apply();
     zoomRafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(zoomRafRef.current);
-  }, [faceTrackingEnabled, videoSrc, videoRef, zoomEffects]);
+  }, [faceTrackingEnabled, playing, videoSrc, videoRef, zoomEffects]);
 
   /* Smooth playhead: read video time on animation frames while playing.
      Updates are throttled to ~30fps so state churn never lags playback. */
@@ -1526,7 +1559,7 @@ export default function ClipperEditor({
       className="clipper-editor fixed inset-0 z-[10000] flex flex-col overflow-hidden"
       style={{ fontFamily: CLIP_EDITOR_FONT, color: CLIP_EDITOR.textPrimary }}
     >
-      <span aria-hidden className="h-[2px] w-full shrink-0" style={{ background: CLIP_EDITOR.blue }} />
+      <span aria-hidden className="h-px w-full shrink-0" style={{ background: "linear-gradient(90deg, #e9edf3 0%, #b9d3fb 50%, #e9edf3 100%)" }} />
       {error ? (
         <div className="flex shrink-0 items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12px] text-amber-800">
           <AlertCircle size={14} strokeWidth={ICON_STROKE} />
@@ -1536,10 +1569,10 @@ export default function ClipperEditor({
       ) : null}
 
       {/* Three full-height columns. Timeline lives ONLY in the centre column, flush to the bottom. */}
-      <div className="grid min-h-0 flex-1 grid-cols-[270px_minmax(0,1fr)_356px] max-[1450px]:grid-cols-[240px_minmax(0,1fr)_326px]">
+      <div className="grid min-h-0 flex-1 grid-cols-[232px_minmax(0,1fr)_300px] max-[1180px]:grid-cols-[216px_minmax(0,1fr)_280px]">
         <aside
           className="clipper-sidebar flex min-h-0 flex-col overflow-hidden"
-          style={{ borderRight: `1px solid ${CLIP_EDITOR.border}`, paddingLeft: 24, paddingRight: 20, paddingTop: 29 }}
+          style={{ background: "#F9F9F7", borderRight: `1px solid ${CLIP_EDITOR.border}`, paddingLeft: 20, paddingRight: 16, paddingTop: 24 }}
           aria-label="Clips"
         >
           <div className="flex shrink-0 items-center justify-between pr-1">
@@ -1551,7 +1584,7 @@ export default function ClipperEditor({
           <p className="mt-[6px] shrink-0 text-[12px]" style={{ color: CLIP_EDITOR.textMuted }}>
             {filteredClips.length} clip{filteredClips.length === 1 ? "" : "s"}
           </p>
-          <label className="mt-5 flex h-[42px] w-full shrink-0 items-center gap-2 rounded-[10px] bg-white pl-[13px] pr-3" style={{ border: "1px solid #E1E7F0", maxWidth: 240 }}>
+          <label className="mt-5 flex h-[38px] w-full shrink-0 items-center gap-2 rounded-[9px] bg-white pl-[11px] pr-3 shadow-[0_1px_1px_rgba(20,35,60,.02)]" style={{ border: "1px solid #E4E8ED", maxWidth: 228 }}>
             <Search size={15} strokeWidth={ICON_STROKE} style={{ color: CLIP_EDITOR.textMuted }} />
             <input
               value={search}
@@ -1569,20 +1602,20 @@ export default function ClipperEditor({
                   key={clip.id}
                   type="button"
                   onClick={() => onSelectClip(clip.id)}
-                  className="relative flex h-[90px] w-full items-center text-left transition-colors duration-150"
+                  className="relative flex h-[82px] w-full items-center text-left transition-[background,transform] duration-150"
                   style={{
                     background: active ? CLIP_EDITOR.selected : "transparent",
-                    maxWidth: 242,
-                    borderRadius: 10,
-                    paddingLeft: 14,
-                    paddingRight: 12,
-                    gap: 13,
+                    maxWidth: 230,
+                    borderRadius: 11,
+                    paddingLeft: 11,
+                    paddingRight: 10,
+                    gap: 11,
                   }}
                   onMouseEnter={(event) => { if (!active) (event.currentTarget as HTMLElement).style.background = CLIP_EDITOR.hover; }}
                   onMouseLeave={(event) => { if (!active) (event.currentTarget as HTMLElement).style.background = "transparent"; }}
                 >
                   {active ? <span className="absolute bottom-[10px] left-0 top-[10px] w-[3px] rounded-full" style={{ background: CLIP_EDITOR.blue }} /> : null}
-                  <video muted preload="metadata" src={srcFor(clip)} className="h-[68px] w-[44px] shrink-0 rounded-[7px] bg-[#0B1220] object-cover" />
+                  <video muted preload="metadata" src={srcFor(clip)} className="h-[62px] w-[42px] shrink-0 rounded-[7px] bg-[#0B1220] object-cover shadow-[0_2px_8px_rgba(8,18,38,.12)]" />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[13px]" style={{ fontWeight: 650, color: CLIP_EDITOR.textPrimary }}>{clip.title}</span>
                     <span className="mt-1 block text-[12px]" style={{ color: CLIP_EDITOR.textMuted }}>
@@ -1599,10 +1632,10 @@ export default function ClipperEditor({
           </div>
         </aside>
 
-        <main className="clipper-main flex min-h-0 min-w-0 flex-col overflow-hidden" style={{ borderRight: `1px solid ${CLIP_EDITOR.border}` }}>
+        <main className="clipper-main flex min-h-0 min-w-0 flex-col overflow-hidden" style={{ background: "#F6F6F3", borderRight: `1px solid ${CLIP_EDITOR.border}` }}>
           {selected ? (
             <>
-              <header className="flex h-[90px] shrink-0 items-start justify-between" style={{ paddingLeft: 30, paddingRight: 25, paddingTop: 30 }}>
+              <header className="flex h-[82px] shrink-0 items-start justify-between" style={{ paddingLeft: 28, paddingRight: 24, paddingTop: 20 }}>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     {editingTitle ? (
@@ -1616,12 +1649,7 @@ export default function ClipperEditor({
                         style={{ border: `1px solid ${CLIP_EDITOR.blue}`, fontWeight: 700, color: CLIP_EDITOR.textPrimary }}
                         aria-label="Clip title"
                       />
-                    ) : (
-                      <h1 className="truncate text-[21px] tracking-[-0.025em]" style={{ fontWeight: 650, color: CLIP_EDITOR.textPrimary }}>{selected.title}</h1>
-                    )}
-                    <button type="button" onClick={() => setEditingTitle(true)} className="grid h-6 w-6 shrink-0 place-items-center rounded-[6px] transition-colors duration-150 hover:bg-[#F5F8FC]" aria-label="Rename clip">
-                      <Pencil size={15} strokeWidth={ICON_STROKE} style={{ color: CLIP_EDITOR.textMuted }} />
-                    </button>
+                    ) : <button type="button" onClick={() => setEditingTitle(true)} className="min-w-0 rounded-[6px] text-left outline-none focus-visible:ring-2 focus-visible:ring-blue-200" title="Click to rename"><h1 className="truncate text-[21px] tracking-[-0.025em]" style={{ fontWeight: 650, color: CLIP_EDITOR.textPrimary }}>{selected.title}</h1></button>}
                     <div className="relative" ref={menuRef}>
                       <button
                         type="button"
@@ -1637,68 +1665,34 @@ export default function ClipperEditor({
                           className="absolute left-0 top-[calc(100%+6px)] z-20 min-w-[148px] overflow-hidden rounded-[10px] bg-white py-1"
                           style={{ border: `1px solid ${CLIP_EDITOR.border}`, boxShadow: "0 8px 24px rgba(20,35,60,0.10)" }}
                         >
-                          <button
-                            type="button"
-                            disabled={exportBusy}
-                            onClick={() => { setMenuOpen(false); onExport(); }}
-                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12.5px] transition-colors duration-150 hover:bg-[#F5F8FC] disabled:opacity-40"
-                            style={{ color: CLIP_EDITOR.textPrimary }}
-                          >
-                            <Download size={14} strokeWidth={ICON_STROKE} />
-                            {exportBusy ? "Exporting…" : "Export clip"}
-                          </button>
+                          <button type="button" onClick={() => { setMenuOpen(false); setEditingTitle(true); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12.5px] transition-colors duration-150 hover:bg-[#F5F8FC]" style={{ color: CLIP_EDITOR.textPrimary }}><Pencil size={14} />Rename</button>
                         </div>
                       ) : null}
                     </div>
                   </div>
                   <p className="mt-[7px] text-[12px]" style={{ color: "#65748C" }}>
-                    {selected.clip_duration || `${Math.round(duration)}s`} · {qualityLabel}
-                    {faceTrackingEnabled ? " · Face tracking" : " · Auto-reframed"}
+                    {selected.clip_duration || `${Math.round(duration)} sec`} · {qualityLabel} · Ready
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center gap-2.5">
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={faceTrackingEnabled}
-                    aria-label="Face tracking"
-                    onClick={() => onFaceTrackingChange?.(!faceTrackingEnabled)}
-                    className="flex h-[34px] items-center gap-2 rounded-[9px] px-2.5 text-[12px] font-medium transition-colors duration-150"
-                    style={{
-                      border: `1px solid ${faceTrackingEnabled ? CLIP_EDITOR.blue : "#E7EDF5"}`,
-                      background: faceTrackingEnabled ? CLIP_EDITOR.selected : "#fff",
-                      color: faceTrackingEnabled ? CLIP_EDITOR.blue : CLIP_EDITOR.textSecondary,
-                    }}
-                    title="Centre the frame on the face and follow smoothly with MediaPipe (no lag)"
-                  >
-                    <ScanFace size={15} strokeWidth={ICON_STROKE} />
-                    Face tracking
-                    <span
-                      className="relative ml-0.5 h-[16px] w-[28px] rounded-full transition-colors duration-150"
-                      style={{ background: faceTrackingEnabled ? CLIP_EDITOR.blue : "#D5DCE8" }}
-                    >
-                      <span
-                        className="absolute top-[2px] h-[12px] w-[12px] rounded-full bg-white transition-[left] duration-150"
-                        style={{ left: faceTrackingEnabled ? 14 : 2 }}
-                      />
-                    </span>
-                  </button>
-                  <div
-                    className="flex h-[38px] w-[74px] shrink-0 items-center justify-center rounded-[10px] bg-white"
-                    style={{ border: "1px solid #E7EDF5" }}
-                    aria-label={`Clip score ${scoreFor(selected)} out of 100`}
-                  >
-                    <span className="text-[15px] tabular-nums" style={{ fontWeight: 700, color: CLIP_EDITOR.blue }}>{scoreFor(selected)}</span>
-                    <span className="ml-1 text-[12px]" style={{ color: "#7FAFFF" }}>/100</span>
-                  </div>
+                <div className="relative flex shrink-0 items-center gap-7" ref={menuRef}>
+                  <button type="button" onClick={() => setInspectorMode("overview")} className="text-[11.5px] font-medium text-[#69717D] hover:text-[#30343A]" aria-label={`Clip score ${scoreFor(selected)} out of 100`}>Good clip · {scoreFor(selected)}</button>
+                  <button type="button" onClick={togglePlay} className="flex h-9 items-center gap-1.5 rounded-[11px] bg-white px-3 text-[12px] font-medium text-[#3F454D] shadow-[inset_0_0_0_1px_rgba(31,41,55,.09)] hover:bg-[#F7F8FA]">{playing ? <Pause size={14} /> : <Play size={14} />} Preview</button>
+                  <button type="button" disabled={exportBusy} onClick={() => setExportSheetOpen(true)} className="flex h-9 items-center gap-1.5 rounded-[11px] bg-[#3977F6] px-4 text-[12px] font-semibold text-white shadow-[0_6px_16px_rgba(57,119,246,.2)] transition-[transform,background-color] duration-150 hover:bg-[#2F6DE9] active:scale-[.98] disabled:opacity-60"><Download size={14} />{exportBusy ? "Exporting…" : "Export"}</button>
+                  <AnimatePresence>
+                    {exportSheetOpen ? <motion.div initial={{ opacity: 0, y: -4, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -3, scale: .98 }} transition={{ duration: .18, ease: [0.22, 1, 0.36, 1] }} className="absolute right-0 top-11 z-30 w-[280px] rounded-[17px] border border-black/[.09] bg-white p-4 shadow-[0_18px_50px_rgba(21,28,40,.16)]">
+                      <div className="flex items-start justify-between"><div><p className="text-[13px] font-semibold">Export clip</p><p className="mt-1 text-[10.5px] text-[#8B919A]">Ready for social video</p></div><button type="button" onClick={() => setExportSheetOpen(false)} className="grid h-7 w-7 place-items-center rounded-[7px] text-[#8B919A] hover:bg-[#F2F3F5]">×</button></div>
+                      <div className="mt-4 space-y-2 text-[11px]"><div className="flex justify-between"><span className="text-[#828892]">Quality</span><strong>1080p HD</strong></div><div className="flex justify-between"><span className="text-[#828892]">Format</span><strong>MP4</strong></div><div className="flex justify-between"><span className="text-[#828892]">Captions</span><strong>{captionsVisible ? "Burn into video" : "Off"}</strong></div></div>
+                      <button type="button" disabled={exportBusy} onClick={() => { onExport(); if (!exportBusy) setExportSheetOpen(false); }} className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-[10px] bg-[#3977F6] text-[11.5px] font-semibold text-white disabled:opacity-60"><Download size={13} />{exportBusy ? "Exporting…" : "Export video"}</button>
+                    </motion.div> : null}
+                  </AnimatePresence>
                 </div>
               </header>
 
-              <div className="flex min-h-0 flex-1 items-center justify-center px-6 pb-4">
+              <div className="flex min-h-0 flex-1 items-center justify-center px-8 pb-5 pt-1">
                 <div
                   data-testid="clipper-preview"
-                  className="relative w-full max-w-[812px] overflow-hidden rounded-[12px]"
-                  style={{ height: "min(440px, 100%)", maxHeight: 440, aspectRatio: "16 / 9", boxShadow: "0 5px 16px rgba(20,35,60,0.10)", background: "#040A18" }}
+                  className="relative w-full max-w-[812px] overflow-hidden rounded-[16px] ring-1 ring-black/[.08]"
+                  style={{ height: "min(560px, 100%)", maxHeight: 560, maxWidth: 980, aspectRatio: "16 / 9", boxShadow: "0 18px 46px rgba(20,35,60,0.14)", background: "#040A18" }}
                   onClick={togglePlay}
                 >
                   <video
@@ -1750,7 +1744,7 @@ export default function ClipperEditor({
                   </div>
                   {!playing ? (
                     <span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center">
-                      <span className="grid h-12 w-12 place-items-center rounded-full bg-white/92" style={{ color: CLIP_EDITOR.textPrimary }}>
+                      <span className="grid h-12 w-12 place-items-center rounded-full bg-white/94 shadow-[0_5px_16px_rgba(0,0,0,.18)]" style={{ color: CLIP_EDITOR.textPrimary }}>
                         <Play size={18} strokeWidth={ICON_STROKE} className="ml-0.5" />
                       </span>
                     </span>
@@ -1758,7 +1752,19 @@ export default function ClipperEditor({
                 </div>
               </div>
 
-              <div className="h-[350px] w-full shrink-0">
+              <div className="clipper-quick-tools flex h-[46px] shrink-0 items-center justify-center gap-1 border-t border-black/[.045] bg-[#F8F8F6]">
+                {([
+                  ["overview", "Trim", Scissors],
+                  ["captions", "Captions", Captions],
+                  ["reframe", "Reframe", ScanFace],
+                  ["sound", "Sound", AudioLines],
+                  ["enhance", "Enhance", RefreshCw],
+                ] as const).map(([mode, label, Icon]) => (
+                  <button key={mode} type="button" onClick={() => setInspectorMode(mode)} className={cn("flex h-8 items-center gap-1.5 rounded-[9px] px-3 text-[11px] font-medium transition-[background-color,color,transform] duration-150 active:scale-[.98]", inspectorMode === mode ? "bg-[#E8F1FF] text-[#2F6FD1]" : "text-[#68717D] hover:bg-white hover:text-[#30343A]")}><Icon size={14} strokeWidth={ICON_STROKE} />{label}</button>
+                ))}
+              </div>
+
+              <div className="h-[300px] w-full shrink-0 border-t border-black/[.055] bg-[#FBFBFA]">
                 <EditorTimeline
                   clipId={selected.id}
                   videoSrc={videoSrc}
@@ -1785,24 +1791,41 @@ export default function ClipperEditor({
           )}
         </main>
 
-        <aside className="clipper-inspector flex min-h-0 flex-col bg-white" style={{ borderLeft: `1px solid ${CLIP_EDITOR.border}` }}>
-          <SoundFxLibrary />
-          <WordTimingInspector
-            words={words}
-            activeIndex={activeWordIndex}
-            onSelect={onActiveWordIndex}
-            onChangeWord={onWordChange}
-            onRegenerate={onRegenerate}
-            regenerateBusy={regenerateBusy}
-            canRegenerate={Boolean(selected?.artifact_id) || words.length > 0}
-            onSeekWord={(index) => {
-              const word = words[index];
-              if (word && videoRef.current) videoRef.current.currentTime = Math.max(0, word.start);
-              if (word) onTimeChange(Math.max(0, word.start));
-            }}
-            captionStyle={captionStyle}
-            onCaptionStyleChange={onCaptionStyleChange}
-          />
+        <aside className="clipper-inspector min-h-0 overflow-hidden bg-[#FCFCFB]" style={{ borderLeft: `1px solid ${CLIP_EDITOR.border}` }}>
+          <AnimatePresence initial={false} mode="wait">
+            <motion.div key={inspectorMode} className="h-full min-h-0 overflow-y-auto" initial={{ opacity: 0, x: 6 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -5 }} transition={{ duration: .2, ease: [0.22, 1, 0.36, 1] }}>
+              {inspectorMode === "overview" ? (
+                <div className="p-5">
+                  <p className="text-[14px] font-semibold text-[#30343A]">Clip</p>
+                  <div className="mt-4 rounded-[14px] border border-black/[.065] bg-white p-4">
+                    <p className="truncate text-[12.5px] font-semibold text-[#373B42]">{selected?.title || "No clip selected"}</p>
+                    <div className="mt-4 grid grid-cols-2 gap-y-3 text-[10.5px]"><span className="text-[#92979F]">Duration</span><strong className="text-right font-medium">{selected?.clip_duration || `${Math.round(duration)} sec`}</strong><span className="text-[#92979F]">Format</span><strong className="text-right font-medium">9:16</strong><span className="text-[#92979F]">Quality</span><strong className="text-right font-medium">{qualityLabel}</strong></div>
+                  </div>
+                  <p className="mt-6 text-[10px] font-semibold uppercase tracking-[.08em] text-[#A0A4AB]">Quick actions</p>
+                  <div className="mt-2 grid gap-1.5">{([[
+                    "captions", "Edit captions", Captions,
+                  ], ["reframe", "Reframe video", ScanFace], ["sound", "Add sound", AudioLines]] as const).map(([mode, label, Icon]) => <button key={mode} type="button" onClick={() => setInspectorMode(mode)} className="flex h-10 items-center gap-2 rounded-[10px] bg-white px-3 text-left text-[11.5px] font-medium text-[#565D67] shadow-[inset_0_0_0_1px_rgba(31,41,55,.065)] hover:bg-[#F6F8FB]"><Icon size={14} className="text-[#4C79C8]" />{label}<ChevronRight size={13} className="ml-auto text-[#A2A7AE]" /></button>)}</div>
+                  <button type="button" onClick={() => setInspectorMode("enhance")} className="mt-6 w-full rounded-[14px] border border-black/[.065] bg-white p-4 text-left hover:bg-[#FBFCFD]"><span className="flex items-center justify-between text-[11.5px] font-semibold text-[#4B5058]">Clip insights <ChevronRight size={13} /></span><strong className="mt-2 block text-[22px] tracking-[-.03em] text-[#3977F6]">{selected ? scoreFor(selected) : 0}<small className="ml-1 text-[10px] font-medium text-[#94A4BE]">/ 100</small></strong><span className="mt-1 block text-[9.5px] text-[#92979F]">Hook strong · Caption clarity good</span></button>
+                </div>
+              ) : inspectorMode === "captions" ? (
+                <div className="flex min-h-full flex-col">
+                  <div className="p-5 pb-3"><div className="flex items-center justify-between"><p className="text-[14px] font-semibold text-[#30343A]">Captions</p><button type="button" onClick={() => setInspectorMode("overview")} className="grid h-7 w-7 place-items-center rounded-[7px] text-[#969BA3] hover:bg-[#F0F1F3]">×</button></div><p className="mt-1 text-[10.5px] text-[#92979F]">Choose a style, then edit words only when needed.</p>
+                    <p className="mt-5 text-[9.5px] font-semibold uppercase tracking-[.08em] text-[#9A9FA7]">Style</p>
+                    <div className="mt-2 grid grid-cols-2 gap-2">{[["phrase-highlight", "Clean"], ["word", "Bold"], ["phrase", "Minimal"], ["phrase-highlight", "Creator"]].map(([value, label], index) => <button key={`${value}-${label}`} type="button" onClick={() => onCaptionStyleChange({ subtitle_style: value, font: index === 1 ? "Impact" : "Montserrat" })} className="h-12 rounded-[10px] border border-black/[.07] bg-white text-[10.5px] font-semibold text-[#4F555E] hover:border-blue-200"><span className={cn("block", index === 1 && "font-black uppercase")}>{label}</span><small className="mt-1 block text-[8px] font-normal text-[#A0A4AB]">Sample caption</small></button>)}</div>
+                    <button type="button" onClick={() => setCaptionAdvanced((value) => !value)} className="mt-4 flex h-9 w-full items-center justify-between border-t border-black/[.06] pt-2 text-[10.5px] font-medium text-[#6F757E]">Edit words & advanced timing <ChevronDown size={13} className={captionAdvanced ? "rotate-180" : ""} /></button>
+                  </div>
+                  {captionAdvanced ? <WordTimingInspector words={words} activeIndex={activeWordIndex} onSelect={onActiveWordIndex} onChangeWord={onWordChange} onRegenerate={onRegenerate} regenerateBusy={regenerateBusy} canRegenerate={Boolean(selected?.artifact_id) || words.length > 0} onSeekWord={(index) => { const word = words[index]; if (word && videoRef.current) videoRef.current.currentTime = Math.max(0, word.start); if (word) onTimeChange(Math.max(0, word.start)); }} captionStyle={captionStyle} onCaptionStyleChange={onCaptionStyleChange} /> : null}
+                </div>
+              ) : inspectorMode === "reframe" ? (
+                <div className="p-5"><div className="flex items-center justify-between"><p className="text-[14px] font-semibold text-[#30343A]">Reframe</p><button type="button" onClick={() => setInspectorMode("overview")} className="grid h-7 w-7 place-items-center rounded-[7px] text-[#969BA3] hover:bg-[#F0F1F3]">×</button></div><p className="mt-1 text-[10.5px] text-[#92979F]">Keep the subject composed for a vertical clip.</p>
+                  <div aria-label={`Face tracking ${faceTrackingEnabled ? "enabled" : "disabled"}`} className="mt-5 flex w-full items-center gap-3 rounded-[14px] border border-black/[.065] bg-white p-4 text-left"><span className="grid h-9 w-9 place-items-center rounded-[10px] bg-[#EEF4FF] text-[#3977F6]"><ScanFace size={17} /></span><span className="min-w-0 flex-1"><strong className="block text-[11.5px]">Face tracking</strong><small className="mt-1 block text-[9.5px] leading-4 text-[#969BA3]">{faceTrackingEnabled ? "Enabled for this clip · smart camera active" : "Off for this clip"}</small></span><span className={cn("rounded-full px-2 py-1 text-[9px] font-semibold", faceTrackingEnabled ? "bg-[#EEF4FF] text-[#3977F6]" : "bg-[#F1F2F4] text-[#8E939B]")}>{faceTrackingEnabled ? "On" : "Off"}</span></div>
+                  <p className="mt-3 rounded-[10px] bg-[#F3F5F8] px-3 py-2.5 text-[9.5px] leading-4 text-[#7E848D]">Framing is chosen before generation so preview and export stay identical. Start a new clip to change this setting.</p>
+                  <div className="mt-3 grid gap-1.5"><div className="flex h-10 items-center justify-between rounded-[10px] px-3 text-[11px] text-[#555B64]"><span>Auto reframe</span><small className="text-[#90959D]">Dead-zone camera</small></div><div className="flex h-10 items-center justify-between rounded-[10px] px-3 text-[11px] text-[#555B64]"><span>Follow speaker</span>{faceTrackingEnabled ? <Check size={13} className="text-[#3977F6]" /> : <span className="text-[9px] text-[#9A9FA7]">Disabled</span>}</div></div>
+                </div>
+              ) : inspectorMode === "sound" ? <div className="h-full"><div className="flex items-center justify-between px-5 pt-5"><div><p className="text-[14px] font-semibold text-[#30343A]">Sound</p><p className="mt-1 text-[10.5px] text-[#92979F]">Press a sound to add it at the playhead.</p></div><button type="button" onClick={() => setInspectorMode("overview")} className="grid h-7 w-7 place-items-center rounded-[7px] text-[#969BA3] hover:bg-[#F0F1F3]">×</button></div><SoundFxLibrary compact /></div>
+              : <div className="p-5"><div className="flex items-center justify-between"><p className="text-[14px] font-semibold text-[#30343A]">Enhance</p><button type="button" onClick={() => setInspectorMode("overview")} className="grid h-7 w-7 place-items-center rounded-[7px] text-[#969BA3] hover:bg-[#F0F1F3]">×</button></div><p className="mt-1 text-[10.5px] leading-4 text-[#92979F]">Let Clyra refresh captions and timing using the current clip.</p><div className="mt-5 rounded-[14px] border border-black/[.065] bg-white p-4"><strong className="text-[12px]">Improve clip</strong><p className="mt-1 text-[9.5px] leading-4 text-[#92979F]">Regenerate subtitle timing without changing the source video.</p><button type="button" disabled={regenerateBusy || (!selected?.artifact_id && !words.length)} onClick={onRegenerate} className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-[10px] bg-[#EEF4FF] text-[11px] font-semibold text-[#3977F6] disabled:opacity-40"><RefreshCw size={13} className={regenerateBusy ? "animate-spin" : ""} />{regenerateBusy ? "Improving…" : "Improve captions"}</button></div></div>}
+            </motion.div>
+          </AnimatePresence>
         </aside>
       </div>
     </div>

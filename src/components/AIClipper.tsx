@@ -2575,7 +2575,16 @@ export default function AIClipper({
       onSearch={setSearch}
       qualityLabel={draft.renderQuality === "balanced" ? "720p" : "1080p"}
       scoreFor={(clip) => clipPotentialScore(results.find((item) => item.id === clip.id) || (clip as ClipResult))}
-      srcFor={(clip) => outputUrl(clip.output)}
+      // The editable preview always uses the caption-free plate when the
+      // project owns a detached caption layer. This prevents a burned legacy
+      // output plus the live editor overlay from ever creating two subtitle
+      // sets, and keeps captions fixed while a face crop moves underneath.
+      srcFor={(clip) => {
+        const result = clip as ClipResult;
+        return result.plate_url && hasDetachedCaptions(result)
+          ? result.plate_url
+          : outputUrl(clip.output);
+      }}
       words={captionWords}
       onWordChange={changeCaptionWord}
       activeWordIndex={activeCaptionIndex}
@@ -2598,7 +2607,6 @@ export default function AIClipper({
       error={error}
       onDismissError={() => setError("")}
       faceTrackingEnabled={draft.faceTracking !== "off"}
-      onFaceTrackingChange={(enabled) => setFaceTrackingPreset(enabled ? "auto" : "none")}
     />
   );
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Globe2, Monitor, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Smartphone } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -82,6 +82,8 @@ export default function ClyraCodeWorkspace() {
   const [focusFile, setFocusFile] = useState<string | null>(null);
   const [contexts, setContexts] = useState<ComposerContext[]>([]);
   const [creating, setCreating] = useState(false);
+  const [projectNameSheetOpen, setProjectNameSheetOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [previewContentVisible, setPreviewContentVisible] = useState(false);
@@ -152,6 +154,7 @@ export default function ClyraCodeWorkspace() {
   });
   const sidebarWidth = sidebarCollapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
   const shellRef = useRef<HTMLDivElement | null>(null);
+  const [shellWidth, setShellWidth] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [conversationWidth, setConversationWidth] = useState(() => {
     const raw = Number(localStorage.getItem(WIDTH_KEY));
@@ -159,6 +162,27 @@ export default function ClyraCodeWorkspace() {
     // ~47% of the chat+preview pair on a typical desktop (sidebar aside).
     return 560;
   });
+
+  // Animate real pane widths rather than using a flex-grow interpolation.
+  // Flex-grow makes children briefly scale/stretch while the free space is
+  // redistributed; measured widths let both panes reflow like the left rail.
+  useLayoutEffect(() => {
+    const shell = shellRef.current;
+    if (!shell) return;
+    const update = () => setShellWidth(shell.clientWidth);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(shell);
+    return () => observer.disconnect();
+  }, []);
+
+  const availableWorkspaceWidth = Math.max(0, shellWidth - sidebarWidth - 2);
+  const openConversationWidth = Math.min(
+    Math.max(MIN_CONVERSATION, conversationWidth),
+    Math.max(MIN_CONVERSATION, availableWorkspaceWidth - MIN_PREVIEW),
+  );
+  const conversationTargetWidth = rightPanelOpen ? openConversationWidth : availableWorkspaceWidth;
+  const previewTargetWidth = rightPanelOpen ? Math.max(0, availableWorkspaceWidth - openConversationWidth) : 0;
 
   // First layout (no saved width): pin conversation to ~47% of remaining space.
   useEffect(() => {
@@ -216,13 +240,11 @@ export default function ClyraCodeWorkspace() {
   );
 
   /* -------------------- project creation -------------------- */
-  // New projects open straight into the welcome chat — no name prompt. The
-  // project takes its name from the first request once the agent responds.
-  const createProject = useCallback(async () => {
+  const createProject = useCallback(async (name = "New project") => {
     if (creating) return;
     setCreating(true);
     try {
-      const project = await api.createProject("New project");
+      const project = await api.createProject(name.trim() || "New project");
       await loadProjects();
       selectProject(project.id);
       return project;
@@ -233,16 +255,29 @@ export default function ClyraCodeWorkspace() {
     }
   }, [creating, loadProjects, selectProject]);
 
+  const requestNewProject = useCallback(() => {
+    if (creating) return;
+    setNewProjectName("");
+    setProjectNameSheetOpen(true);
+  }, [creating]);
+
+  const confirmNewProject = useCallback(async () => {
+    const name = newProjectName.trim();
+    if (!name) return;
+    const project = await createProject(name);
+    if (project) setProjectNameSheetOpen(false);
+  }, [createProject, newProjectName]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
-        void createProject();
+        requestNewProject();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [createProject]);
+  }, [requestNewProject]);
 
   /* -------------------- helpers -------------------- */
   const activeProject = state.projects.find((p) => p.id === state.activeProjectId) ?? null;
@@ -264,7 +299,7 @@ export default function ClyraCodeWorkspace() {
       setPreviewContentVisible(false);
       return;
     }
-    const timer = window.setTimeout(() => setPreviewContentVisible(true), 150);
+    const timer = window.setTimeout(() => setPreviewContentVisible(true), 255);
     return () => window.clearTimeout(timer);
   }, [rightPanelOpen]);
 
@@ -401,7 +436,7 @@ export default function ClyraCodeWorkspace() {
           setRightTab("browser");
           setFocusFile(null);
         }}
-        onNewProject={() => void createProject()}
+        onNewProject={requestNewProject}
         onNewChat={(projectId) => void handleNewChat(projectId)}
         onRenameProject={(projectId, name) => {
           void api.renameProject(projectId, name).then(() => loadProjects());
@@ -441,9 +476,10 @@ export default function ClyraCodeWorkspace() {
 
       {/* -------- centre: agent conversation -------- */}
       <motion.section
-        layout="size"
-        className={cn("flex min-h-0 flex-col bg-[color:var(--main-background)] transition-[width] duration-[300ms] ease-[cubic-bezier(0.22,1,0.36,1)]", rightPanelOpen ? "shrink-0" : "min-w-0 flex-1")}
-        style={rightPanelOpen ? { width: conversationWidth } : undefined}
+        initial={false}
+        animate={{ width: conversationTargetWidth }}
+        transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+        className="flex min-h-0 shrink-0 flex-col overflow-hidden bg-[color:var(--main-background)]"
       >
         {state.connection === "reconnecting" && running ? (
           <motion.div
@@ -593,10 +629,10 @@ export default function ClyraCodeWorkspace() {
       <motion.div
         initial={false}
         animate={rightPanelOpen
-          ? { flexGrow: 1, flexBasis: 0, x: 0, opacity: 1 }
-          : { flexGrow: 0, flexBasis: 0, x: 12, opacity: 0 }}
-        transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
-        className={cn("flex min-h-0 min-w-0 overflow-hidden", !rightPanelOpen && "pointer-events-none")}
+          ? { width: previewTargetWidth, x: 0, opacity: 1 }
+          : { width: 0, x: 8, opacity: 0 }}
+        transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+        className={cn("flex min-h-0 shrink-0 overflow-hidden", !rightPanelOpen && "pointer-events-none")}
         aria-hidden={!rightPanelOpen || undefined}
       >
           <div className="cc-resize-handle" data-active={dragging || undefined} onPointerDown={onDragStart} role="separator" aria-orientation="vertical" />
@@ -636,6 +672,30 @@ export default function ClyraCodeWorkspace() {
         onToggle={() => setTerminalOpen((open) => !open)}
         agentActivityCount={agentActivityCount}
       />
+      <AnimatePresence>
+        {projectNameSheetOpen ? (
+          <motion.div
+            className="fixed inset-0 z-[110] flex items-center justify-center bg-black/[0.10] p-5 backdrop-blur-[1px]"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            onMouseDown={() => setProjectNameSheetOpen(false)}
+          >
+            <motion.form
+              initial={{ opacity: 0, y: 10, scale: 0.985 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 8, scale: 0.985 }} transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              onMouseDown={(event) => event.stopPropagation()}
+              onSubmit={(event) => { event.preventDefault(); void confirmNewProject(); }}
+              className="w-full max-w-[360px] rounded-[13px] border border-black/[0.09] bg-white p-4 shadow-[0_22px_60px_rgba(15,23,42,0.16)]"
+            >
+              <p className="text-[13px] font-medium text-[#2D2F34]">New project</p>
+              <p className="mt-1 text-[11.5px] leading-[1.5] text-[#777A80]">Give this workspace a clear name. Chats, files, preview, and source control will stay together here.</p>
+              <input autoFocus value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} placeholder="Project name" className="mt-3 h-9 w-full rounded-[8px] border border-black/[0.09] px-2.5 text-[12px] text-[#35373C] outline-none transition-colors placeholder:text-[#A0A2A6] focus:border-black/[0.22]" />
+              <div className="mt-3 flex justify-end gap-1.5">
+                <button type="button" onClick={() => setProjectNameSheetOpen(false)} className="h-8 rounded-[8px] px-2.5 text-[11.5px] text-[#65676C] transition-colors hover:bg-black/[0.04]">Cancel</button>
+                <button type="submit" disabled={!newProjectName.trim() || creating} className="flex h-8 items-center gap-1.5 rounded-[8px] bg-[#292A2E] px-3 text-[11.5px] font-medium text-white transition-colors hover:bg-[#17181B] disabled:cursor-not-allowed disabled:opacity-40">{creating ? <span className="h-3 w-3 animate-spin rounded-full border border-white/35 border-t-white" /> : null} Create project</button>
+              </div>
+            </motion.form>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </div>
   );
 }

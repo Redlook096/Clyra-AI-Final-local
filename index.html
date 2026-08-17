@@ -28,6 +28,16 @@
           "Segoe UI", sans-serif;
       }
 
+      /* Covers React's first commit so the workspace can never flash before
+         the real, app-driven startup surface takes over. */
+      #clyra-preboot-surface {
+        position: fixed;
+        inset: 0;
+        z-index: 10000;
+        background: #fff;
+        pointer-events: none;
+      }
+
       .clyra-boot-card {
         width: min(280px, calc(100vw - 48px));
         display: flex;
@@ -85,15 +95,9 @@
     </style>
   </head>
   <body>
+    <div id="clyra-preboot-surface" aria-hidden="true"></div>
     <div id="root">
-      <div class="clyra-boot-fallback">
-        <div class="clyra-boot-card">
-          <div class="clyra-boot-track">
-            <div class="clyra-boot-fill"></div>
-          </div>
-          <p class="clyra-boot-copy">Starting Clyra...</p>
-        </div>
-      </div>
+      <div class="clyra-boot-fallback" aria-hidden="true"></div>
     </div>
     <script>
       window.addEventListener(

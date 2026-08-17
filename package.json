@@ -38,6 +38,8 @@
     "test:clip-zoom": "tsx tools/clip-zoom-effect-unit-tests.ts",
     "test:clipper-publishing": "tsx tools/clipper-publishing-unit-tests.ts",
     "test:licensed-footage": "tsx tools/licensed-footage-unit-tests.ts",
+    "test:smart-camera": "tsx tools/smart-camera-unit-tests.ts",
+    "test:forge": "tsx tools/forge-unit-tests.ts",
     "test:agent-controller": "tsx tools/agent-controller-unit-tests.ts",
     "test:computer-agent": "node tools/computer-agent-contract-tests.mjs",
     "test:vibe-runtime": "tsx tools/vibe-runtime-unit-tests.ts",
@@ -198,11 +200,15 @@
     }
   },
   "dependencies": {
+    "@dimforge/rapier2d-compat": "^0.18.2",
+    "@dimforge/rapier3d-compat": "^0.18.2",
     "@opencode-ai/sdk": "^1.18.12",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
     "archiver": "^7.0.1",
     "isomorphic-git": "^1.41.4",
-    "node-pty": "^1.1.0"
+    "node-pty": "^1.1.0",
+    "pixi.js": "^8.19.0",
+    "three": "^0.185.1"
   }
 }

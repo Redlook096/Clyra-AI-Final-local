@@ -16,6 +16,7 @@ export type ActionKind =
   | "create"
   | "delete"
   | "search"
+  | "research"
   | "list"
   | "command"
   | "build"
@@ -148,20 +149,24 @@ function classifyCommand(command: string): ActionKind {
 }
 
 function classifyTool(tool: string, input: Record<string, unknown>): { kind: ActionKind; target: string } {
-  const lower = tool.toLowerCase();
-  const file = String(input.filePath || input.path || input.file || "");
-  const command = String(input.command || input.cmd || "");
-  const query = String(input.pattern || input.query || input.search || "");
-  if (/^(bash|shell|command)$/.test(lower)) {
+  // Providers use slightly different names and argument keys for the same
+  // tool. Normalize those real variants here instead of hiding them behind a
+  // generic "Completed" row in the transcript.
+  const lower = tool.toLowerCase().replace(/[.\s-]+/g, "_");
+  const file = firstString(input, "filePath", "filepath", "file_path", "path", "file", "target_file", "targetFile", "filename", "relativePath");
+  const command = firstString(input, "command", "cmd", "script", "shell", "bash");
+  const query = firstString(input, "pattern", "query", "search", "q", "text", "term");
+  if (/^(bash|shell|command|execute|exec|run|terminal|shell_command)$/.test(lower)) {
     const cleaned = cleanCommand(command) || tool;
     return { kind: classifyCommand(cleaned), target: cleaned };
   }
-  if (lower === "write") return { kind: "create", target: stripProjectPrefix(file) };
-  if (/^(edit|apply_patch|str_replace|patch)$/.test(lower)) return { kind: "edit", target: stripProjectPrefix(file) };
-  if (/^(delete|rm|remove)$/.test(lower)) return { kind: "delete", target: stripProjectPrefix(file) };
-  if (lower === "read") return { kind: "read", target: stripProjectPrefix(file) };
-  if (/^(grep|glob|search|websearch|codebase_search)$/.test(lower)) return { kind: "search", target: query || stripProjectPrefix(file) || tool };
-  if (/^(list|ls|tree)$/.test(lower)) return { kind: "list", target: stripProjectPrefix(file || String(input.dir || "")) || "project structure" };
+  if (/^(write|write_file|create|create_file|file_write)$/.test(lower)) return { kind: "create", target: stripProjectPrefix(file) };
+  if (/^(edit|edit_file|apply_patch|applypatch|str_replace|replace|replace_in_file|patch|file_edit)$/.test(lower)) return { kind: "edit", target: stripProjectPrefix(file) };
+  if (/^(delete|delete_file|rm|remove|remove_file)$/.test(lower)) return { kind: "delete", target: stripProjectPrefix(file) };
+  if (/^(read|read_file|open_file|view_file|cat|file_read)$/.test(lower)) return { kind: "read", target: stripProjectPrefix(file) };
+  if (/^(web_search|websearch|search_web|internet_search)$/.test(lower)) return { kind: "research", target: query || tool };
+  if (/^(grep|glob|search|codebase_search|find_in_files|ripgrep)$/.test(lower)) return { kind: "search", target: query || stripProjectPrefix(file) || tool };
+  if (/^(list|ls|tree|list_files|readdir|directory_list)$/.test(lower)) return { kind: "list", target: stripProjectPrefix(file || firstString(input, "dir", "directory", "cwd")) || "project structure" };
   if (/^(browser|preview|screenshot|open_browser)$/.test(lower)) return { kind: "preview", target: String(input.url || query || "live preview") };
   if (/^(webfetch|fetch|curl)$/.test(lower)) return { kind: "fetch", target: String(input.url || query || tool) };
   if (/^(todowrite|todoread|todo)$/.test(lower)) return { kind: "todo", target: "task list" };
@@ -190,8 +195,8 @@ function countsFromDiffText(diff: string): { additions: number; deletions: numbe
 /** Minimal unified patch rebuilt from an edit tool's real old/new inputs. */
 function buildEditSnippet(kind: ActionKind, input: Record<string, unknown>): string {
   if (kind !== "edit") return "";
-  const oldText = firstString(input, "old", "old_string", "search", "replace");
-  const newText = firstString(input, "new", "new_string", "replace_with", "replacement");
+  const oldText = firstString(input, "old", "oldText", "old_string", "oldString", "search", "find", "from");
+  const newText = firstString(input, "new", "newText", "new_string", "newString", "replace_with", "replacement", "to", "replace");
   if (!oldText && !newText) return "";
   const minus = oldText
     ? oldText.split("\n").map((line) => `-${line}`).join("\n")

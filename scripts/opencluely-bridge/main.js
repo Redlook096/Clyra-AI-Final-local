@@ -425,6 +425,7 @@ class ApplicationController {
       "CommandOrControl+Shift+V": () => windowManager.toggleVisibility(),
       "CommandOrControl+Shift+I": () => windowManager.toggleInteraction(),
       "CommandOrControl+Shift+C": () => windowManager.switchToWindow("chat"),
+      "CommandOrControl+Shift+E": () => this.captureSelectedTextContext(),
       "CommandOrControl+Shift+\\": () => this.clearSessionMemory(),
       "CommandOrControl+,": () => windowManager.showSettings(),
       "Alt+A": () => windowManager.toggleInteraction(),
@@ -445,6 +446,47 @@ class ApplicationController {
       const success = globalShortcut.register(accelerator, handler);
       logger.debug("Global shortcut registered", { accelerator, success });
     });
+  }
+
+  async _sendNativeShortcut(combo) {
+    const { execFile } = require('child_process');
+    const run = (command, args) => new Promise((resolve, reject) => execFile(command, args, { timeout: 8000 }, (error) => error ? reject(error) : resolve()));
+    if (process.platform === 'darwin') {
+      const helper = path.join(__dirname, 'macos-input.py');
+      for (const python of ['python3', '/usr/bin/python3', '/opt/homebrew/bin/python3']) {
+        try { await run(python, [helper, 'key', combo]); return; } catch (_) { /* try next runtime */ }
+      }
+      throw new Error('macOS Accessibility permission is required.');
+    }
+    if (process.platform === 'win32') {
+      const key = combo.toLowerCase().endsWith('+c') ? '^c' : '^v';
+      await run('powershell', ['-NoProfile', '-Command', `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${key}')`]);
+      return;
+    }
+    await run('xdotool', ['key', '--clearmodifiers', combo.replace('ctrl+', 'ctrl+')]);
+  }
+
+  async captureSelectedTextContext() {
+    const { clipboard } = require('electron');
+    const previousClipboard = clipboard.readText();
+    try {
+      await this._sendNativeShortcut(process.platform === 'darwin' ? 'cmd+c' : 'ctrl+c');
+      await new Promise((resolve) => setTimeout(resolve, 140));
+      const text = clipboard.readText().trim();
+      clipboard.writeText(previousClipboard);
+      if (!text) throw new Error('Select some text, then use the shortcut again.');
+      this._selectedTextContext = { text, capturedAt: Date.now() };
+      const mainWindow = windowManager.getWindow('main');
+      mainWindow?.show?.(); mainWindow?.focus?.();
+      windowManager.broadcastToAllWindows('selected-text-context', { text, length: text.length });
+      return { ok: true, text };
+    } catch (error) {
+      clipboard.writeText(previousClipboard);
+      const mainWindow = windowManager.getWindow('main');
+      mainWindow?.show?.(); mainWindow?.focus?.();
+      windowManager.broadcastToAllWindows('selected-text-context', { error: error.message });
+      return { ok: false, error: error.message };
+    }
   }
 
   setupServiceEventHandlers() {
@@ -490,6 +532,116 @@ class ApplicationController {
   ipcMain.handle("take-screenshot", () => this.triggerScreenshotOCR());
   ipcMain.handle("list-displays", () => captureService.listDisplays());
   ipcMain.handle("capture-area", (event, options) => captureService.captureAndProcess(options));
+  ipcMain.handle("begin-region-selection", () => windowManager.beginRegionSelection());
+  ipcMain.handle("cancel-region-selection", () => {
+    windowManager.endRegionSelection();
+    return { ok: true, cancelled: true };
+  });
+  ipcMain.handle("complete-region-selection", async (_event, area = {}) => {
+    const display = windowManager.currentDisplay || require('electron').screen.getPrimaryDisplay();
+    const scale = Number(display?.scaleFactor || 1);
+    windowManager.endRegionSelection();
+    try {
+      const capture = await captureService.captureAndProcess({
+        displayId: display?.id,
+        fullScreen: true,
+        // Selection is in logical display coordinates. Native capture buffers
+        // use device pixels, so normalise before cropping.
+        area: {
+          x: Math.max(0, Math.round(Number(area.x || 0) * scale)),
+          y: Math.max(0, Math.round(Number(area.y || 0) * scale)),
+          width: Math.max(1, Math.round(Number(area.width || 0) * scale)),
+          height: Math.max(1, Math.round(Number(area.height || 0) * scale)),
+        },
+      });
+      return this.#attachScreenContext(capture, 'Selected area');
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
+  ipcMain.handle("capture-current-screen", async () => {
+    try { return this.#attachScreenContext(await this.#captureForAgent(), 'Current screen'); }
+    catch (error) { return { ok: false, error: error.message }; }
+  });
+  ipcMain.handle("capture-current-window", async () => {
+    try { return this.#attachScreenContext(await captureService.captureAndProcess({ fullScreen: false }), 'Current window'); }
+    catch (error) { return { ok: false, error: error.message }; }
+  });
+  ipcMain.handle("attach-local-image", async (_event, payload = {}) => {
+    try {
+      const name = String(payload.name || 'Attached image').slice(0, 180);
+      const mimeType = String(payload.mimeType || 'image/png');
+      const data = String(payload.base64 || payload.data || '');
+      if (!/^image\/(?:png|jpe?g|webp|gif)$/i.test(mimeType)) {
+        return { ok: false, error: 'Choose a PNG, JPEG, WebP, or GIF image.' };
+      }
+      const imageBuffer = Buffer.from(data, 'base64');
+      if (!imageBuffer.length || imageBuffer.length > 12 * 1024 * 1024) {
+        return { ok: false, error: 'That image is empty or larger than 12 MB.' };
+      }
+      return this.#attachScreenContext({ imageBuffer, mimeType }, name);
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
+  ipcMain.handle("transform-selected-text", async (_event, payload = {}) => {
+    try {
+      const text = String(payload.text || this._selectedTextContext?.text || '').trim();
+      const action = String(payload.action || 'Improve').trim().slice(0, 80);
+      if (!text) return { ok: false, error: 'No selected text is available.' };
+      const prompt = `${action} the selected text below. Preserve its meaning and formatting intent. Return only the replacement text, without quotation marks or commentary.\n\nSELECTED TEXT:\n${text}`;
+      const history = sessionManager.getOptimizedHistory();
+      const result = await llmService.processTextWithSkillStream(prompt, 'general', history.recent, null);
+      const response = String(result?.response || '').trim();
+      if (!response) throw new Error('Clyra did not return replacement text.');
+      return { ok: true, response };
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
+  ipcMain.handle("replace-selected-text", async (_event, payload = {}) => {
+    const { clipboard } = require('electron');
+    const text = String(payload.text || '').trim();
+    if (!text || !this._selectedTextContext) return { ok: false, error: 'The original text selection is no longer available.' };
+    const previousClipboard = clipboard.readText();
+    try {
+      clipboard.writeText(text);
+      windowManager.getWindow('main')?.hide?.();
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      await this._sendNativeShortcut(process.platform === 'darwin' ? 'cmd+v' : 'ctrl+v');
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      clipboard.writeText(previousClipboard);
+      this._selectedTextContext = null;
+      return { ok: true, replaced: true };
+    } catch (error) { clipboard.writeText(previousClipboard); return { ok: false, error: error.message }; }
+  });
+  ipcMain.handle("screen-ripple-finished", () => { windowManager.finishScreenRipple(); return { ok: true }; });
+  ipcMain.handle("start-overlay-voice-call", async () => {
+    const mic = await this.ensureMicrophoneAccess();
+    if (mic?.ok === false) return { ok: false, error: mic.error || 'Microphone permission is required.' };
+    speechService.startRecording();
+    windowManager.broadcastToAllWindows('voice-call-state', { state: 'listening', source: 'microphone' });
+    return { ok: true, state: 'listening' };
+  });
+  ipcMain.handle("end-overlay-voice-call", () => {
+    speechService.stopRecording();
+    windowManager.broadcastToAllWindows('voice-call-state', { state: 'idle' });
+    return { ok: true, state: 'idle' };
+  });
+  ipcMain.handle("pause-desktop-control", async () => {
+    this._pausedControlTask = this.computerAgent?.activeTask || this._activeControlTask || null;
+    this.computerAgent?.stop?.();
+    await desktopControl.stopControl().catch(() => {});
+    windowManager.broadcastToAllWindows('control-status', { status: 'paused', message: 'Clyra paused — you have control.' });
+    return { ok: true, resumable: Boolean(this._pausedControlTask) };
+  });
+  ipcMain.handle("resume-desktop-control", async () => {
+    if (!this._pausedControlTask) return { ok: false, error: 'There is no paused task to continue.' };
+    const task = this._pausedControlTask;
+    this._pausedControlTask = null;
+    this._activeControlTask = task;
+    this.computerAgent.run(task, { softCloakFn: (cloak) => this.#softCloakOpenCluely(cloak) })
+      .catch((error) => windowManager.broadcastToAllWindows('control-status', { status: 'error', message: error.message }));
+    return { ok: true, state: 'controlling' };
+  });
     
     // Provide reliable clipboard write via main process
     ipcMain.handle("copy-to-clipboard", (event, text) => {
@@ -749,11 +901,13 @@ class ApplicationController {
           }
           // If the user asks about the screen/page, run the real screenshot vision path
           // so chat uses the same capture pipeline as ⌘⇧S (not text-only Clyra).
-          if (this._isScreenQuestion(text)) {
+          if (this._screenAttachment || this._isScreenQuestion(text)) {
             await this.triggerScreenshotOCR({
               userQuestion: text,
               visionMode: "screen-ask",
+              capture: this._screenAttachment || undefined,
             });
+            this._screenAttachment = null;
             return;
           }
           const sessionHistory = sessionManager.getOptimizedHistory();
@@ -773,6 +927,8 @@ class ApplicationController {
       const task = String(payload?.task || "").trim();
       if (!task) return { ok: false, error: "A task is required." };
       this._controlAbort = false;
+      this._activeControlTask = task;
+      void windowManager.playScreenRipple({ direction: 'out', intensity: 0.65 });
       this.computerAgent.stop();
       this.computerAgent
         .run(task, { softCloakFn: (cloak) => this.#softCloakOpenCluely(cloak) })
@@ -786,8 +942,31 @@ class ApplicationController {
       return { ok: true, started: true, engine: this.computerAgent.status().engine };
     });
 
+    ipcMain.handle("steer-desktop-control", async (_event, payload = {}) => {
+      const instruction = String(payload.instruction || '').trim();
+      if (!instruction) return { ok: false, error: 'An instruction is required.' };
+      if (!this._activeControlTask && !this._pausedControlTask) {
+        return { ok: false, error: 'There is no active control task to update.' };
+      }
+      const previous = this._activeControlTask || this._pausedControlTask;
+      const task = `${previous}\n\nLatest user correction (follow this now): ${instruction}`;
+      this.computerAgent?.stop?.();
+      await desktopControl.stopControl().catch(() => {});
+      this._pausedControlTask = null;
+      this._activeControlTask = task;
+      windowManager.broadcastToAllWindows('control-status', {
+        status: 'step',
+        message: `Updating task · ${instruction.slice(0, 96)}`,
+      });
+      this.computerAgent.run(task, { softCloakFn: (cloak) => this.#softCloakOpenCluely(cloak) })
+        .catch((error) => windowManager.broadcastToAllWindows('control-status', { status: 'error', message: error.message }));
+      return { ok: true, updated: true };
+    });
+
     ipcMain.handle("stop-desktop-control", async () => {
       this._controlAbort = true;
+      this._activeControlTask = null;
+      this._pausedControlTask = null;
       this.computerAgent?.stop?.();
       try {
         await desktopControl.stopControl();
@@ -798,6 +977,7 @@ class ApplicationController {
         status: "stopped",
         message: "Control stopped.",
       });
+      void windowManager.playScreenRipple({ direction: 'out', intensity: 0.45 });
       windowManager.showAllWindows();
       windowManager.centerMainWindowAtTop?.();
       return { ok: true };
@@ -1450,6 +1630,23 @@ class ApplicationController {
     );
   }
 
+  #attachScreenContext(capture, label) {
+    if (!capture?.imageBuffer?.length) throw new Error('Clyra could not capture that screen context. Check Screen Recording permission and try again.');
+    this._screenAttachment = capture;
+    const bytes = capture.imageBuffer.length;
+    // A thumbnail is intentionally only a renderer affordance. The full
+    // buffer remains in the main process and is sent to vision only on submit.
+    const preview = capture.imageBuffer.length <= 1_900_000
+      ? `data:${capture.mimeType || 'image/jpeg'};base64,${capture.imageBuffer.toString('base64')}`
+      : null;
+    windowManager.broadcastToAllWindows('screen-context-attached', {
+      label: label || 'Screen attached', preview,
+      bytes,
+      metadata: capture.metadata?.source || capture.metadata || null,
+    });
+    return { ok: true, label, preview, bytes };
+  }
+
   async #captureForAgent() {
     // Soft-cloak OpenCluely only — never hide() (macOS focus steal) or touch other apps.
     this.#softCloakOpenCluely(true);
@@ -1600,7 +1797,7 @@ class ApplicationController {
         if (process.env.CLYRA_HIDE_OVERLAY_DURING_CAPTURE === "1") {
           await new Promise((r) => setTimeout(r, 90));
         }
-        capture = await captureService.captureAndProcess({ fullScreen: true });
+        capture = opts.capture || await captureService.captureAndProcess({ fullScreen: true });
       } finally {
         this.#softCloakOpenCluely(false);
       }

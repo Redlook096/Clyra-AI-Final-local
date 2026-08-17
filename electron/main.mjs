@@ -368,7 +368,10 @@ function syncOpenCluelyBridgeFromRepo() {
     ["computer-agent-api.mjs", "computer-agent-api.mjs"],
     ["preload.js", "preload.js"],
     ["ui/bar-chat.js", "src/ui/bar-chat.js"],
+    ["ui/screen-ripple.js", "src/ui/screen-ripple.js"],
     ["html/index.html", "index.html"],
+    ["html/ripple.html", "html/ripple.html"],
+    ["html/region-select.html", "html/region-select.html"],
   ];
   for (const [srcName, destName] of copies) {
     const from = path.join(bridge, srcName);

@@ -1133,7 +1133,7 @@ export default function StudyBrainWorkspace({
   }
 
   return (
-    <div className="study-brain-shell flex h-full min-h-0 bg-[color:var(--clyra-canvas)] text-[color:var(--clyra-text)]">
+    <div className="study-brain-shell flex h-full min-h-0 pl-[220px] bg-[color:var(--clyra-canvas)] text-[color:var(--clyra-text)]">
       {/* Legacy rail stays mounted only to preserve its existing action bindings. */}
       <aside className="hidden" aria-hidden="true">
         <div className="flex items-center gap-2.5 border-b border-[color:var(--clyra-border)] px-3.5 py-3.5">
@@ -1230,7 +1230,7 @@ export default function StudyBrainWorkspace({
           <motion.section
             initial={{ opacity: 0, x: -7, scale: .985 }} animate={{ opacity: 1, x: 0, scale: 1 }} exit={{ opacity: 0, x: -5, scale: .985 }}
             transition={{ duration: .16, ease: [0.16, 1, 0.3, 1] }}
-            className="study-dock-popover fixed left-[86px] z-40 flex w-[286px] max-w-[calc(100vw-104px)] flex-col overflow-hidden rounded-[14px] border border-[color:var(--clyra-border)] bg-white/95 p-2 shadow-[0_16px_42px_rgba(15,23,42,.12)] backdrop-blur-xl"
+            className="study-dock-popover fixed left-[232px] z-40 flex w-[286px] max-w-[calc(100vw-248px)] flex-col overflow-hidden rounded-[14px] border border-[color:var(--clyra-border)] bg-white/95 p-2 shadow-[0_16px_42px_rgba(15,23,42,.12)] backdrop-blur-xl"
             style={{ top: `min(calc(100vh - 420px), max(16px, ${dockPanelTop - 22}px))`, maxHeight: "min(400px, calc(100vh - 32px))" }}
             role="dialog" aria-label="Study spaces"
           >
@@ -1244,7 +1244,7 @@ export default function StudyBrainWorkspace({
           <motion.section
             initial={{ opacity: 0, x: -7, scale: .985 }} animate={{ opacity: 1, x: 0, scale: 1 }} exit={{ opacity: 0, x: -5, scale: .985 }}
             transition={{ duration: .16, ease: [0.16, 1, 0.3, 1] }}
-            className="study-dock-popover fixed left-[86px] z-40 flex w-[294px] max-w-[calc(100vw-104px)] flex-col overflow-hidden rounded-[14px] border border-[color:var(--clyra-border)] bg-white/95 p-2 shadow-[0_16px_42px_rgba(15,23,42,.12)] backdrop-blur-xl"
+            className="study-dock-popover fixed left-[232px] z-40 flex w-[294px] max-w-[calc(100vw-248px)] flex-col overflow-hidden rounded-[14px] border border-[color:var(--clyra-border)] bg-white/95 p-2 shadow-[0_16px_42px_rgba(15,23,42,.12)] backdrop-blur-xl"
             style={{ top: `min(calc(100vh - 420px), max(16px, ${dockPanelTop - 22}px))`, maxHeight: "min(400px, calc(100vh - 32px))" }}
             role="dialog" aria-label="Current study space"
           >

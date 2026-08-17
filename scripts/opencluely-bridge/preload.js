@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sendChatMessage: (text) => ipcRenderer.invoke('send-chat-message', text),
   getSkillPrompt: (skillName) => ipcRenderer.invoke('get-skill-prompt', skillName),
   startDesktopControl: (task) => ipcRenderer.invoke('start-desktop-control', { task }),
+  steerDesktopControl: (instruction) => ipcRenderer.invoke('steer-desktop-control', { instruction }),
   stopDesktopControl: () => ipcRenderer.invoke('stop-desktop-control'),
   getDesktopControlStatus: () => ipcRenderer.invoke('get-desktop-control-status'),
   onControlStatus: (callback) => ipcRenderer.on('control-status', callback),
@@ -116,6 +117,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Display management
   listDisplays: () => ipcRenderer.invoke('list-displays'),
   captureArea: (options) => ipcRenderer.invoke('capture-area', options),
+  beginRegionSelection: () => ipcRenderer.invoke('begin-region-selection'),
+  completeRegionSelection: (area) => ipcRenderer.invoke('complete-region-selection', area),
+  cancelRegionSelection: () => ipcRenderer.invoke('cancel-region-selection'),
+  captureCurrentScreen: () => ipcRenderer.invoke('capture-current-screen'),
+  captureCurrentWindow: () => ipcRenderer.invoke('capture-current-window'),
+  attachLocalImage: (payload) => ipcRenderer.invoke('attach-local-image', payload),
+  transformSelectedText: (payload) => ipcRenderer.invoke('transform-selected-text', payload),
+  replaceSelectedText: (text) => ipcRenderer.invoke('replace-selected-text', { text }),
+  startOverlayVoiceCall: () => ipcRenderer.invoke('start-overlay-voice-call'),
+  endOverlayVoiceCall: () => ipcRenderer.invoke('end-overlay-voice-call'),
+  pauseDesktopControl: () => ipcRenderer.invoke('pause-desktop-control'),
+  resumeDesktopControl: () => ipcRenderer.invoke('resume-desktop-control'),
+  rippleFinished: () => ipcRenderer.invoke('screen-ripple-finished'),
   
   // Event listeners
   onTranscriptionReceived: (callback) => ipcRenderer.on('transcription-received', callback),
@@ -141,6 +155,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onRecordingStopped: (callback) => ipcRenderer.on('recording-stopped', callback),
   onCodingLanguageChanged: (callback) => ipcRenderer.on('coding-language-changed', callback),
   onMainWindowShown: (callback) => ipcRenderer.on('main-window-shown', callback),
+  onScreenContextAttached: (callback) => ipcRenderer.on('screen-context-attached', callback),
+  onSelectedTextContext: (callback) => ipcRenderer.on('selected-text-context', callback),
+  onScreenRipple: (callback) => ipcRenderer.on('screen-ripple', callback),
+  onVoiceCallState: (callback) => ipcRenderer.on('voice-call-state', callback),
   
   // Generic receive method
   receive: (channel, callback) => ipcRenderer.on(channel, callback),

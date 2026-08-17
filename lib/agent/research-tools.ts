@@ -171,9 +171,14 @@ export async function saveResearchContext(
 }
 
 export function inferBrandResearchNeeded(prompt: string): boolean {
-  return /\b(openai|apple|google|stripe|notion|linear|netflix|tesla|microsoft|amazon|shopify|figma|airbnb|uber|spotify)\b/i.test(prompt) ||
-    /\b(landing page|homepage|website|recreate|clone|inspired by|like)\b/i.test(prompt) &&
-      /\b(for|of)\s+[A-Z][A-Za-z0-9&.\-\s]{2,30}/.test(prompt);
+  // Public products, URLs and versioned libraries drift. Treat them as a
+  // research-before-build task rather than asking the coding model to invent
+  // an approximation from stale memory. Deliberately exclude ordinary local
+  // refactors so routine work stays fast and offline.
+  const publicReference = /\b(openai|apple|google|stripe|notion|linear|netflix|tesla|microsoft|amazon|shopify|figma|airbnb|uber|spotify|cursor|claude|github|supabase|firebase|vercel)\b/i;
+  const productLanguage = /\b(landing page|homepage|website|recreate|clone|inspired by|make (?:it|this) like|match(?:ing)?|integrate|integration|api|sdk|library|documentation|latest|current release|design system)\b/i;
+  const url = /https?:\/\//i;
+  return url.test(prompt) || publicReference.test(prompt) || productLanguage.test(prompt) && /\b(for|of|like|with|using)\s+[A-Z][A-Za-z0-9&.\-\s]{2,42}/.test(prompt);
 }
 
 export async function runBrandResearch(
@@ -189,10 +194,25 @@ export async function runBrandResearch(
 
   const sources: string[] = [];
   const notes: string[] = [];
+  const officialDomains: Record<string, string> = {
+    openai: "https://openai.com",
+    apple: "https://www.apple.com",
+    google: "https://www.google.com",
+    stripe: "https://stripe.com/docs",
+    notion: "https://www.notion.so",
+    linear: "https://linear.app",
+    figma: "https://www.figma.com",
+    cursor: "https://www.cursor.com",
+    supabase: "https://supabase.com/docs",
+    firebase: "https://firebase.google.com/docs",
+    vercel: "https://vercel.com/docs",
+  };
 
   try {
-    const results = await webSearch(`${brand} official site product`, 6);
-    for (const url of results.slice(0, 4)) {
+    const knownDomain = Object.entries(officialDomains).find(([name]) => new RegExp(`\\b${name}\\b`, "i").test(prompt))?.[1];
+    const results = await webSearch(`${brand} official site product documentation`, 6);
+    const orderedResults = [...new Set([knownDomain, ...results].filter(Boolean) as string[])];
+    for (const url of orderedResults.slice(0, 4)) {
       onStatus?.(`Fetching ${url}…`);
       const fetched = await fetchUrl(url);
       if (!fetched.blocked && fetched.text) {

@@ -6,9 +6,15 @@ import os from "node:os";
 
 const DEFAULT_AGENTS_MD = `# Clyra Code Agent
 
-Be an adaptive expert coding agent like Cursor or Codex. Understand intent → investigate → plan across files → act → inspect → adapt → validate until complete. No fixed tool-call quota. Scale effort to the request. Read before editing. Prefer production-quality work. Fix failures after checks.
+You are Clyra's autonomous software engineer. Complete the user's actual objective in this repository; decide the next highest-value action from repository evidence rather than following a fixed workflow. Scale work to the task: a small change may need inspect → edit → verify, while a feature or refactor may need repeated exploration, planning, implementation, recovery and review.
 
-Work in real, adaptive phases rather than an unstructured command log. For non-trivial tasks, use the available todo/task-list tool before implementation and keep it updated as discoveries change the plan. Each phase should be a coherent unit such as inspection, implementation, validation, or recovery. Between meaningful phases, provide a concise user-facing progress update (one to three sentences) describing what was actually learned or completed and the next step. Never reveal hidden chain-of-thought or invent actions, files, checks, or results.
+For medium, large, investigative, debugging, refactor and greenfield work, use the real todo/task-list tool to track meaningful engineering goals (not every tool call). Keep normally one primary todo active; reopen or revise todos when new evidence or a failed check proves an assumption wrong. Treat PLAN.md as durable task memory when it exists: read relevant sections at major transitions, revise it when the plan changes materially, and do not finish until its success criteria have evidence.
+
+Read before changing unfamiliar code. Use progressively narrower retrieval instead of dumping the repository into context. After significant observations, decide whether an edit is justified, what its blast radius is, and the cheapest meaningful verification. Test/build/typecheck failures are observations to investigate and repair, not reasons to stop. Before declaring completion, inspect the changed files and working diff, verify the requested outcome, and avoid unrelated edits.
+
+Execution discipline for a new product: inspect only the project root/configuration and the directly relevant source files, then start writing the implementation. Do not probe the host filesystem, shell configuration, user directories, environment variables, provider settings, or installed tools beyond one focused capability check. For a multi-file greenfield app, make the first implementation edit within the first three tool calls after orientation; continue with focused edits rather than repeatedly rediscovering the repository. A starter scaffold is only a baseline—change it to satisfy the specific request before finishing.
+
+Between meaningful phases, provide one concise user-facing progress update about what was actually learned or completed and what comes next. Never expose private chain-of-thought, invent actions, files, results, test passes, or progress.
 
 Project architecture rules — for every coding request:
 - Inspect the existing project structure first (list files, read configs) and match its framework and conventions.
@@ -39,16 +45,42 @@ type ProjectRuntime = {
   listeners: Set<(event: ClyraAgentEvent) => void>;
   events: ClyraAgentEvent[];
   partStates: Map<string, string>;
-  reconciliation: Map<string, { fingerprint: string; idleSince?: number; emptyRetries?: number }>;
+  reconciliation: Map<string, { fingerprint: string; idleSince?: number; emptyRetries?: number; completionRetries?: number }>;
 };
 
-async function hasPortableIosStarter(projectPath: string) {
-  try {
-    const entries = await fs.promises.readdir(projectPath, { recursive: true });
-    return entries.some((entry) => typeof entry === "string" && entry.endsWith("App.swift"));
-  } catch {
-    return false;
-  }
+type TaskComplexity = "trivial" | "small" | "medium" | "large" | "investigative" | "debugging" | "refactor" | "greenfield";
+
+type TaskLedger = {
+  taskId: string;
+  objective: string;
+  complexity: TaskComplexity;
+  status: "executing" | "completed" | "failed" | "cancelled";
+  planPath?: string;
+  todos: Array<{ id: string; title: string; status: "pending" | "in_progress" | "completed" }>;
+  modifiedFiles: string[];
+  verification: { passed: string[]; failed: string[] };
+  createdAt: number;
+  updatedAt: number;
+};
+
+function classifyTask(text: string): TaskComplexity {
+  const value = text.toLowerCase();
+  if (/\b(debug|diagnose|investigate|why .*fail|not working|broken)\b/.test(value)) return "debugging";
+  if (/\b(refactor|migrate|rewrite|architecture)\b/.test(value)) return "refactor";
+  if (/\b(build|create|make)\b/.test(value) && /\b(app|feature|website|system|dashboard)\b/.test(value)) return "greenfield";
+  if (/\b(multi|complex|advanced|full|complete|integrat|across)\b/.test(value) || text.length > 420) return "large";
+  if (/\b(add|implement|improve|support|update)\b/.test(value)) return "medium";
+  if (text.length < 70) return "trivial";
+  return "small";
+}
+
+function defaultTodos(objective: string, complexity: TaskComplexity): TaskLedger["todos"] {
+  if (complexity === "trivial" || complexity === "small") return [];
+  return [
+    { id: "orient", title: "Understand the relevant repository implementation", status: "in_progress" },
+    { id: "implement", title: `Implement: ${objective.slice(0, 90)}`, status: "pending" },
+    { id: "verify", title: "Verify the requested outcome", status: "pending" },
+  ];
 }
 
 export type CodingModelStatus =
@@ -195,6 +227,148 @@ export class OpenCodeRuntimeManager {
     return this.client(project.projectPath).session.diff({ path: { id: sessionId }, throwOnError: true });
   }
 
+  /**
+   * Keep a small, durable execution checkpoint outside the conversation. This
+   * is deliberately support state for OpenCode—not a second scheduler. The
+   * model still selects tools and adapts the plan itself through AGENTS.md.
+   */
+  private async beginTaskLedger(projectPath: string, sessionId: string, objective: string) {
+    const complexity = classifyTask(objective);
+    const agentRoot = path.join(projectPath, ".clyra", "agent", "sessions");
+    await fs.promises.mkdir(agentRoot, { recursive: true });
+    const gitignorePath = path.join(projectPath, ".gitignore");
+    const gitignore = await fs.promises.readFile(gitignorePath, "utf8").catch(() => "");
+    if (!gitignore.split(/\r?\n/).includes(".clyra/agent/")) {
+      await fs.promises.writeFile(gitignorePath, `${gitignore.replace(/\s*$/, "")}\n.clyra/agent/\n`, "utf8");
+    }
+    const planPath = path.join(projectPath, "PLAN.md");
+    const needsPlan = ["medium", "large", "investigative", "debugging", "refactor", "greenfield"].includes(complexity);
+    if (needsPlan) {
+      const exists = await fs.promises.stat(planPath).then(() => true).catch(() => false);
+      if (!exists) {
+        await fs.promises.writeFile(planPath, `# Task\n\n${objective}\n\n# Success Criteria\n\n- Implement the requested outcome without unrelated changes.\n- Verify it using the strongest practical check.\n\n# Repository Findings\n\n- Pending orientation.\n\n# Implementation Plan\n\n## 1. Understand the relevant implementation\nStatus: in progress\n\n## 2. Implement the requested change\nStatus: pending\n\n## 3. Verify and review the result\nStatus: pending\n\n# Decisions\n\n- Pending repository evidence.\n\n# Discoveries\n\n- Pending orientation.\n\n# Verification\n\n- [ ] Select focused checks from the repository.\n\n# Completion\n\n- Pending verification.\n`, "utf8");
+      }
+    }
+    const now = Date.now();
+    const ledger: TaskLedger = {
+      taskId: sessionId,
+      objective,
+      complexity,
+      status: "executing",
+      planPath: needsPlan ? "PLAN.md" : undefined,
+      todos: defaultTodos(objective, complexity),
+      modifiedFiles: [],
+      verification: { passed: [], failed: [] },
+      createdAt: now,
+      updatedAt: now,
+    };
+    await fs.promises.writeFile(path.join(agentRoot, `${sessionId}.json`), JSON.stringify(ledger, null, 2), "utf8");
+  }
+
+  private async checkpointTaskLedger(project: ProjectRuntime, sessionId: string, status: TaskLedger["status"]) {
+    const ledgerPath = path.join(project.projectPath, ".clyra", "agent", "sessions", `${sessionId}.json`);
+    try {
+      const ledger = JSON.parse(await fs.promises.readFile(ledgerPath, "utf8")) as TaskLedger;
+      const diff = await this.client(project.projectPath).session.diff({ path: { id: sessionId }, throwOnError: true }).catch(() => []);
+      const messages = await this.client(project.projectPath).session.messages({ path: { id: sessionId }, throwOnError: true }).catch(() => []);
+      const failures = messages.flatMap((message) => message.parts ?? []).filter((part) => (part as { state?: { status?: string } }).state?.status === "error").map((part) => String((part as { state?: { error?: unknown } }).state?.error || "Tool failed"));
+      ledger.status = status;
+      const sessionFiles = (diff as Array<{ file?: string }>).map((entry) => entry.file).filter((file): file is string => Boolean(file));
+      // Some OpenCode providers stream real write parts but do not populate
+      // session.diff until a later compaction. Preserve the actual project
+      // evidence instead of reporting an empty changed-files ledger.
+      ledger.modifiedFiles = [...new Set([...sessionFiles, ...await this.filesTouchedSince(project.projectPath, ledger.createdAt)])];
+      ledger.verification.failed = failures.slice(-8);
+      if (status === "completed") {
+        ledger.todos = ledger.todos.map((todo) => ({ ...todo, status: "completed" }));
+        if (ledger.planPath) {
+          await fs.promises.appendFile(path.join(project.projectPath, ledger.planPath), `\n# Completion\n\nCompleted by OpenCode after the available task checks. Review the action stream and changed files for exact evidence.\n`, "utf8").catch(() => undefined);
+        }
+      }
+      ledger.updatedAt = Date.now();
+      await fs.promises.writeFile(ledgerPath, JSON.stringify(ledger, null, 2), "utf8");
+    } catch {
+      // Checkpoints must never block a real OpenCode run.
+    }
+  }
+
+  /**
+   * Best-effort fallback for providers whose session.diff lags behind their
+   * streamed write events. This runs only at task checkpoints/completion, not
+   * while the user is typing or an action stream is rendering.
+   */
+  private async filesTouchedSince(projectPath: string, since: number): Promise<string[]> {
+    const ignored = new Set([".git", ".agent", ".clyra", "node_modules", "dist", "build", ".next"]);
+    const touched: string[] = [];
+    const visit = async (directory: string): Promise<void> => {
+      const entries = await fs.promises.readdir(directory, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        if (entry.isDirectory() && ignored.has(entry.name)) continue;
+        const absolute = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          await visit(absolute);
+          continue;
+        }
+        if (!entry.isFile()) continue;
+        const stat = await fs.promises.stat(absolute).catch(() => undefined);
+        // A tiny clock skew allowance keeps files written immediately after a
+        // task starts from being missed on filesystems with coarse timestamps.
+        if (stat && Math.max(stat.mtimeMs, stat.birthtimeMs) >= since - 2_000) {
+          touched.push(path.relative(projectPath, absolute));
+        }
+      }
+    };
+    await visit(projectPath);
+    return touched;
+  }
+
+  /**
+   * A model saying "done" is not enough evidence for a greenfield app. This
+   * guard only applies to substantial build requests and uses real session
+   * diffs/tool history to request another turn in the same OpenCode session.
+   * It never fabricates work or rewrites the model's result.
+   */
+  private async completionGap(project: ProjectRuntime, sessionId: string, messages: Array<{ parts?: Array<unknown> }>) {
+    const ledgerPath = path.join(project.projectPath, ".clyra", "agent", "sessions", `${sessionId}.json`);
+    const ledger = await fs.promises.readFile(ledgerPath, "utf8")
+      .then((value) => JSON.parse(value) as TaskLedger)
+      .catch(() => undefined);
+    if (!ledger || !["greenfield", "large"].includes(ledger.complexity)) return undefined;
+
+    const diff = await this.client(project.projectPath).session.diff({ path: { id: sessionId }, throwOnError: true }).catch(() => []);
+    const sessionFiles = (diff as Array<{ file?: string }>).map((entry) => entry.file).filter((file): file is string => Boolean(file));
+    // Use the OpenCode diff whenever it is present, but fall back to files
+    // truly touched after this task began if a provider has not materialised
+    // its diff snapshot yet. The fallback is evidence-based, not a guessed
+    // action count, so it cannot turn a no-op into a completed feature.
+    const files = [...new Set([...sessionFiles, ...await this.filesTouchedSince(project.projectPath, ledger.createdAt)])];
+    const implementationFiles = files.filter((file) => !/(^|\/)(PLAN\.md|AGENTS\.md|\.gitignore|package-lock\.json)$/i.test(file));
+    const toolText = JSON.stringify(messages.map((message) => message.parts ?? []));
+    const hasValidation = /(?:npm\s+run\s+(?:build|test|typecheck|lint)|\b(?:typecheck|vitest|jest|eslint|swiftc|swift\s+build|xcodebuild)\b)/i.test(toolText);
+    const isSwiftTask = /\b(?:swift|swiftui|ios|iphone)\b/i.test(ledger.objective);
+    const minimumFiles = isSwiftTask ? 2 : 3;
+    if (implementationFiles.length < minimumFiles) {
+      return `only ${implementationFiles.length} implementation file${implementationFiles.length === 1 ? "" : "s"} changed (need a real multi-file implementation)`;
+    }
+    if (!hasValidation) return "no real build, typecheck, test, or Swift validation command ran";
+    return undefined;
+  }
+
+  private async requestCompletionRecovery(project: ProjectRuntime, sessionId: string, reason: string) {
+    this.publish(project, { type: "session.status", properties: { sessionID: sessionId, status: { type: "busy" } } });
+    await this.client(project.projectPath).session.promptAsync({
+      path: { id: sessionId },
+      body: {
+        model: resolveRecoveryModel(),
+        parts: [{
+          type: "text",
+          text: `Do not complete this task yet: ${reason}. Continue the same task now. Implement the remaining product across the appropriate real files, make the visible interactions work, run a relevant validation command, inspect the preview where available, and repair any failure. Do not only describe a plan or change configuration.`,
+        }],
+      },
+      throwOnError: true,
+    });
+  }
+
   async prompt(projectId: string, sessionId: string, text: string, agent?: string, model?: { providerID: string; modelID: string }) {
     const project = this.requiredSession(projectId, sessionId);
     // The model always comes from Clyra's server-side provider configuration.
@@ -202,6 +376,7 @@ export class OpenCodeRuntimeManager {
     // Adaptive behaviour is guided via AGENTS.md (OpenCode reads it), not by
     // injecting preface text into the user turn (which models may echo).
     await this.ensureAgentsGuide(project.projectPath);
+    await this.beginTaskLedger(project.projectPath, sessionId, text);
     this.publish(project, { type: "session.status", properties: { sessionID: sessionId, status: { type: "busy" } } });
     const response = await this.client(project.projectPath).session.promptAsync({
       path: { id: sessionId },
@@ -218,7 +393,10 @@ export class OpenCodeRuntimeManager {
       // Upgrade projects still carrying the original seeded guidance so the
       // multi-file architecture rules apply to existing workspaces too.
       const existing = await fs.promises.readFile(agentsPath, "utf8");
-      if (/Be an adaptive expert coding agent\./.test(existing) && !/Project architecture rules/.test(existing)) {
+      const isPortableIosGuide = /Cross-platform SwiftUI Source Mode|swiftui-design-skill\/SKILL\.md/.test(existing);
+      if (/Be an adaptive expert coding agent\.|Clyra Code Agent/.test(existing)
+        && !/PLAN\.md as durable task memory/.test(existing)
+        && !isPortableIosGuide) {
         await fs.promises.writeFile(agentsPath, DEFAULT_AGENTS_MD, "utf8").catch(() => undefined);
       }
     } catch {
@@ -228,7 +406,9 @@ export class OpenCodeRuntimeManager {
 
   async abort(projectId: string, sessionId: string) {
     const project = this.requiredSession(projectId, sessionId);
-    return this.client(project.projectPath).session.abort({ path: { id: sessionId }, throwOnError: true });
+    const result = await this.client(project.projectPath).session.abort({ path: { id: sessionId }, throwOnError: true });
+    await this.checkpointTaskLedger(project, sessionId, "cancelled");
+    return result;
   }
 
   async respondPermission(projectId: string, sessionId: string, permissionId: string, response: string) {
@@ -366,7 +546,7 @@ export class OpenCodeRuntimeManager {
       // final assistant text lands. Treat a long-stable fingerprint as idle so
       // Thinking collapses and the live preview can refresh.
       const idleSince = !changed ? (previous?.idleSince ?? now) : undefined;
-      project.reconciliation.set(sessionId, { fingerprint, idleSince, emptyRetries: previous?.emptyRetries ?? 0 });
+      project.reconciliation.set(sessionId, { fingerprint, idleSince, emptyRetries: previous?.emptyRetries ?? 0, completionRetries: previous?.completionRetries ?? 0 });
 
       // The server can briefly report idle in between tool-call turns. Keep
       // reconciling through that transition and only complete after a stable
@@ -382,16 +562,10 @@ export class OpenCodeRuntimeManager {
         const hasTool = parts.some((part) => part.type === "tool" || Boolean(part.tool));
         const hasErrorPart = parts.some((part) => part.type === "error" || (part.state as { status?: string } | undefined)?.status === "error");
         if (assistant && !hasText && !hasTool && !hasErrorPart) {
-          // iOS requests receive a real multi-file SwiftUI source starter
-          // before the model runs. If a provider ends a tool-only turn after
-          // inspecting that starter, do not keep the visible iPhone preview
-          // blocked through several blank recovery cycles. The source is
-          // already usable and the same chat can be refined in a later turn.
-          if (await hasPortableIosStarter(project.projectPath)) {
-            this.publish(project, { type: "session.idle", properties: { sessionID: sessionId } });
-            project.reconciliation.delete(sessionId);
-            return;
-          }
+          // A generated Swift starter is only a baseline, never evidence that
+          // the user's requested product is complete. Continue the same
+          // OpenCode session through its bounded recovery path instead of
+          // presenting an early, generic iOS scaffold as a finished app.
           // Deep tool-use runs can occasionally end with a blank continuation
           // from the model even though OpenCode has already completed real
           // reads/commands. Resume that *same* session before declaring the
@@ -440,10 +614,32 @@ export class OpenCodeRuntimeManager {
           const message = authHint
             || "The configured coding model stopped before completing its final response. Completed work is preserved; retry to continue the same task.";
           this.lastError = message;
+          await this.checkpointTaskLedger(project, sessionId, "failed");
           this.publish(project, { type: "session.error", properties: { sessionID: sessionId, error: { message } } });
           project.reconciliation.delete(sessionId);
           return;
         }
+        const gap = await this.completionGap(project, sessionId, messages);
+        const completionRetries = previous?.completionRetries ?? 0;
+        if (gap && completionRetries < 3) {
+          project.reconciliation.set(sessionId, { fingerprint: "", completionRetries: completionRetries + 1, emptyRetries: previous?.emptyRetries ?? 0 });
+          try {
+            await this.requestCompletionRecovery(project, sessionId, gap);
+            setTimeout(() => void this.reconcileSession(project, sessionId, 0), 900).unref();
+            return;
+          } catch (retryError) {
+            this.lastError = retryError instanceof Error ? retryError.message : String(retryError);
+          }
+        }
+        if (gap) {
+          const message = `The coding agent stopped before the requested product was complete: ${gap}. Completed work is preserved; retry to continue the same task.`;
+          this.lastError = message;
+          await this.checkpointTaskLedger(project, sessionId, "failed");
+          this.publish(project, { type: "session.error", properties: { sessionID: sessionId, error: { message } } });
+          project.reconciliation.delete(sessionId);
+          return;
+        }
+        await this.checkpointTaskLedger(project, sessionId, "completed");
         this.publish(project, { type: "session.idle", properties: { sessionID: sessionId } });
         project.reconciliation.delete(sessionId);
         return;

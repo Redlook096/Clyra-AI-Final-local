@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { ArrowDown, ChevronRight } from "lucide-react";
+import { ArrowDown } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { MarkdownMessageContent } from "../MarkdownMessageContent";
 import { ShiningText } from "../ShiningText";
@@ -11,72 +11,34 @@ import { stripFilePrefix } from "./format";
 import { AGENT_EASE, ROW_ENTER, SUBTLE_ENTER } from "./motion";
 
 /**
- * One persistent thinking row. While running it shimmers with the same sweep
- * as the live preview; when the backend ends the reasoning phase the same
- * row settles into "Thought for Xs" — the shimmer keeps sweeping underneath
- * while the completed label crossfades over it, then the container width
- * eases to the new label. No unmount, no frozen state, no teleport.
+ * A single quiet reasoning marker. It only shows the durable elapsed label
+ * after a real reasoning event completes; no disclosure UI or grouped state.
  */
 function ThinkingEvent({ entry }: { entry: Extract<LogEntry, { type: "reasoning" }> }) {
   const completed = Boolean(entry.endedAt);
-  const seconds = entry.endedAt
-    ? Math.max(1, Math.round((entry.endedAt - entry.ts) / 1000))
-    : 0;
-
-  // Restored history renders the settled label immediately — no morph replay.
-  const [historical] = useState(() => {
-    if (!entry.endedAt) return false;
-    return Date.now() - entry.endedAt > 4000;
-  });
-  const settled = completed && historical;
-
-  const [dropShimmer, setDropShimmer] = useState(settled);
-  const [expanded, setExpanded] = useState(false);
-  const summary = entry.text?.trim();
-
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (settled) return;
-    if (!completed) {
-      setDropShimmer(false);
-      return;
-    }
-    const timer = window.setTimeout(() => setDropShimmer(true), 640);
-    return () => window.clearTimeout(timer);
-  }, [completed, settled]);
+    if (completed) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, [completed]);
+  const seconds = Math.max(1, Math.round(((entry.endedAt ?? now) - entry.ts) / 1000));
+  const showDuration = completed || seconds >= 3;
 
   return (
-    <motion.div layout className="relative py-[2px]">
-      <button
-        type="button"
-        disabled={!completed || !summary}
-        aria-expanded={completed && summary ? expanded : undefined}
-        onClick={() => summary && setExpanded((value) => !value)}
-        className={cn(
-          "flex min-h-[22px] min-w-0 items-center gap-1.5 rounded-[5px] text-left transition-colors",
-          completed && summary && "hover:bg-black/[0.025]",
-        )}
-      >
-        {!dropShimmer ? (
-          <div className={cn("flex min-w-0 items-center gap-2 transition-opacity duration-300 ease-out", completed && "opacity-0")} aria-hidden={completed || undefined}>
-            <ShiningText text={summary || "Thinking"} play className="truncate text-[14px] font-medium leading-5 tracking-normal" />
-          </div>
-        ) : null}
-        <AnimatePresence>
-          {completed ? (
-            <motion.div key="completed" className={cn("flex items-center gap-1.5", !dropShimmer && "absolute inset-0")} initial={settled ? { opacity: 1, x: 0 } : { opacity: 0, x: -3 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.22, ease: AGENT_EASE }}>
-              {summary ? <motion.span aria-hidden animate={{ rotate: expanded ? 90 : 0 }} transition={{ duration: 0.18, ease: AGENT_EASE }} className="inline-flex w-3 justify-center text-[#A0A2A6]"><ChevronRight className="h-3 w-3" /></motion.span> : <span className="w-3" />}
-            <span className="text-[13px] leading-5 text-[#8A8D92]">Thought · {seconds}s</span>
-            </motion.div>
-          ) : null}
-        </AnimatePresence>
-      </button>
-      <AnimatePresence initial={false}>
-        {completed && expanded && summary ? (
-          <motion.p initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2, ease: AGENT_EASE }} className="ml-4 max-w-[620px] overflow-hidden pb-1 pt-0.5 text-[13px] leading-5 text-[#8A8D92]">
-            {summary}
-          </motion.p>
-        ) : null}
-      </AnimatePresence>
+    <motion.div layout className="flex min-h-[22px] items-center py-[2px]">
+      {completed ? (
+        <motion.span initial={{ opacity: 0, y: -1 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.16, ease: AGENT_EASE }} className="text-[13px] leading-5 text-[#8A8D92]">
+          Thought · {seconds}s
+        </motion.span>
+      ) : (
+        <>
+          <ShiningText text="Thinking" play className="truncate text-[13px] font-medium leading-5 tracking-normal" />
+          <span className="ml-1 inline-block min-w-[2.5ch] text-[11px] tabular-nums text-[#8A8D92]">
+            {showDuration ? `${seconds}s` : ""}
+          </span>
+        </>
+      )}
     </motion.div>
   );
 }
@@ -264,9 +226,7 @@ export function CompletionSummary({
   );
 }
 
-type TranscriptItem =
-  | { type: "entry"; entry: LogEntry; id: string }
-  | { type: "phase"; id: string; actions: AgentAction[]; thoughts: Extract<LogEntry, { type: "reasoning" }>[]; ts: number };
+type TranscriptItem = { type: "entry"; entry: LogEntry; id: string };
 
 /**
  * Keeps the activity stream readable during a busy OpenCode phase. A later
@@ -304,7 +264,7 @@ function SequencedActionRows({
     releaseTimer.current = window.setTimeout(() => {
       releasing.current = false;
       setRevealed((value) => Math.min(actions.length, value + 1));
-    }, reduced ? 0 : 500);
+    }, reduced ? 0 : 120);
   };
 
   useEffect(() => {
@@ -340,6 +300,7 @@ function SequencedActionRows({
 function phaseLabel(actions: AgentAction[]) {
   const reads = actions.filter((action) => action.kind === "read").length;
   const searches = actions.filter((action) => action.kind === "search").length;
+  const research = actions.filter((action) => action.kind === "research").length;
   const lists = actions.filter((action) => action.kind === "list").length;
   const edits = actions.filter((action) => /^(edit|create|delete)$/.test(action.kind));
   const commands = actions.filter((action) => /^(command|build|check|test|preview)$/.test(action.kind));
@@ -352,9 +313,14 @@ function phaseLabel(actions: AgentAction[]) {
     const validation = commands.some((action) => /^(build|check|test)$/.test(action.kind));
     return { text: validation ? "Ran validation" : `Ran ${commands.length} command${commands.length === 1 ? "" : "s"}`, additions, deletions };
   }
-  if ((reads || searches || lists) && !edits.length && !commands.length) {
-    const parts = [reads ? `${reads} file${reads === 1 ? "" : "s"}` : "", searches ? `${searches} search${searches === 1 ? "" : "es"}` : "", lists ? `${lists} folder${lists === 1 ? "" : "s"}` : ""].filter(Boolean);
-    return { text: `Explored ${parts.join(" and ")}`, additions, deletions };
+  if ((reads || searches || research || lists) && !edits.length && !commands.length) {
+    const parts = [
+      research ? `${research} web source${research === 1 ? "" : "s"}` : "",
+      reads ? `${reads} file${reads === 1 ? "" : "s"}` : "",
+      searches ? `${searches} codebase search${searches === 1 ? "" : "es"}` : "",
+      lists ? `${lists} folder${lists === 1 ? "" : "s"}` : "",
+    ].filter(Boolean);
+    return { text: research ? `Researched ${parts.join(" and ")}` : `Explored ${parts.join(" and ")}`, additions, deletions };
   }
   const parts = [edits.length ? "edited files" : "", reads || searches || lists ? "read files" : "", commands.length ? "ran commands" : ""].filter(Boolean);
   return { text: parts.length ? `${parts[0][0].toUpperCase()}${parts[0].slice(1)}${parts.length > 1 ? `, ${parts.slice(1).join(", ")}` : ""}` : "Completed agent work", additions, deletions };
@@ -548,7 +514,22 @@ export function Conversation({
   const hasOpenReasoning = state.log.some(
     (entry) => entry.type === "reasoning" && !entry.endedAt,
   );
-  const showThinking = running && !!state.runStartedAt && !hasActiveTool && !hasOpenReasoning;
+  // A provider can settle a reasoning part a frame before it emits the next
+  // tool. Keep that real Thought marker as the single visual owner of the
+  // state during the hand-off instead of briefly mounting a second “Thinking”
+  // row beneath it.
+  const latestReasoning = [...state.log].reverse().find(
+    (entry): entry is Extract<LogEntry, { type: "reasoning" }> => entry.type === "reasoning",
+  );
+  const reasoningJustSettled = Boolean(
+    latestReasoning?.endedAt && Date.now() - latestReasoning.endedAt < 1_800,
+  );
+  const showThinking =
+    running &&
+    !!state.runStartedAt &&
+    !hasActiveTool &&
+    !hasOpenReasoning &&
+    !reasoningJustSettled;
   const revisitedActionIds = useMemo(() => {
     const editedFiles = new Set<string>();
     const revisited = new Set<string>();
@@ -564,54 +545,11 @@ export function Conversation({
     return revisited;
   }, [state.actions, state.log]);
   const transcriptItems = useMemo<TranscriptItem[]>(() => {
-    const next: TranscriptItem[] = [];
     const log = suppressBriefThoughts(dedupeConsecutiveAssistantEntries(state.log));
-    for (let index = 0; index < log.length;) {
-      const entry = log[index];
-      if (entry.type !== "action") {
-        next.push({ type: "entry", entry, id: entry.id });
-        index += 1;
-        continue;
-      }
-      const action = state.actions[entry.actionId];
-      // Compact density hides insignificant internal calls.
-      if (
-        density === "compact" &&
-        action &&
-        /^(generic|todo|fetch)$/.test(action.kind) &&
-        action.status === "success"
-      ) {
-        index += 1;
-        continue;
-      }
-      const grouped: AgentAction[] = [action];
-      const thoughts: Extract<LogEntry, { type: "reasoning" }>[] = [];
-      let cursor = index + 1;
-      while (cursor < log.length) {
-        const candidate = log[cursor];
-        // Reasoning belongs under the action phase it follows. It should not
-        // prematurely split a real OpenCode phase into several summaries.
-        if (candidate.type === "reasoning") {
-          thoughts.push(candidate);
-          cursor += 1;
-          continue;
-        }
-        if (candidate.type !== "action") break;
-        const candidateAction = state.actions[candidate.actionId];
-        if (!candidateAction) break;
-        grouped.push(candidateAction);
-        cursor += 1;
-      }
-      const active = grouped.some((item) => item.status === "active" || item.status === "queued") || thoughts.some((thought) => !thought.endedAt);
-      if (grouped.length > 1 || active || thoughts.length) {
-        next.push({ type: "phase", id: `phase-${grouped[0].id}-${grouped.at(-1)?.id}`, actions: grouped, thoughts, ts: entry.ts });
-        index = cursor;
-      } else {
-        next.push({ type: "entry", entry, id: entry.id });
-        index += 1;
-      }
-    }
-    return next;
+    // Keep the transcript literal: each OpenCode event owns one row. In
+    // particular, do not suppress unfamiliar provider tools; they are often
+    // the only visible record of real browser, file, or project work.
+    return log.map((entry) => ({ type: "entry" as const, entry, id: entry.id }));
   }, [state.actions, state.log, density]);
 
   // Render immediately from the real OpenCode event stream. Earlier versions
@@ -621,25 +559,11 @@ export function Conversation({
 
   return (
     <div className="relative min-h-0 flex-1">
-      <div ref={scrollRef} className="cc-scroll absolute inset-0 overflow-y-auto px-5 pb-3 pt-2 sm:px-7">
+      <div ref={scrollRef} className="cc-scroll absolute inset-0 overflow-y-auto px-6 pb-4 pt-3 sm:px-7">
         <div className="mx-auto flex w-full max-w-[760px] flex-col">
           {visibleItems.map((item, index) => {
-            if (item.type === "phase") {
-              return (
-                <PhaseGroup
-                  key={item.id}
-                  actions={item.actions}
-                  thoughts={item.thoughts}
-                  onOpenFile={onOpenFile}
-                  revisitedActionIds={revisitedActionIds}
-                  historical={Date.now() - item.ts > 4000}
-                  defaultExpanded={density === "detailed"}
-                />
-              );
-            }
             const entry = item.entry;
-            const previousItem = visibleItems[index - 1];
-            const prev = previousItem?.type === "entry" ? previousItem.entry : undefined;
+            const prev = visibleItems[index - 1]?.entry;
             const nextKindGap =
               prev &&
               ((prev.type === "action" && entry.type === "assistant") ||
@@ -655,11 +579,11 @@ export function Conversation({
                   {...(reduced || !fresh
                     ? {}
                     : { initial: { opacity: 0, y: 3 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.18, ease: AGENT_EASE } })}
-                  className="mb-3 mt-[22px] flex w-full justify-end first:mt-2"
+                  className="mb-2.5 mt-[16px] flex w-full justify-end first:mt-2"
                 >
                   <div
                     data-invert-ignore="true"
-                    className="cc-user-prompt max-w-[82%] whitespace-pre-wrap rounded-[11px] px-[12px] py-[10px] text-[16px] leading-6 text-[#2F3033]"
+                    className="cc-user-prompt max-w-[82%] whitespace-pre-wrap rounded-[11px] px-[12px] py-[8px] text-[14px] leading-[21px] text-[#2F3033]"
                   >
                     {entry.text}
                   </div>
@@ -672,10 +596,10 @@ export function Conversation({
                   key={entry.id}
                   {...(reduced || !fresh ? {} : SUBTLE_ENTER)}
                   className={cn(
-                    "text-[16px] font-normal leading-6 tracking-normal text-[#2F3033]",
-                    "[&_p]:my-[10px] [&_ul]:my-[10px] [&_ol]:my-[10px] [&_li]:my-[3px] [&_pre]:my-2 [&_code]:text-[13px]",
+                    "text-[14px] font-normal leading-[21px] tracking-normal text-[#303136]",
+                    "[&_p]:my-[9px] [&_ul]:my-[9px] [&_ol]:my-[9px] [&_li]:my-[3px] [&_pre]:my-2 [&_code]:text-[12px]",
                     "[&_strong]:font-medium",
-                    nextKindGap ? "mt-3" : "mt-1.5",
+                    nextKindGap ? "mt-2.5" : "mt-1.5",
                   )}
                 >
                   <MarkdownMessageContent content={entry.text} />
@@ -694,7 +618,7 @@ export function Conversation({
             return (
               <div
                 key={entry.id}
-                className={cn(prev?.type === "action" ? "mt-[4px]" : nextKindGap ? "mt-2.5" : "mt-1")}
+                className={cn(prev?.type === "action" ? "mt-[3px]" : nextKindGap ? "mt-2" : "mt-1")}
               >
                 <AgentActionRow
                   action={action}
