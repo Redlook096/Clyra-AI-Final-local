@@ -48,12 +48,17 @@ const LINE_CLASSES: Record<DiffLine["kind"], { row: string; text: string }> = {
 };
 
 /** A real diff line. Source content always arrives directly from the harness. */
-const DiffBodyLine = memo(function DiffBodyLine({ line }: { line: DiffLine }) {
+const DiffBodyLine = memo(function DiffBodyLine({ line, index = 0, animate = true }: { line: DiffLine; index?: number; animate?: boolean }) {
   const styles = LINE_CLASSES[line.kind];
   const prefix = line.kind === "add" ? "+ " : line.kind === "del" ? "− " : "  ";
 
   return (
-    <div className={cn("flex items-start", styles.row)}>
+    <motion.div
+      initial={animate ? { opacity: 0, y: 1 } : false}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.14, delay: animate ? Math.min(index * 0.009, 0.28) : 0, ease: AGENT_EASE }}
+      className={cn("flex items-start", styles.row)}
+    >
       <span className="w-7 shrink-0 select-none pr-1.5 text-right text-[9px] leading-[1.65] text-[#C2C2C0]">
         {line.beforeLine ?? ""}
       </span>
@@ -69,7 +74,7 @@ const DiffBodyLine = memo(function DiffBodyLine({ line }: { line: DiffLine }) {
         {prefix}
         {line.text}
       </span>
-    </div>
+    </motion.div>
   );
 });
 
@@ -135,7 +140,7 @@ export const AgentFileEdit = memo(function AgentFileEdit({
     if (failed || manualOpen !== null) return;
     if (phase !== "header") return;
     if (!hasLines) return;
-    const delay = active ? 35 : 40;
+    const delay = active ? 12 : 16;
     const timer = window.setTimeout(() => setPhase("open"), delay);
     return () => window.clearTimeout(timer);
   }, [failed, manualOpen, phase, hasLines, active]);
@@ -228,7 +233,7 @@ export const AgentFileEdit = memo(function AgentFileEdit({
   const additions = action.additions ?? 0;
   const deletions = action.deletions ?? 0;
 
-  const renderedLines = lines.map((line, index) => <DiffBodyLine key={index} line={line} />);
+  const renderedLines = lines.map((line, index) => <DiffBodyLine key={index} line={line} index={index} animate={!historical} />);
 
   const toggle = () => {
     if (hasLines) {
@@ -340,8 +345,8 @@ export const AgentFileEdit = memo(function AgentFileEdit({
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{
-              height: { duration: 0.19, ease: AGENT_EASE },
-              opacity: { duration: 0.13, delay: 0.02 },
+              height: { duration: 0.26, ease: AGENT_EASE },
+              opacity: { duration: 0.2, delay: 0.03 },
             }}
             className="mx-[1px] mb-1 mt-[2px] overflow-hidden rounded-[7px] border border-black/[0.07] bg-[#FAFAF9]"
           >

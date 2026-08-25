@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowUp, Bug, CheckCircle2, Clipboard, File as FileIcon, FileSearch, Folder, Globe2, Image, ListChecks, Mic, MousePointer2, Plus, Square, X } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { QuestionComposer, type QuestionAnswers, type QuestionSet } from "./QuestionComposer";
 
 export type ComposerContext = {
   id: string;
@@ -43,6 +44,10 @@ export function Composer({
   welcome = false,
   suggestion,
   onCommandChange,
+  question,
+  questionSubmitting = false,
+  onQuestionSubmit,
+  onQuestionBack,
 }: {
   running: boolean;
   model: string | null;
@@ -54,6 +59,10 @@ export function Composer({
   welcome?: boolean;
   suggestion?: { text: string; nonce: number };
   onCommandChange?: (command: ComposerCommand | null) => void;
+  question?: QuestionSet | null;
+  questionSubmitting?: boolean;
+  onQuestionSubmit?: (answers: QuestionAnswers) => void;
+  onQuestionBack?: () => void;
 }) {
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
@@ -163,7 +172,18 @@ export function Composer({
   const attached = attachments.length > 0 || contexts.length > 0;
   return (
     <div className={cn("relative px-3", welcome ? "pt-0" : "pb-2 pt-1")}>
-      <div className={cn("relative mx-auto overflow-visible rounded-[14px] border border-black/[0.08] bg-white transition-[height,border-color,box-shadow] duration-200 ease-out", welcome ? "max-w-[620px] shadow-[0_4px_18px_rgba(0,0,0,0.025)] focus-within:border-black/[0.15] focus-within:shadow-[0_4px_18px_rgba(0,0,0,0.035)]" : "max-w-[680px] shadow-[0_1px_2px_rgba(0,0,0,0.025),0_5px_18px_rgba(0,0,0,0.025)] focus-within:border-black/[0.14] focus-within:shadow-[0_0_0_1px_rgba(57,119,246,0.12),0_5px_18px_rgba(0,0,0,0.03)]")}>
+      <motion.div
+        layout
+        transition={{ layout: { duration: 0.26, ease: [0.22, 1, 0.36, 1] } }}
+        className={cn("relative mx-auto overflow-visible rounded-[14px] border border-black/[0.08] bg-white", welcome ? "max-w-[620px] shadow-[0_4px_18px_rgba(0,0,0,0.025)] focus-within:border-black/[0.15] focus-within:shadow-[0_4px_18px_rgba(0,0,0,0.035)]" : "max-w-[680px] shadow-[0_1px_2px_rgba(0,0,0,0.025),0_5px_18px_rgba(0,0,0,0.025)] focus-within:border-black/[0.14] focus-within:shadow-[0_0_0_1px_rgba(57,119,246,0.12),0_5px_18px_rgba(0,0,0,0.03)]")}
+      >
+        <AnimatePresence mode="popLayout" initial={false}>
+          {question ? (
+            <motion.div key="question" initial={{ opacity: 0, y: 7 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -7 }} transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}>
+              <QuestionComposer questionSet={question} submitting={questionSubmitting} onBack={onQuestionBack} onSubmit={(answers) => onQuestionSubmit?.(answers)} />
+            </motion.div>
+          ) : (
+            <motion.div key="normal" initial={{ opacity: 0, y: 7 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -7 }} transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}>
         <AnimatePresence initial={false}>
           {attached ? <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }} className="overflow-hidden">
             <div className="flex max-h-[86px] gap-1.5 overflow-x-auto px-2.5 pt-2 [scrollbar-width:none]">
@@ -185,8 +205,11 @@ export function Composer({
           <button type="button" aria-label="Voice input" onClick={() => textareaRef.current?.focus()} className="flex h-6 w-6 items-center justify-center rounded-[7px] text-[#85878C] transition-colors hover:bg-black/[0.045] hover:text-[#34363A]"><Mic className="h-3.5 w-3.5" strokeWidth={1.65} /></button>
           {running ? <button type="button" onClick={onStop} aria-label="Stop" className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-[#242528] text-white transition-colors duration-150 hover:bg-[#17181A] active:scale-[0.96]"><Square className="h-[10px] w-[10px]" fill="currentColor" /></button> : <button type="button" onClick={submit} disabled={!value.trim() && attachments.length === 0 && contexts.length === 0} aria-label="Send" className={cn("flex h-[30px] w-[30px] items-center justify-center rounded-full transition-all duration-150 active:scale-[0.96]", value.trim() || attachments.length || contexts.length ? "bg-[#3977F6] text-white hover:bg-[#2E68E5]" : "bg-[#F0F0EF] text-[#B7B8BA]")}><ArrowUp className="h-3.5 w-3.5" strokeWidth={2.15} /></button>}
         </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
         <AnimatePresence>{commandQuery !== null && visibleCommands.length ? <motion.div initial={{ opacity: 0, y: 4, scale: 0.985 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 3, scale: 0.985 }} transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }} className="clyra-command-palette absolute bottom-[calc(100%+7px)] left-0 z-40 w-full overflow-hidden rounded-[10px] border border-black/[0.08] bg-white p-1 shadow-[0_10px_24px_rgba(15,23,42,0.11)]">{visibleCommands.map((item, index) => { const Icon = item.icon; return <button key={item.id} type="button" onMouseEnter={() => setCommandIndex(index)} onClick={() => selectCommand(item.id)} className={cn("flex h-9 w-full items-center gap-2 rounded-[6px] px-2.5 text-left transition-colors", index === commandIndex ? "bg-black/[0.035]" : "hover:bg-black/[0.035]")}><Icon className="h-3.5 w-3.5 text-[#5F6368]" strokeWidth={1.65} /><span className="min-w-0 flex-1"><span className="block text-[11.5px] font-medium text-[#4B4D52]">/{item.id}</span></span><span className="truncate text-[10.5px] text-[#96989D]">{item.description}</span></button>; })}</motion.div> : null}</AnimatePresence>
-      </div>
+      </motion.div>
       <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => { if (event.currentTarget.files) addFiles(event.currentTarget.files, "image"); event.currentTarget.value = ""; }} />
       <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(event) => { if (event.currentTarget.files) addFiles(event.currentTarget.files); event.currentTarget.value = ""; }} />
       <input ref={folderInputRef} type="file" multiple className="hidden" onChange={(event) => { if (event.currentTarget.files) addFiles(event.currentTarget.files, "folder"); event.currentTarget.value = ""; }} />

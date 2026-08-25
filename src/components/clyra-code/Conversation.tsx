@@ -583,9 +583,19 @@ export function Conversation({
                 >
                   <div
                     data-invert-ignore="true"
-                    className="cc-user-prompt max-w-[82%] whitespace-pre-wrap rounded-[11px] px-[12px] py-[8px] text-[14px] leading-[21px] text-[#2F3033]"
+                    className="cc-user-prompt max-w-[82%] rounded-[11px] px-[12px] py-[8px] text-[14px] leading-[21px] text-[#2F3033]"
                   >
-                    {entry.text}
+                    {entry.answers?.length ? (
+                      <div className="mb-1.5 flex flex-col gap-[3px] rounded-[7px] border border-black/[0.05] bg-white/55 px-2 py-1.5">
+                        {entry.answers.map((row) => (
+                          <div key={row.question} className="flex items-center gap-2">
+                            <span className="min-w-0 flex-1 truncate text-[11px] text-[#8B8D92]">{row.question}</span>
+                            <span className="shrink-0 text-[12px] font-medium text-[#303136]">{row.answer}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    <span className="whitespace-pre-wrap">{entry.text}</span>
                   </div>
                 </motion.div>
               );

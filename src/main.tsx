@@ -58,6 +58,17 @@ if (embedParams.get("vibe_embed") === "1") {
   });
 } else if (window.location.pathname === "/__dev/opencode") {
   void import("./dev-fixtures/clyra-code/OpenCodeDiagnostic.tsx").then((m) => root.render(<m.default />));
+} else if ((import.meta as { env?: { DEV?: boolean } }).env?.DEV && window.location.pathname === "/__dev/bloub") {
+  // Dev-only Bloub avatar test harness. Not linked from app navigation, and
+  // `import.meta.env.DEV` lets the bundler dead-code-eliminate this whole
+  // branch (and its dynamic import) out of production builds.
+  void import("./components/bloub/BloubDevHarness.tsx").then((m) => {
+    root.render(
+      <StrictMode>
+        <m.default />
+      </StrictMode>,
+    );
+  });
 } else if (window.location.pathname === "/preview") {
   const searchParams = new URLSearchParams(window.location.search);
   const theme = searchParams.get("theme");

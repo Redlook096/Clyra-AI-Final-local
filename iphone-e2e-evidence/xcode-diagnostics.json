@@ -1,0 +1,14 @@
+{
+  "state": "COMMAND_LINE_TOOLS_ONLY",
+  "arch": "x86_64",
+  "macOSVersion": "15.7.7",
+  "xcodeAppInstalled": false,
+  "selectedDeveloperDir": "/Library/Developer/CommandLineTools",
+  "xcodeVersion": null,
+  "simctlAvailable": false,
+  "runtimes": [],
+  "deviceTypes": [],
+  "devices": [],
+  "xcodesInstalled": true,
+  "message": "Only Command Line Tools are installed — full Xcode is required for the iOS Simulator."
+}

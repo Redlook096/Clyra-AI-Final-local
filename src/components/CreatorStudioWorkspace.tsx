@@ -33,6 +33,7 @@ import { AnimatePresence, motion } from "motion/react";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -78,7 +79,9 @@ import {
   buildIMessageTimeline,
   getIMessageFrame,
   getIMessageFloatingPanelGeometry,
+  getIMessageGroupPosition,
   getIMessagePanelLayout,
+  getTypingDotPhase,
   IMESSAGE_CANVAS,
   IMESSAGE_TOKENS,
 } from "../lib/fakeTextTimeline";
@@ -1006,7 +1009,10 @@ function MessagePreview({
   windowStart?: number;
 }) {
   const messageScroll = useRef<HTMLDivElement | null>(null);
-  const timeline = useMemo(() => buildIMessageTimeline(project.messages, project.playbackRate), [project.messages, project.playbackRate]);
+  const timeline = useMemo(
+    () => buildIMessageTimeline(project.messages, project.playbackRate, { showTypingIndicator: project.showTypingIndicator }),
+    [project.messages, project.playbackRate, project.showTypingIndicator],
+  );
   // The active editor always supplies media time, including zero. Treat that
   // first frame as a deterministic timeline frame so the first message is
   // present at t=0 exactly like the public Framelabs template. The legacy
@@ -1014,13 +1020,15 @@ function MessagePreview({
   // message count.
   const isTimelineControlled = playbackMs !== undefined;
   const safePlaybackMs = playbackMs ?? 0;
-  const frame = getIMessageFrame(timeline, safePlaybackMs);
+  const frame = isTimelineControlled
+    ? getIMessageFrame(timeline, safePlaybackMs)
+    : { visibleCount: 0, typingSide: null, typingStartMs: null, enteringMessageId: null, entranceProgress: 1, activeMessageId: null, showReadReceipt: false, readReceiptMessageId: null, readReceiptLabel: null };
   const frameVisible = isTimelineControlled ? frame.visibleCount : (visible ?? project.messages.length);
   const shown = project.messages.slice(windowStart, windowStart + frameVisible);
   // A Fake Text sheet is content-fit by design: its footer follows the newest
   // bubble and lets the gameplay remain visible below.  When a real overflow
   // occurs, this shared layout caps the sheet and the message list scrolls.
-  const floatingLayout = getIMessagePanelLayout(shown);
+  const floatingLayout = getIMessagePanelLayout(shown, { typingSide: frame.typingSide, showReadReceipt: frame.showReadReceipt });
   const floatingGeometry = getIMessageFloatingPanelGeometry(floatingLayout);
   const floatingHeight = `${(floatingGeometry.height / IMESSAGE_CANVAS.height * 100).toFixed(3)}%`;
   const floatingLeft = `${(floatingGeometry.x / IMESSAGE_CANVAS.width * 100).toFixed(3)}%`;
@@ -1041,15 +1049,34 @@ function MessagePreview({
     ? { panel: "#ffffff", header: "#f4f4f6", incoming: "#e9e9eb", outgoing: "#0a84ff", incomingText: "#111114", contact: "#26262b", accent: "#0a84ff", avatar: "#aab0bb" }
     : { panel: "#000000", header: "#1c1c1e", incoming: "#2c2c2e", outgoing: "#0a84ff", incomingText: "#f5f5f7", contact: "#d8d8dc", accent: "#0a84ff", avatar: "#aab0bb" };
 
-  useEffect(() => {
+  // Layout-effect, not effect: the scroll position must land in the same
+  // paint as the bubble's opacity/transform, or the bubble visibly renders a
+  // frame ahead of the list catching up to it — the "flicker" a rAF-driven
+  // useEffect update introduces once the browser has already painted.
+  useLayoutEffect(() => {
     const container = messageScroll.current;
     if (!container || !isTimelineControlled) return;
-    // The header never participates in the scroll.  Resolve the destination
-    // directly from the media time instead of relying on a lingering smooth
-    // scroll animation: a scrubbed frame, a paused frame, and an exported
-    // frame must all describe the identical message stack.
-    container.scrollTo({ top: Math.max(0, container.scrollHeight - container.clientHeight), behavior: "auto" });
-  }, [frameVisible, isTimelineControlled]);
+    // The header never participates in the scroll. The destination is
+    // resolved directly from the media time, never a CSS/JS scroll transition,
+    // so a scrubbed frame, a paused frame, and an exported frame all describe
+    // the identical scroll position for that exact timestamp. The entering
+    // bubble occupies its full layout height immediately (only its own
+    // opacity/scale/translateY animates via transform), so the "before" list
+    // height is derived by subtracting that one bubble's measured
+    // contribution rather than by remembering a previous frame.
+    const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    if (!frame.enteringMessageId || frame.entranceProgress >= 1) {
+      container.scrollTop = maxScrollTop;
+      return;
+    }
+    const enteringEl = container.querySelector<HTMLElement>(`[data-message-id="${frame.enteringMessageId}"]`);
+    let previousMax = maxScrollTop;
+    if (enteringEl) {
+      const marginTopPx = parseFloat(window.getComputedStyle(enteringEl).marginTop) || 0;
+      previousMax = Math.max(0, maxScrollTop - (enteringEl.offsetHeight + marginTopPx));
+    }
+    container.scrollTop = previousMax + (maxScrollTop - previousMax) * frame.entranceProgress;
+  }, [frameVisible, frame.enteringMessageId, frame.entranceProgress, isTimelineControlled]);
 
   return (
     <div data-testid="fake-text-preview" className="relative h-full w-full overflow-hidden bg-[#2a7659]">
@@ -1057,9 +1084,12 @@ function MessagePreview({
       <div
         data-testid="imessage-conversation-canvas"
         // Height is already derived from the deterministic media timeline
-        // (from the media timestamp). A separate CSS transition would keep running
-        // after a seek, which means a scrubbed frame can briefly use a
-        // different layout than the exact same video timestamp in export.
+        // (from the media timestamp), so this transition never changes *what*
+        // height is correct for a given time — only playback smooths the
+        // visual step between two already-correct heights (the typing row
+        // adding/removing itself). A scrub or a paused frame disables it so
+        // dragging the scrubber snaps immediately instead of lagging behind,
+        // keeping the exported frame and a scrubbed preview frame identical.
         className="absolute flex flex-col overflow-hidden"
         style={{
           left: panelGeometry.left,
@@ -1069,6 +1099,7 @@ function MessagePreview({
           borderRadius: panelGeometry.radius,
           backgroundColor: palette.panel,
           borderBottom: "none",
+          transition: isPlaying && isTimelineControlled ? "height 180ms cubic-bezier(0.22, 1, 0.36, 1)" : "none",
         }}
       >
           <div data-testid="imessage-header" className="relative shrink-0 border-b border-white/[.04]" style={{ height: panelGeometry.headerHeight, backgroundColor: palette.header }}>
@@ -1084,21 +1115,25 @@ function MessagePreview({
           <div ref={messageScroll} className="flex min-h-0 flex-1 flex-col overflow-y-auto px-[2.47%] pb-[1.296cqw] pt-[1.481cqw] [scrollbar-width:none]" style={{ backgroundColor: palette.panel }}>
               {shown.map((message, localIndex) => {
                 const index = windowStart + localIndex;
+                const groupPosition = getIMessageGroupPosition(shown, localIndex);
+                const hasTail = groupPosition === "end" || groupPosition === "single";
+                const isEntering = message.id === frame.enteringMessageId;
+                const progress = isEntering ? frame.entranceProgress : 1;
+                const isReceiptTarget = frame.showReadReceipt && message.id === frame.readReceiptMessageId;
+                const tailColor = message.side === "right" ? palette.outgoing : palette.incoming;
                 return (
                 <div
                   key={message.id}
                   data-testid={`imessage-bubble-${index}`}
+                  data-message-id={message.id}
                   className={cn(
-                    "flex min-h-[4.444cqw] w-fit max-w-[64%] items-center [overflow-wrap:anywhere] px-[1.481cqw] py-[1.019cqw] text-[2.222cqw] font-normal leading-[1.15]",
+                    "relative flex min-h-[4.444cqw] w-fit max-w-[64%] items-center [overflow-wrap:anywhere] px-[1.481cqw] py-[1.019cqw] text-[2.222cqw] font-normal leading-[1.15]",
                     message.side === "right" ? "ml-auto text-white" : "",
                   )}
                   style={{
                     backgroundColor: message.side === "right" ? palette.outgoing : palette.incoming,
                     color: message.side === "right" ? "#ffffff" : palette.incomingText,
                     borderRadius: "2.5cqw",
-                    // Messages and the content-fit bottom edge commit at the
-                    // same media timestamp. Keeping every existing row fixed
-                    // avoids flicker and list movement during export/scrubs.
                     // Consecutive iMessage bubbles sit fractionally closer
                     // together than a sender change. Keep these values tied
                     // to the shared 1080px tokens used by the canvas renderer.
@@ -1107,12 +1142,67 @@ function MessagePreview({
                         ? IMESSAGE_TOKENS.sameSenderGap
                         : IMESSAGE_TOKENS.senderSwitchGap) / IMESSAGE_CANVAS.width * 100).toFixed(3)}cqw`
                       : 0,
+                    // A short, precise iOS-style pop — opacity/scale/translateY are a
+                    // pure function of the media timestamp (see getIMessageFrame), so
+                    // a scrub, a paused frame, and playback always agree. Using
+                    // transform (not layout width/height) means the bubble already
+                    // occupies its final space, which is what keeps the coordinated
+                    // auto-scroll above deterministic too.
+                    opacity: progress,
+                    transform: `translateY(${(1 - progress) * IMESSAGE_TOKENS.bubbleEntranceRiseDistance}px) scale(${IMESSAGE_TOKENS.bubbleEntranceStartScale + (1 - IMESSAGE_TOKENS.bubbleEntranceStartScale) * progress})`,
+                    transformOrigin: message.side === "right" ? "bottom right" : "bottom left",
                   }}
                 >
                   <span className="relative">{message.text}</span>
+                  {hasTail ? (
+                    <span aria-hidden className="pointer-events-none absolute bottom-0 h-[1.1cqw] w-[1.1cqw]" style={{
+                      [message.side === "right" ? "right" : "left"]: "-0.3cqw",
+                      backgroundColor: tailColor,
+                      borderRadius: message.side === "right" ? "0 0 0 1.1cqw" : "0 0 1.1cqw 0",
+                    }} />
+                  ) : null}
+                  {hasTail ? (
+                    <span aria-hidden className="pointer-events-none absolute bottom-[-0.2cqw] h-[1.5cqw] w-[1.5cqw] rounded-full" style={{
+                      [message.side === "right" ? "right" : "left"]: "-1cqw",
+                      backgroundColor: palette.panel,
+                    }} />
+                  ) : null}
+                  {isReceiptTarget ? (
+                    <span
+                      aria-hidden
+                      className="absolute -bottom-[1.9cqw] right-0 whitespace-nowrap text-[1.4cqw] font-medium"
+                      style={{ color: project.theme === "ios_light" ? "#8a8a8e" : "#98989d" }}
+                    >
+                      {frame.readReceiptLabel === "read" ? "Read" : "Delivered"}
+                    </span>
+                  ) : null}
                 </div>
                 );
               })}
+              {frame.typingSide ? (
+                <div
+                  className={cn(
+                    "flex h-[4.444cqw] w-[7.4cqw] items-center justify-center gap-[.55cqw] rounded-[2.5cqw]",
+                    frame.typingSide === "right" ? "ml-auto" : "",
+                  )}
+                  style={{
+                    backgroundColor: frame.typingSide === "right" ? palette.outgoing : palette.incoming,
+                    marginTop: shown.length ? `${(IMESSAGE_TOKENS.senderSwitchGap / IMESSAGE_CANVAS.width * 100).toFixed(3)}cqw` : 0,
+                  }}
+                >
+                  {getTypingDotPhase(safePlaybackMs, frame.typingStartMs ?? safePlaybackMs).map((offset, dotIndex) => (
+                    <span
+                      key={dotIndex}
+                      aria-hidden
+                      className="h-[.55cqw] w-[.55cqw] rounded-full"
+                      style={{
+                        backgroundColor: frame.typingSide === "right" ? "rgba(255,255,255,.85)" : (project.theme === "ios_light" ? "#8a8a8e" : "#98989d"),
+                        transform: `translateY(${-offset * 3.5}px)`,
+                      }}
+                    />
+                  ))}
+                </div>
+              ) : null}
           </div>
       </div>
     </div>
@@ -1684,7 +1774,7 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
     try {
       const mp4 = project.type === "would_rather"
         ? await renderWouldRatherVideo({ rounds: project.rounds.map((round) => ({ ...round, topColor: project.style.topColor, bottomColor: project.style.bottomColor })), voice: project.voice, signal: controller.signal, onProgress: setRenderProgress })
-        : await renderMessageStoryVideo({ name: project.participants[0].name, messages: project.messages, voices: { left: project.participants[0].voice, right: project.participants[1].voice }, background: project.background, backgroundVideo: project.gameplay?.src, theme: project.theme, layout: project.layout, playbackRate: project.playbackRate, signal: controller.signal, onProgress: setRenderProgress });
+        : await renderMessageStoryVideo({ name: project.participants[0].name, messages: project.messages, voices: { left: project.participants[0].voice, right: project.participants[1].voice }, background: project.background, backgroundVideo: project.gameplay?.src, theme: project.theme, layout: project.layout, playbackRate: project.playbackRate, showTypingIndicator: project.showTypingIndicator, signal: controller.signal, onProgress: setRenderProgress });
       if (resultUrl) URL.revokeObjectURL(resultUrl);
       setResultUrl(URL.createObjectURL(mp4));
     } catch (cause) {
@@ -1803,6 +1893,30 @@ function TemplateCreatorEditor({ initial }: { initial: WouldRatherProject | Fake
                       <span className="mt-1.5 block text-[8px] leading-4 text-slate-400">{theme.detail}</span>
                     </button>
                   ))}
+                </div>
+                <div className="mt-4 flex items-center justify-between rounded-[16px] border border-[#e2e5ea] bg-white p-4">
+                  <div className="min-w-0 pr-4">
+                    <p className="text-[14px] font-semibold text-slate-950">Typing indicator</p>
+                    <p className="mt-0.5 text-[12px] leading-relaxed text-slate-400">Show the "•••" beat before each bubble commits. Turn off for messages to appear instantly.</p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={project.showTypingIndicator}
+                    aria-label="Toggle typing indicator"
+                    onClick={() => edit((draft) => { if (draft.type === "fake_text_story") draft.showTypingIndicator = !draft.showTypingIndicator; })}
+                    className={cn(
+                      "relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors duration-200",
+                      project.showTypingIndicator ? "bg-[#34c759]" : "bg-[#e2e5ea]",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "absolute top-[2px] h-[22px] w-[22px] rounded-full bg-white shadow-[0_1px_3px_rgba(15,23,42,.25)] transition-transform duration-200",
+                        project.showTypingIndicator ? "translate-x-[20px]" : "translate-x-[2px]",
+                      )}
+                    />
+                  </button>
                 </div>
               </motion.div>
             ) : step === "gameplay" && project.type === "fake_text_story" ? (
@@ -2070,6 +2184,7 @@ function CreatorEditor({ initial }: { initial: CreatorProject }) {
           backgroundVideo: project.gameplay?.src,
           theme: project.theme,
           layout: project.layout,
+          showTypingIndicator: project.showTypingIndicator,
           signal: controller.signal,
           onProgress: setRenderProgress,
         });

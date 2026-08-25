@@ -148,7 +148,7 @@ function SoundFxLibrary({ compact = false }: { compact?: boolean } = {}) {
                 <span className="block truncate text-[11.5px] font-medium" style={{ color: CLIP_EDITOR.textPrimary }}>{asset.label}</span>
                 <span className="block truncate text-[10px]" style={{ color: CLIP_EDITOR.textMuted }}>{asset.hint} · {asset.nativeDuration.toFixed(1)}s</span>
               </button>
-              <span className="pointer-events-none rounded-[5px] px-1.5 py-1 text-[9.5px] font-medium opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" style={{ background: "#EAF2FF", color: CLIP_EDITOR.blue }}>Drag</span>
+              <span className="pointer-events-none rounded-[5px] px-1.5 py-1 text-[9.5px] font-medium opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" style={{ background: "#edf2ff", color: CLIP_EDITOR.blue }}>Drag</span>
             </div>
           );
         })}
@@ -404,7 +404,7 @@ function EditorTimeline({
     if (!context) return;
     context.scale(ratio, ratio);
     context.clearRect(0, 0, width, height);
-    context.strokeStyle = "rgba(22, 119, 255, 0.55)";
+    context.strokeStyle = "rgba(65,105,246, 0.55)";
     context.lineWidth = 1.4;
     context.lineCap = "round";
     const mid = height / 2;
@@ -862,8 +862,8 @@ function EditorTimeline({
                     onClick={(event) => { event.stopPropagation(); onWordSelect?.(phrase.wordIndex); seek(phrase.start); }}
                     onPointerDown={(event) => event.stopPropagation()}
                     aria-label={`Seek to caption ${phrase.text}`}
-                    className="absolute top-[6px] h-[29px] overflow-hidden rounded-[7px] px-2 text-left text-[9px] font-semibold uppercase tracking-[.02em] transition-[background-color,box-shadow] duration-150 hover:bg-[#DDEAFF]"
-                    style={{ left: `${left}%`, width: `${width}%`, minWidth: 34, background: "#EAF2FF", color: "#3F6FAF", boxShadow: "inset 0 0 0 1px rgba(57,119,246,.14)" }}
+                    className="absolute top-[6px] h-[29px] overflow-hidden rounded-[7px] px-2 text-left text-[9px] font-semibold uppercase tracking-[.02em] transition-[background-color,box-shadow] duration-150 hover:bg-[#dde6ff]"
+                    style={{ left: `${left}%`, width: `${width}%`, minWidth: 34, background: "#edf2ff", color: "#3F6FAF", boxShadow: "inset 0 0 0 1px rgba(65,105,246,.14)" }}
                   ><span className="block truncate">{phrase.text}</span></button>
                 );
               })}
@@ -945,11 +945,11 @@ function EditorTimeline({
               })}
               {sfxDropActive && sfxDropTime !== null && duration > 0 ? (
                 <span
-                  className="pointer-events-none absolute bottom-0 top-0 z-10 w-px bg-[#3977F6]"
+                  className="pointer-events-none absolute bottom-0 top-0 z-10 w-px bg-[#4169f6]"
                   style={{ left: `${(sfxDropTime / duration) * 100}%` }}
                   aria-hidden
                 >
-                  <span className="absolute left-1 top-1 whitespace-nowrap rounded bg-[#3977F6] px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
+                  <span className="absolute left-1 top-1 whitespace-nowrap rounded bg-[#4169f6] px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
                     Drop {draggedSfx ? CLIP_SFX_ASSETS.find((asset) => asset.id === draggedSfx)?.label : "sound"} · {formatEditorTime(sfxDropTime)}
                   </span>
                 </span>
@@ -958,7 +958,7 @@ function EditorTimeline({
                 <span className="pointer-events-none absolute inset-0 z-[1] flex items-center justify-center">
                   <span
                     className="flex items-center gap-2 rounded-[8px] px-2.5 py-1 text-[10.5px] font-medium"
-                    style={{ background: sfxDropActive ? "#EAF2FF" : "rgba(255,255,255,.84)", color: sfxDropActive ? CLIP_EDITOR.blue : CLIP_EDITOR.textMuted, boxShadow: sfxDropActive ? "inset 0 0 0 1px rgba(57,119,246,.28)" : "inset 0 0 0 1px rgba(15,23,42,.05)" }}
+                    style={{ background: sfxDropActive ? "#edf2ff" : "rgba(255,255,255,.84)", color: sfxDropActive ? CLIP_EDITOR.blue : CLIP_EDITOR.textMuted, boxShadow: sfxDropActive ? "inset 0 0 0 1px rgba(65,105,246,.28)" : "inset 0 0 0 1px rgba(15,23,42,.05)" }}
                   >
                     <AudioLines size={13} strokeWidth={ICON_STROKE} />
                     Release to place sound
@@ -1008,9 +1008,9 @@ function EditorTimeline({
                         left: `${left}%`,
                         width: `${Math.max(width, 0.4)}%`,
                         background: effect.direction === "in"
-                          ? "linear-gradient(90deg, rgba(79,124,255,0.12), rgba(79,124,255,0.32))"
+                          ? "linear-gradient(90deg, rgba(65,105,246,0.12), rgba(65,105,246,0.32))"
                           : "linear-gradient(90deg, rgba(16,185,129,0.32), rgba(16,185,129,0.12))",
-                        boxShadow: active ? `inset 0 0 0 1.5px ${CLIP_EDITOR.blue}` : "inset 0 0 0 1px rgba(79,124,255,0.25)",
+                        boxShadow: active ? `inset 0 0 0 1.5px ${CLIP_EDITOR.blue}` : "inset 0 0 0 1px rgba(65,105,246,0.25)",
                       }}
                       aria-label={`Zoom ${effect.direction} from ${formatEditorTime(effect.start)} to ${formatEditorTime(effect.end)}`}
                     >
@@ -1041,8 +1041,8 @@ function EditorTimeline({
                           <span
                             className="grid h-[18px] w-[14px] place-items-center rounded-[4px] text-white shadow-sm"
                             style={{
-                              background: pinSelected ? CLIP_EDITOR.blue : effect.direction === "in" ? "#4F7CFF" : "#10B981",
-                              boxShadow: pinSelected ? "0 0 0 2px rgba(79,124,255,0.28)" : undefined,
+                              background: pinSelected ? CLIP_EDITOR.blue : effect.direction === "in" ? "#4169f6" : "#10B981",
+                              boxShadow: pinSelected ? "0 0 0 2px rgba(65,105,246,0.28)" : undefined,
                             }}
                           >
                             <MapPin size={10} strokeWidth={2.4} />
@@ -1677,12 +1677,12 @@ export default function ClipperEditor({
                 <div className="relative flex shrink-0 items-center gap-7" ref={menuRef}>
                   <button type="button" onClick={() => setInspectorMode("overview")} className="text-[11.5px] font-medium text-[#69717D] hover:text-[#30343A]" aria-label={`Clip score ${scoreFor(selected)} out of 100`}>Good clip · {scoreFor(selected)}</button>
                   <button type="button" onClick={togglePlay} className="flex h-9 items-center gap-1.5 rounded-[11px] bg-white px-3 text-[12px] font-medium text-[#3F454D] shadow-[inset_0_0_0_1px_rgba(31,41,55,.09)] hover:bg-[#F7F8FA]">{playing ? <Pause size={14} /> : <Play size={14} />} Preview</button>
-                  <button type="button" disabled={exportBusy} onClick={() => setExportSheetOpen(true)} className="flex h-9 items-center gap-1.5 rounded-[11px] bg-[#3977F6] px-4 text-[12px] font-semibold text-white shadow-[0_6px_16px_rgba(57,119,246,.2)] transition-[transform,background-color] duration-150 hover:bg-[#2F6DE9] active:scale-[.98] disabled:opacity-60"><Download size={14} />{exportBusy ? "Exporting…" : "Export"}</button>
+                  <button type="button" disabled={exportBusy} onClick={() => setExportSheetOpen(true)} className="flex h-9 items-center gap-1.5 rounded-[11px] bg-[#4169f6] px-4 text-[12px] font-semibold text-white shadow-[0_6px_16px_rgba(65,105,246,.2)] transition-[transform,background-color] duration-150 hover:bg-[#3158ea] active:scale-[.98] disabled:opacity-60"><Download size={14} />{exportBusy ? "Exporting…" : "Export"}</button>
                   <AnimatePresence>
                     {exportSheetOpen ? <motion.div initial={{ opacity: 0, y: -4, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -3, scale: .98 }} transition={{ duration: .18, ease: [0.22, 1, 0.36, 1] }} className="absolute right-0 top-11 z-30 w-[280px] rounded-[17px] border border-black/[.09] bg-white p-4 shadow-[0_18px_50px_rgba(21,28,40,.16)]">
                       <div className="flex items-start justify-between"><div><p className="text-[13px] font-semibold">Export clip</p><p className="mt-1 text-[10.5px] text-[#8B919A]">Ready for social video</p></div><button type="button" onClick={() => setExportSheetOpen(false)} className="grid h-7 w-7 place-items-center rounded-[7px] text-[#8B919A] hover:bg-[#F2F3F5]">×</button></div>
                       <div className="mt-4 space-y-2 text-[11px]"><div className="flex justify-between"><span className="text-[#828892]">Quality</span><strong>1080p HD</strong></div><div className="flex justify-between"><span className="text-[#828892]">Format</span><strong>MP4</strong></div><div className="flex justify-between"><span className="text-[#828892]">Captions</span><strong>{captionsVisible ? "Burn into video" : "Off"}</strong></div></div>
-                      <button type="button" disabled={exportBusy} onClick={() => { onExport(); if (!exportBusy) setExportSheetOpen(false); }} className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-[10px] bg-[#3977F6] text-[11.5px] font-semibold text-white disabled:opacity-60"><Download size={13} />{exportBusy ? "Exporting…" : "Export video"}</button>
+                      <button type="button" disabled={exportBusy} onClick={() => { onExport(); if (!exportBusy) setExportSheetOpen(false); }} className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-[10px] bg-[#4169f6] text-[11.5px] font-semibold text-white disabled:opacity-60"><Download size={13} />{exportBusy ? "Exporting…" : "Export video"}</button>
                     </motion.div> : null}
                   </AnimatePresence>
                 </div>
@@ -1760,7 +1760,7 @@ export default function ClipperEditor({
                   ["sound", "Sound", AudioLines],
                   ["enhance", "Enhance", RefreshCw],
                 ] as const).map(([mode, label, Icon]) => (
-                  <button key={mode} type="button" onClick={() => setInspectorMode(mode)} className={cn("flex h-8 items-center gap-1.5 rounded-[9px] px-3 text-[11px] font-medium transition-[background-color,color,transform] duration-150 active:scale-[.98]", inspectorMode === mode ? "bg-[#E8F1FF] text-[#2F6FD1]" : "text-[#68717D] hover:bg-white hover:text-[#30343A]")}><Icon size={14} strokeWidth={ICON_STROKE} />{label}</button>
+                  <button key={mode} type="button" onClick={() => setInspectorMode(mode)} className={cn("flex h-8 items-center gap-1.5 rounded-[9px] px-3 text-[11px] font-medium transition-[background-color,color,transform] duration-150 active:scale-[.98]", inspectorMode === mode ? "bg-[#edf2ff] text-[#3158ea]" : "text-[#68717D] hover:bg-white hover:text-[#30343A]")}><Icon size={14} strokeWidth={ICON_STROKE} />{label}</button>
                 ))}
               </div>
 
@@ -1804,8 +1804,8 @@ export default function ClipperEditor({
                   <p className="mt-6 text-[10px] font-semibold uppercase tracking-[.08em] text-[#A0A4AB]">Quick actions</p>
                   <div className="mt-2 grid gap-1.5">{([[
                     "captions", "Edit captions", Captions,
-                  ], ["reframe", "Reframe video", ScanFace], ["sound", "Add sound", AudioLines]] as const).map(([mode, label, Icon]) => <button key={mode} type="button" onClick={() => setInspectorMode(mode)} className="flex h-10 items-center gap-2 rounded-[10px] bg-white px-3 text-left text-[11.5px] font-medium text-[#565D67] shadow-[inset_0_0_0_1px_rgba(31,41,55,.065)] hover:bg-[#F6F8FB]"><Icon size={14} className="text-[#4C79C8]" />{label}<ChevronRight size={13} className="ml-auto text-[#A2A7AE]" /></button>)}</div>
-                  <button type="button" onClick={() => setInspectorMode("enhance")} className="mt-6 w-full rounded-[14px] border border-black/[.065] bg-white p-4 text-left hover:bg-[#FBFCFD]"><span className="flex items-center justify-between text-[11.5px] font-semibold text-[#4B5058]">Clip insights <ChevronRight size={13} /></span><strong className="mt-2 block text-[22px] tracking-[-.03em] text-[#3977F6]">{selected ? scoreFor(selected) : 0}<small className="ml-1 text-[10px] font-medium text-[#94A4BE]">/ 100</small></strong><span className="mt-1 block text-[9.5px] text-[#92979F]">Hook strong · Caption clarity good</span></button>
+                  ], ["reframe", "Reframe video", ScanFace], ["sound", "Add sound", AudioLines]] as const).map(([mode, label, Icon]) => <button key={mode} type="button" onClick={() => setInspectorMode(mode)} className="flex h-10 items-center gap-2 rounded-[10px] bg-white px-3 text-left text-[11.5px] font-medium text-[#565D67] shadow-[inset_0_0_0_1px_rgba(31,41,55,.065)] hover:bg-[#F6F8FB]"><Icon size={14} className="text-[#4169f6]" />{label}<ChevronRight size={13} className="ml-auto text-[#A2A7AE]" /></button>)}</div>
+                  <button type="button" onClick={() => setInspectorMode("enhance")} className="mt-6 w-full rounded-[14px] border border-black/[.065] bg-white p-4 text-left hover:bg-[#FBFCFD]"><span className="flex items-center justify-between text-[11.5px] font-semibold text-[#4B5058]">Clip insights <ChevronRight size={13} /></span><strong className="mt-2 block text-[22px] tracking-[-.03em] text-[#4169f6]">{selected ? scoreFor(selected) : 0}<small className="ml-1 text-[10px] font-medium text-[#94A4BE]">/ 100</small></strong><span className="mt-1 block text-[9.5px] text-[#92979F]">Hook strong · Caption clarity good</span></button>
                 </div>
               ) : inspectorMode === "captions" ? (
                 <div className="flex min-h-full flex-col">
@@ -1818,12 +1818,12 @@ export default function ClipperEditor({
                 </div>
               ) : inspectorMode === "reframe" ? (
                 <div className="p-5"><div className="flex items-center justify-between"><p className="text-[14px] font-semibold text-[#30343A]">Reframe</p><button type="button" onClick={() => setInspectorMode("overview")} className="grid h-7 w-7 place-items-center rounded-[7px] text-[#969BA3] hover:bg-[#F0F1F3]">×</button></div><p className="mt-1 text-[10.5px] text-[#92979F]">Keep the subject composed for a vertical clip.</p>
-                  <div aria-label={`Face tracking ${faceTrackingEnabled ? "enabled" : "disabled"}`} className="mt-5 flex w-full items-center gap-3 rounded-[14px] border border-black/[.065] bg-white p-4 text-left"><span className="grid h-9 w-9 place-items-center rounded-[10px] bg-[#EEF4FF] text-[#3977F6]"><ScanFace size={17} /></span><span className="min-w-0 flex-1"><strong className="block text-[11.5px]">Face tracking</strong><small className="mt-1 block text-[9.5px] leading-4 text-[#969BA3]">{faceTrackingEnabled ? "Enabled for this clip · smart camera active" : "Off for this clip"}</small></span><span className={cn("rounded-full px-2 py-1 text-[9px] font-semibold", faceTrackingEnabled ? "bg-[#EEF4FF] text-[#3977F6]" : "bg-[#F1F2F4] text-[#8E939B]")}>{faceTrackingEnabled ? "On" : "Off"}</span></div>
+                  <div aria-label={`Face tracking ${faceTrackingEnabled ? "enabled" : "disabled"}`} className="mt-5 flex w-full items-center gap-3 rounded-[14px] border border-black/[.065] bg-white p-4 text-left"><span className="grid h-9 w-9 place-items-center rounded-[10px] bg-[#edf2ff] text-[#4169f6]"><ScanFace size={17} /></span><span className="min-w-0 flex-1"><strong className="block text-[11.5px]">Face tracking</strong><small className="mt-1 block text-[9.5px] leading-4 text-[#969BA3]">{faceTrackingEnabled ? "Enabled for this clip · smart camera active" : "Off for this clip"}</small></span><span className={cn("rounded-full px-2 py-1 text-[9px] font-semibold", faceTrackingEnabled ? "bg-[#edf2ff] text-[#4169f6]" : "bg-[#F1F2F4] text-[#8E939B]")}>{faceTrackingEnabled ? "On" : "Off"}</span></div>
                   <p className="mt-3 rounded-[10px] bg-[#F3F5F8] px-3 py-2.5 text-[9.5px] leading-4 text-[#7E848D]">Framing is chosen before generation so preview and export stay identical. Start a new clip to change this setting.</p>
-                  <div className="mt-3 grid gap-1.5"><div className="flex h-10 items-center justify-between rounded-[10px] px-3 text-[11px] text-[#555B64]"><span>Auto reframe</span><small className="text-[#90959D]">Dead-zone camera</small></div><div className="flex h-10 items-center justify-between rounded-[10px] px-3 text-[11px] text-[#555B64]"><span>Follow speaker</span>{faceTrackingEnabled ? <Check size={13} className="text-[#3977F6]" /> : <span className="text-[9px] text-[#9A9FA7]">Disabled</span>}</div></div>
+                  <div className="mt-3 grid gap-1.5"><div className="flex h-10 items-center justify-between rounded-[10px] px-3 text-[11px] text-[#555B64]"><span>Auto reframe</span><small className="text-[#90959D]">Dead-zone camera</small></div><div className="flex h-10 items-center justify-between rounded-[10px] px-3 text-[11px] text-[#555B64]"><span>Follow speaker</span>{faceTrackingEnabled ? <Check size={13} className="text-[#4169f6]" /> : <span className="text-[9px] text-[#9A9FA7]">Disabled</span>}</div></div>
                 </div>
               ) : inspectorMode === "sound" ? <div className="h-full"><div className="flex items-center justify-between px-5 pt-5"><div><p className="text-[14px] font-semibold text-[#30343A]">Sound</p><p className="mt-1 text-[10.5px] text-[#92979F]">Press a sound to add it at the playhead.</p></div><button type="button" onClick={() => setInspectorMode("overview")} className="grid h-7 w-7 place-items-center rounded-[7px] text-[#969BA3] hover:bg-[#F0F1F3]">×</button></div><SoundFxLibrary compact /></div>
-              : <div className="p-5"><div className="flex items-center justify-between"><p className="text-[14px] font-semibold text-[#30343A]">Enhance</p><button type="button" onClick={() => setInspectorMode("overview")} className="grid h-7 w-7 place-items-center rounded-[7px] text-[#969BA3] hover:bg-[#F0F1F3]">×</button></div><p className="mt-1 text-[10.5px] leading-4 text-[#92979F]">Let Clyra refresh captions and timing using the current clip.</p><div className="mt-5 rounded-[14px] border border-black/[.065] bg-white p-4"><strong className="text-[12px]">Improve clip</strong><p className="mt-1 text-[9.5px] leading-4 text-[#92979F]">Regenerate subtitle timing without changing the source video.</p><button type="button" disabled={regenerateBusy || (!selected?.artifact_id && !words.length)} onClick={onRegenerate} className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-[10px] bg-[#EEF4FF] text-[11px] font-semibold text-[#3977F6] disabled:opacity-40"><RefreshCw size={13} className={regenerateBusy ? "animate-spin" : ""} />{regenerateBusy ? "Improving…" : "Improve captions"}</button></div></div>}
+              : <div className="p-5"><div className="flex items-center justify-between"><p className="text-[14px] font-semibold text-[#30343A]">Enhance</p><button type="button" onClick={() => setInspectorMode("overview")} className="grid h-7 w-7 place-items-center rounded-[7px] text-[#969BA3] hover:bg-[#F0F1F3]">×</button></div><p className="mt-1 text-[10.5px] leading-4 text-[#92979F]">Let Clyra refresh captions and timing using the current clip.</p><div className="mt-5 rounded-[14px] border border-black/[.065] bg-white p-4"><strong className="text-[12px]">Improve clip</strong><p className="mt-1 text-[9.5px] leading-4 text-[#92979F]">Regenerate subtitle timing without changing the source video.</p><button type="button" disabled={regenerateBusy || (!selected?.artifact_id && !words.length)} onClick={onRegenerate} className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-[10px] bg-[#edf2ff] text-[11px] font-semibold text-[#4169f6] disabled:opacity-40"><RefreshCw size={13} className={regenerateBusy ? "animate-spin" : ""} />{regenerateBusy ? "Improving…" : "Improve captions"}</button></div></div>}
             </motion.div>
           </AnimatePresence>
         </aside>

@@ -1,0 +1,24 @@
+{
+  "hostId": "Lukes-MacBook-Pro.local",
+  "hostname": "Lukes-MacBook-Pro.local",
+  "macArchitecture": "x86_64",
+  "macModel": "MacBookPro15,2",
+  "macOSVersion": "15.7.7",
+  "availableDiskSpaceGB": 57,
+  "fullXcodeInstalled": false,
+  "xcodeVersion": null,
+  "simulatorRuntimes": [],
+  "deviceTypes": [],
+  "roles": [],
+  "providerCapabilities": {
+    "supportsServeSim": false,
+    "supportsIdb": false,
+    "supportsSimUse": true,
+    "supportsStreaming": false,
+    "supportsAccessibility": true,
+    "supportsBuild": false,
+    "supportsInstall": false,
+    "supportsLaunch": false
+  },
+  "health": "degraded"
+}

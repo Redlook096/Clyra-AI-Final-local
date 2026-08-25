@@ -897,8 +897,8 @@ function ProcessingScreen({
         className="w-full max-w-[460px] overflow-hidden rounded-[28px] border border-[#e7eaf0] bg-white shadow-[0_18px_52px_rgba(15,23,42,.08)]"
       >
         <div className="flex flex-col items-center px-8 pb-8 pt-10">
-          <div className="relative mb-7"><ProgressRing percent={progress} size={108} strokeWidth={6} color={finishing ? "#10b981" : "#1677FF"} /></div>
-          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[.14em] text-[#4F7CFF]">Clyra AI Clipper</p>
+          <div className="relative mb-7"><ProgressRing percent={progress} size={108} strokeWidth={6} color={finishing ? "#10b981" : "#4169f6"} /></div>
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[.14em] text-[#4169f6]">Clyra AI Clipper</p>
           <h2 className="text-[17px] font-semibold tracking-[-.02em] text-slate-900">{finishing ? "Finalising your clips" : "Creating your best clips"}</h2>
           <div className="mt-5 flex items-center gap-2 text-[12px] font-medium text-slate-400"><Clock3 className="h-3.5 w-3.5" /><span className="tabular-nums">{elapsed}s</span>{readyCount > 0 ? <><span className="text-slate-300">·</span><span>{readyCount} clip{readyCount !== 1 ? "s" : ""} ready</span></> : null}</div>
         </div>
@@ -1966,7 +1966,7 @@ export default function AIClipper({
                         onClick={() => setFaceTrackingPreset(draft.faceTracking === "off" ? "auto" : "none")}
                         className={cn(
                           "relative mt-0.5 h-[22px] w-[40px] shrink-0 rounded-full transition-colors duration-150",
-                          draft.faceTracking !== "off" ? "bg-[#1677FF]" : "bg-slate-200",
+                          draft.faceTracking !== "off" ? "bg-[#4169f6]" : "bg-slate-200",
                         )}
                       >
                         <span
@@ -2351,38 +2351,10 @@ export default function AIClipper({
     <div className="h-full overflow-hidden bg-[#f7f8fa] p-4 sm:p-6">
       <div className="mx-auto flex h-full w-full max-w-[1660px] flex-col overflow-hidden rounded-[26px] border border-[#e7eaf0] bg-white shadow-[0_16px_48px_rgba(15,23,42,.055)]">
         <header className="flex h-14 shrink-0 items-center border-b border-[#eff1f5] px-6">
-          <div className="flex items-center gap-2 text-[16px] font-semibold tracking-[-.03em] text-[#111318]"><span className="grid h-6 w-6 place-items-center rounded-lg bg-[#eff4ff] text-[#4F7CFF]"><Sparkles className="h-3.5 w-3.5" /></span>Clyra</div>
-          <div className="ml-auto flex items-center gap-3"><span className="rounded-full bg-[#f1f5ff] px-3 py-1 text-[12px] font-medium text-[#4F7CFF]">{wizardStep + 1} / {wizardMeta.length}</span></div>
+          <div className="flex items-center gap-2 text-[16px] font-semibold tracking-[-.03em] text-[#111318]"><span className="grid h-6 w-6 place-items-center rounded-lg bg-[#edf2ff] text-[#4169f6]"><Sparkles className="h-3.5 w-3.5" /></span>Clyra</div>
         </header>
         <div className="mx-auto flex min-h-0 w-full max-w-[1360px] flex-1 flex-col px-8 py-5">
         <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[#e7eaf0] bg-white">
-          <nav className="mx-4 mt-3 flex shrink-0 rounded-xl border border-slate-200/80 bg-slate-50 p-1" aria-label="Clip setup sections">
-            {wizardMeta.map((item, index) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setWizardStep(index)}
-                className={cn(
-                  "relative flex h-10 flex-1 items-center justify-center gap-2 rounded-lg px-3 text-center transition-[background-color,box-shadow,color] duration-200",
-                  wizardStep === index ? "bg-white shadow-[0_1px_3px_rgba(15,23,42,.10)]" : "text-slate-400 hover:bg-white/70",
-                )}
-              >
-                <span className={cn(
-                  "text-[11px] font-semibold",
-                  wizardStep === index ? "text-blue-600" : "text-slate-400",
-                )}>
-                  {index + 1}
-                </span>
-                <span className={cn(
-                  "block text-[12px] font-semibold truncate",
-                  wizardStep === index ? "text-slate-900" : "text-slate-500",
-                )}>
-                  {item.title}
-                </span>
-              </button>
-            ))}
-          </nav>
-
           <motion.div
             key={wizardStep}
             initial={{ opacity: 0, y: 6 }}
@@ -2390,9 +2362,9 @@ export default function AIClipper({
             transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
             className="min-h-0 flex-1 overflow-hidden p-4 sm:p-5"
           >
-            <div className="mb-3 flex items-start justify-between gap-4">
+            <div className="mb-4 flex items-start justify-between gap-4">
               <div>
-                <h2 className="text-[16px] font-semibold tracking-[-0.01em] text-slate-900">
+                <h2 className="text-[clamp(20px,2vw,26px)] font-semibold tracking-0 text-[#111318]">
                   {wizardStep === 0 ? "Video source" : wizardStep === 1 ? "Caption appearance" : "Output settings"}
                 </h2>
                 <p className="mt-1 text-[13px] leading-5 text-slate-500 max-w-sm">
@@ -2441,7 +2413,7 @@ export default function AIClipper({
             {false ? (
               <div className="grid h-full place-items-center">
                 <div className="max-w-md text-center">
-                  <span className="mx-auto grid h-11 w-11 place-items-center rounded-2xl bg-[#eff4ff] text-[#4F7CFF]"><Sparkles className="h-5 w-5" /></span>
+                  <span className="mx-auto grid h-11 w-11 place-items-center rounded-2xl bg-[#edf2ff] text-[#4169f6]"><Sparkles className="h-5 w-5" /></span>
                   <h3 className="mt-4 text-[17px] font-semibold tracking-[-.02em] text-slate-900">Clyra will find the strongest moments automatically</h3>
                   <p className="mt-2 text-[13px] leading-5 text-slate-500">It ranks hooks, clarity, pacing and emotional lift, then keeps each clip complete and ready to watch.</p>
                   <div className="mt-6 grid grid-cols-3 gap-2 text-left">{[["Hook","Strong opening"],["Context","Complete thought"],["Pacing","No dead space"]].map(([label,detail]) => <div key={label} className="rounded-xl border border-slate-200/80 bg-slate-50/60 p-3"><p className="text-[11px] font-semibold text-slate-800">{label}</p><p className="mt-1 text-[10px] leading-4 text-slate-400">{detail}</p></div>)}</div>
@@ -2459,7 +2431,7 @@ export default function AIClipper({
                     <label className="block"><span className="mb-1.5 block text-[11px] font-medium text-slate-500">Position</span><select value={draft.position} onChange={(event) => updateDraft("position", event.target.value as CaptionPosition)} className="h-10 w-full rounded-lg border border-slate-200/80 bg-white px-3 text-[12px] font-medium outline-none focus:border-blue-400"><option value="top">Top</option><option value="centre">Middle</option><option value="bottom">Bottom</option></select></label>
                     <label className="block"><span className="mb-1.5 block text-[11px] font-medium text-slate-500">Colour</span><div className="flex h-10 items-center gap-2 rounded-lg border border-slate-200/80 bg-white px-3"><span className="h-4 w-4 rounded-full border border-slate-300 shadow-sm" style={{ backgroundColor: draft.colour }} /><input aria-label="Subtitle colour" type="color" value={draft.colour} onChange={(event) => updateDraft("colour", event.target.value)} className="h-6 min-w-0 flex-1 cursor-pointer bg-transparent outline-none" /></div></label>
                   </div>
-                  <div className="mt-3"><span className="mb-1.5 block text-[11px] font-medium text-slate-500">Colour presets</span><div className="flex h-8 items-center gap-2">{['#FFFFFF','#4F7CFF','#F4D35E','#5DBB7A','#C58AF9','#F28BAE'].map((colour) => <button key={colour} type="button" onClick={() => updateDraft("colour", colour)} aria-label={`Use ${colour} subtitles`} className={cn("h-6 w-6 rounded-full border-2", draft.colour === colour ? "border-[#4F7CFF] ring-2 ring-[#eaf0ff]" : "border-white shadow-sm")} style={{ backgroundColor: colour }} />)}</div></div>
+                  <div className="mt-3"><span className="mb-1.5 block text-[11px] font-medium text-slate-500">Colour presets</span><div className="flex h-8 items-center gap-2">{['#FFFFFF','#4169f6','#F4D35E','#5DBB7A','#C58AF9','#F28BAE'].map((colour) => <button key={colour} type="button" onClick={() => updateDraft("colour", colour)} aria-label={`Use ${colour} subtitles`} className={cn("h-6 w-6 rounded-full border-2", draft.colour === colour ? "border-[#4169f6] ring-2 ring-[#edf2ff]" : "border-white shadow-sm")} style={{ backgroundColor: colour }} />)}</div></div>
                 </div>
               </div>
               <aside className="flex min-h-0 flex-col items-center justify-start overflow-hidden p-0 lg:-mt-5">
@@ -2472,7 +2444,7 @@ export default function AIClipper({
             {wizardStep === 2 ? (
               <div className="grid h-full min-h-0 gap-8 lg:grid-cols-[minmax(0,.9fr)_minmax(320px,1.1fr)]">
                 <div className="grid content-start gap-4">
-                  <div><p className="mb-2 text-[12px] font-medium text-slate-600">Amount of videos</p><div className="grid grid-cols-3 rounded-xl border border-slate-200 bg-slate-50 p-1">{[1,2,3].map((count) => <button key={count} type="button" onClick={() => updateDraft("clipCount", count)} className={cn("h-10 rounded-lg text-[13px] font-semibold transition-colors", draft.clipCount === count ? "bg-white text-[#4F7CFF] shadow-sm ring-1 ring-slate-200" : "text-slate-500 hover:text-slate-800")}>{count}</button>)}</div></div>
+                  <div><p className="mb-2 text-[12px] font-medium text-slate-600">Amount of videos</p><div className="grid grid-cols-3 rounded-xl border border-slate-200 bg-slate-50 p-1">{[1,2,3].map((count) => <button key={count} type="button" onClick={() => updateDraft("clipCount", count)} className={cn("h-10 rounded-lg text-[13px] font-semibold transition-colors", draft.clipCount === count ? "bg-white text-[#4169f6] shadow-sm ring-1 ring-slate-200" : "text-slate-500 hover:text-slate-800")}>{count}</button>)}</div></div>
                   <label className="block"><span className="mb-2 block text-[12px] font-medium text-slate-600">Aspect ratio</span><select value={draft.aspect} onChange={(event) => updateDraft("aspect", event.target.value as ClipAspect)} className="h-11 w-full rounded-xl border border-slate-200/80 bg-white px-3.5 text-[13px] font-medium text-slate-800 outline-none focus:border-blue-400"><option value="9:16">9:16 · Vertical</option><option value="1:1">1:1 · Square</option><option value="16:9">16:9 · Landscape</option></select></label>
                   <label className="block"><span className="mb-2 block text-[12px] font-medium text-slate-600">Clip length</span><select value={draft.clipLength} onChange={(event) => updateDraft("clipLength", Number(event.target.value))} className="h-11 w-full rounded-xl border border-slate-200/80 bg-white px-3.5 text-[13px] font-medium text-slate-800 outline-none focus:border-blue-400"><option value={15}>15 seconds</option><option value={30}>30 seconds</option><option value={45}>45 seconds</option><option value={60}>60 seconds</option></select></label>
                   <label className="block"><span className="mb-2 block text-[12px] font-medium text-slate-600">Render quality</span><select value={draft.renderQuality === "premium" || draft.renderQuality === "master" ? "1080" : "720"} onChange={(event) => updateDraft("renderQuality", event.target.value === "1080" ? "premium" : "balanced")} className="h-11 w-full rounded-xl border border-slate-200/80 bg-white px-3.5 text-[13px] font-medium text-slate-800 outline-none focus:border-blue-400"><option value="1080">1080p · recommended</option><option value="720">720p · faster export</option></select></label>
@@ -2489,41 +2461,55 @@ export default function AIClipper({
               </p>
             ) : null}
           </motion.div>
+        </section>
 
-          <div className="relative flex h-[68px] shrink-0 items-center justify-between border-t border-[#eff1f5] px-6 sm:px-8">
-            <button
-              type="button"
-              disabled={wizardStep === 0}
-              onClick={() => setWizardStep((step) => Math.max(0, step - 1))}
-              className="text-[13px] font-medium text-slate-500 hover:text-slate-900 disabled:invisible"
-            >
-              Back
-            </button>
-            <div className="absolute left-1/2 flex -translate-x-1/2 gap-1.5" aria-label={`Step ${wizardStep + 1} of ${wizardMeta.length}`}>
-              {wizardMeta.map((item, index) => <span key={item.id} className={cn("h-1 w-8 rounded-full", index === wizardStep ? "bg-[#4F7CFF]" : index < wizardStep ? "bg-[#b9caff]" : "bg-[#e7eaf0]")} />)}
-            </div>
+        <footer className="mt-4 shrink-0">
+          <div className="flex min-h-[88px] items-center gap-2 rounded-[22px] border border-[#e2e5ea] bg-white px-5 shadow-[0_12px_38px_rgba(15,23,42,.05)] sm:px-7">
+            {wizardMeta.map((item, index) => {
+              const StepIcon = item.id === "source" ? Video : item.id === "subtitles" ? MessageSquare : SlidersHorizontal;
+              const active = wizardStep === index;
+              return (
+                <div key={item.id} className="flex items-center">
+                  <button
+                    type="button"
+                    onClick={() => setWizardStep(index)}
+                    className={cn(
+                      "flex h-12 items-center gap-3 rounded-2xl px-3 text-[15px] font-medium transition-colors",
+                      active ? "text-[#111318]" : "text-[#68707c] hover:bg-[#f6f8fc] hover:text-[#303642]",
+                    )}
+                  >
+                    <span className={cn("grid h-10 w-10 place-items-center rounded-full", active ? "bg-[#4169f6] text-white" : "bg-[#edf2ff] text-[#4169f6]")}>
+                      <StepIcon className="h-[19px] w-[19px]" />
+                    </span>
+                    {item.title}
+                  </button>
+                  {index < wizardMeta.length - 1 ? <span className="px-1 text-[22px] font-light text-[#a1a8b3]">›</span> : null}
+                </div>
+              );
+            })}
             {wizardStep < 2 ? (
               <button
                 type="button"
+                disabled={!canContinue}
                 onClick={() => setWizardStep((step) => Math.min(2, step + 1))}
-                className="flex h-11 items-center gap-1.5 rounded-xl bg-[#4F7CFF] px-4 text-[13px] font-semibold text-white transition-colors hover:bg-[#416de8]"
+                className="ml-auto flex h-[52px] min-w-[145px] items-center justify-center gap-3 rounded-full bg-[#4169f6] px-7 text-[16px] font-medium text-white shadow-[0_10px_22px_rgba(65,105,246,.25)] transition-[transform,background-color] hover:bg-[#3158ea] active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Continue
-                <ChevronRight className="h-4 w-4" />
+                <ChevronRight className="h-5 w-5" />
               </button>
             ) : (
               <button
                 type="button"
                 disabled={!sourceReady || uploading}
                 onClick={() => void run()}
-                className="flex h-11 items-center gap-2 rounded-xl bg-[#4F7CFF] px-5 text-[13px] font-semibold text-white transition-all hover:bg-[#416de8] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+                className="ml-auto flex h-[52px] min-w-[170px] items-center justify-center gap-3 rounded-full bg-[#4169f6] px-7 text-[16px] font-medium text-white shadow-[0_10px_22px_rgba(65,105,246,.25)] transition-[transform,background-color] hover:bg-[#3158ea] active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-40"
               >
-                <WandSparkles className="h-4 w-4" />
+                <WandSparkles className="h-5 w-5" />
                 Generate clips
               </button>
             )}
           </div>
-        </section>
+        </footer>
         </div>
       </div>
     </div>
@@ -2613,16 +2599,16 @@ export default function AIClipper({
   const projectsView = (
     <div className="h-full overflow-hidden bg-[#f7f8fa] p-5 sm:p-7">
       <div className="mx-auto flex h-full max-w-[1500px] flex-col rounded-[26px] border border-[#e7eaf0] bg-white shadow-[0_16px_48px_rgba(15,23,42,.055)]">
-        <header className="flex h-14 shrink-0 items-center border-b border-[#eff1f5] px-6"><div className="flex items-center gap-2 text-[16px] font-semibold tracking-[-.03em]"><span className="grid h-6 w-6 place-items-center rounded-lg bg-[#eff4ff] text-[#4F7CFF]"><Sparkles className="h-3.5 w-3.5" /></span>Clyra</div><div className="ml-auto flex items-center gap-2"><button type="button" onClick={() => setView("home")} className="h-8 rounded-lg px-3 text-[12px] font-medium text-slate-500 hover:bg-slate-50">Home</button><button type="button" onClick={() => setView("create")} className="flex h-9 items-center gap-1.5 rounded-xl bg-[#4F7CFF] px-3.5 text-[12px] font-semibold text-white hover:bg-[#416de8]"><Plus className="h-3.5 w-3.5" />New clip</button></div></header>
+        <header className="flex h-14 shrink-0 items-center border-b border-[#eff1f5] px-6"><div className="flex items-center gap-2 text-[16px] font-semibold tracking-[-.03em]"><span className="grid h-6 w-6 place-items-center rounded-lg bg-[#edf2ff] text-[#4169f6]"><Sparkles className="h-3.5 w-3.5" /></span>Clyra</div><div className="ml-auto flex items-center gap-2"><button type="button" onClick={() => setView("home")} className="h-8 rounded-lg px-3 text-[12px] font-medium text-slate-500 hover:bg-slate-50">Home</button><button type="button" onClick={() => setView("create")} className="flex h-9 items-center gap-1.5 rounded-xl bg-[#4169f6] px-3.5 text-[12px] font-semibold text-white hover:bg-[#3158ea]"><Plus className="h-3.5 w-3.5" />New clip</button></div></header>
         <div className="min-h-0 flex-1 p-6 sm:p-8"><div className="flex items-end justify-between gap-4"><div><h1 className="text-[25px] font-semibold tracking-[-.04em] text-[#111318]">Projects</h1><p className="mt-1 text-[13px] text-slate-500">Your generated clips, ready to review or refine.</p></div><label className="flex h-10 w-full max-w-[280px] items-center gap-2 rounded-xl border border-slate-200 px-3"><Search className="h-4 w-4 text-slate-400" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search projects" className="min-w-0 flex-1 bg-transparent text-[12px] outline-none" /></label></div>
-          <div className="mt-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{filteredResults.length ? filteredResults.map((result) => <button key={result.id} type="button" onClick={() => { setSelectedId(result.id); setView("results"); }} className="group overflow-hidden rounded-2xl border border-slate-200/80 bg-white text-left transition-[transform,box-shadow,border-color] duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_12px_28px_rgba(15,23,42,.08)]"><div className="relative aspect-video bg-[#111318]"><video muted preload="metadata" src={outputUrl(result.output)} className="h-full w-full object-cover" /><span className="absolute right-3 top-3 rounded-md bg-black/55 px-2 py-1 text-[10px] font-semibold text-white">{result.clip_duration || "Ready"}</span></div><div className="p-4"><p className="truncate text-[13px] font-semibold text-slate-900">{result.title}</p><p className="mt-1 text-[11px] text-slate-400">{result.source_title || "Clyra clip"}</p><div className="mt-3 flex items-center justify-between"><span className="text-[11px] font-medium text-[#4F7CFF]">{clipPotentialScore(result)} score</span><span className="text-[11px] font-medium text-slate-500">Open editor →</span></div></div></button>) : <div className="col-span-full grid min-h-[260px] place-items-center rounded-2xl border border-dashed border-slate-200 text-center"><div><FileVideo2 className="mx-auto h-5 w-5 text-slate-300" /><p className="mt-3 text-[13px] font-medium text-slate-600">No projects yet</p><button type="button" onClick={() => setView("create")} className="mt-3 text-[12px] font-semibold text-[#4F7CFF]">Make your first clip</button></div></div>}</div>
+          <div className="mt-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{filteredResults.length ? filteredResults.map((result) => <button key={result.id} type="button" onClick={() => { setSelectedId(result.id); setView("results"); }} className="group overflow-hidden rounded-2xl border border-slate-200/80 bg-white text-left transition-[transform,box-shadow,border-color] duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_12px_28px_rgba(15,23,42,.08)]"><div className="relative aspect-video bg-[#111318]"><video muted preload="metadata" src={outputUrl(result.output)} className="h-full w-full object-cover" /><span className="absolute right-3 top-3 rounded-md bg-black/55 px-2 py-1 text-[10px] font-semibold text-white">{result.clip_duration || "Ready"}</span></div><div className="p-4"><p className="truncate text-[13px] font-semibold text-slate-900">{result.title}</p><p className="mt-1 text-[11px] text-slate-400">{result.source_title || "Clyra clip"}</p><div className="mt-3 flex items-center justify-between"><span className="text-[11px] font-medium text-[#4169f6]">{clipPotentialScore(result)} score</span><span className="text-[11px] font-medium text-slate-500">Open editor →</span></div></div></button>) : <div className="col-span-full grid min-h-[260px] place-items-center rounded-2xl border border-dashed border-slate-200 text-center"><div><FileVideo2 className="mx-auto h-5 w-5 text-slate-300" /><p className="mt-3 text-[13px] font-medium text-slate-600">No projects yet</p><button type="button" onClick={() => setView("create")} className="mt-3 text-[12px] font-semibold text-[#4169f6]">Make your first clip</button></div></div>}</div>
         </div>
       </div>
     </div>
   );
 
   const homeView = (
-    <div className="grid h-full place-items-center overflow-hidden bg-[#f6f7f9] p-5 sm:p-7"><section className="w-full max-w-[680px] rounded-[30px] border border-white/90 bg-white p-7 shadow-[0_20px_60px_rgba(15,23,42,.08)] sm:p-10"><div className="text-center"><span className="mx-auto grid h-11 w-11 place-items-center rounded-2xl bg-[#eff4ff] text-[#4F7CFF]"><Sparkles className="h-5 w-5" /></span><p className="mt-4 text-[11px] font-semibold uppercase tracking-[.14em] text-[#4F7CFF]">Clyra AI Clipper</p><h1 className="mt-2 text-[27px] font-semibold tracking-[-.045em] text-[#111318]">Start with a video.</h1><p className="mx-auto mt-2 max-w-md text-[13px] leading-6 text-slate-500">Create a fresh clip, or return to a finished project when you are ready to refine it.</p></div><div className="mt-8 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setView("create")} className="group flex min-h-[132px] flex-col justify-between rounded-2xl border border-blue-100 bg-[#f7f9ff] p-5 text-left transition-[background-color,box-shadow,transform] duration-200 hover:-translate-y-px hover:bg-[#f1f5ff] hover:shadow-[0_10px_26px_rgba(79,124,255,.10)] active:scale-[.99]"><span className="grid h-8 w-8 place-items-center rounded-xl bg-[#4F7CFF] text-white shadow-sm"><Plus className="h-4 w-4" /></span><span><span className="block text-[14px] font-semibold text-slate-900">New clip</span><span className="mt-1 block text-[11px] text-slate-500">Use a YouTube link or a video file.</span></span></button><button type="button" onClick={() => setView("projects")} className="group flex min-h-[132px] flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 text-left transition-[background-color,box-shadow,transform] duration-200 hover:-translate-y-px hover:bg-slate-50 hover:shadow-[0_10px_26px_rgba(15,23,42,.07)] active:scale-[.99]"><span className="grid h-8 w-8 place-items-center rounded-xl bg-slate-100 text-slate-600"><FileVideo2 className="h-4 w-4" /></span><span><span className="block text-[14px] font-semibold text-slate-900">View projects</span><span className="mt-1 block text-[11px] text-slate-500">Play, edit, or export a completed clip.</span></span></button></div></section></div>
+    <div className="grid h-full place-items-center overflow-hidden bg-[#f6f7f9] p-5 sm:p-7"><section className="w-full max-w-[680px] rounded-[30px] border border-white/90 bg-white p-7 shadow-[0_20px_60px_rgba(15,23,42,.08)] sm:p-10"><div className="text-center"><span className="mx-auto grid h-11 w-11 place-items-center rounded-2xl bg-[#edf2ff] text-[#4169f6]"><Sparkles className="h-5 w-5" /></span><p className="mt-4 text-[11px] font-semibold uppercase tracking-[.14em] text-[#4169f6]">Clyra AI Clipper</p><h1 className="mt-2 text-[27px] font-semibold tracking-[-.045em] text-[#111318]">Start with a video.</h1><p className="mx-auto mt-2 max-w-md text-[13px] leading-6 text-slate-500">Create a fresh clip, or return to a finished project when you are ready to refine it.</p></div><div className="mt-8 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setView("create")} className="group flex min-h-[132px] flex-col justify-between rounded-2xl border border-blue-100 bg-[#f7f9ff] p-5 text-left transition-[background-color,box-shadow,transform] duration-200 hover:-translate-y-px hover:bg-[#edf2ff] hover:shadow-[0_10px_26px_rgba(65,105,246,.10)] active:scale-[.99]"><span className="grid h-8 w-8 place-items-center rounded-xl bg-[#4169f6] text-white shadow-sm"><Plus className="h-4 w-4" /></span><span><span className="block text-[14px] font-semibold text-slate-900">New clip</span><span className="mt-1 block text-[11px] text-slate-500">Use a YouTube link or a video file.</span></span></button><button type="button" onClick={() => setView("projects")} className="group flex min-h-[132px] flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 text-left transition-[background-color,box-shadow,transform] duration-200 hover:-translate-y-px hover:bg-slate-50 hover:shadow-[0_10px_26px_rgba(15,23,42,.07)] active:scale-[.99]"><span className="grid h-8 w-8 place-items-center rounded-xl bg-slate-100 text-slate-600"><FileVideo2 className="h-4 w-4" /></span><span><span className="block text-[14px] font-semibold text-slate-900">View projects</span><span className="mt-1 block text-[11px] text-slate-500">Play, edit, or export a completed clip.</span></span></button></div></section></div>
   );
 
   const content = (

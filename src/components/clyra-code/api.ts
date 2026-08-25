@@ -26,36 +26,53 @@ export type ProjectGitStatus = {
   changes: Array<{ path: string; status: "A" | "M" | "D" | "R" | "?"; staged: boolean }>;
 };
 
-export type IosSimulatorInfo = {
+export type IPhoneDevice = {
   udid: string;
   name: string;
-  version: string;
-  booted: boolean;
+  runtime: string;
+  state: "Booted" | "Shutdown" | "Booting" | "Shutting Down";
 };
 
-export type IosStatus = {
+export type IPhoneStatus = {
   mac: boolean;
-  xcode: string | null;
-  simulators: IosSimulatorInfo[];
-  booted: IosSimulatorInfo | null;
-  bridgeRunning: boolean;
-  bridgeUrl: string | null;
+  arch: "arm64" | "x86_64" | "other";
+  xcodeVersion: string | null;
+  fastStreamSupported: boolean;
+  devices: IPhoneDevice[];
+  booted: IPhoneDevice | null;
 };
 
-export type SwiftWasmStatus = {
-  configured: boolean;
-  compilerUrl: string | null;
-  framework: "ElementaryUI";
-  target: string;
-  devices: string[];
+export type XcodeState =
+  | "NO_XCODE"
+  | "COMMAND_LINE_TOOLS_ONLY"
+  | "XCODE_INSTALLED_NOT_SELECTED"
+  | "XCODE_NEEDS_FIRST_LAUNCH"
+  | "NO_IOS_RUNTIME"
+  | "READY";
+
+export type XcodeDiagnosis = {
+  state: XcodeState;
+  arch: "arm64" | "x86_64" | "other";
+  macOSVersion: string | null;
+  xcodeAppInstalled: boolean;
+  selectedDeveloperDir: string | null;
+  xcodeVersion: string | null;
+  simctlAvailable: boolean;
+  runtimes: Array<{ identifier: string; name: string; version: string; isAvailable: boolean }>;
+  deviceTypes: Array<{ identifier: string; name: string }>;
+  devices: Array<{ udid: string; name: string; runtime: string; state: string }>;
+  xcodesInstalled: boolean;
+  message: string;
 };
 
-export type MobilePreviewStatus = {
-  configured: boolean;
-  xtool: boolean;
-  goIos: boolean;
-  host: string;
-  requiresPhysicalDevice: boolean;
+export type IPhoneRunResult = {
+  ok: boolean;
+  deviceId?: string;
+  bundleId?: string;
+  streamUrl?: string;
+  streamKind?: "iframe" | "img";
+  buildOutput?: string;
+  error?: string;
 };
 
 export type FileDiff = {
@@ -173,73 +190,55 @@ export const api = {
     method: "POST", body: JSON.stringify({ branch }),
   }),
 
-  iosStatus: () => json<IosStatus>("/api/ios/status"),
+  iphoneStatus: () => json<IPhoneStatus>("/api/iphone/status"),
 
-  swiftWasmStatus: () => json<SwiftWasmStatus>("/api/swift-wasm/status"),
+  iphoneDevices: () => json<{ devices: IPhoneDevice[] }>("/api/iphone/devices").then((r) => r.devices ?? []),
 
-  swiftWasmBuild: (projectId: string) => json<{ ok: boolean; bundleUrl?: string; buildId?: string; diagnostics?: string[]; error?: string }>(
-    `/api/swift-wasm/projects/${enc(projectId)}/build`,
-    { method: "POST" },
-  ),
+  iphoneReadiness: (projectId: string) =>
+    json<{ ready: boolean; projectPath: string }>(`/api/iphone/projects/${enc(projectId)}/readiness`),
 
-  swiftWasmInspect: (projectId: string) =>
-    json<{ metadata: { file: string; name: string; line: number } | null }>(
-      `/api/swift-wasm/projects/${enc(projectId)}/inspect`,
-    ),
+  iphoneRun: (projectId: string, deviceId?: string) =>
+    json<IPhoneRunResult>(`/api/iphone/projects/${enc(projectId)}/run`, {
+      method: "POST",
+      body: JSON.stringify(deviceId ? { deviceId } : {}),
+    }),
 
-  swiftWasmReadiness: (projectId: string) =>
-    json<{ ready: boolean; kind: "package" | null; projectPath: string | null }>(
-      `/api/swift-wasm/projects/${enc(projectId)}/readiness`,
-    ),
+  iphoneRebuild: (projectId: string) =>
+    json<IPhoneRunResult>(`/api/iphone/projects/${enc(projectId)}/rebuild`, { method: "POST" }),
 
-  mobilePreviewStatus: () => json<MobilePreviewStatus>("/api/mobile-preview/status"),
+  iphoneRelaunch: (projectId: string) =>
+    json<{ ok: boolean; error?: string }>(`/api/iphone/projects/${enc(projectId)}/relaunch`, { method: "POST" }),
 
-  mobilePreviewDevices: () => json<{ devices: string[] }>("/api/mobile-preview/devices"),
+  iphoneStop: (projectId: string) =>
+    json<{ ok: boolean }>(`/api/iphone/projects/${enc(projectId)}/stop`, { method: "POST" }),
 
-  mobilePreviewBuild: (projectId: string, deviceId?: string) => json<{ ok: boolean; bundleId?: string; streamUrl?: string | null; message?: string; error?: string }>(
-    `/api/mobile-preview/projects/${enc(projectId)}/build`,
-    { method: "POST", body: JSON.stringify(deviceId ? { deviceId } : {}) },
-  ),
-
-  mobilePreviewReadiness: (projectId: string) =>
-    json<{ ready: boolean; projectPath: string }>(`/api/mobile-preview/projects/${enc(projectId)}/readiness`),
-
-  mobilePreviewInput: (projectId: string, input: Record<string, unknown>) =>
-    json<{ ok: boolean; error?: string }>(`/api/mobile-preview/projects/${enc(projectId)}/input`, {
+  iphoneControl: (projectId: string, input: Record<string, unknown>) =>
+    json<{ ok: boolean; error?: string }>(`/api/iphone/projects/${enc(projectId)}/control`, {
       method: "POST",
       body: JSON.stringify(input),
     }),
 
-  iosStartBridge: () => json<{ ok: boolean; url: string }>("/api/ios/bridge/start", { method: "POST" }),
-
-  iosLaunch: (projectId: string, device?: { name?: string; version?: string }) =>
-    json<{
-      ok: boolean;
-      sessionId?: string;
-      controlUrl?: string;
-      device?: string;
-      version?: string;
-      bundleId?: string;
-      error?: string;
-    }>("/api/ios/launch", {
-      method: "POST",
-      body: JSON.stringify({ projectId, deviceName: device?.name, iosVersion: device?.version }),
-    }),
-
-  iosRelaunch: (projectId: string) =>
-    json<{ ok: boolean; error?: string }>("/api/ios/relaunch", {
-      method: "POST",
-      body: JSON.stringify({ projectId }),
-    }),
-
-  iosInspect: (projectId: string) =>
-    json<{ metadata: { file: string; name: string; line: number } | null }>(
-      `/api/ios/projects/${enc(projectId)}/inspect`,
+  iphoneLogs: (projectId: string) =>
+    json<{ logs: Array<{ timestamp: number; level: string; source: string; message: string }> }>(
+      `/api/iphone/projects/${enc(projectId)}/logs`,
     ),
 
-  iosReadiness: (projectId: string) =>
-    json<{ ready: boolean; kind: "workspace" | "project" | "package" | null; projectPath: string | null }>(
-      `/api/ios/projects/${enc(projectId)}/readiness`,
+  iphoneSetupDiagnose: () => json<XcodeDiagnosis>("/api/iphone/setup/diagnose"),
+
+  iphoneXcodeVersions: () =>
+    json<{ versions: Array<{ version: string; build: string; installed: boolean }> }>("/api/iphone/setup/xcode-versions"),
+
+  iphoneInstallCommand: (version: string) =>
+    json<{ command: string }>(`/api/iphone/setup/install-command?version=${enc(version)}`),
+
+  iphoneRecommendedXcode: () =>
+    json<{ recommendedXcode: string | null; compatibleXcodes: string[]; blockedReason: string | null; sourceEvidence: string[] }>(
+      "/api/iphone/setup/recommended-xcode",
+    ),
+
+  iphoneDiskSpace: () =>
+    json<{ availableGB: number; requiredGB: number; breakdown: Array<{ label: string; gb: number }>; sufficient: boolean; shortfallGB: number }>(
+      "/api/iphone/setup/disk-space",
     ),
 
   sourceEdit: (projectId: string, payload: { file: string; selector: string; property: string; value: string }) =>

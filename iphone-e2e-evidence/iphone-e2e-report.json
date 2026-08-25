@@ -1,0 +1,236 @@
+{
+  "mode": "mac",
+  "clientOS": "darwin",
+  "ranAt": "2026-08-22T08:58:28.635Z",
+  "usedAiApi": false,
+  "steps": [
+    {
+      "name": "host.capabilities",
+      "status": "PASS",
+      "detail": {
+        "hostId": "Lukes-MacBook-Pro.local",
+        "hostname": "Lukes-MacBook-Pro.local",
+        "macArchitecture": "x86_64",
+        "macModel": "MacBookPro15,2",
+        "macOSVersion": "15.7.7",
+        "availableDiskSpaceGB": 57,
+        "fullXcodeInstalled": false,
+        "xcodeVersion": null,
+        "simulatorRuntimes": [],
+        "deviceTypes": [],
+        "roles": [],
+        "providerCapabilities": {
+          "supportsServeSim": false,
+          "supportsIdb": false,
+          "supportsSimUse": true,
+          "supportsStreaming": false,
+          "supportsAccessibility": true,
+          "supportsBuild": false,
+          "supportsInstall": false,
+          "supportsLaunch": false
+        },
+        "health": "degraded"
+      },
+      "timestamp": "2026-08-22T08:58:28.290Z"
+    },
+    {
+      "name": "xcode.diagnose",
+      "status": "PASS",
+      "detail": {
+        "state": "COMMAND_LINE_TOOLS_ONLY",
+        "arch": "x86_64",
+        "macOSVersion": "15.7.7",
+        "xcodeAppInstalled": false,
+        "selectedDeveloperDir": "/Library/Developer/CommandLineTools",
+        "xcodeVersion": null,
+        "simctlAvailable": false,
+        "runtimes": [],
+        "deviceTypes": [],
+        "devices": [],
+        "xcodesInstalled": true,
+        "message": "Only Command Line Tools are installed — full Xcode is required for the iOS Simulator."
+      },
+      "timestamp": "2026-08-22T08:58:28.322Z"
+    },
+    {
+      "name": "xcode.compatibility-resolver",
+      "status": "PASS",
+      "detail": {
+        "macOSVersion": "15.7.7",
+        "architecture": "x86_64",
+        "compatibleXcodes": [
+          "26.3",
+          "26.2",
+          "26.1.1",
+          "26.1",
+          "26.0.1",
+          "26.0",
+          "16.4",
+          "16.3",
+          "16.2",
+          "16.1",
+          "16.0",
+          "15.4",
+          "15.3",
+          "15.2",
+          "15.1",
+          "15.0.1",
+          "15.0",
+          "14.3.1",
+          "14.3",
+          "14.2",
+          "14.1",
+          "14.0.1",
+          "14.0"
+        ],
+        "recommendedXcode": "26.3",
+        "confidence": "curated-table",
+        "sourceEvidence": [
+          "xcodes list: 284 cataloged releases (141 stable)",
+          "curated minimum-macOS table: 13 entries, keyed per exact version (not per major)",
+          "host: macOS 15.7.7, x86_64"
+        ],
+        "blockedReason": null
+      },
+      "timestamp": "2026-08-22T08:58:28.603Z"
+    },
+    {
+      "name": "simulator.boot",
+      "status": "BLOCKED",
+      "detail": "Apple Host state is COMMAND_LINE_TOOLS_ONLY, not READY — Only Command Line Tools are installed — full Xcode is required for the iOS Simulator.",
+      "timestamp": "2026-08-22T08:58:28.634Z"
+    },
+    {
+      "name": "simulator.springboard",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "ui.semantic-snapshot",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "flow.home",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "flow.settings",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "flow.general",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "flow.about",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "flow.scroll",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "flow.system-app-discovery",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "flow.system-app-open",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "flow.text-input",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "flow.text-edit",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "flow.swipe",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "flow.rotate-landscape",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "flow.rotate-portrait",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "flow.lock",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "flow.screenshot",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "flow.app-switch-cycles",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "soak.10min",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "reconnect.renderer-reload",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "reconnect.clyra-restart",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    },
+    {
+      "name": "reconnect.apple-host-restart",
+      "status": "BLOCKED",
+      "detail": "No real Simulator is reachable on this Apple Host — see xcode.diagnose above for the exact reason.",
+      "timestamp": "2026-08-22T08:58:28.635Z"
+    }
+  ],
+  "summary": {
+    "pass": 3,
+    "blocked": 22,
+    "fail": 0,
+    "notRun": 0
+  }
+}

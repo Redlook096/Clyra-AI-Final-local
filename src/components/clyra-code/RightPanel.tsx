@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { motion } from "motion/react";
-import Editor, { type OnMount } from "@monaco-editor/react";
+import { AnimatePresence, motion } from "motion/react";
+import Editor, { type OnMount, loader } from "@monaco-editor/react";
+import * as monaco from "monaco-editor";
+// Load Monaco from the local bundle instead of the CDN loader default so the
+// Files editor renders in the desktop/offline shell, not only on the web.
+loader.config({ monaco });
 import {
   ArrowLeft,
   ArrowRight,
@@ -24,7 +28,8 @@ import {
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { ShiningText } from "../ShiningText";
-import { api, type FileDiff, type MobilePreviewStatus, type PreviewLogLine, type PreviewSession, type SwiftWasmStatus } from "./api";
+import { api, type FileDiff, type PreviewLogLine, type PreviewSession } from "./api";
+import { IPhonePanel } from "./IPhonePanel";
 import type { AgentAction, ClyraCodeState, ProjectPlatform } from "./store";
 import { DiffCounters } from "./AnimatedCounter";
 import { computeLineDiff, linesFromPatch } from "./diff";
@@ -80,6 +85,10 @@ export function usePreview(projectId: string | null, buildVersion: number) {
     if (!projectId) return;
     if (startedForRef.current !== projectId) {
       startedForRef.current = projectId;
+      // Drop the previous project's session immediately so its preview can
+      // never render against the newly selected project.
+      setSession(null);
+      setFrameVersion(0);
       void start();
     }
     let retryingMissingEntry = false;
@@ -270,9 +279,9 @@ function BrowserView({
       </div>
 
       <div ref={surfaceRef} className="relative min-h-0 flex-1 bg-white">
-        {ready ? (
+        {ready && !agentRunning ? (
           <iframe
-            key={frameVersion}
+            key={`${projectId}:${frameVersion}`}
             // Keep the trailing slash so the preview behaves as a directory:
             // relative JS/CSS assets and the injected inspect bridge resolve
             // inside this project's proxied namespace.
@@ -286,20 +295,6 @@ function BrowserView({
               win?.postMessage({ type: "clyra:mode", mode: inspectMode }, "*");
             }}
           />
-        ) : starting || agentRunning ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 bg-[#FAFAF9]">
-            <div className="cc-preview-loader" aria-hidden />
-            <div className="flex flex-col items-center gap-1 text-center">
-              <ShiningText
-                text={starting ? "Starting live preview…" : "Building your project…"}
-                play
-                className="text-[12.5px] font-medium tracking-[-0.01em]"
-              />
-              <p className="text-[11px] text-[#8A8A8A]">
-                {starting ? "Preparing the development server" : "Preview will appear when files are ready"}
-              </p>
-            </div>
-          </div>
         ) : failed ? (
           <div className="flex h-full flex-col items-center justify-center gap-2.5 bg-[#FAFAF9]">
             <p className="text-[13px] font-medium text-[#171717]">Preview could not start</p>
@@ -325,7 +320,7 @@ function BrowserView({
               </button>
             </div>
           </div>
-        ) : (
+        ) : (!starting && !agentRunning) ? (
           <div className="relative flex h-full flex-col items-center justify-center overflow-hidden bg-[#F7F7F6]">
             <div className="relative z-[1] flex max-w-[300px] flex-col items-center px-5 text-center">
               <Globe className="mb-2.5 h-6 w-6 text-[#B7B9BD]" strokeWidth={1.4} />
@@ -337,462 +332,32 @@ function BrowserView({
               </p>
             </div>
           </div>
-        )}
-
-      </div>
-    </div>
-  );
-}
-/* ------------------------------------------------------------------ */
-/* iOS Simulator preview — live stream from the embedded ios-bridge     */
-/* ------------------------------------------------------------------ */
-
-const DEFAULT_DEVICE = "Connected iPhone";
-
-/**
- * A portable SwiftUI source preview. It is intentionally separate from the
- * optional physical-device bridge below: every Clyra client can render this
- * Chromium preview, while a real iPhone stream remains an opt-in enhancement.
- */
-function IosPreviewView({
-  projectId,
-  relaunchSignal,
-  agentRunning,
-  inspectMode,
-  onToggleInspect,
-  onInspectElement,
-  fullscreen,
-  onToggleFullscreen,
-}: {
-  projectId: string | null;
-  relaunchSignal: number;
-  agentRunning: boolean;
-  inspectMode: boolean;
-  onToggleInspect: () => void;
-  onInspectElement: (payload: InspectPayload) => void;
-  fullscreen: boolean;
-  onToggleFullscreen: () => void;
-  onPreviewError?: (message: string) => void;
-}) {
-  const [status, setStatus] = useState<SwiftWasmStatus | null>(null);
-  const [phase, setPhase] = useState<"waiting" | "building" | "running" | "failed">("waiting");
-  const [bundleUrl, setBundleUrl] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [orientation, setOrientation] = useState<"portrait" | "landscape">("portrait");
-  const [frameKey, setFrameKey] = useState(0);
-  const launchRef = useRef<string | null>(null);
-  const phoneAreaRef = useRef<HTMLDivElement | null>(null);
-
-  const build = useCallback(async () => {
-    if (!projectId) return;
-    setPhase("building");
-    setError(null);
-    try {
-      const result = await api.swiftWasmBuild(projectId);
-      if (!result.ok || !result.bundleUrl) throw new Error(result.error ?? "Preview build did not produce a bundle.");
-      setBundleUrl(result.bundleUrl);
-      setFrameKey((value) => value + 1);
-      setPhase("running");
-    } catch (cause) {
-      setPhase("failed");
-      setError(cause instanceof Error ? cause.message : "Preview build failed.");
-    }
-  }, [projectId]);
-
-  useEffect(() => { void api.swiftWasmStatus().then(setStatus).catch(() => undefined); }, []);
-  useEffect(() => {
-    if (!projectId) return;
-    let cancelled = false;
-    let retry: number | undefined;
-    const checkReadiness = () => {
-      void api.swiftWasmReadiness(projectId).then((readiness) => {
-        if (cancelled) return;
-        if (!readiness.ready) {
-          setPhase("waiting");
-          // A coding agent can create the first Swift file after this pane
-          // mounts. Keep checking lightly instead of requiring the user to
-          // press Reload once the source is actually ready.
-          retry = window.setTimeout(checkReadiness, 700);
-          return;
-        }
-        if (launchRef.current !== `${projectId}:${relaunchSignal}`) {
-          launchRef.current = `${projectId}:${relaunchSignal}`;
-          void build();
-        }
-      }).catch(() => {
-        if (!cancelled) {
-          setPhase("waiting");
-          retry = window.setTimeout(checkReadiness, 1000);
-        }
-      });
-    };
-    checkReadiness();
-    return () => { cancelled = true; if (retry !== undefined) window.clearTimeout(retry); };
-  }, [agentRunning, build, projectId, relaunchSignal]);
-
-  const loading = phase === "waiting" || phase === "building";
-  const title = phase === "building" ? "Updating local preview…" : "Preparing SwiftUI preview…";
-  return <div className="flex min-h-0 flex-1 flex-col">
-    <div className="flex h-[40px] items-center gap-1 border-b border-[color:var(--border-subtle)] px-2.5">
-      <span className="flex h-7 items-center rounded-[7px] px-2 text-[11.5px] font-medium text-[#505258]">iPhone 16</span>
-      <span className="text-[10.5px] text-[#96989D]">Local SwiftUI preview</span>
-      <span className="flex-1" />
-      <button type="button" aria-label="Rotate preview" title="Rotate preview" onClick={() => setOrientation((value) => value === "portrait" ? "landscape" : "portrait")} className="rounded-[7px] p-1.5 text-[#93959A] transition-colors hover:bg-black/[0.03] hover:text-[#202124]"><RotateCw className="h-[13px] w-[13px]" strokeWidth={1.8} /></button>
-      <button type="button" aria-label="Reload preview" title="Reload preview" onClick={() => void build()} className="rounded-[7px] p-1.5 text-[#93959A] transition-colors hover:bg-black/[0.03] hover:text-[#202124]"><RotateCw className="h-[13px] w-[13px]" strokeWidth={1.8} /></button>
-      <button type="button" aria-label={fullscreen ? "Exit full screen preview" : "Full screen preview"} title={fullscreen ? "Exit full screen" : "Full screen"} onClick={onToggleFullscreen} className="rounded-[7px] p-1.5 text-[#93959A] transition-colors hover:bg-black/[0.03] hover:text-[#202124]">{fullscreen ? <Minimize2 className="h-[13px] w-[13px]" strokeWidth={1.8} /> : <Maximize2 className="h-[13px] w-[13px]" strokeWidth={1.8} />}</button>
-      <button type="button" onClick={onToggleInspect} className={cn("ml-1 flex h-7 items-center gap-1.5 rounded-[8px] px-2.5 text-[11.5px] transition-colors", inspectMode ? "bg-[#E8F0FE] font-medium text-[#3977F6]" : "font-medium text-[#505258] hover:bg-black/[0.03]")}>{inspectMode ? "✓ Editing" : "Commenting"}</button>
-    </div>
-    <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[#FAFAF9] p-4">
-      {bundleUrl && !loading && phase === "running" ? <div ref={phoneAreaRef} className={cn("relative overflow-hidden rounded-[38px] bg-[#1C1C1E] p-[8px] shadow-[0_16px_34px_rgba(15,23,42,0.18)]", orientation === "portrait" ? "h-[532px] w-[260px]" : "h-[270px] w-[532px]")}>
-        <span className={cn("absolute z-10 rounded-full bg-[#111]", orientation === "portrait" ? "left-1/2 top-[14px] h-[19px] w-[88px] -translate-x-1/2" : "left-[14px] top-1/2 h-[88px] w-[19px] -translate-y-1/2")} />
-        <iframe key={frameKey} src={bundleUrl} title="SwiftUI preview" className="h-full w-full rounded-[30px] bg-white" />
-        {inspectMode ? <button type="button" className="absolute inset-0 z-20 cursor-crosshair" aria-label="Reference SwiftUI view" onClick={(event) => { const rect = phoneAreaRef.current?.getBoundingClientRect(); onInspectElement({ platform: "ios", kind: "SwiftUI view", label: "SwiftUI preview", name: "ContentView", x: Math.round(event.clientX - (rect?.left ?? 0)), y: Math.round(event.clientY - (rect?.top ?? 0)) }); }}><span className="pointer-events-none absolute left-3 top-3 rounded-[6px] bg-[#3977F6]/95 px-2 py-1 text-[10px] font-medium text-white">Click a view to reference it in chat</span></button> : null}
-      </div> : null}
-      {loading ? <div className="relative z-10 flex h-full w-full flex-col items-center justify-center gap-3.5 bg-[#FAFAF9]"><div className="relative h-[438px] w-[218px] rounded-[34px] bg-[#202124] p-[7px] shadow-[0_16px_34px_rgba(15,23,42,0.18)]"><div className="relative flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-[28px] bg-[#F8F8F7]"><span className="absolute left-1/2 top-2 h-[18px] w-[86px] -translate-x-1/2 rounded-full bg-[#202124]" /><div className="cc-preview-loader" /><ShiningText text={title} play className="mt-4 max-w-[160px] text-center text-[11.5px] font-medium tracking-[-0.01em]" /><p className="mt-1.5 max-w-[166px] text-center text-[9.5px] leading-[1.4] text-[#8A8A8A]">Preview will appear once Swift source is ready</p></div></div><p className="text-[10.5px] text-[#96989D]">Cross-platform local preview</p></div> : null}
-      {phase === "failed" ? <div className="flex max-w-[340px] flex-col items-center gap-2 text-center"><p className="text-[13px] font-medium text-[#3D3F43]">Preview build failed</p><p className="text-[11.5px] leading-[1.5] text-[#94969A]">{error}</p><button type="button" onClick={() => void build()} className="h-7 rounded-[7px] border border-black/[0.08] px-2.5 text-[11.5px] text-[#202124] hover:bg-black/[0.03]">Try again</button></div> : null}
-    </div>
-  </div>;
-}
-
-function PhysicalDeviceIosPreviewView({
-  projectId,
-  relaunchSignal,
-  agentRunning,
-  inspectMode,
-  onToggleInspect,
-  onInspectElement,
-  onPreviewError,
-}: {
-  projectId: string | null;
-  /** Bump after a successful agent run to reinstall + relaunch the app. */
-  relaunchSignal: number;
-  agentRunning: boolean;
-  inspectMode: boolean;
-  onToggleInspect: () => void;
-  onInspectElement: (payload: InspectPayload) => void;
-  onPreviewError?: (message: string) => void;
-}) {
-  const [status, setStatus] = useState<MobilePreviewStatus | null>(null);
-  const [phase, setPhase] = useState<"idle" | "waiting" | "building" | "connecting" | "running" | "failed">("idle");
-  const [streamUrl, setStreamUrl] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [device, setDevice] = useState(DEFAULT_DEVICE);
-  const [devices, setDevices] = useState<string[]>([]);
-  const [deviceMenu, setDeviceMenu] = useState(false);
-  const [orientation, setOrientation] = useState<"portrait" | "landscape">("portrait");
-  const [frameKey, setFrameKey] = useState(0);
-  const launchedRef = useRef<string | null>(null);
-  const reportedErrorRef = useRef<string | null>(null);
-  const streamAreaRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    // Infrastructure readiness is not a source-code failure. Never start an
-    // automatic agent retry merely because a user has not installed the
-    // optional physical-device toolchain or connected a phone.
-    if (phase === "failed" && error && !/Install and configure xtool and go-ios|No connected preview session|Connect an iPhone/i.test(error) && reportedErrorRef.current !== error) {
-      reportedErrorRef.current = error;
-      onPreviewError?.(error);
-    }
-  }, [error, onPreviewError, phase]);
-
-  const launch = useCallback(
-    async () => {
-      // A completion signal can arrive before the optional device bridge has
-      // reported its capability. Keep the preview in its honest idle state
-      // rather than attempting a build that is guaranteed to fail.
-      if (!status?.configured) {
-        setPhase("idle");
-        return;
-      }
-      if (!projectId) return;
-      setPhase("building");
-      setError(null);
-      try {
-        const result = await api.mobilePreviewBuild(projectId, device === DEFAULT_DEVICE ? undefined : device);
-        if (!result.ok || !result.streamUrl) {
-          setPhase("failed");
-          setError(result.error ?? "The physical-device build failed.");
-          return;
-        }
-        setStreamUrl(result.streamUrl);
-        setPhase("connecting");
-        setFrameKey((key) => key + 1);
-      } catch (err) {
-        setPhase("failed");
-        setError(err instanceof Error ? err.message : "The mobile preview pipeline failed.");
-      }
-    },
-    [projectId, status?.configured],
-  );
-
-  useEffect(() => {
-    void api.mobilePreviewStatus().then(setStatus).catch(() => undefined);
-    void api.mobilePreviewDevices().then(({ devices: found }) => {
-      setDevices(found);
-      if (found[0]) setDevice(found[0]);
-    }).catch(() => undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (!projectId) return;
-    if (!status) return;
-    if (!status.configured) {
-      setPhase("idle");
-      return;
-    }
-    if (agentRunning) {
-      setPhase("waiting");
-      return;
-    }
-    let cancelled = false;
-    void api.mobilePreviewReadiness(projectId).then((readiness) => {
-      if (cancelled || launchedRef.current === projectId) return;
-      if (!readiness.ready) {
-        setPhase("waiting");
-        return;
-      }
-      launchedRef.current = projectId;
-      void launch();
-    }).catch(() => {
-      if (!cancelled) setPhase("waiting");
-    });
-    return () => { cancelled = true; };
-  }, [projectId, status, launch, agentRunning, relaunchSignal]);
-
-  useEffect(() => {
-    if (!projectId || relaunchSignal === 0 || !status?.configured) return;
-    launchedRef.current = null;
-    void launch();
-  }, [relaunchSignal, projectId, launch, status?.configured]);
-
-  const currentDeviceName = device;
-
-  // The loader owns the simulator surface until the first actual stream frame
-  // arrives. This prevents a blank preview or a stopped loader while the
-  // agent is still generating/building the native project.
-  const loading = agentRunning || phase === "waiting" || phase === "building" || phase === "connecting";
-  const loadingTitle =
-    phase === "waiting"
-      ? agentRunning
-        ? "Building your iOS project…"
-        : "Preparing iOS preview…"
-      : phase === "building"
-        ? "Building for your connected iPhone…"
-        : "Opening the live device stream…";
-  const loadingDetail =
-    phase === "waiting"
-      ? agentRunning
-        ? "Preview will appear when the native project is ready"
-        : "Waiting for the native project files"
-      : phase === "building"
-        ? "xtool is signing and installing the Swift package"
-        : "Waiting for the first live device frame";
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-[40px] items-center gap-1 border-b border-[color:var(--border-subtle)] px-2.5">
-        {status ? (
-          <>
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setDeviceMenu((open) => !open)}
-                className="flex h-7 items-center gap-1 rounded-[7px] px-2 text-[11.5px] font-medium text-[#505258] transition-colors hover:bg-black/[0.03]"
-              >
-                {currentDeviceName}
-                <ChevronDown className={cn("h-3 w-3 text-[#96989D] transition-transform", deviceMenu && "rotate-180")} />
-              </button>
-              {deviceMenu ? (
-                <div className="absolute left-0 top-[32px] z-30 max-h-64 w-[190px] overflow-y-auto rounded-[8px] border border-black/[0.06] bg-white py-0.5 shadow-[0_8px_20px_rgba(15,23,42,0.08)]">
-                  {(devices.length ? devices : [DEFAULT_DEVICE]).map((simulator) => (
-                    <button
-                      key={simulator}
-                      type="button"
-                      onClick={() => {
-                        setDevice(simulator);
-                        setDeviceMenu(false);
-                        launchedRef.current = null;
-                        void launch();
-                      }}
-                      className="flex w-full items-center justify-between px-2.5 py-[5px] text-left text-[11.5px] text-[#202124] transition-colors hover:bg-black/[0.03]"
-                    >
-                      <span className="truncate">{simulator}</span>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-            <span className="text-[10.5px] text-[#96989D]">Physical device</span>
-            <span className="flex-1" />
-            <button
-              type="button"
-              aria-label="Rotate device"
-              title="Rotate device"
-              onClick={() => {
-                const next = orientation === "portrait" ? "landscape" : "portrait";
-                setOrientation(next);
-                if (projectId) void api.mobilePreviewInput(projectId, { action: "orientation", value: next }).catch(() => undefined);
-              }}
-              className="rounded-[7px] p-1.5 text-[#93959A] transition-colors hover:bg-black/[0.03] hover:text-[#202124]"
-            >
-              <RotateCw className="h-[13px] w-[13px]" strokeWidth={1.8} />
-            </button>
-            <button
-              type="button"
-              aria-label="Relaunch"
-              title="Rebuild and relaunch"
-              onClick={() => {
-                launchedRef.current = null;
-                void launch();
-              }}
-              className="rounded-[7px] p-1.5 text-[#93959A] transition-colors hover:bg-black/[0.03] hover:text-[#202124]"
-            >
-              <RotateCw className="h-[13px] w-[13px]" strokeWidth={1.8} />
-            </button>
-            <button
-              type="button"
-              onClick={onToggleInspect}
-              className={cn(
-                "ml-1 flex h-7 items-center gap-1.5 rounded-[8px] px-2.5 text-[11.5px] transition-colors",
-                inspectMode
-                  ? "bg-[#E8F0FE] font-medium text-[#3977F6]"
-                  : "font-medium text-[#505258] hover:bg-black/[0.03]",
-              )}
-            >
-              {inspectMode ? "✓ Editing" : "Commenting"}
-            </button>
-          </>
-        ) : (
-          <span className="flex-1 text-[11.5px] text-[#505258]">iPhone Preview</span>
-        )}
-      </div>
-
-      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[#FAFAF9] p-4">
-        {streamUrl ? (
-          <div ref={streamAreaRef} className="absolute inset-0 flex items-center justify-center overflow-hidden">
-            <PhysicalDevicePhoneFrame
-              url={streamUrl}
-              device={device}
-              frameKey={frameKey}
-              onReady={() => setPhase((current) => current === "connecting" ? "running" : current)}
-              onInput={(input) => {
-                if (projectId) void api.mobilePreviewInput(projectId, input).catch(() => undefined);
-              }}
-            />
-            {inspectMode && phase === "running" ? (
-              <div
-                className="absolute inset-0 z-20 cursor-crosshair"
-                onClick={(event) => {
-                  const node = streamAreaRef.current;
-                  if (!node || !projectId) return;
-                  const rect = node.getBoundingClientRect();
-                  const x = Math.round(event.clientX - rect.left);
-                  const y = Math.round(event.clientY - rect.top);
-                  void api.mobilePreviewInput(projectId, { action: "tap", x, y }).catch(() => undefined);
-                  onInspectElement({ platform: "ios", kind: "SwiftUI view", label: `iPhone view @ ${x}, ${y}`, name: "view", x, y, device: currentDeviceName });
-                }}
-              >
-                <div className="pointer-events-none absolute left-3 top-3 rounded-[6px] bg-[#3977F6]/95 px-2 py-1 text-[10px] font-medium text-white">
-                  Click a view to reference it in chat
-                </div>
-              </div>
-            ) : null}
-          </div>
         ) : null}
 
-        {loading ? (
-          <div className="relative z-10 flex h-full w-full flex-col items-center justify-center gap-3.5 bg-[#FAFAF9]">
-            <div className="relative h-[438px] w-[218px] rounded-[34px] bg-[#202124] p-[7px] shadow-[0_16px_34px_rgba(15,23,42,0.18)]">
-              <div className="relative flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-[28px] bg-[#F8F8F7]">
-                <span className="absolute left-1/2 top-2 h-[18px] w-[86px] -translate-x-1/2 rounded-full bg-[#202124]" aria-hidden />
-                <div className="cc-preview-loader" aria-hidden />
-                <ShiningText text={loadingTitle} play className="mt-4 max-w-[160px] text-center text-[11.5px] font-medium tracking-[-0.01em]" />
-                <p className="mt-1.5 max-w-[166px] text-center text-[9.5px] leading-[1.4] text-[#8A8A8A]">{loadingDetail}</p>
-              </div>
-            </div>
-            <p className="text-[10.5px] text-[#96989D]">Live physical-device preview</p>
-          </div>
-        ) : phase === "failed" ? (
-          <div className="flex max-w-[360px] flex-col items-center gap-2 text-center">
-            <p className="text-[13px] font-medium text-[#3D3F43]">Build failed</p>
-            <p className="max-h-40 overflow-y-auto whitespace-pre-wrap text-[11px] leading-[1.5] text-[#94969A]">
-              {error}
-            </p>
-            <button
-              type="button"
-              onClick={() => void launch()}
-              className="mt-1 h-7 rounded-[7px] border border-black/[0.08] px-2.5 text-[11.5px] text-[#202124] transition-colors hover:bg-black/[0.03]"
+        <AnimatePresence>
+          {(starting || agentRunning) && !failed ? (
+            <motion.div
+              key="preview-loading"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ opacity: { duration: 0.32, ease: [0.22, 1, 0.36, 1] } }}
+              className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-[#FAFAF9]"
             >
-              Try again
-            </button>
-          </div>
-        ) : status && !status.configured ? (
-          <div className="flex w-full max-w-[340px] flex-col items-center gap-2.5 text-center">
-            <p className="text-[13px] font-medium text-[#3D3F43]">iPhone preview is unavailable</p>
-            <p className="text-[11.5px] leading-[1.5] text-[#94969A]">
-              Swift source can still be created here. Configure a supported local preview bridge to stream a native device.
-            </p>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center gap-2 text-center">
-            <p className="text-[13px] font-medium text-[#3D3F43]">iPhone preview</p>
-            <p className="text-[11.5px] text-[#94969A]">
-              The interactive preview will appear here once Swift source is ready.
-            </p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/** Centered physical iPhone stream. Input is forwarded through go-ios. */
-function PhysicalDevicePhoneFrame({ url, device, frameKey, onReady, onInput }: { url: string; device: string; frameKey: number; onReady?: () => void; onInput?: (input: Record<string, unknown>) => void }) {
-  const areaRef = useRef<HTMLDivElement | null>(null);
-  const pointerStart = useRef<{ x: number; y: number } | null>(null);
-  const [scale, setScale] = useState(1);
-
-  useEffect(() => {
-    const node = areaRef.current;
-    if (!node) return;
-    const observer = new ResizeObserver(() => {
-      setScale(Math.min(1, (node.clientWidth - 32) / 400, (node.clientHeight - 24) / 900));
-    });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
-
-  const coordinates = (event: { clientX: number; clientY: number }) => {
-    const node = areaRef.current?.querySelector<HTMLElement>("[data-phone-screen]");
-    if (!node) return null;
-    const rect = node.getBoundingClientRect();
-    return { x: Math.round(((event.clientX - rect.left) / rect.width) * 390), y: Math.round(((event.clientY - rect.top) / rect.height) * 844) };
-  };
-
-  return (
-    <div ref={areaRef} className="absolute inset-0 flex items-center justify-center overflow-hidden">
-      <div
-        style={{ width: 260, height: 532, transform: `scale(${scale})`, transformOrigin: "center center" }}
-        className="relative shrink-0 rounded-[38px] bg-[#1C1C1E] p-[9px] shadow-[0_16px_34px_rgba(15,23,42,0.18)]"
-        tabIndex={0}
-        onPointerDown={(event) => { pointerStart.current = coordinates(event); }}
-        onPointerUp={(event) => {
-          const start = pointerStart.current;
-          const end = coordinates(event);
-          pointerStart.current = null;
-          if (!start || !end) return;
-          const distance = Math.hypot(end.x - start.x, end.y - start.y);
-          if (distance < 12) onInput?.({ action: "tap", ...end });
-          else onInput?.({ action: "swipe", ...start, toX: end.x, toY: end.y });
-        }}
-        onKeyDown={(event) => {
-          if (event.key.length === 1) onInput?.({ action: "type", text: event.key });
-          else if (event.key === "Enter") onInput?.({ action: "type", text: "\n" });
-        }}
-      >
-        <span className="absolute left-1/2 top-[14px] z-10 h-[19px] w-[88px] -translate-x-1/2 rounded-full bg-[#111]" />
-        <img data-phone-screen key={frameKey} src={url} title={`${device} live preview`} onLoad={onReady} className="h-full w-full rounded-[30px] bg-black object-cover" />
+              <div className="cc-preview-loader" aria-hidden />
+              <div className="flex flex-col items-center gap-1 text-center">
+                <ShiningText
+                  text={starting ? "Starting live preview…" : "Building your project…"}
+                  play
+                  className="text-[12.5px] font-medium tracking-[-0.01em]"
+                />
+                <p className="text-[11px] text-[#8A8A8A]">
+                  {starting ? "Preparing the development server" : "Preview will appear when files are ready"}
+                </p>
+              </div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
       </div>
     </div>
   );
@@ -940,6 +505,12 @@ function buildFileTree(files: WorkspaceFile[]) {
   return root;
 }
 
+function shouldShowWorkspaceFile(path: string) {
+  if (path.startsWith(".agent/skills/")) return true;
+  if (path === ".agent/AGENTS.md") return true;
+  return !path.startsWith(".agent/") && !path.startsWith(".clyra/") && !path.startsWith(".git");
+}
+
 function FilesView({ projectId, diffs }: { projectId: string | null; diffs: FileDiff[] }) {
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [query, setQuery] = useState("");
@@ -952,10 +523,9 @@ function FilesView({ projectId, diffs }: { projectId: string | null; diffs: File
   const refresh = useCallback(async () => {
     if (!projectId) { setFiles([]); return; }
     const data = await api.getProject(projectId).catch(() => null);
-    // Agent checkpoints and bundled skills are implementation detail; the
-    // workbench should open on the actual project source, not a wall of
-    // harness metadata.
-    const next = (data?.files ?? []).filter((file) => !file.path.startsWith(".agent/"));
+    // Agent checkpoints stay hidden, but the bundled Apple/SwiftUI skills are
+    // real project guidance and belong in the workbench alongside source.
+    const next = (data?.files ?? []).filter((file) => shouldShowWorkspaceFile(file.path));
     setFiles(next);
     setSelected((current) => current && next.some((file) => file.path === current) ? current : next[0]?.path ?? null);
   }, [projectId]);
@@ -1012,7 +582,7 @@ function FilesView({ projectId, diffs }: { projectId: string | null; diffs: File
     const nextPath = window.prompt("Rename path", path)?.trim();
     if (!nextPath || nextPath === path) return;
     const result = await api.moveProjectPath(projectId, path, nextPath);
-    const visibleFiles = result.files.filter((file) => !file.path.startsWith(".agent/"));
+    const visibleFiles = result.files.filter((file) => shouldShowWorkspaceFile(file.path));
     setFiles(visibleFiles);
     setSelected((current) => current === path ? nextPath : current);
     setOpenFiles((current) => current.map((item) => item === path ? nextPath : item));
@@ -1342,9 +912,9 @@ export function RightPanel({
 
       {tab === "browser" ? (
         platform === "ios" ? (
-          <IosPreviewView
+          <IPhonePanel
             projectId={state.activeProjectId}
-            relaunchSignal={relaunchSignal}
+            buildVersion={relaunchSignal}
             agentRunning={agentRunning}
             inspectMode={inspectMode}
             onToggleInspect={() => setInspectMode((mode) => !mode)}

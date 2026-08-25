@@ -6,33 +6,33 @@
  * No gradients, no glassmorphism — flat white surfaces with 1px hairlines.
  */
 export const CLIP_EDITOR = {
-  /** Base page background. */
-  bg: "#F6F6F3",
+  /** Base page background — matches the app's slate-50 shell. */
+  bg: "#F8FAFC",
   /** Secondary panel background (fields, quiet wells). */
-  panel: "#FBFBF9",
-  /** Primary text — dark navy. */
-  textPrimary: "#1D1D1F",
+  panel: "#F6F8FC",
+  /** Primary text — near-black, matches text-slate-950 elsewhere in the app. */
+  textPrimary: "#111318",
   /** Secondary text. */
-  textSecondary: "#5F6368",
+  textSecondary: "#68707C",
   /** Muted/metadata text. */
-  textMuted: "#868B91",
+  textMuted: "#8A909A",
   /** Standard 1px border. */
-  border: "#E5E5E2",
+  border: "#E2E5EA",
   /** Extra-light separator for row dividers. */
-  separator: "#ECECE9",
-  /** Primary action blue. */
-  blue: "#0A66D8",
+  separator: "#ECEEF2",
+  /** Primary action blue — the same accent used across Clyra's other workspaces. */
+  blue: "#4169F6",
   /** Selected surface — pale blue. */
-  selected: "#EDF5FF",
+  selected: "#EDF2FF",
   /** Hover surface. */
-  hover: "#F1F2F2",
-  /** Karaoke active-word highlight used by the FFmpeg burn-in. */
+  hover: "#F3F4F6",
+  /** Karaoke active-word highlight used by the FFmpeg burn-in (unrelated to app chrome). */
   karaoke: "#FFD54A",
 } as const;
 
-/** Native desktop typography; monospace is reserved for timecodes. */
+/** Native desktop typography — matches the app's global body font stack. */
 export const CLIP_EDITOR_FONT =
-  '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, "Helvetica Neue", Arial, sans-serif';
+  '-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif';
 
 export const CLIP_EDITOR_MONO =
   'ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace';

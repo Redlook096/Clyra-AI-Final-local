@@ -190,7 +190,7 @@ export const AgentActionRow = memo(function AgentActionRow({
       {...enterProps}
       layout
       transition={rowTransition}
-      className={cn("group", !isActive && !isError && "opacity-[0.8] transition-opacity duration-200")}
+      className={cn("group", isActive && !isStreamingEdit && "cc-active-row", !isActive && !isError && "opacity-[0.8] transition-opacity duration-200")}
     >
       <div
         className={cn(

@@ -6,17 +6,41 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { clyraDataPath } from "../runtime-paths";
 import { codingModelStatus, openCodeRuntimeManager } from "./OpenCodeRuntimeManager";
-import { detectMobileSwiftProject } from "../mobile-preview-routes";
+import { detectMobileSwiftProject } from "../mobile-platform-detect";
 
 const execFileAsync = promisify(execFile);
 
-const IOS_AGENTS_MD = `# Clyra Code Agent — Cross-platform SwiftUI Source Mode
+const IOS_AGENTS_MD = `# Clyra Code Agent — Native SwiftUI Mode
 
-You are building a portable Swift/SwiftUI application source workspace. Clyra
-must work consistently on macOS and Windows, so do not depend on Xcode,
-xcodebuild, a physical iPhone, xtool, go-ios, WSL, or a platform-only simulator.
-Never claim a native install or device build succeeded unless the configured
-preview service has returned a real successful result.
+You are building a real Swift/SwiftUI application. Clyra's iPhone panel runs
+it on the actual Xcode iOS Simulator (via xcodebuild + xcrun simctl) when the
+host Mac has full Xcode installed; on a host without Xcode the panel reports
+that plainly instead of pretending a build/run succeeded.
+
+Use the iPhone CLI (node __IPHONE_CLI_PATH__ <command> __PROJECT_ID__ ... —
+the CLI reaches Clyra's local server, no separate setup needed) to drive the
+same real Simulator your generated app runs in, as part of your own
+build/verify loop, not just to show the user something. This project's ID
+for these commands is: __PROJECT_ID__
+  status                                        — Xcode/arch/device availability
+  devices                                        — list Simulator devices
+  run <projectId> [deviceId]                     — boot + build + install + launch + start stream
+  rebuild <projectId>                            — rebuild + reinstall + relaunch after an edit
+  ui <projectId>                                 — read the real accessibility tree (JSON)
+  tap <projectId> <x0..1> <y0..1>                — tap a point (normalized screen coords)
+  swipe <projectId> <up|down|left|right>
+  type <projectId> <text>
+  home <projectId>                               — press the Home button
+  rotate <projectId> <portrait|landscape>
+  screenshot <projectId> <outputPath>
+  logs <projectId>                                — recent simulator/app log lines
+
+Never claim a build, install, launch, or interaction succeeded unless the CLI
+actually returned ok:true for it. A successful xcodebuild is not "done" —
+after installing and launching, read the accessibility tree or a screenshot
+and confirm the screen you expect is actually showing before reporting
+completion. If \`status\` reports no Xcode/no devices, say so plainly and keep
+working on the source; do not fabricate a run you could not perform.
 
 Project architecture rules — for every coding request:
 - Inspect the existing project structure first (list files and read Package.swift) and match its conventions.
@@ -24,8 +48,8 @@ Project architecture rules — for every coding request:
   App/  Views/  Components/  Models/  ViewModels/  Services/  Utilities/  Resources/  Tests/
 - Use real SwiftUI and a portable Swift Package (Package.swift). Keep views small, focused and reusable.
 - Reuse existing views and models instead of rebuilding them. Revisit and edit multiple files during the run when needed.
-- Apple guidance lives in .agent/skills/ — consult the bundled Apple Skills, Claude Code Apple Skills, SwiftUI expert guidance, and **swiftui-design-skill/SKILL.md** before designing an iOS interface. Use its anti-template review and app-specific visual direction, not a generic starter layout.
-- The embedded preview can be unavailable on a host without a configured preview bridge. Generate correct reusable source and use portable/static checks where available; report the preview limitation plainly rather than attempting unavailable device tooling.
+- Apple guidance lives in .agent/skills/ — consult the bundled Apple Skills, Claude Code Apple Skills, SwiftUI expert guidance, **ios-swiftui/SKILL.md**, **ios-design/SKILL.md**, and **swiftui-design-skill/SKILL.md** before designing an iOS interface. Use its anti-template review and app-specific visual direction, not a generic starter layout.
+- The real Simulator run can be unavailable on a host without full Xcode (check with the CLI's \`status\` command). Generate correct, real Swift/SwiftUI source regardless; report the run limitation plainly rather than claiming a build/install/launch you could not perform.
 - Only claim completion for checks that actually ran. If validation fails, show the error, fix the file, and rerun the available validation.
 - Use SF Symbols, Swift concurrency (async/await), and accessibility best practices.
 
@@ -42,7 +66,7 @@ Product and quality loop — adapt depth to the requested product before editing
 - The browser/preview tool is a real verification tool. When browser mode is requested, observe the active preview, interact with it, verify outcomes, repair source where necessary and re-test. Never claim interactions that did not occur.
 
 Execution discipline:
-- Read swiftui-design-skill/SKILL.md plus only the references directly relevant to this app, then begin implementation immediately. Do not inspect the host filesystem outside the project, shell configuration, environment variables, provider configuration, or simulator tooling; this is a local source/preview workspace, not an environment-diagnosis task.
+- Read swiftui-design-skill/SKILL.md plus only the references directly relevant to this app, then begin implementation immediately. Do not inspect the host filesystem outside the project or shell/environment configuration beyond running the iPhone CLI's \`status\`/\`run\`/\`ui\` commands as documented above; this is a local source/build workspace, not an open-ended environment-diagnosis task.
 - After Package.swift and the existing views are known, make the first meaningful product edit within the next three tool calls. Keep working in focused multi-file edits rather than repeatedly listing files.
 - The generated starter is a previewable baseline only. Adapt it to the requested app and create real task-specific changes before completion; never report it as the finished product unchanged.
 
@@ -52,13 +76,15 @@ Definition of done for an advanced iOS product:
 - Wire every visible primary action to a real SwiftUI behaviour: navigation, edit/create flow, filtering, selection, sheet, alert, persistence mutation, or an explicit disabled/unavailable state with a reason. Do not leave decorative buttons.
 - Build a stateful app: mutations must visibly update the appropriate screen and survive view refreshes when the scope calls for it. Prefer AppStorage/UserDefaults for small local persistence rather than fake static controls.
 - Before finishing, inspect the complete app as a product designer. Remove repeated large cards, unused navigation destinations, placeholder labels, empty metric blocks, excessive rounded surfaces and controls that do not match the product's job. If the first version looks like a template, revise it before validating.
-- Keep the portable preview honest: it is a source-driven Chromium preview unless an actual configured compiler reports a native build. Still make source layouts and interactions complete enough that the preview can exercise the core product flow.
+- Keep completion claims honest: only report a build/install/launch/interaction as done when the iPhone CLI actually returned ok:true for it, and confirm the resulting screen via the accessibility tree or a screenshot rather than assuming the last edit worked.
 `;
 
 const APPLE_SKILL_SOURCE = path.resolve(process.cwd(), "lib/apple-skills-repo", "skills");
 const CLAUDE_APPLE_SKILL_SOURCE = path.resolve(process.cwd(), "lib/claude-code-apple-skills", "skills");
 const SWIFTUI_SKILL_SOURCE = path.resolve(process.cwd(), "lib/swiftui-agent-skill-repo", "skills", "swiftui-expert-skill");
 const SWIFTUI_DESIGN_SKILL_SOURCE = path.resolve(process.cwd(), "lib/swiftui-design-skill");
+const IOS_SWIFTUI_SKILL_SOURCE = path.resolve(process.cwd(), "skills", "ios-swiftui");
+const IOS_DESIGN_SKILL_SOURCE = path.resolve(process.cwd(), "skills", "ios-design");
 
 /**
  * Project workspaces live inside Clyra's data dir, which the parent repo
@@ -105,7 +131,7 @@ function titleFor(prompt: string) {
 }
 
 function requestsIosProject(prompt: string) {
-  return /\b(?:ios|iphone|ipad|swiftui|uikit|xcode|xcworkspace|xcodeproj)\b/i.test(prompt);
+  return /\b(?:ios|iphone|ipad|swiftui|uikit|xcode|xcworkspace|xcodeproj|watchos|visionos|apple\s+watch|apple\s+tv|tvos|app\s+store)\b/i.test(prompt);
 }
 
 type IosStarterProfile = {
@@ -210,8 +236,10 @@ async function seedIosStarterIfEmpty(root: string, prompt: string) {
  * alone cannot select iOS mode. Seed the same real agent guidance from the
  * request when the user explicitly asks for an Apple-platform project.
  */
-async function prepareIosAgentWorkspace(root: string) {
-  await fs.writeFile(path.join(root, "AGENTS.md"), IOS_AGENTS_MD, "utf8").catch(() => undefined);
+async function prepareIosAgentWorkspace(root: string, projectId: string) {
+  const cliPath = path.resolve(process.cwd(), "tools", "clyra-iphone-cli.cjs");
+  const agentsMd = IOS_AGENTS_MD.replaceAll("__IPHONE_CLI_PATH__", cliPath).replaceAll("__PROJECT_ID__", projectId);
+  await fs.writeFile(path.join(root, "AGENTS.md"), agentsMd, "utf8").catch(() => undefined);
   try {
     await fs.mkdir(path.join(root, ".agent", "skills"), { recursive: true });
     await fs.cp(APPLE_SKILL_SOURCE, path.join(root, ".agent", "skills", "apple-skills"), {
@@ -243,6 +271,17 @@ async function prepareIosAgentWorkspace(root: string) {
       const exists = await fs.stat(source).then(() => true).catch(() => false);
       if (exists) await fs.cp(source, path.join(destination, directory), { recursive: true, force: true });
     }
+    // Native SwiftUI coding + Apple HIG design skills — the router always loads
+    // these for iOS requests so generated apps are real Swift/SwiftUI following
+    // Apple conventions rather than HTML/CSS styled to look like an iPhone.
+    await fs.cp(IOS_SWIFTUI_SKILL_SOURCE, path.join(root, ".agent", "skills", "ios-swiftui"), {
+      recursive: true,
+      force: true,
+    }).catch(() => undefined);
+    await fs.cp(IOS_DESIGN_SKILL_SOURCE, path.join(root, ".agent", "skills", "ios-design"), {
+      recursive: true,
+      force: true,
+    }).catch(() => undefined);
   } catch {
     /* Skills are optional context, not a runtime prerequisite. */
   }
@@ -305,9 +344,10 @@ Project architecture rules — for every coding request:
           "utf8",
         ).catch(() => undefined);
       }
-      // Swift mobile preview mode is source based, not Xcode based.
+      // Real Xcode Simulator when the Apple Host has Xcode; the CLI in
+      // IOS_AGENTS_MD tells the agent honestly when it does not.
       if (detectMobileSwiftProject(root)) {
-        await prepareIosAgentWorkspace(root);
+        await prepareIosAgentWorkspace(root, projectId);
       }
       res.json(await openCodeRuntimeManager.start(projectId, root));
     } catch (error) {
@@ -332,8 +372,9 @@ Project architecture rules — for every coding request:
   });
 
   app.get("/api/opencode/sessions/:projectId", async (req, res) => {
-    try { res.json(await openCodeRuntimeManager.listSessions(safeProjectId(req.params.projectId))); }
-    catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : "Could not list sessions." }); }
+    const projectId = safeProjectId(req.params.projectId);
+    try { res.json(await openCodeRuntimeManager.listSessions(projectId, projectPath(projectId))); }
+    catch { res.json([]); }
   });
 
   app.patch("/api/opencode/sessions/:projectId/:sessionId", async (req, res) => {
@@ -366,7 +407,7 @@ Project architecture rules — for every coding request:
     try {
       if (requestsIosProject(text)) {
         const root = projectPath(safeProjectId(req.params.projectId));
-        await prepareIosAgentWorkspace(root);
+        await prepareIosAgentWorkspace(root, safeProjectId(req.params.projectId));
         await seedIosStarterIfEmpty(root, text);
       }
       await openCodeRuntimeManager.prompt(safeProjectId(req.params.projectId), req.params.sessionId, text, typeof req.body?.agent === "string" ? req.body.agent : undefined);
@@ -437,7 +478,7 @@ Project architecture rules — for every coding request:
       const root = projectPath(projectId);
       await fs.mkdir(root, { recursive: true });
       await ensureProjectGitRepo(root).catch(() => undefined);
-      if (requestsIosProject(prompt)) await prepareIosAgentWorkspace(root);
+      if (requestsIosProject(prompt)) await prepareIosAgentWorkspace(root, projectId);
       await openCodeRuntimeManager.start(projectId, root);
       const session = await openCodeRuntimeManager.createSession(projectId, titleFor(prompt));
       await openCodeRuntimeManager.prompt(projectId, session.id, prompt, Boolean(req.body?.planMode) ? "plan" : undefined);

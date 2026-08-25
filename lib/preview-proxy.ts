@@ -2,20 +2,17 @@
  * Preview proxy + Visual Edit source synchronization.
  *
  * The project preview runs on its own vite port (cross-origin iframe), which
- * blocks DOM inspection. This module proxies the preview (and the iOS bridge)
- * through the local Clyra origin so the inspect overlay can read the real
- * DOM, and exposes the source-edit endpoint that writes visual changes back
- * into the project's actual files.
+ * blocks DOM inspection. This module proxies the preview through the local
+ * Clyra origin so the inspect overlay can read the real DOM, and exposes the
+ * source-edit endpoint that writes visual changes back into the project's
+ * actual files.
  */
 import type { Application } from "express";
-import type { Server } from "node:http";
 import http from "node:http";
-import net from "node:net";
 import path from "node:path";
 import fs from "node:fs";
 import { WebSocket } from "ws";
 import { getPreviewTargetPort } from "./vibe-coder/preview/preview-runner";
-import { iosBridgeUrl } from "./ios-bridge-manager";
 import { clyraDataPath } from "./runtime-paths";
 
 const INSPECT_SCRIPT = fs.readFileSync(
@@ -104,8 +101,8 @@ function proxyRequest(
   req.pipe(upstreamReq);
 }
 
-/** Proxy a websocket upgrade to the given target port. */
-function proxyUpgrade(req: http.IncomingMessage, socket: net.Socket, head: Buffer, targetPort: number) {
+/** Proxy a websocket upgrade to the given target port. Reused by the iPhone stream proxy. */
+export function proxyUpgrade(req: http.IncomingMessage, socket: import("node:stream").Duplex, head: Buffer, targetPort: number) {
   const { WebSocketServer } = require("ws") as typeof import("ws");
   const wss = new WebSocketServer({ noServer: true });
   wss.on("connection", (client) => {
@@ -228,31 +225,4 @@ export function registerPreviewProxy(app: Application) {
     });
   });
 
-  // iOS bridge proxy (same origin so the stream can be overlaid).
-  app.use("/ios-bridge", (req, res) => {
-    const base = iosBridgeUrl();
-    if (!base) {
-      res.status(502).json({ error: "iOS Bridge is not running." });
-      return;
-    }
-    const port = Number(new URL(base).port) || 8123;
-    proxyRequest(req as never, res as never, port);
-  });
-
-}
-
-/** WebSocket upgrades for the iOS bridge (control/video channels). */
-export function attachPreviewUpgrades(httpServer: Server) {
-  httpServer.on("upgrade", (req, socket, head) => {
-    const url = req.url ?? "/";
-    if (url.startsWith("/ios-bridge/")) {
-      const base = iosBridgeUrl();
-      if (!base) {
-        socket.destroy();
-        return;
-      }
-      const port = Number(new URL(base).port) || 8123;
-      proxyUpgrade(req, socket, head, port);
-    }
-  });
 }

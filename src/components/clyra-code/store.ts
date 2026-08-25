@@ -55,8 +55,10 @@ export type AgentAction = {
   permissionResolved?: string;
 };
 
+export type UserAnswer = { question: string; answer: string };
+
 export type LogEntry =
-  | { type: "user"; id: string; text: string; ts: number }
+  | { type: "user"; id: string; text: string; ts: number; answers?: UserAnswer[] }
   | { type: "assistant"; id: string; text: string; ts: number }
   /** A concise, provider-supplied reasoning summary — never hidden chain of thought. */
   | { type: "reasoning"; id: string; text?: string; ts: number; endedAt?: number }
@@ -115,11 +117,52 @@ function stripProjectPrefix(path: string) {
   return normalized.replace(/^.*\/projects\/[^/]+\/files\//, "").replace(/^\.\//, "");
 }
 
+/** The platform the user is asking to build for, or null when it is ambiguous. */
+export type DetectedPlatform = "web" | "ios" | "desktop" | null;
+
+const PLATFORM_STYLE_ONLY =
+  /\b(ios|iphone|ipad|apple|macos|mac|windows|android|material|swiftui|ios-style|apple-style)\s+(theme|style|styles|look|looks|feel|design|ui|ux|vibe|aesthetic|inspired|flavou?r|polish)\b/i;
+
+const IOS_RE =
+  /\b(ios|iphone|ipad|swiftui|swift\s+app|xcode|apple\s+watch|watchos|visionos|apple\s+tv|tvos|app\s+store)\b/i;
+const DESKTOP_RE =
+  /\b(desktop\s+app|electron|tauri|menubar|menu\s+bar|system\s+tray|macos\s+app|windows\s+app|linux\s+app|native\s+desktop)\b/i;
+const WEB_RE =
+  /\b(website|web\s+app|webapp|landing\s+page|homepage|portfolio\s+site|react|next\.?js|vite|svelte|vue|angular|pwa|spa|html|css|javascript|typescript|browser|chrome\s+extension)\b/i;
+
+/**
+ * Detect the intended target platform from a prompt. Styling-only mentions of a
+ * platform (e.g. "iOS theme") are ignored so they never select a platform. When
+ * the intent is unclear the result is null and the caller should ask the user.
+ */
+export function detectPlatformIntent(prompt: string): DetectedPlatform {
+  const stripped = prompt.toLowerCase().replace(PLATFORM_STYLE_ONLY, " ");
+  const ios = IOS_RE.test(stripped);
+  const desktop = DESKTOP_RE.test(stripped);
+  const web = WEB_RE.test(stripped);
+  const hits = [ios, desktop, web].filter(Boolean).length;
+  if (hits === 0 || hits > 1) return null;
+  if (ios) return "ios";
+  if (desktop) return "desktop";
+  return "web";
+}
+
 /** Detect iOS intent from a prompt so iOS App Mode activates automatically. */
 export function detectIosIntent(prompt: string): boolean {
-  const ios = /\b(ios|iphone|ipad|swiftui|swift\s+app|xcode|apple\s+watch|watchos|visionos|apple\s+tv|tvos|app\s+store)\b/i;
-  const web = /\b(website|web\s+app|html|react|next\.?js|electron|desktop\s+app|landing\s+page|portfolio)\b/i;
-  return ios.test(prompt) && !web.test(prompt);
+  return detectPlatformIntent(prompt) === "ios";
+}
+
+/**
+ * Whether the composer should ask "which platform?" before sending. This only
+ * fires for a clear request to build a new app/website/product with no platform
+ * signal, so ordinary requests and follow-ups always send immediately.
+ */
+export function shouldAskPlatform(prompt: string): boolean {
+  const t = prompt.toLowerCase().trim();
+  if (!t || t.length > 160) return false;
+  const build = /\b(build|make|create|start|generate|scaffold|develop|code|write|ship)\b/i.test(t);
+  const deliverable = /\b(app|application|website|webapp|web\s+app|site|ios|iphone|ipad|android|desktop|native|product|landing|page|project|game|tool|software|extension|store)\b/i.test(t);
+  return build && deliverable && detectPlatformIntent(t) === null;
 }
 
 /** Commands often embed absolute project paths; compress them for display. */
@@ -315,8 +358,19 @@ export function useClyraCode() {
           const entryId = `assistant-${part.messageID}-${part.id}`;
           setState((prev) => {
             // OpenCode replays the submitted user prompt as a part; the
-            // optimistic user entry already owns it.
-            if (prev.log.some((e) => e.type === "user" && e.text === text)) return prev;
+            // optimistic user entry already owns it. A replay may also carry a
+            // hidden platform/instruction prefix, so treat a trailing match of
+            // any user message as the same echoed turn rather than new prose.
+            if (
+              prev.log.some((e) => {
+                if (e.type !== "user") return false;
+                const userText = e.text.trim();
+                if (!userText) return false;
+                return e.text === text || text.trim().endsWith(userText);
+              })
+            ) {
+              return prev;
+            }
             // An assistant response means the preceding real reasoning phase
             // has concluded. Keep thought events sequential with the streamed
             // tool work instead of leaving several active at once.
@@ -629,15 +683,16 @@ export function useClyraCode() {
   );
 
   const startRun = useCallback(
-    async (prompt: string, agent?: string) => {
+    async (prompt: string, agent?: string, options?: { userText?: string; answers?: UserAnswer[] }) => {
       const projectId = activeProjectRef.current;
       if (!projectId || !prompt.trim()) return false;
       const followUp = Boolean(activeSessionRef.current) && runStateRef.current !== "idle";
       const userEntry: LogEntry = {
         type: "user",
         id: `user-${Date.now()}`,
-        text: prompt,
+        text: options?.userText ?? prompt,
         ts: Date.now(),
+        answers: options?.answers,
       };
       setState((prev) => ({
         ...prev,

@@ -64,12 +64,13 @@ import { TaskGroupPlanner } from "./lib/vibe-coder/harness/task-group-planner";
 import { FileSpecPlanner } from "./lib/vibe-coder/harness/file-spec-planner";
 import { registerClineRoutes } from "./lib/cline/cline-routes";
 import { registerOpenCodeRoutes } from "./lib/opencode/opencode-routes";
-import { registerVoiceRoutes, attachVoiceWebSocket } from "./backend/voice";
+import { registerVoiceRoutes, attachDictationWebSocket } from "./backend/voice";
 import { attachTerminalWebSocket } from "./lib/terminal-ws";
-import { detectMobileSwiftProject, registerMobilePreviewRoutes } from "./lib/mobile-preview-routes";
-import { registerSwiftWasmRoutes } from "./lib/swift-wasm-routes";
+import { detectMobileSwiftProject } from "./lib/mobile-platform-detect";
+import { registerIPhoneRoutes, attachIPhoneStreamUpgrades } from "./lib/iphone/iphone-routes";
+import { attachAppleHostServer } from "./lib/iphone/remote/AppleHostServer";
 import { gitService } from "./lib/github/git-service";
-import { registerPreviewProxy, attachPreviewUpgrades } from "./lib/preview-proxy";
+import { registerPreviewProxy } from "./lib/preview-proxy";
 import { registerCreatorTtsRoutes, stopCreatorTtsWorker } from "./backend/creator-tts/service";
 import {
   buildWebSearchPrompt,
@@ -1421,8 +1422,7 @@ async function startServer() {
 
   registerClineRoutes(app);
   registerOpenCodeRoutes(app);
-  registerMobilePreviewRoutes(app);
-  registerSwiftWasmRoutes(app);
+  registerIPhoneRoutes(app);
   registerVoiceRoutes(app);
   registerCreatorTtsRoutes(app);
   // The live-preview proxy is required by both Vite development and the
@@ -4177,9 +4177,10 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
 
   const { createServer } = await import("node:http");
   const httpServer = createServer(app);
-  attachVoiceWebSocket(httpServer);
+  attachDictationWebSocket(httpServer);
   attachTerminalWebSocket(httpServer);
-  attachPreviewUpgrades(httpServer);
+  attachIPhoneStreamUpgrades(httpServer);
+  attachAppleHostServer(httpServer);
 
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);

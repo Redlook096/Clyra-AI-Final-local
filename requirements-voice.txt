@@ -1,25 +1,22 @@
+# Clyra voice worker: Pipecat + SmallWebRTCTransport + Fish Audio STT/TTS +
+# DeepSeek (OpenAI-compatible) LLM. No local STT/TTS models -- this venv is
+# intentionally light.
+#
+# numba/llvmlite/cryptography/numpy are pinned below because pipecat-ai's
+# default resolution picks versions with no prebuilt wheel on Intel macOS,
+# forcing a from-source build that needs a Rust toolchain + system LLVM/
+# OpenSSL headers this machine doesn't have. These pins have wheels and are
+# still within pipecat-ai's accepted ranges. Drop them on a machine that has
+# a full build toolchain (or on Apple Silicon / Linux, which have wheels for
+# the newer versions).
+numba<0.62
+llvmlite<0.45
+cryptography<49
+numpy<2.3
+
+pipecat-ai[webrtc,silero,openai]>=0.0.108
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
-numpy>=1.24.0,<1.26.0
-pydantic>=2.0.0
-# Core realtime STT (Faster-Whisper backend for whisper_streaming-style policy)
-faster-whisper>=1.1.0
-torch==2.6.0; platform_system != "Darwin" or platform_machine != "x86_64"
-torch==2.2.2; platform_system == "Darwin" and platform_machine == "x86_64"
-torchaudio==2.6.0; platform_system != "Darwin" or platform_machine != "x86_64"
-torchaudio==2.2.2; platform_system == "Darwin" and platform_machine == "x86_64"
-# Minimal runtime dependencies for the pinned official Chatterbox source. The
-# package itself is installed without its demo-only Gradio dependency by setup-voice.sh.
-librosa==0.11.0
-s3tokenizer>=0.3.0
-transformers>=4.46.0,<5.0.0
-diffusers==0.29.0
-resemble-perth @ git+https://github.com/resemble-ai/Perth.git@master
-conformer==0.3.2
-safetensors>=0.5.3
-spacy-pkuseg>=1.0.0
-pykakasi==2.3.0
-pyloudnorm>=0.2.0
-omegaconf==2.3.0
-# Optional fallbacks are intentionally not installed. All product TTS shares
-# the Chatterbox-Turbo worker unless an operator explicitly adds a fallback.
+aiohttp>=3.9.0
+ormsgpack>=1.5.0
+python-multipart>=0.0.9

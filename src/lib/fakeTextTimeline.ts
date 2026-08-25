@@ -13,6 +13,8 @@ export type IMessageScriptMessage = {
   typingSeconds?: number;
   pauseSeconds?: number;
   narration?: boolean;
+  /** Set false to skip the typing-dots beat before this bubble commits. */
+  showTyping?: boolean;
   /** Actual duration returned by Clyra TTS during export, when available. */
   voiceDurationMs?: number;
 };
@@ -40,10 +42,13 @@ export type IMessageTimeline = {
 export type IMessageFrame = {
   visibleCount: number;
   typingSide: IMessageSide | null;
+  typingStartMs: number | null;
   enteringMessageId: string | null;
   entranceProgress: number;
   activeMessageId: string | null;
   showReadReceipt: boolean;
+  readReceiptMessageId: string | null;
+  readReceiptLabel: "delivered" | "read" | null;
 };
 
 /**
@@ -109,24 +114,30 @@ export const IMESSAGE_TOKENS = Object.freeze({
   senderSwitchGap: 13,
   messageLineHeight: 27,
   messageFontSize: 24,
-  typingMinimumMs: 0,
-  typingMaximumMs: 0,
-  // The iMessage card is deliberately a stable recording surface.  A new
-  // message appears as a settled bubble and the card's lower edge advances in
-  // the same frame.  There is no opacity/scale/list reflow animation to
-  // flicker during export or after a scrub.
-  bubbleEntranceMs: 0,
-  readReceiptDelayMs: 0,
-  // The reference uses clean rounded bubbles. Keep the former token for
-  // older consumers, but it deliberately produces no tail geometry.
-  tailSize: 0,
+  // A short reply types fast; a long dramatic line lingers a little longer.
+  // Both bounds keep pacing fast enough for short-form video (see spec: never
+  // stall on typing dots for more than ~1.5s).
+  typingMinimumMs: 350,
+  typingMaximumMs: 1500,
+  typingBaseMs: 260,
+  typingPerCharacterMs: 22,
+  // Every bubble commits with a brief, precise iOS-style pop: opacity/scale/
+  // translateY interpolated from a pure function of time (see
+  // getIMessageFrame), so a scrub or an exported frame reproduces the exact
+  // same mid-entrance state as continuous playback.
+  bubbleEntranceMs: 220,
+  bubbleEntranceRiseDistance: 8,
+  bubbleEntranceStartScale: 0.93,
+  readReceiptDelayMs: 400,
+  // Small rounded notch on the last bubble of a consecutive-sender group.
+  tailSize: 8,
   latestMessageBottomGap: 14,
   // Keep a generous playable area below the sheet.  Once content crosses this
   // limit the message list scrolls rather than covering the gameplay layer.
   floatingPanelMaxHeight: 900,
   emptyPanelBodyHeight: 52,
-  typingIndicatorHeight: 0,
-  readReceiptHeight: 0,
+  typingIndicatorHeight: 44,
+  readReceiptHeight: 22,
   estimatedCharactersPerLine: 38,
 } as const);
 
@@ -137,19 +148,38 @@ function speechDurationMs(message: IMessageScriptMessage) {
   return Math.max(850, message.text.trim().split(/\s+/).filter(Boolean).length * 310);
 }
 
+/** Short replies type fast, long dramatic lines linger a little — clamped so the
+ * viewer never stares at typing dots for more than ~1.5s. */
+function typingDurationMs(message: IMessageScriptMessage) {
+  if (message.showTyping === false) return 0;
+  const characters = message.text.trim().length;
+  return Math.min(
+    IMESSAGE_TOKENS.typingMaximumMs,
+    Math.max(IMESSAGE_TOKENS.typingMinimumMs, IMESSAGE_TOKENS.typingBaseMs + characters * IMESSAGE_TOKENS.typingPerCharacterMs),
+  );
+}
+
+function easeOutCubic(t: number) {
+  const clamped = Math.max(0, Math.min(1, t));
+  return 1 - Math.pow(1 - clamped, 3);
+}
+
 /** Build a deterministic sequential timeline; no CSS timer is needed to infer state. */
-export function buildIMessageTimeline(messages: IMessageScriptMessage[], playbackRate = 1): IMessageTimeline {
+export function buildIMessageTimeline(
+  messages: IMessageScriptMessage[],
+  playbackRate = 1,
+  options: { showTypingIndicator?: boolean } = {},
+): IMessageTimeline {
   const rate = Math.max(0.6, Math.min(1.8, Number.isFinite(playbackRate) ? playbackRate : 1));
   let cursor = 0;
   const events = messages.map((message, index) => {
-    // Messages enter directly. The exported fake-text format intentionally has
-    // no typing bubbles or read receipts, so audio, bubble, and layout all use
-    // the same deterministic start time.
     const typingStartMs = cursor;
-    const typingEndMs = typingStartMs;
-    const bubbleStartMs = cursor;
-    const bubbleEndMs = bubbleStartMs + IMESSAGE_TOKENS.bubbleEntranceMs;
-    const voiceStartMs = bubbleStartMs;
+    const typingEndMs = typingStartMs + (options.showTypingIndicator === false ? 0 : typingDurationMs(message)) / rate;
+    const bubbleStartMs = typingEndMs;
+    const bubbleEndMs = bubbleStartMs + IMESSAGE_TOKENS.bubbleEntranceMs / rate;
+    // The bubble is on screen fractionally before its narration starts, so the
+    // viewer can begin reading as the voice begins (spec: 30-90ms lead).
+    const voiceStartMs = bubbleStartMs + 60 / rate;
     const voiceEndMs = voiceStartMs + speechDurationMs(message) / rate;
     // A message stays on screen for its narration (when any), then its authored pause.
     const endMs = Math.max(bubbleEndMs, voiceEndMs) + Math.max(0, Number(message.pauseSeconds ?? 0.25) * 1_000) / rate;
@@ -163,21 +193,51 @@ export function getIMessageFrame(timeline: IMessageTimeline, timeMs: number): IM
   const safeTime = Math.max(0, Math.min(timeline.durationMs, Number.isFinite(timeMs) ? timeMs : 0));
   const visible = timeline.events.filter((event) => safeTime >= event.bubbleStartMs);
   const active = timeline.events.find((event) => safeTime >= event.typingStartMs && safeTime < event.endMs) || null;
-  const entering = IMESSAGE_TOKENS.bubbleEntranceMs > 0
-    ? timeline.events.find((event) => safeTime >= event.bubbleStartMs && safeTime < event.bubbleEndMs) || null
-    : null;
-  // iMessage states are discrete: the new bubble and its compact body height
-  // commit at one media timestamp.  This keeps all existing bubbles fixed and
-  // prevents a CSS/canvas transition from producing visible flicker.
-  const entranceProgress = 1;
+  const typing = timeline.events.find((event) => safeTime >= event.typingStartMs && safeTime < event.typingEndMs) || null;
+  const entering = timeline.events.find((event) => safeTime >= event.bubbleStartMs && safeTime < event.bubbleEndMs) || null;
+  const entranceProgress = entering
+    ? easeOutCubic((safeTime - entering.bubbleStartMs) / Math.max(1, entering.bubbleEndMs - entering.bubbleStartMs))
+    : 1;
+
+  // The read receipt belongs to the newest outgoing bubble, and only while it
+  // remains the newest message on screen (a following typing beat retires it).
+  const lastVisible = visible[visible.length - 1] || null;
+  let readReceiptMessageId: string | null = null;
+  let readReceiptLabel: "delivered" | "read" | null = null;
+  if (lastVisible && lastVisible.side === "right") {
+    const nextEvent = timeline.events[lastVisible.index + 1];
+    const stillNewest = !nextEvent || safeTime < nextEvent.typingStartMs;
+    if (stillNewest) {
+      const sinceVoiceEnd = safeTime - lastVisible.voiceEndMs;
+      if (sinceVoiceEnd >= IMESSAGE_TOKENS.readReceiptDelayMs * 2) readReceiptLabel = "read";
+      else if (sinceVoiceEnd >= IMESSAGE_TOKENS.readReceiptDelayMs) readReceiptLabel = "delivered";
+      if (readReceiptLabel) readReceiptMessageId = lastVisible.id;
+    }
+  }
+
   return {
     visibleCount: visible.length,
-    typingSide: null,
+    typingSide: typing?.side ?? null,
+    typingStartMs: typing?.typingStartMs ?? null,
     enteringMessageId: entering?.id || null,
     entranceProgress,
     activeMessageId: active?.id || null,
-    showReadReceipt: false,
+    showReadReceipt: readReceiptLabel !== null,
+    readReceiptMessageId,
+    readReceiptLabel,
   };
+}
+
+/** Deterministic, tiny vertical bounce for each of the three typing dots — a
+ * pure function of time so the DOM preview and the canvas export always agree. */
+export function getTypingDotPhase(timeMs: number, typingStartMs: number): [number, number, number] {
+  const elapsed = Math.max(0, timeMs - typingStartMs);
+  const cycleMs = 900;
+  const staggerMs = 140;
+  return [0, 1, 2].map((dot) => {
+    const phase = ((elapsed - dot * staggerMs) % cycleMs + cycleMs) % cycleMs;
+    return Math.max(0, Math.sin((phase / cycleMs) * Math.PI * 2));
+  }) as [number, number, number];
 }
 
 export function getIMessageGroupPosition(messages: IMessageScriptMessage[], index: number): IMessageGroupPosition {
@@ -207,6 +267,10 @@ export function getIMessagePanelLayout(
      */
     enteringProgress?: number;
     maxPanelHeight?: number;
+    /** A visible typing-dots row reserves space like a trailing bubble. */
+    typingSide?: IMessageSide | null;
+    /** A visible "Delivered"/"Read" caption reserves a thin trailing row. */
+    showReadReceipt?: boolean;
   } = {},
 ): IMessagePanelLayout {
   // Keep this one-to-one with the render list. A temporarily blank message is
@@ -214,7 +278,7 @@ export function getIMessagePanelLayout(
   // filtering it here would make the preview and export disagree while the
   // user edits text.
   const shown = messages;
-  const messageHeight = shown.reduce((total, message, index) => {
+  let messageHeight = shown.reduce((total, message, index) => {
     const contribution = estimateIMessageBubbleHeight(message.text);
     if (!index) return total + contribution;
     const previous = shown[index - 1]!;
@@ -223,7 +287,12 @@ export function getIMessagePanelLayout(
       : IMESSAGE_TOKENS.senderSwitchGap;
     return total + gap + contribution;
   }, 0);
-  const bodyHeight = shown.length
+  if (options.typingSide) {
+    messageHeight += (shown.length ? IMESSAGE_TOKENS.senderSwitchGap : 0) + IMESSAGE_TOKENS.typingIndicatorHeight;
+  } else if (options.showReadReceipt) {
+    messageHeight += IMESSAGE_TOKENS.readReceiptHeight;
+  }
+  const bodyHeight = shown.length || options.typingSide
     ? IMESSAGE_TOKENS.messageTopInset + messageHeight + IMESSAGE_TOKENS.messageBottomInset
     : IMESSAGE_TOKENS.emptyPanelBodyHeight;
   const naturalHeight = IMESSAGE_TOKENS.headerHeight + bodyHeight;

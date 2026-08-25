@@ -1,71 +1,45 @@
-"""Voice pipeline configuration."""
+"""Configuration for the Clyra voice Pipecat worker.
+
+STT + TTS: Fish Audio (https://fish.audio). LLM: existing DeepSeek /
+OpenAI-compatible endpoint (unchanged from the rest of Clyra).
+"""
 
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
 
-def env_str(key: str, default: str) -> str:
-    return os.getenv(key, default)
+@dataclass(frozen=True)
+class VoiceConfig:
+    port: int
+    sample_rate: int
+    fish_api_key: str
+    fish_reference_id: str | None
+    fish_tts_model: str | None
+    llm_base_url: str
+    llm_api_key: str
+    llm_model: str
 
 
-def env_int(key: str, default: int) -> int:
-    try:
-        return int(os.getenv(key, str(default)))
-    except ValueError:
-        return default
-
-
-def env_float(key: str, default: float) -> float:
-    try:
-        return float(os.getenv(key, str(default)))
-    except ValueError:
-        return default
-
-
-SAMPLE_RATE = env_int("VOICE_SAMPLE_RATE", 16000)
-# distil-large-v3 for production accuracy/speed; tiny.en is the call-fluent local CPU default.
-STT_MODEL = env_str("VOICE_STT_MODEL", "base.en")
-STT_DEVICE = env_str("VOICE_WHISPER_DEVICE", "cpu")
-STT_COMPUTE = env_str("VOICE_WHISPER_COMPUTE", "int8")
-# Measured: threads=1 ~756ms, threads=2 ~585ms, threads=4 ~437ms on tiny.en.
-# Default 4 for call speed; set VOICE_WHISPER_CPU_THREADS=2 if the host is CPU-contended.
-STT_CPU_THREADS = env_int("VOICE_WHISPER_CPU_THREADS", 4)
-STT_LANGUAGE = env_str("VOICE_STT_LANGUAGE", "en")
-STT_BEAM_SIZE = env_int("VOICE_STT_BEAM_SIZE", 1)
-STT_WINDOW_MS = env_int("VOICE_STT_WINDOW_MS", 640)
-STT_STEP_MS = env_int("VOICE_STT_STEP_MS", 360)
-STT_OVERLAP_MS = env_int("VOICE_STT_OVERLAP_MS", 220)
-STT_MIN_COMMIT_MS = env_int("VOICE_STT_MIN_COMMIT_MS", 320)
-# Shorter endpoint — speculative decode overlaps the wait (profiled).
-ENDPOINT_SILENCE_MS = env_int("VOICE_ENDPOINT_SILENCE_MS", 300)
-# Kick off Whisper as soon as silence starts so endpoint wait ≠ added latency.
-SPECULATIVE_DECODE_MS = env_int("VOICE_SPECULATIVE_DECODE_MS", 140)
-# Keep a short pre-roll before VAD speech onset so Whisper hears word starts
-# (without this, tiny.en often turns "Hi, how…" into "I have…").
-STT_PREROLL_MS = env_int("VOICE_STT_PREROLL_MS", 200)
-# Mid-stream partials are expensive on CPU; off by default for call-fluent latency.
-STT_PARTIALS_ENABLED = env_str("VOICE_STT_PARTIALS", "0").lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
-VAD_THRESHOLD = env_float("VOICE_VAD_THRESHOLD", 0.45)
-VAD_MIN_SPEECH_MS = env_int("VOICE_VAD_MIN_SPEECH_MS", 140)
-# Continuous user speech required before interrupting assistant TTS (noise immunity).
-BARGE_HOLD_MS = env_int("VOICE_BARGE_HOLD_MS", 480)
-TTS_VOICE = env_str("VOICE_TTS_VOICE", "Ryan")
-# Every product surface uses the same persistent Chatterbox-Turbo runtime.
-# Unsupported hosts may opt into a clearly reported fallback.
-TTS_ENGINE = env_str("VOICE_TTS_ENGINE", "chatterbox-turbo")
-# Match capture/playback rate to avoid pitch/pop artifacts from resampling mismatch.
-TTS_SAMPLE_RATE = env_int("VOICE_TTS_SAMPLE_RATE", 24000)
-TTS_QUALITY_MODE = env_str("VOICE_TTS_QUALITY_MODE", "natural")  # natural | fast
-TTS_KOKORO_SPEED = env_float(
-    "VOICE_TTS_KOKORO_SPEED",
-    0.92 if TTS_QUALITY_MODE == "natural" else 1.05,
-)
-TTS_CHUNK_MS = env_float("VOICE_TTS_CHUNK_MS", 160.0 if TTS_QUALITY_MODE == "natural" else 100.0)
-TTS_FADE_MS = env_float("VOICE_TTS_FADE_MS", 12.0)
-PIPELINE_PORT = env_int("VOICE_PIPELINE_PORT", 8787)
+def load_config() -> VoiceConfig:
+    llm_api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("MY_LLM_API_KEY") or ""
+    llm_base_url = (
+        os.environ.get("MY_LLM_BASE_URL")
+        or ("https://api.deepseek.com" if os.environ.get("DEEPSEEK_API_KEY") else "https://api.openai.com/v1")
+    )
+    llm_model = (
+        os.environ.get("MY_LLM_MODEL")
+        or os.environ.get("DEEPSEEK_MODEL")
+        or ("deepseek-v4-flash" if os.environ.get("DEEPSEEK_API_KEY") else "gpt-4o-mini")
+    )
+    return VoiceConfig(
+        port=int(os.environ.get("PIPELINE_PORT", os.environ.get("VOICE_PIPELINE_PORT", "8787"))),
+        sample_rate=int(os.environ.get("VOICE_SAMPLE_RATE", "16000")),
+        fish_api_key=os.environ.get("FISH_AUDIO_API_KEY", ""),
+        fish_reference_id=os.environ.get("FISH_TTS_REFERENCE_ID") or None,
+        fish_tts_model=os.environ.get("FISH_TTS_MODEL") or None,
+        llm_base_url=llm_base_url,
+        llm_api_key=llm_api_key,
+        llm_model=llm_model,
+    )

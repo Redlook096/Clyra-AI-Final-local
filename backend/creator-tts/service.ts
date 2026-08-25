@@ -110,14 +110,14 @@ function configuredCreatorVoiceIds(): Record<string, string> {
   return configured;
 }
 
-function asyncVoiceIdFor(voice: CreatorVoiceName, defaultVoiceId: string) {
+function fishReferenceIdFor(voice: CreatorVoiceName, defaultReferenceId: string) {
   const configured = configuredCreatorVoiceIds();
   if (configured[voice]) return configured[voice]!;
-  // ASYNC_VOICE_ID has historically meant Max (see .env.example), not every
-  // arbitrary Creator persona.  Reusing it for Ryan/Aiden was why grey and
-  // blue messages sounded identical despite the two VoicePicker controls.
-  const defaultVoiceName = String(process.env.ASYNC_VOICE_NAME || "Max").trim();
-  return voice === defaultVoiceName ? defaultVoiceId : "";
+  // FISH_TTS_REFERENCE_ID has historically meant Max (see .env.example), not
+  // every arbitrary Creator persona.  Reusing it for Ryan/Aiden was why grey
+  // and blue messages sounded identical despite the two VoicePicker controls.
+  const defaultVoiceName = String(process.env.FISH_TTS_BASE_VOICE_NAME || "Max").trim();
+  return voice === defaultVoiceName ? defaultReferenceId : "";
 }
 
 function wavDurationMs(audio: Buffer, fallbackRate: number) {
@@ -139,8 +139,8 @@ function wavDurationMs(audio: Buffer, fallbackRate: number) {
 }
 
 function synthesizeLocalPlaceholderVoice(text: string, voice: CreatorVoiceName, sampleRate: number): CachedSpeech {
-  // Offline/dev fallback so Fake Text / Creator exports still finish when Async
-  // voice IDs are not configured (common in cloud agents / local Linux).
+  // Offline/dev fallback so Fake Text / Creator exports still finish when Fish
+  // Audio voice IDs are not configured (common in cloud agents / local Linux).
   const words = Math.max(1, text.trim().split(/\s+/).filter(Boolean).length);
   const durationMs = Math.min(8_000, Math.max(700, Math.round(words * 320)));
   const samples = Math.max(1, Math.round((sampleRate * durationMs) / 1_000));
@@ -254,21 +254,21 @@ export function registerCreatorTtsRoutes(app: express.Express) {
     const dedicatedVoices = Object.keys(configuredCreatorVoiceIds());
     const systemFallbackAvailable = process.platform === "darwin";
     const localPlaceholderAvailable = process.env.CREATOR_TTS_ALLOW_LOCAL_PLACEHOLDER !== "false";
-    const baseVoice = String(process.env.ASYNC_VOICE_NAME || "Max").trim() || "Max";
+    const baseVoice = String(process.env.FISH_TTS_BASE_VOICE_NAME || "Max").trim() || "Max";
     const availableVoices = CREATOR_VOICES.filter((voice) => (
-      (voice === baseVoice && Boolean(config.asyncApiKey && config.asyncVoiceId))
+      (voice === baseVoice && Boolean(config.fishApiKey && config.fishReferenceId))
       || dedicatedVoices.includes(voice)
       || systemFallbackAvailable
       || localPlaceholderAvailable
     ));
     res.json({
       ok: availableVoices.length > 0,
-      engine: config.asyncApiKey
-        ? "async+system-fallback"
+      engine: config.fishApiKey
+        ? "fish-audio+system-fallback"
         : systemFallbackAvailable
           ? "system-fallback"
           : "local-placeholder",
-      model: config.asyncModel,
+      model: config.fishModel,
       voices: availableVoices,
       dedicatedVoices,
       systemFallbackAvailable,
@@ -285,20 +285,21 @@ export function registerCreatorTtsRoutes(app: express.Express) {
       return;
     }
     const config = loadVoiceConfig();
-    const asyncVoiceId = asyncVoiceIdFor(voice, config.asyncVoiceId);
-    const canUseAsync = Boolean(config.asyncApiKey && asyncVoiceId);
+    const fishReferenceId = fishReferenceIdFor(voice, config.fishReferenceId);
+    const canUseFish = Boolean(config.fishApiKey && fishReferenceId);
     const canUseSystemVoice = process.platform === "darwin" && process.env.CREATOR_TTS_ALLOW_SYSTEM_FALLBACK !== "false";
     const canUseLocalPlaceholder = process.env.CREATOR_TTS_ALLOW_LOCAL_PLACEHOLDER !== "false";
-    if (!canUseAsync && !canUseSystemVoice && !canUseLocalPlaceholder) {
+    if (!canUseFish && !canUseSystemVoice && !canUseLocalPlaceholder) {
       res.status(503).json({ error: `No dedicated Creator voice is configured for ${voice}. Add CREATOR_TTS_VOICE_${environmentVoiceKey(voice)}_ID.` });
       return;
     }
-    const engineKey = canUseAsync
-      ? `async:${asyncVoiceId}`
+    const fishSampleRate = 44100;
+    const engineKey = canUseFish
+      ? `fish:${fishReferenceId}`
       : canUseSystemVoice
         ? `system:${SYSTEM_VOICE_BY_CREATOR_VOICE[voice]}`
         : "local-placeholder";
-    const cacheKey = `${voice}\u0000${engineKey}\u0000${config.asyncModel}\u0000${text}`;
+    const cacheKey = `${voice}\u0000${engineKey}\u0000${config.fishModel}\u0000${text}`;
     const cached = readCachedSpeech(cacheKey);
     if (cached) {
       sendSpeech(res, cached, voice, "HIT");
@@ -315,58 +316,48 @@ export function registerCreatorTtsRoutes(app: express.Express) {
     req.once("aborted", () => controller.abort());
     try {
       const startedAt = performance.now();
-      const requestSpeech = (modelId: string) => fetch("https://api.async.com/text_to_speech/streaming", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": config.asyncApiKey,
-            version: "v1",
-          },
-          body: JSON.stringify({
-            model_id: modelId,
-            transcript: text,
-            voice: { mode: "id", id: asyncVoiceId },
-            output_format: {
-              container: "raw",
-              encoding: "pcm_s16le",
-              sample_rate: config.asyncSampleRate,
-            },
-            language: "en",
-          }),
-          signal: controller.signal,
-        });
       let speech: CachedSpeech;
-      if (canUseAsync) {
+      if (canUseFish) {
         try {
-          let response = await requestSpeech(config.asyncModel);
-          if (!response.ok && config.asyncFallbackModel && config.asyncFallbackModel !== config.asyncModel) {
-            response = await requestSpeech(config.asyncFallbackModel);
-          }
-          if (!response.ok) throw new Error(`Async narration failed (${response.status})`);
+          const response = await fetch("https://api.fish.audio/v1/tts", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${config.fishApiKey}`,
+              model: config.fishModel || "s1",
+            },
+            body: JSON.stringify({
+              text,
+              reference_id: fishReferenceId,
+              format: "wav",
+              sample_rate: fishSampleRate,
+            }),
+            signal: controller.signal,
+          });
+          if (!response.ok) throw new Error(`Fish Audio narration failed (${response.status})`);
           void recordApiUsage({
-            provider: "async",
-            model: response.headers.get("x-async-model") || config.asyncModel,
+            provider: "fish-audio",
+            model: config.fishModel || "s1",
             feature: "creator-tts",
-            // Async bills/limits by provider-specific audio units, so retain
-            // the exact request character count and mark the cost unpriced
-            // until the account's contract rate is supplied.
+            // Fish Audio bills/limits by provider-specific audio units, so
+            // retain the exact request character count and mark the cost
+            // unpriced until the account's contract rate is supplied.
             usage: { totalTokens: 0 },
             units: { inputCharacters: text.length },
           }).catch(() => undefined);
-          const pcm = Buffer.from(await response.arrayBuffer());
-          if (!pcm.length) throw new Error("Async narration returned no audio");
-          const audio = pcm16Wav(pcm, config.asyncSampleRate);
-          const durationMs = Math.round(pcm.length / 2 / config.asyncSampleRate * 1_000);
-          speech = { audio, durationMs, engine: `async:${response.headers.get("x-async-model") || config.asyncModel}` };
+          const audio = Buffer.from(await response.arrayBuffer());
+          if (audio.length < 128) throw new Error("Fish Audio narration returned no audio");
+          const durationMs = wavDurationMs(audio, fishSampleRate);
+          speech = { audio, durationMs, engine: `fish:${config.fishModel || "s1"}` };
         } catch (error) {
-          if (canUseSystemVoice) speech = await synthesizeMacSystemVoice(text, voice, config.asyncSampleRate);
-          else if (canUseLocalPlaceholder) speech = synthesizeLocalPlaceholderVoice(text, voice, config.asyncSampleRate);
+          if (canUseSystemVoice) speech = await synthesizeMacSystemVoice(text, voice, fishSampleRate);
+          else if (canUseLocalPlaceholder) speech = synthesizeLocalPlaceholderVoice(text, voice, fishSampleRate);
           else throw error;
         }
       } else if (canUseSystemVoice) {
-        speech = await synthesizeMacSystemVoice(text, voice, config.asyncSampleRate);
+        speech = await synthesizeMacSystemVoice(text, voice, fishSampleRate);
       } else {
-        speech = synthesizeLocalPlaceholderVoice(text, voice, config.asyncSampleRate);
+        speech = synthesizeLocalPlaceholderVoice(text, voice, fishSampleRate);
       }
       cacheSpeech(cacheKey, speech);
       sendSpeech(res, speech, voice, "MISS", performance.now() - startedAt);

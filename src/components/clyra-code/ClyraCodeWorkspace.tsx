@@ -3,10 +3,11 @@ import { AnimatePresence, motion } from "motion/react";
 import { Globe2, Monitor, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Smartphone } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { api } from "./api";
-import { useClyraCode, type AgentAction } from "./store";
+import { shouldAskPlatform, useClyraCode, type AgentAction } from "./store";
 import { Sidebar, ClyraMark, type ChatThread } from "./Sidebar";
 import { Conversation } from "./Conversation";
 import { Composer, type ComposerAttachment, type ComposerCommand, type ComposerContext } from "./Composer";
+import { summarizeAnswers, type QuestionAnswers, type QuestionSet } from "./QuestionComposer";
 import { RightPanel, usePreview, type RightTab } from "./RightPanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { GitHubPopover } from "./GitHubPopover";
@@ -32,6 +33,32 @@ const WELCOME_SUBTITLES = [
   ["Start anywhere. Clyra will help ", "shape", " it."],
   ["Make something ", "great", ", one change at a time."],
 ] as const;
+
+const PLATFORM_QUESTIONS: QuestionSet = {
+  questions: [
+    {
+      id: "platform",
+      question: "Which platform should I target?",
+      type: "single",
+      options: ["iOS app", "Webapp/Website", "Desktop app"],
+    },
+  ],
+};
+
+const DEMO_QUESTIONS: QuestionSet = {
+  questions: [
+    { id: "layout", question: "Which layout should I use?", type: "single", options: ["Current layout", "New layout"] },
+    { id: "animations", question: "Should I preserve existing animations?", type: "single", options: ["Yes", "No", "Only the good ones"] },
+    { id: "scope", question: "How much should I change?", type: "single", options: ["Minimal", "Balanced", "Full rebuild"] },
+    { id: "direction", question: "Any visual direction?", type: "single", options: ["Keep it clean", "More colorful", "Dark mode"], allowCustom: true },
+  ],
+};
+
+function platformDirective(answer: string): string {
+  if (/ios|iphone/i.test(answer)) return "Build this as a native iOS app with SwiftUI.\n\n";
+  if (/desktop/i.test(answer)) return "Build this as a desktop app (Electron), shipped as a responsive web app first so the live preview works.\n\n";
+  return "Build this as a website / web app.\n\n";
+}
 
 function encodeAttachment(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -99,6 +126,10 @@ export default function ClyraCodeWorkspace() {
     try { return JSON.parse(localStorage.getItem("clyra-code:hidden-projects") || "[]"); } catch { return []; }
   });
   const autoFixedPreviewError = useRef<string | null>(null);
+  const [questionSet, setQuestionSet] = useState<QuestionSet | null>(null);
+  const questionSetRef = useRef<QuestionSet | null>(null);
+  const [questionSubmitting, setQuestionSubmitting] = useState(false);
+  const pendingPromptRef = useRef<string>("");
 
   const suggestPrompt = useCallback((text: string) => {
     setSuggestion((current) => ({ text, nonce: (current?.nonce ?? 0) + 1 }));
@@ -326,8 +357,30 @@ export default function ClyraCodeWorkspace() {
   );
 
   const submitPrompt = useCallback(
-    async (text: string, attachments: ComposerAttachment[] = [], command?: ComposerCommand) => {
+    async (
+      text: string,
+      attachments: ComposerAttachment[] = [],
+      command?: ComposerCommand,
+      options?: { userText?: string; answers?: Array<{ question: string; answer: string }> },
+    ) => {
       window.dispatchEvent(new CustomEvent("clyra:workflow-tabs-hide"));
+      const trimmed = text.trim();
+      if (trimmed === "/ask") {
+        pendingPromptRef.current = "";
+        questionSetRef.current = DEMO_QUESTIONS;
+        setQuestionSet(DEMO_QUESTIONS);
+        return true;
+      }
+      // A fresh request that clearly asks to build a new app/website/product
+      // with no platform signal turns into a question instead of guessing.
+      // Follow-ups inside an existing session and ordinary requests always
+      // send immediately so the composer never feels like it swallowed a turn.
+      if (!command && shouldAskPlatform(trimmed) && !state.sessionId) {
+        pendingPromptRef.current = trimmed;
+        questionSetRef.current = PLATFORM_QUESTIONS;
+        setQuestionSet(PLATFORM_QUESTIONS);
+        return false;
+      }
       let projectId = state.activeProjectId;
       if (!projectId) {
         const project = await createProject();
@@ -354,13 +407,46 @@ export default function ClyraCodeWorkspace() {
           debug: "[Clyra Debug mode] Reproduce the reported issue, inspect real logs and relevant code, make the smallest correct repair, then rerun the reproduction and validation.\n\n",
           explain: "[Clyra Explain mode] Inspect the actual repository and explain the requested architecture or code. Do not edit files unless the user separately asks for a change.\n\n",
         };
-        return startRun((command ? commandInstruction[command] : "") + attachmentContext + text, command === "plan" ? "plan" : undefined);
+        // Fire the run without awaiting the full network round trip: startRun
+        // appends the optimistic user message synchronously before its first
+        // await, so the composer can clear immediately instead of freezing
+        // the input until the agent's runtime/session/prompt calls resolve.
+        void startRun((command ? commandInstruction[command] : "") + attachmentContext + text, command === "plan" ? "plan" : undefined, options);
+        return true;
       } catch {
         return false;
       }
     },
-    [createProject, startRun, state.activeProjectId],
+    [createProject, startRun, state.activeProjectId, state.sessionId],
   );
+
+  const handleQuestionSubmit = useCallback(
+    (answers: QuestionAnswers) => {
+      const answer = answers.platform?.values?.[0] ?? answers.layout?.values?.[0] ?? "";
+      const pending = pendingPromptRef.current;
+      pendingPromptRef.current = "";
+      const usedSet = questionSetRef.current;
+      const summary = summarizeAnswers(usedSet, answers);
+      setQuestionSubmitting(true);
+      window.setTimeout(() => {
+        setQuestionSubmitting(false);
+        setQuestionSet(null);
+        if (pending) {
+          void submitPrompt(platformDirective(answer) + pending, [], undefined, {
+            userText: pending,
+            answers: summary,
+          });
+        }
+      }, 240);
+    },
+    [submitPrompt],
+  );
+
+  const handleQuestionBack = useCallback(() => {
+    pendingPromptRef.current = "";
+    setQuestionSubmitting(false);
+    setQuestionSet(null);
+  }, []);
 
   // A preview failure that appears after an otherwise finished run is a real
   // validation signal. Feed it back into the same agent session once, rather
@@ -549,6 +635,10 @@ export default function ClyraCodeWorkspace() {
                       placeholder="Ask Clyra to build, fix, or change something…"
                       welcome
                       suggestion={suggestion}
+                      question={questionSet}
+                      questionSubmitting={questionSubmitting}
+                      onQuestionSubmit={handleQuestionSubmit}
+                      onQuestionBack={handleQuestionBack}
                     />
                   </div>
                   <div className="mt-4 flex items-center justify-center gap-1.5">
@@ -619,6 +709,10 @@ export default function ClyraCodeWorkspace() {
                   onSubmit={submitPrompt}
                   onStop={() => void cancelRun()}
                   suggestion={suggestion}
+                  question={questionSet}
+                  questionSubmitting={questionSubmitting}
+                  onQuestionSubmit={handleQuestionSubmit}
+                  onQuestionBack={handleQuestionBack}
                 />
               </motion.div>
             )}

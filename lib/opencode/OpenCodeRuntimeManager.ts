@@ -187,8 +187,14 @@ export class OpenCodeRuntimeManager {
     return session;
   }
 
-  async listSessions(projectId: string) {
-    const project = this.requiredProject(projectId);
+  async listSessions(projectId: string, projectPath?: string) {
+    if (!this.runtime) return [];
+    let project = this.projects.get(projectId);
+    if (!project) {
+      if (!projectPath) return [];
+      project = { projectId, projectPath, sessions: new Set<string>(), listeners: new Set<(event: ClyraAgentEvent) => void>(), events: [], partStates: new Map<string, string>(), reconciliation: new Map<string, { fingerprint: string; idleSince?: number; emptyRetries?: number; completionRetries?: number }>() };
+      this.projects.set(projectId, project);
+    }
     return this.client(project.projectPath).session.list({ throwOnError: true });
   }
 

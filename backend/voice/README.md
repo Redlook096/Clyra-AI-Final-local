@@ -1,131 +1,77 @@
-# Clyra Voice Calling — Ultra-Low-Latency Pipeline
+# Clyra Voice Calling — Pipecat + WebRTC
 
 ## Architecture
 
 ```
-Browser mic (PCM16)
-  → WebSocket /voice/stream (Node gateway)
-    → Voice pipeline WS /stream (Python)
-        VAD (Silero | energy)
-        Streaming STT (Faster-Whisper + local-agreement)
-    ← partial / final transcripts
-  → Existing OpenAI-compatible LLM API (DeepSeek / configured provider)
-    → semantic phrase streaming through one persistent Chatterbox-Turbo worker
-  → Browser speaker (PCM chunks)
+Browser mic (WebRTC)
+  → POST /voice/offer (Node)         builds system prompt + history
+    → POST /api/offer (Python)       Pipecat SmallWebRTCTransport SDP answer
+        VAD/turn detection (Silero)
+        Fish Audio STT (/v1/asr)     -- final per utterance, rolling partials
+    ← Pipecat pipeline: STT → LLM → TTS, with real barge-in/interruption
+  → DeepSeek (OpenAI-compatible) LLM -- or the in-process Test Mode echo route
+  → Fish Audio TTS (streaming, wss://api.fish.audio/v1/tts/live)
+  → Browser speaker (WebRTC)
 ```
 
-**LLM rule:** The voice stack reuses the app’s existing OpenAI-compatible LLM. No second LLM provider.
+Pipecat's `PipelineTask(enable_rtvi=True)` emits connection/listening/
+thinking/speaking/transcript events over the WebRTC data channel; the
+frontend consumes them via `@pipecat-ai/client-react`.
 
-## Repo selection
-
-| Layer | Choice | Why |
-|---|---|---|
-| STT engine | [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper) | 4× faster than openai/whisper, low memory |
-| Streaming policy | [whisper_streaming](https://github.com/ufal/whisper_streaming)-style local agreement | Partials, overlap windows, endpointing — not batch loops |
-| Model default | `distil-large-v3` ([Distil-Whisper](https://huggingface.co/distil-whisper)) | ~6× speedup, strong English accuracy |
-| Alt quality | `large-v3-turbo` / `small.en` | Env-selectable quality/latency tradeoff |
-| VAD | [Silero VAD](https://github.com/snakers4/silero-vad) | Fast speech gating; energy fallback offline |
-| TTS | [Chatterbox-Turbo](https://github.com/resemble-ai/chatterbox) | Shared human-realism engine for calls and creator narration |
-| Degraded mode | Explicit browser fallback only | Disabled by default; never mislabeled as Chatterbox |
-| Live patterns | [WhisperLive](https://github.com/collabora/WhisperLive) concepts | Browser mic + nearly-live server pattern |
+**LLM rule:** DeepSeek is the only LLM provider, same key/model as the rest
+of the app. **Test Mode** (a UI toggle, off by default) replaces the
+DeepSeek call with an in-process loopback route
+([echo_llm.py](../../backend/voice-pipeline/echo_llm.py)) that streams back
+exactly what Fish STT heard — every other stage (WebRTC, VAD, Fish STT, Fish
+TTS, barge-in) still runs for real. It exists so voice-call development
+doesn't spend DeepSeek credits.
 
 ## Folder structure
 
 ```
-backend/voice/                 # Node gateway (sessions, LLM, WS protocol)
-  pipeline/client.ts           # Python pipeline client
-  websocket/voice-stream-handler.ts
-backend/voice-pipeline/        # Python streaming worker
-  main.py                      # FastAPI HTTP + WS /stream
-  stt_stream.py                # Streaming Faster-Whisper
-  vad.py
-  tts_stream.py
+backend/voice/                 # Node: sessions, system prompt, SDP proxy
+  config.ts
+  routes.ts                    # POST /voice/session, /voice/offer, /voice/end
+  session/voice-session-manager.ts
+  metrics/voice-metrics.ts
+backend/voice-pipeline/        # Python: the actual Pipecat pipeline
+  main.py                      # FastAPI: POST /api/offer, GET /health
+  bot.py                       # builds the pipeline per connection
+  fish_stt.py                  # FishASRSTTService (SegmentedSTTService)
+  echo_llm.py                  # Test Mode's in-process OpenAI-compatible route
   config.py
 docker/docker-compose.voice.yml
 requirements-voice.txt
 ```
 
-## Protocol
-
-Client → Node:
-- `audio` `{ codec:"pcm16", data, seq }`
-- `utterance` `{ text }` (browser STT fallback)
-- `mute` `{ muted }`
-- `barge_in`
-- `ping`
-
-Node → Client:
-- `ready`, `pipeline_mode` `{ mode:"pipeline"|"browser" }`
-- `status`, `transcript_partial`, `transcript_final`
-- `llm_token`, `llm_done`, `tts_chunk`, `tts_done`, `error`
-
-## Latency strategy
-
-1. VAD gates STT so silence isn’t decoded
-2. Overlapping short windows emit partials early
-3. Endpoint ~420ms silence → final transcript
-4. LLM streams tokens immediately
-5. First speakable sentence → TTS immediately (don’t wait for full answer)
-6. Barge-in aborts LLM + TTS without killing the session
-
 ## Environment
 
 ```env
-VOICE_ENABLED=true
-VOICE_PIPELINE_URL=http://127.0.0.1:8787
-VOICE_STT_MODEL=distil-large-v3
-VOICE_STT_LANGUAGE=en
-VOICE_WHISPER_DEVICE=cpu
-VOICE_WHISPER_COMPUTE=int8
-VOICE_TTS_VOICE=Ryan
-VOICE_TTS_ENGINE=chatterbox-turbo
-VOICE_TTS_REFERENCE=/absolute/path/to/consented-voice-reference.wav
-VOICE_TTS_ALLOW_FALLBACK=false
+FISH_AUDIO_API_KEY=
+FISH_TTS_REFERENCE_ID=       # Fish voice id
+FISH_TTS_MODEL=              # e.g. s1 / s2-pro
+DEEPSEEK_API_KEY=            # existing chat key, reused as-is
 VOICE_SAMPLE_RATE=16000
-VOICE_ENDPOINT_SILENCE_MS=420
-VOICE_TTS_TIMEOUT_MS=3500
+VOICE_PIPELINE_URL=http://127.0.0.1:8787
 ```
 
 ## Local run
 
 ```bash
-# App
-npm run dev:source
-
-# Pipeline
-python3 -m venv .venv-voice
-source .venv-voice/bin/activate
-pip install -r requirements-voice.txt
-cd backend/voice-pipeline && python main.py
+tools/setup-voice.sh            # once, builds .venv-voice311
+npm run dev:source              # starts Node + auto-spawns the voice worker
 ```
 
-## Docker
+Or run the worker by hand:
 
 ```bash
-docker compose -f docker/docker-compose.voice.yml up --build
+.venv-voice311/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8787
+# (cwd: backend/voice-pipeline)
 ```
 
 ## Tests
 
 ```bash
-cd backend/voice-pipeline && python test_pipeline_unit.py
-
-# Full voice-call emulation (Wallace fixture → STT → LLM → TTS)
-# Prefers http://127.0.0.1:31415 (desktop), then :3000, or CLYRA_VOICE_BASE_URL.
-npm run test:voice-e2e
-# Dictation-only STT path (same audio / protocol)
-npm run test:voice-e2e:dictation
-# Or:
-#   node tools/voice-call-e2e.mjs
-#   node tools/voice-call-e2e.mjs --dictation
-# Artifacts land in tmp/voice-bench/e2e-*/
+.venv-voice311/bin/python backend/voice-pipeline/test_pipeline_unit.py
+node tools/voice-call-webrtc-e2e.mjs   # full WebRTC E2E, Test Mode on
 ```
-
-## Fallback
-
-| Failure | Behavior |
-|---|---|
-| Pipeline down | `pipeline_mode=browser` → Web Speech STT + speechSynthesis |
-| Chatterbox unavailable | Report unavailable; browser fallback only when explicitly enabled |
-| Silero missing | Energy VAD |
-| TTS timeout | Client progressive speechSynthesis |

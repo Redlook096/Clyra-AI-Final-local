@@ -98,8 +98,8 @@ export function Sidebar({
     <motion.aside
       aria-hidden={collapsed || undefined}
       initial={false}
-      animate={{ width: collapsed ? 0 : 236, opacity: collapsed ? 0 : 1, x: collapsed ? -8 : 0 }}
-      transition={reduceMotion ? { duration: 0 } : { duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+      animate={{ width: collapsed ? 0 : 236, opacity: collapsed ? 0 : 1 }}
+      transition={reduceMotion ? { duration: 0 } : { duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
       className={cn("relative flex h-full min-w-0 shrink-0 flex-col overflow-hidden border-r border-black/[0.055] bg-[#F8F8F7] font-[-apple-system,BlinkMacSystemFont,Inter,Segoe_UI,sans-serif]", collapsed && "pointer-events-none border-r-0")}>
       <div className={cn("px-3 pt-1.5", collapsed && "px-1.5")}>
         <div className={cn("flex h-[46px] items-center", collapsed ? "justify-center" : "gap-1.5")}>

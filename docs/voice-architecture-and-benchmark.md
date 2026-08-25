@@ -1,87 +1,91 @@
-# Voice Architecture and Validation
+# Voice Call Architecture
 
-Date: 15 July 2026. Development host: Intel MacBook Pro, four-core i7, 16 GB
-RAM. This is not the final 8 GB acceptance machine.
+Date: 22 August 2026. Replaces the previous Faster-Whisper/Chatterbox +
+raw-WebSocket design described in this file's earlier revisions.
 
-## Why the Previous Voice Sounded Robotic
+## Stack
 
-1. The Python worker could be unavailable while the product silently used
-   browser speech synthesis.
-2. Very short token fragments restarted pitch and sentence prosody.
-3. PCM crossed the app as repeated base64 JSON chunks and separate playback
-   sources, making joins audible.
-4. Creator narration and live calls used different engines and voices.
-5. Mute stopped recognition without always releasing microphone tracks.
-
-## Selected Engine
-
-The selected engine is official
-[Chatterbox-Turbo](https://github.com/resemble-ai/chatterbox), using
-`ChatterboxTurboTTS`. It is the sole neural TTS path for voice calls, Fake Text
-Story, and Would You Rather. One warm model instance, one conditioning cache,
-and a bounded inference queue are shared by all sessions.
-
-The repository comparison that led to the earlier architecture remains useful,
-but no unused model is installed as an active product path:
-
-| Engine | Role after this change | Reason |
-| --- | --- | --- |
-| Chatterbox-Turbo | Selected shared engine | English conversational quality, reference conditioning, compact Turbo model |
-| Qwen3-TTS 0.6B | Not active | Would duplicate a heavier creator runtime |
-| CosyVoice 3 0.5B | Not active | No local quality result justifies a second framework |
-| MOSS-TTS-Nano | Not active | Candidate only if a measured low-resource profile is later required |
-| Kokoro/Piper | Removed from active path | Avoid inconsistent voices and silent quality downgrade |
-
-## Runtime Pipeline
-
-```text
-Browser microphone
-  -> WebSocket PCM16
-  -> endpointing and Faster-Whisper transcription
-  -> existing OpenAI-compatible LLM stream
-  -> spoken-text normalization
-  -> semantic phrase buffer
-  -> persistent Chatterbox-Turbo inference
-  -> binary PCM transport with response and generation IDs
-  -> scheduled Web Audio playback
+```
+Browser mic (WebRTC, @pipecat-ai/client-js + small-webrtc-transport)
+  -> POST /voice/offer (Node: attaches system prompt + history server-side)
+    -> POST /api/offer (Python: Pipecat SmallWebRTCTransport SDP answer)
+        Silero VAD / turn detection
+        Fish Audio STT (/v1/asr, REST -- see below)
+    <- Pipecat pipeline: STT -> LLM -> TTS, real barge-in/interruption
+  -> DeepSeek (OpenAI-compatible) LLM, or the in-process Test Mode echo route
+  -> Fish Audio TTS (wss://api.fish.audio/v1/tts/live, streaming)
+  -> Browser speaker (WebRTC)
 ```
 
-Phrases target 8-28 useful words and flush after stable punctuation or a short
-timeout. Playback uses one monotonic timeline. Barge-in clears scheduled audio,
-cancels pending work, and discards packets from older generations.
+`PipelineTask(enable_rtvi=True)` emits connection/listening/thinking/
+speaking/transcript events over the WebRTC data channel; the frontend
+(`src/hooks/useVoiceCall.ts`) consumes them via `@pipecat-ai/client-js`
+(`RTVIEvent`), not custom timers.
 
-## Voice Conditioning
+## Why Fish STT isn't fully streaming
 
-Use a legal, consented 8-12 second conversational reference with one speaker,
-no music, clipping, long silence, or strong room reverb. Configure it with
-`VOICE_TTS_REFERENCE`. The persistent runtime caches conditioning rather than
-re-encoding the same reference for every phrase.
+Fish Audio's `/v1/asr` is a REST, non-streaming, BETA endpoint (upload
+audio, get one transcript back) -- there's no live partial-transcript
+stream on Fish's side, unlike its TTS (which is real streaming websocket
+and is used as Pipecat's built-in `FishAudioTTSService`). `FishASRSTTService`
+(`backend/voice-pipeline/fish_stt.py`) subclasses Pipecat's
+`SegmentedSTTService`, which already buffers mic audio between VAD
+start/stop and calls the REST endpoint once per utterance for a fast
+**final** transcript. It also polls the growing buffer every ~700ms while
+VAD reports ongoing speech to approximate a live **partial** caption. This
+is a deliberate trade-off documented here, not a fabricated feature.
 
-## Verified Locally
+## Test Mode
 
-- official Chatterbox source is pinned by `tools/setup-voice.sh`
-- `ChatterboxTurboTTS` imports in `.venv-voice311`
-- live and creator routes target the same persistent worker
-- fallback is explicit and defaults off
-- phrase queues and creator requests carry a selected voice
+A persisted, off-by-default UI setting (Settings -> Voice). When on, the
+LLM stage is a loopback route served by the same Python process
+(`backend/voice-pipeline/echo_llm.py`) that streams back exactly what Fish
+STT heard, in the real OpenAI streaming chunk format `OpenAILLMService`
+expects -- so every other stage (WebRTC, VAD, Fish STT, Fish TTS, barge-in,
+turn management) still runs for real, but DeepSeek is never called. Exists
+so voice-call development and testing doesn't spend DeepSeek credits.
 
-The model weights have not yet been warmed on this Intel host. Therefore this
-document does not claim Chatterbox first-audio, RTF, RAM, or listening scores.
-Run the benchmark on the target hardware before using the requested latency and
-8 GB limits as accepted measurements.
+## Environment
 
-## Production Configuration
-
-```bash
-VOICE_TTS_ENGINE=chatterbox-turbo
-VOICE_TTS_VOICE=Ryan
-VOICE_TTS_REFERENCE=/absolute/path/to/consented-reference.wav
-VOICE_TTS_ALLOW_FALLBACK=false
-VOICE_TTS_SAMPLE_RATE=24000
-VOICE_TTS_FLUSH_MS=120
-VOICE_BARGE_HOLD_MS=700
-VOICE_TTS_TIMEOUT_MS=30000
+```env
+FISH_AUDIO_API_KEY=
+FISH_TTS_REFERENCE_ID=
+FISH_TTS_MODEL=s1
+DEEPSEEK_API_KEY=            # existing chat key, reused as-is
+VOICE_SAMPLE_RATE=16000
+VOICE_PIPELINE_URL=http://127.0.0.1:8787
 ```
 
-No API key is sent to the voice worker or browser. The existing server-side LLM
-configuration remains unchanged.
+## Dictation is separate
+
+Cmd+Shift+K global dictation and the composer's mic button never needed an
+LLM or TTS turn, so they kept their own small WS bridge to Fish's REST ASR
+(`backend/voice/websocket/dictation-stream.ts`) instead of going through
+the Pipecat pipeline above.
+
+## Verified
+
+- Real `@pipecat-ai/client-js` browser client connects through the full
+  stack: WebRTC ICE, RTVI `client-ready` handshake, pipeline start --
+  confirmed via `backend/voice-pipeline` server logs during manual and
+  Playwright-driven browser testing.
+- A standalone `aiortc` peer-connection script exercises `/api/offer`
+  directly (SDP offer/answer, `connectionState: connected`) without the
+  browser, isolating the Python worker's WebRTC handling.
+- `backend/voice-pipeline/test_pipeline_unit.py` covers config defaults,
+  the PCM->WAV helper, `/health`, and the Test Mode echo route's streaming
+  format against the real `openai` client.
+- `tools/voice-call-webrtc-e2e.mjs` drives the actual app UI in a real
+  Chromium (Playwright) with a fake mic device and asserts the call reaches
+  Listening and ends cleanly.
+
+## Not yet verified in this environment
+
+Real Fish Audio STT/TTS behavior, barge-in-mid-sentence, a 10-minute soak,
+and reconnect-after-network-loss all need a real `FISH_AUDIO_API_KEY` (and
+ideally a recorded speech fixture at `tmp/voice-bench/wallace-cl-2.wav`) --
+this development machine doesn't have one configured. `tools/
+voice-call-webrtc-e2e.mjs` is built to exercise all of this once a key is
+set; without one, Fish's TTS websocket rejects the connection with HTTP 401
+and the pipeline reports that as a non-fatal `ErrorFrame`, which is exactly
+what was observed while building this.

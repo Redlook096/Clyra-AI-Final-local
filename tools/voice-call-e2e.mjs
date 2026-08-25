@@ -1,15 +1,19 @@
 /**
- * Backend voice-call end-to-end emulation.
+ * Dictation end-to-end emulation (Cmd+Shift+K + the composer mic button).
  *
- * Streams PCM16 the same way VoicePcmCapturer + useVoiceCall / DictationController
- * do over `/voice/session` + `/voice/stream`, then asserts STT → LLM → TTS.
+ * Streams PCM16 the same way VoicePcmCapturer / DictationController do over
+ * `/voice/session` + `/voice/stream` (backend/voice/websocket/dictation-stream.ts,
+ * Fish Audio `/v1/asr`), then asserts a transcript comes back.
+ *
+ * Voice CALLS moved to Pipecat + WebRTC and no longer speak this raw-WS
+ * protocol -- see tools/voice-call-webrtc-e2e.mjs for that path. This script
+ * is dictation-only now; it requires --dictation and errors otherwise.
  *
  * Usage:
- *   node tools/voice-call-e2e.mjs
  *   node tools/voice-call-e2e.mjs --dictation
- *   node tools/voice-call-e2e.mjs path/to/audio.m4a
- *   CLYRA_VOICE_BASE_URL=http://127.0.0.1:31415 node tools/voice-call-e2e.mjs
- *   npm run test:voice-e2e
+ *   node tools/voice-call-e2e.mjs --dictation path/to/audio.m4a
+ *   CLYRA_VOICE_BASE_URL=http://127.0.0.1:31415 node tools/voice-call-e2e.mjs --dictation
+ *   npm run test:voice-e2e:dictation
  *
  * Fixture (preferred):
  *   tmp/voice-bench/wallace-cl-2.m4a
@@ -236,6 +240,13 @@ Do not add extra commentary. Keep it to one short spoken sentence.`;
   const session = await sessionRes.json();
   if (!sessionRes.ok || !session.ok) {
     throw new Error(`voice/session failed: HTTP ${sessionRes.status} ${JSON.stringify(session)}`);
+  }
+  if (!session.websocketUrl) {
+    throw new Error(
+      "No websocketUrl in the session response -- this script only covers dictation " +
+        "(pass --dictation). Voice calls now run over Pipecat + WebRTC; use " +
+        "tools/voice-call-webrtc-e2e.mjs for that path.",
+    );
   }
 
   console.log(`base=${baseUrl}`);

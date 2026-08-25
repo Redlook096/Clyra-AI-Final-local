@@ -66,6 +66,8 @@ export type FakeTextProject = CreatorProjectBase & {
   messages: StoryMessage[];
   theme: "ios_dark" | "ios_light";
   layout: "floating_phone" | "full_chat" | "chat_gameplay";
+  /** Show the "..." typing-dots beat before each bubble commits. Defaults to true. */
+  showTypingIndicator: boolean;
   background?: string;
   gameplay?: {
     clipId: string;
@@ -157,6 +159,7 @@ export function createCreatorProject(type: CreatorProjectType): CreatorProject {
       ],
       theme: "ios_dark",
       layout: "floating_phone",
+      showTypingIndicator: true,
       gameplay: gameplay ? {
         clipId: gameplay.id,
         category: gameplay.category,
@@ -240,6 +243,7 @@ export function migrateCreatorProject(raw: unknown, fallbackType: CreatorProject
     ];
     project.theme = value.theme === "ios_light" ? "ios_light" : "ios_dark";
     project.layout = "floating_phone";
+    project.showTypingIndicator = value.showTypingIndicator !== false;
     const gameplayId = typeof value.gameplay?.clipId === "string" ? value.gameplay.clipId : undefined;
     const selectedGameplay = getFakeTextGameplayClip(gameplayId);
     project.gameplay = selectedGameplay ? {
@@ -271,7 +275,7 @@ export function creatorProjectDuration(project: CreatorProject) {
     return project.rounds.reduce((sum, round) => sum + WOULD_RATHER_LEAD_IN_MS + round.timerSeconds * 1_000 + round.revealSeconds * 1_000, 0);
   }
   if (project.type === "fake_text_story") {
-    return buildIMessageTimeline(project.messages, project.playbackRate).durationMs;
+    return buildIMessageTimeline(project.messages, project.playbackRate, { showTypingIndicator: project.showTypingIndicator }).durationMs;
   }
   return Math.max(3_000, `${project.title} ${project.body}`.split(/\s+/).length * 320);
 }

@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import type { VoiceConfig } from "../config";
 
 export type VoiceChatMessage = { role: "user" | "assistant"; content: string };
 
@@ -83,29 +82,6 @@ export class VoiceSessionManager {
 
   delete(id: string) {
     this.sessions.delete(id);
-  }
-
-  buildPipelinePayload(session: VoiceSession, config: VoiceConfig) {
-    return {
-      sessionId: session.id,
-      conversationId: session.conversationId,
-      messages: session.messages,
-      llm: {
-        baseUrl: config.llmBaseUrl,
-        apiKey: config.llmApiKey,
-        model: config.llmModel,
-        temperature: config.temperature,
-        maxTokens: config.maxTokens,
-      },
-      audio: {
-        sampleRate: config.sampleRate,
-        chunkMs: config.chunkMs,
-        silenceThreshold: config.silenceThreshold,
-        vadSensitivity: config.vadSensitivity,
-      },
-      stt: { model: config.sttModel },
-      tts: { voice: config.ttsVoice },
-    };
   }
 }
 

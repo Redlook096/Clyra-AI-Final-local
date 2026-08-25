@@ -2,9 +2,12 @@ import {
   buildIMessageTimeline,
   getIMessageFrame,
   getIMessageFloatingPanelGeometry,
+  getIMessageGroupPosition,
   getIMessagePanelLayout,
+  getTypingDotPhase,
   IMESSAGE_CANVAS,
   IMESSAGE_TOKENS,
+  type IMessageFrame,
 } from "./fakeTextTimeline";
 
 // Canvas export is authored at 720 × 1280 but consumes the same 1080px
@@ -599,13 +602,18 @@ function drawMessageVideo(
   context: CanvasRenderingContext2D,
   background: CreatorBackgroundMedia | null,
   name: string,
-  messages: CreatorMessage[],
-  visible: number,
+  // The caller (renderMessageStoryVideo) always assigns a stable id before
+  // building the timeline, so entrance/tail/read-receipt lookups by id here
+  // can rely on it being present.
+  messages: Array<CreatorMessage & { id: string }>,
+  frame: IMessageFrame,
+  timeMs: number,
   panelHeight: number,
   theme: MessageTheme,
   layout: MessageLayout,
   windowStart = 0,
 ) {
+  const visible = frame.visibleCount;
   // Draw at one logical 720 × 1280 coordinate system, then scale the complete
   // surface for a 1080 × 1920 export. This keeps typography, bubbles, icons,
   // and safe areas proportional to the preview rather than independently scaled.
@@ -710,17 +718,23 @@ function drawMessageVideo(
       // message when a 1px conversion difference appears.
       + 3,
   );
+  const typingIndicatorHeight = imessageRenderToken(IMESSAGE_TOKENS.typingIndicatorHeight);
+  const typingIndicatorWidth = imessageRenderToken(64);
   let contentHeight = shown.reduce((sum, item, index) => {
     if (!index) return sum + item.bubbleHeight;
     const previous = shown[index - 1]!.message;
     return sum + item.bubbleHeight + (previous.side === item.message.side ? imessageRenderToken(IMESSAGE_TOKENS.sameSenderGap) : imessageRenderToken(IMESSAGE_TOKENS.senderSwitchGap));
   }, 0);
+  if (frame.typingSide) {
+    contentHeight += (shown.length ? imessageRenderToken(IMESSAGE_TOKENS.senderSwitchGap) : 0) + typingIndicatorHeight;
+  }
   // Mirror the DOM preview's content surface: when a long conversation
   // exceeds the measured body, retain every bubble and shift the complete
   // stack upward beneath the fixed header. Removing older messages based on
   // an arbitrary count made a rendered frame disagree with a scrubbed one.
   const scrollOffset = Math.max(0, contentHeight - available);
   let bubbleY = y + headerHeight + imessageRenderToken(IMESSAGE_TOKENS.messageTopInset) - scrollOffset;
+  const tailSize = imessageRenderToken(IMESSAGE_TOKENS.tailSize);
   for (const [shownIndex, item] of shown.entries()) {
     const { message, lines, bubbleWidth, bubbleHeight } = item;
     if (shownIndex) {
@@ -728,18 +742,69 @@ function drawMessageVideo(
       bubbleY += previous.side === message.side ? imessageRenderToken(IMESSAGE_TOKENS.sameSenderGap) : imessageRenderToken(IMESSAGE_TOKENS.senderSwitchGap);
     }
     const bubbleX = message.side === "right" ? x + width - bubbleWidth - sideInset : x + sideInset;
+    const isEntering = message.id === frame.enteringMessageId;
+    const progress = isEntering ? frame.entranceProgress : 1;
+    const scale = IMESSAGE_TOKENS.bubbleEntranceStartScale + (1 - IMESSAGE_TOKENS.bubbleEntranceStartScale) * progress;
+    const riseY = (1 - progress) * imessageRenderToken(IMESSAGE_TOKENS.bubbleEntranceRiseDistance);
+    // Scale/translate around the bubble's own bottom edge (the side it grows
+    // from), matching the DOM's transformOrigin so preview and export agree.
+    const originX = message.side === "right" ? bubbleX + bubbleWidth : bubbleX;
+    const originY = bubbleY + bubbleHeight;
+    context.save();
+    context.globalAlpha = progress;
+    context.translate(originX, originY + riseY);
+    context.scale(scale, scale);
+    context.translate(-originX, -originY);
     drawMessageBubblePath(context, bubbleX, bubbleY, bubbleWidth, bubbleHeight);
     context.fillStyle = message.side === "right" ? colors.outgoing : colors.incoming;
     context.fill();
+    const groupPosition = getIMessageGroupPosition(shown.map((entry) => entry.message), shownIndex);
+    if (groupPosition === "end" || groupPosition === "single") {
+      context.beginPath();
+      const tailX = message.side === "right" ? bubbleX + bubbleWidth : bubbleX;
+      context.arc(tailX, bubbleY + bubbleHeight - tailSize * 0.4, tailSize, 0, Math.PI * 2);
+      context.fill();
+      context.fillStyle = colors.panel;
+      context.beginPath();
+      context.arc(message.side === "right" ? tailX + tailSize * 1.1 : tailX - tailSize * 1.1, bubbleY + bubbleHeight + tailSize * 0.2, tailSize * 1.15, 0, Math.PI * 2);
+      context.fill();
+    }
     context.fillStyle = message.side === "right" ? colors.outgoingText : colors.incomingText;
     lines.forEach((line, lineIndex) => context.fillText(line, bubbleX + bubbleHorizontalPadding, bubbleY + bubbleVerticalPadding + bubbleFontSize + lineIndex * bubbleLineHeight));
+    context.restore();
+    if (message.id === frame.readReceiptMessageId && frame.showReadReceipt) {
+      context.fillStyle = theme === "ios_light" ? "#8a8a8e" : "#98989d";
+      context.font = `500 ${imessageRenderToken(18)}px -apple-system, BlinkMacSystemFont, sans-serif`;
+      context.textAlign = "right";
+      context.fillText(frame.readReceiptLabel === "read" ? "Read" : "Delivered", bubbleX + bubbleWidth, bubbleY + bubbleHeight + imessageRenderToken(20));
+      context.font = `400 ${bubbleFontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
+      context.textAlign = "left";
+    }
     bubbleY += bubbleHeight;
+  }
+  if (frame.typingSide) {
+    bubbleY += shown.length ? imessageRenderToken(IMESSAGE_TOKENS.senderSwitchGap) : 0;
+    const typingX = frame.typingSide === "right" ? x + width - typingIndicatorWidth - sideInset : x + sideInset;
+    drawMessageBubblePath(context, typingX, bubbleY, typingIndicatorWidth, typingIndicatorHeight);
+    context.fillStyle = frame.typingSide === "right" ? colors.outgoing : colors.incoming;
+    context.fill();
+    const dots = getTypingDotPhase(timeMs, frame.typingStartMs ?? timeMs);
+    const dotRadius = imessageRenderToken(4);
+    const dotGap = imessageRenderToken(14);
+    const dotsCenterX = typingX + typingIndicatorWidth / 2;
+    const dotsCenterY = bubbleY + typingIndicatorHeight / 2;
+    dots.forEach((offset, dotIndex) => {
+      context.beginPath();
+      context.fillStyle = frame.typingSide === "right" ? "rgba(255,255,255,.85)" : (theme === "ios_light" ? "#8a8a8e" : "#98989d");
+      context.arc(dotsCenterX + (dotIndex - 1) * dotGap, dotsCenterY - offset * imessageRenderToken(5), dotRadius, 0, Math.PI * 2);
+      context.fill();
+    });
   }
   context.restore();
   context.restore();
 }
 
-export async function renderMessageStoryVideo(options: { name: string; messages: CreatorMessage[]; voices: Record<"left" | "right", CreatorVoice>; background?: string; backgroundVideo?: string; theme?: MessageTheme; layout?: MessageLayout; playbackRate?: number; onProgress?: (progress: number) => void; signal?: AbortSignal }) {
+export async function renderMessageStoryVideo(options: { name: string; messages: CreatorMessage[]; voices: Record<"left" | "right", CreatorVoice>; background?: string; backgroundVideo?: string; theme?: MessageTheme; layout?: MessageLayout; playbackRate?: number; showTypingIndicator?: boolean; onProgress?: (progress: number) => void; signal?: AbortSignal }) {
   const messages = options.messages.map((message, index) => ({ ...message, id: message.id || `message-${index}` }));
   const speeches: Array<{ data: ArrayBuffer; durationMs: number } | null> = [];
   for (let index = 0; index < messages.length; index += 1) {
@@ -759,7 +824,7 @@ export async function renderMessageStoryVideo(options: { name: string; messages:
     ...message,
     voiceDurationMs: speeches[index]?.durationMs || undefined,
   }));
-  const timeline = buildIMessageTimeline(timedMessages, options.playbackRate || 1);
+  const timeline = buildIMessageTimeline(timedMessages, options.playbackRate || 1, { showTypingIndicator: options.showTypingIndicator });
   // Fake Text Story is rendered at its actual project resolution; the drawing
   // code scales one fixed logical canvas so preview and export keep their ratios.
   const setup = await prepareRecorder({ width: 1080, height: 1920, fps: 60, manualFrameCapture: true });
@@ -813,14 +878,15 @@ export async function renderMessageStoryVideo(options: { name: string; messages:
     const drawFrame = (timeMs: number) => {
       const frame = getIMessageFrame(timeline, timeMs);
       const panelHeight = layout === "floating_phone"
-        ? imessageRenderToken(getIMessagePanelLayout(messages.slice(0, frame.visibleCount)).panelHeight)
+        ? imessageRenderToken(getIMessagePanelLayout(messages.slice(0, frame.visibleCount), { typingSide: frame.typingSide, showReadReceipt: frame.showReadReceipt }).panelHeight)
         : 1_280;
       drawMessageVideo(
         setup.context,
         background,
         options.name,
         messages,
-        frame.visibleCount,
+        frame,
+        timeMs,
         panelHeight,
         theme,
         layout,

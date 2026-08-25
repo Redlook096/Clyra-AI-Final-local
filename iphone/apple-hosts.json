@@ -1,0 +1,9 @@
+[
+  {
+    "hostLabel": "test-client",
+    "url": "ws://127.0.0.1:59453/api/iphone/remote",
+    "token": "2148a9d4-3602-47b2-926d-ce62651cc87a",
+    "pairedAt": 1787382698531,
+    "lastConnectedAt": 1787382698532
+  }
+]

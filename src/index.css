@@ -164,6 +164,32 @@
   display: none !important;
 }
 
+/* Active agent action — a quiet travelling shimmer so the row that is
+   currently running is unambiguous, and settles the instant it completes. */
+.cc-active-row {
+  position: relative;
+}
+.cc-active-row::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  background: linear-gradient(100deg, transparent 25%, rgba(57, 119, 246, 0.055) 48%, transparent 72%);
+  background-size: 220% 100%;
+  animation: cc-active-shimmer 2s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes cc-active-shimmer {
+  0% { background-position: 130% 0; }
+  100% { background-position: -130% 0; }
+}
+
+/* Shared scroll: keep every workbench surface contained so nested panes and
+   the transcript settle together instead of rubber-banding past their edges. */
+.cc-scroll {
+  overscroll-behavior: contain;
+}
+
 /* Remastered working surfaces: the welcome and chat welcome deliberately keep
    their existing composition. These refinements apply only once a study space
    becomes an active canvas, material review, or inspector workflow. */
@@ -5063,6 +5089,7 @@ body,
   width: min(220px, 58vw);
   flex-direction: column;
   align-items: center;
+  gap: 22px;
 }
 
 .clyra-boot-overlay .clyra-boot-progress {
@@ -5122,7 +5149,19 @@ body,
    this layer simply lets the already-rendered app surface come into view. */
 .clyra-boot-overlay.clyra-boot-overlay--ripple {
   background: transparent;
-  display: block;
+  /* Deliberately still `grid; place-items: center` (inherited from the
+     base rule) rather than `block`: the flying avatar keeps the exact same
+     tree position across "holding" -> "ripple", and its FLIP-style flight
+     is measured off this container, so its layout must not shift between
+     the two phases or the flight would start from the wrong point. */
+}
+
+.clyra-boot-avatar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  transform-origin: center center;
 }
 
 
@@ -6784,6 +6823,12 @@ body,
   box-shadow: 0 3px 12px rgba(37, 99, 235, .14);
 }
 .clyra-chat-welcome__orb .clyra-ai-orb-shell { transform: scale(.42); transform-origin: center; }
+.clyra-chat-welcome__blob {
+  position: relative;
+  z-index: 1;
+  width: 72px;
+  height: 72px;
+}
 .clyra-chat-welcome__title {
   position: relative;
   z-index: 1;

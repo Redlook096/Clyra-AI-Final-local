@@ -1,0 +1,37 @@
+{
+  "macOSVersion": "15.7.7",
+  "architecture": "x86_64",
+  "compatibleXcodes": [
+    "26.3",
+    "26.2",
+    "26.1.1",
+    "26.1",
+    "26.0.1",
+    "26.0",
+    "16.4",
+    "16.3",
+    "16.2",
+    "16.1",
+    "16.0",
+    "15.4",
+    "15.3",
+    "15.2",
+    "15.1",
+    "15.0.1",
+    "15.0",
+    "14.3.1",
+    "14.3",
+    "14.2",
+    "14.1",
+    "14.0.1",
+    "14.0"
+  ],
+  "recommendedXcode": "26.3",
+  "confidence": "curated-table",
+  "sourceEvidence": [
+    "xcodes list: 284 cataloged releases (141 stable)",
+    "curated minimum-macOS table: 13 entries, keyed per exact version (not per major)",
+    "host: macOS 15.7.7, x86_64"
+  ],
+  "blockedReason": null
+}

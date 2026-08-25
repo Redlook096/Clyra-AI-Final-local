@@ -1,0 +1,3 @@
+{
+  "error": "Command failed: xcrun simctl list devices available -j\nxcrun: error: unable to find utility \"simctl\", not a developer tool or in PATH\n"
+}

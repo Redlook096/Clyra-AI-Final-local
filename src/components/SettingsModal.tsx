@@ -53,6 +53,8 @@ type SettingsModalProps = {
   setVoicePitch: (value: number) => void;
   voiceVolume: number;
   setVoiceVolume: (value: number) => void;
+  voiceTestMode: boolean;
+  setVoiceTestMode: (value: boolean) => void;
   chats: unknown[];
 };
 
@@ -241,6 +243,8 @@ export function SettingsModal({
   setVoicePitch,
   voiceVolume,
   setVoiceVolume,
+  voiceTestMode,
+  setVoiceTestMode,
   chats,
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<(typeof sections)[number]["id"]>("look");
@@ -567,6 +571,9 @@ export function SettingsModal({
                       <RangeControl label="Pace" value={voiceRate} min={0.82} max={1.08} step={0.01} onChange={setVoiceRate} valueLabel={voiceRate < 0.91 ? "Calmer" : voiceRate > 1 ? "Quicker" : "Balanced"} />
                       <RangeControl label="Warmth" value={voicePitch} min={0.9} max={1.16} step={0.01} onChange={setVoicePitch} valueLabel={voicePitch < 0.99 ? "Lower" : voicePitch > 1.08 ? "Brighter" : "Natural"} />
                       <RangeControl label="Volume" value={voiceVolume} min={0.5} max={1} step={0.01} onChange={setVoiceVolume} valueLabel={`${Math.round(voiceVolume * 100)}%`} />
+                      <SettingRow title="Test Mode" detail="Voice call repeats back what you say instead of using DeepSeek. Use this to check the mic, connection, and Fish Audio voice without spending chat credits.">
+                        <Toggle checked={voiceTestMode} onChange={setVoiceTestMode} label="Toggle voice call test mode" />
+                      </SettingRow>
                     </>
                   ) : null}
 

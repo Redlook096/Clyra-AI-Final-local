@@ -124,8 +124,8 @@ const iMessageTimeline = buildIMessageTimeline(iMessageScript);
 assert.equal(iMessageTimeline.events.length, 3); assertions += 1;
 check(iMessageTimeline.events[1].typingStartMs >= iMessageTimeline.events[0].endMs, "Timeline events must be sequential");
 const typingFrame = getIMessageFrame(iMessageTimeline, iMessageTimeline.events[0].typingStartMs + 10);
-assert.equal(typingFrame.typingSide, null); assertions += 1;
-assert.equal(typingFrame.visibleCount, 1); assertions += 1;
+assert.equal(typingFrame.typingSide, "left"); assertions += 1;
+assert.equal(typingFrame.visibleCount, 0); assertions += 1;
 const arrivedFrame = getIMessageFrame(iMessageTimeline, iMessageTimeline.events[1].bubbleStartMs + 220);
 assert.equal(arrivedFrame.visibleCount, 2); assertions += 1;
 assert.equal(getIMessageGroupPosition(iMessageScript, 0), "start"); assertions += 1;
@@ -135,6 +135,6 @@ assert.equal(getIMessageGroupPosition(iMessageScript, 2), "single"); assertions 
 const measuredVoiceTimeline = buildIMessageTimeline([
   { id: "actual-duration", side: "left" as const, text: "Short", narration: true, voiceDurationMs: 2_340 },
 ]);
-assert.equal(measuredVoiceTimeline.events[0].voiceEndMs, 2_340); assertions += 1;
+assert.equal(measuredVoiceTimeline.events[0].voiceEndMs - measuredVoiceTimeline.events[0].voiceStartMs, 2_340); assertions += 1;
 
 console.log(`creator-unit-tests: ${assertions} assertions passed`);

@@ -103,15 +103,30 @@ import {
   type DocumentRewriteRequest,
 } from "./components/ui/document-card";
 import { AppLauncher } from "./components/AppLauncher";
+import { ShortsStudioWelcome, type ShortsMode } from "./components/ShortsStudioWelcome";
 import { AgentControlledPreview } from "./components/AgentControlledPreview";
 import type { CreatorMode } from "./components/CreatorStudioWorkspace";
-import { VoiceCallOverlay } from "./components/voice/VoiceCallOverlay";
+import { VoiceCallScreen } from "./components/voice/VoiceCallScreen";
 import { DictationController } from "./components/DictationController";
 import { VoiceWaveIcon } from "./components/voice/VoiceWaveIcon";
 import { VoiceWaveform } from "./components/voice/VoiceWaveform";
 import { VoicePcmCapturer } from "./lib/voicePcmCapture";
 import { useVoiceCall } from "./hooks/useVoiceCall";
-import { AiOrb, type OrbColorTheme } from "./components/AiOrb";
+import { type OrbColorTheme } from "./components/AiOrb";
+import { Bloub, type BloubHandle } from "./components/bloub/Bloub";
+import { BloubBootAvatar } from "./components/bloub/BloubBootAvatar";
+
+// Maps the app's existing orb colour themes to a single Bloub accent hex.
+// Bloub takes one flat colour (its geometry doesn't depend on it), so this
+// is the only place a Clyra-blue restyle would need to change.
+const BLOUB_THEME_COLOR: Record<OrbColorTheme, string> = {
+  default: "#3b82f6",
+  ocean: "#0284c7",
+  sunset: "#ea580c",
+  forest: "#16a34a",
+  mono: "#64748b",
+  noir: "#171717",
+};
 import { GoogleProductIcon, YouTubeBrandIcon } from "./components/brand/ProductIcons";
 import { getElectronDesktop } from "./lib/electron-runtime";
 import { VibeAgentMessageBody } from "./components/vibe/VibeAgentMessageBody";
@@ -816,9 +831,13 @@ function StartupSpatialRipple() {
 function BootIntroOverlay({
   state,
   progress,
+  avatarColor,
+  onAvatarArrive,
 }: {
   state: BootOverlayState;
   progress: number;
+  avatarColor: string;
+  onAvatarArrive: () => void;
 }) {
   const progressRail = (
     <div className="clyra-boot-progress clyra-boot-progress--intro" role="progressbar" aria-label="Preparing Clyra" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)}>
@@ -833,12 +852,22 @@ function BootIntroOverlay({
     </div>
   );
 
-  if (state === "ripple") {
-    return <div className="clyra-boot-overlay clyra-boot-overlay--ripple"><StartupSpatialRipple /></div>;
-  }
+  // The avatar keeps the same tree position/identity across the
+  // "holding" -> "ripple" phases so its fly-into-position transform is
+  // never interrupted by a remount; only the chrome around it changes.
   return (
-    <div className="clyra-boot-overlay clyra-boot-overlay--progress">
-      {progressRail}
+    <div className={`clyra-boot-overlay ${state === "ripple" ? "clyra-boot-overlay--ripple" : "clyra-boot-overlay--progress"}`}>
+      {state === "ripple" && <StartupSpatialRipple />}
+      <div className="clyra-boot-overlay__content">
+        <BloubBootAvatar
+          progress={progress}
+          phase={state}
+          color={avatarColor}
+          targetSelector="#clyra-bloub-home-target"
+          onArrive={onAvatarArrive}
+        />
+        {state !== "ripple" && progressRail}
+      </div>
     </div>
   );
 }
@@ -2331,6 +2360,7 @@ export default function App() {
     };
   }, [activeWorkspaceTab, isEmbeddedToolPreview]);
   const [isAppLauncherOpen, setIsAppLauncherOpen] = useState(false);
+  const [isShortsWelcomeOpen, setIsShortsWelcomeOpen] = useState(false);
   const [isTaskViewOpen, setIsTaskViewOpen] = useState(false);
   const [visitedWorkspaceTabs, setVisitedWorkspaceTabs] = useState<WorkspaceTabId[]>(["chat"]);
   const [taskViewPreviews, setTaskViewPreviews] = useState<Record<string, TaskViewPreview>>({});
@@ -2785,6 +2815,22 @@ export default function App() {
   const [introState, setIntroState] = useState<BootOverlayState>(() => isEmbeddedToolRoute ? "complete" : "holding");
   const [introProgress, setIntroProgress] = useState(0);
   const isBootOverlayVisible = introState !== "complete";
+  // Tracks whether the flying boot avatar has landed in the chat-home slot
+  // (or, on an embedded/deep-linked boot with no overlay at all, is simply
+  // never blocked). Gates the header avatar's own fade-in so there's never
+  // a second, competing entrance animation underneath the boot overlay.
+  const [bloubLanded, setBloubLanded] = useState(() => !isBootOverlayVisible);
+  useEffect(() => {
+    if (introState === "complete") setBloubLanded(true);
+  }, [introState]);
+  // The header avatar has no room to react to a pointer that's usually
+  // nowhere near it, so it doesn't follow the cursor here — it holds a
+  // fixed, centred, forward gaze instead of the state's default off-axis
+  // rest look.
+  const homeBloubRef = useRef<BloubHandle | null>(null);
+  useEffect(() => {
+    if (bloubLanded) homeBloubRef.current?.setGaze(0, 0, 0);
+  }, [bloubLanded]);
 
   // The static document-level cover remains until this first layout commit,
   // where the React-owned boot surface is already in place beneath it.
@@ -3231,6 +3277,13 @@ export default function App() {
   const [voiceVolume, setVoiceVolume] = useState(() =>
     readStoredNumber("clyra-voice-volume", 0.96, 0.5, 1),
   );
+  const [voiceTestMode, setVoiceTestMode] = useState(() => {
+    try {
+      return window.localStorage.getItem("clyra-voice-test-mode") === "true";
+    } catch {
+      return false;
+    }
+  });
 
   const voiceChatHistory = useMemo(
     () =>
@@ -3282,9 +3335,7 @@ export default function App() {
     chatHistory: voiceChatHistory,
     systemPrompt: `${systemPrompt.trim() || CLYRA_CHAT_SYSTEM_PROMPT}\n\n${CLYRA_ENGLISH_LANGUAGE_CONTRACT}`,
     temperature,
-    speechRate: voiceRate,
-    speechPitch: voicePitch,
-    speechVolume: voiceVolume,
+    testMode: voiceTestMode,
     onTurn: handleVoiceTurn,
   });
 
@@ -3319,10 +3370,11 @@ export default function App() {
       window.localStorage.setItem("clyra-voice-rate", String(voiceRate));
       window.localStorage.setItem("clyra-voice-pitch", String(voicePitch));
       window.localStorage.setItem("clyra-voice-volume", String(voiceVolume));
+      window.localStorage.setItem("clyra-voice-test-mode", String(voiceTestMode));
     } catch (error) {
       console.error("Failed to save voice settings:", error);
     }
-  }, [voicePitch, voiceRate, voiceVolume]);
+  }, [voicePitch, voiceRate, voiceVolume, voiceTestMode]);
 
   useEffect(() => {
     try {
@@ -6454,24 +6506,7 @@ Please analyze the code you just wrote and fix this error.`;
           }}
         />
       )}
-      <VoiceCallOverlay
-        open={voiceCall.active}
-        status={voiceCall.status}
-        muted={voiceCall.muted}
-        micLevel={voiceCall.micLevel}
-        waveformSignalRef={voiceCall.waveformSignalRef}
-        partialTranscript={voiceCall.partialTranscript}
-        assistantText={voiceCall.assistantText}
-        error={voiceCall.error}
-        turns={voiceCall.turns}
-        orbColorTheme={orbColorTheme}
-        onToggleMute={voiceCall.toggleMute}
-        onEnd={voiceCall.endCall}
-        onRetry={() => void voiceCall.startCall()}
-        onSendText={voiceCall.sendTextMessage}
-        onUpdateUserMessage={voiceCall.updateUserMessage}
-        onResendUserMessage={voiceCall.resendUserMessage}
-      />
+      <VoiceCallScreen call={voiceCall} testMode={voiceTestMode} avatarColor={BLOUB_THEME_COLOR[orbColorTheme]} />
       <GoogleConnectSheet
         open={Boolean(googleConnectRequest)}
         busy={googleConnectBusy}
@@ -6498,11 +6533,23 @@ Please analyze the code you just wrote and fix this error.`;
               setIsAppLauncherOpen(false);
               setSelectedCommand(null);
               setShowCommandPalette(false);
+              if (tool === "shorts") {
+                setIsShortsWelcomeOpen(true);
+                return;
+              }
               handleWorkspaceTabChange(tool);
             }}
           />
         ) : null}
       </AnimatePresence>
+      <ShortsStudioWelcome
+        open={isShortsWelcomeOpen}
+        onClose={() => setIsShortsWelcomeOpen(false)}
+        onSelectMode={(mode: ShortsMode) => {
+          setIsShortsWelcomeOpen(false);
+          handleWorkspaceTabChange(mode);
+        }}
+      />
       <WorkspaceTaskView
         ref={taskViewRef}
         open={isTaskViewOpen}
@@ -6553,6 +6600,8 @@ Please analyze the code you just wrote and fix this error.`;
               <BootIntroOverlay
                 state={introState}
                 progress={introProgress}
+                avatarColor={BLOUB_THEME_COLOR[orbColorTheme]}
+                onAvatarArrive={() => setBloubLanded(true)}
               />
             ) : null}
           </AnimatePresence>,
@@ -7368,9 +7417,31 @@ Please analyze the code you just wrote and fix this error.`;
                             initial={false}
                             className="flex flex-col items-center text-center pt-24 pb-4"
                           >
-                            <span className="clyra-chat-welcome__identity mb-5 flex items-center gap-2">
-                              <span className="clyra-chat-welcome__orb" aria-hidden><AiOrb colorTheme={orbColorTheme} /></span>
-                              <span className="text-[15px] font-semibold text-slate-500">Clyra</span>
+                            <span
+                              id="clyra-bloub-home-target"
+                              className="clyra-chat-welcome__blob mb-5 flex items-center justify-center"
+                              aria-hidden
+                              style={{ opacity: bloubLanded ? 1 : 0, transition: "opacity 0.26s cubic-bezier(0.22,1,0.36,1)" }}
+                            >
+                              {/*
+                                This welcome block only renders once `isVibeWorkspace` (and
+                                the other workspace tabs) have already been ruled out a few
+                                branches up in this same ternary (see `isVibeWorkspace ? (
+                                <VibeCoderWorkspace /> ) : ...` above) — so Bloub only shows
+                                on the chat home screen and is hidden everywhere else.
+
+                                It stays invisible (see `bloubLanded`) until the boot overlay's
+                                flying avatar (`BloubBootAvatar`) actually lands here, so there
+                                is only ever one "waking up" performance, not two competing ones.
+                              */}
+                              <Bloub
+                                ref={homeBloubRef}
+                                state="idle"
+                                size={72}
+                                color={BLOUB_THEME_COLOR[orbColorTheme]}
+                                background="#ffffff"
+                                animateEntrance={false}
+                              />
                             </span>
                             <motion.div
                               initial={false}
@@ -7400,11 +7471,6 @@ Please analyze the code you just wrote and fix this error.`;
                               <YouTubeBrandIcon />
                               <Globe strokeWidth={1.7} />
                               <span>Web, YouTube, and your Google sources</span>
-                            </div>
-                            <div className="clyra-primary-chat-welcome__suggestions mt-4" aria-label="Suggested ways to begin">
-                              <button type="button" onClick={() => applyQuickPrompt("/search ")}><Globe /> Research the web</button>
-                              <button type="button" onClick={() => applyQuickPrompt("/youtube ")}><YouTubeBrandIcon /> Analyse YouTube</button>
-                              <button type="button" onClick={() => applyQuickPrompt("Search my Google Drive for ")}><GoogleProductIcon product="drive" /> Use Google Drive</button>
                             </div>
                           </motion.div>
                         </motion.div>
@@ -8624,6 +8690,8 @@ Please analyze the code you just wrote and fix this error.`;
         setVoicePitch={setVoicePitch}
         voiceVolume={voiceVolume}
         setVoiceVolume={setVoiceVolume}
+        voiceTestMode={voiceTestMode}
+        setVoiceTestMode={setVoiceTestMode}
         chats={chats}
         clearChats={() => {
           setChats([]);
