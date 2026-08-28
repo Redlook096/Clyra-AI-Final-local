@@ -25,9 +25,12 @@ contextBridge.exposeInMainWorld("clyraDesktop", {
     inspect: () => ipcRenderer.invoke("browser:inspect"),
     setCursor: (cursor) => ipcRenderer.invoke("browser:set-cursor", cursor),
     openDevTools: () => ipcRenderer.invoke("browser:devtools"),
+    snip: (tabId) => ipcRenderer.invoke("browser:snip", { tabId }),
+    cancelSnip: (tabId) => ipcRenderer.invoke("browser:cancel-snip", { tabId }),
     onState: (callback) => subscribe("browser:state", callback),
     onFocusAddress: (callback) => subscribe("browser:focus-address", callback),
     onFocusFind: (callback) => subscribe("browser:focus-find", callback),
+    onAskSelection: (callback) => subscribe("browser:ask-selection", callback),
   },
   surfaces: {
     update: (payload) => ipcRenderer.invoke("surface:update", payload),
@@ -81,4 +84,5 @@ contextBridge.exposeInMainWorld("clyraDesktop", {
     onData: (callback) => subscribe("terminal:data", callback),
     onExit: (callback) => subscribe("terminal:exit", callback),
   },
+  selectFolder: () => ipcRenderer.invoke("dialog:select-folder"),
 });

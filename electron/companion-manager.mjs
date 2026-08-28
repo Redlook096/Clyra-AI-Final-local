@@ -7,9 +7,10 @@ import { BrowserWindow, globalShortcut, screen } from "electron";
 import path from "node:path";
 import { pickGuideTarget, wantsGuide } from "./companion-guide.mjs";
 
-const WIDTH = 400;
-const HEIGHT = 620;
-const MARGIN = 18;
+const WIDTH = 420;
+const COLLAPSED_HEIGHT = 64;
+const EXPANDED_HEIGHT = 560;
+const MARGIN = 24;
 
 export { pickGuideTarget, wantsGuide };
 
@@ -28,6 +29,8 @@ export class CompanionManager {
   constructor(options) {
     this.options = options;
     this.window = null;
+    this.expanded = false;
+    this.lastBounds = null;
     this.shortcutRegistered = false;
     this.state = {
       phase: "idle",
@@ -57,20 +60,41 @@ export class CompanionManager {
     return Boolean(this.window && !this.window.isDestroyed() && this.window.webContents === webContents);
   }
 
+  /**
+   * Bottom-centre of whichever display currently has the cursor, not always
+   * the primary display — a companion that only ever appears on monitor 1
+   * is a real papercut on any multi-monitor setup.
+   */
+  #anchorDisplay() {
+    return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  }
+
+  /** Bounds for a given height, anchored bottom-centre with the bottom edge fixed. */
+  #boundsFor(height, display = this.#anchorDisplay()) {
+    const { width: dw, height: dh, x: dx, y: dy } = display.workArea;
+    return {
+      x: Math.round(dx + (dw - WIDTH) / 2),
+      y: Math.round(dy + dh - height - MARGIN),
+      width: WIDTH,
+      height,
+    };
+  }
+
   async ensureWindow() {
     if (this.window && !this.window.isDestroyed()) return this.window;
-    const display = screen.getPrimaryDisplay();
-    const { width, height, x, y } = display.workArea;
+    // Remember the last screen position across sessions (per spec: "remember
+    // its last position"). Falls back to the default bottom-centre anchor.
+    const restored = this.lastBounds;
+    const bounds = restored || this.#boundsFor(COLLAPSED_HEIGHT);
     this.window = new BrowserWindow({
-      width: WIDTH,
-      height: HEIGHT,
-      x: x + width - WIDTH - MARGIN,
-      y: y + height - HEIGHT - MARGIN,
+      ...bounds,
+      height: COLLAPSED_HEIGHT,
       frame: false,
       transparent: true,
       resizable: false,
       skipTaskbar: true,
       alwaysOnTop: true,
+      hasShadow: false,
       show: false,
       webPreferences: {
         preload: this.options.preloadPath,
@@ -79,7 +103,14 @@ export class CompanionManager {
         sandbox: true,
       },
     });
+    this.expanded = false;
     this.window.setAlwaysOnTop(true, "floating");
+    this.window.on("moved", () => {
+      if (!this.window || this.window.isDestroyed()) return;
+      // Only persist the collapsed position — an expanded window's bounds
+      // are a derived, temporary state, not somewhere the user dragged it.
+      if (!this.expanded) this.lastBounds = this.window.getBounds();
+    });
     this.window.on("closed", () => {
       this.window = null;
       void this.options.desktop.setCursor(null);
@@ -95,7 +126,31 @@ export class CompanionManager {
     this.#pushState({ phase: "open", status: "Ready — ask me anything about your screen" });
   }
 
+  /** Grow the collapsed bar into the full chat panel, keeping its bottom edge fixed. */
+  expand() {
+    if (!this.window || this.window.isDestroyed() || this.expanded) return { ok: true };
+    this.expanded = true;
+    const current = this.window.getBounds();
+    const display = screen.getDisplayNearestPoint({ x: current.x, y: current.y });
+    const next = this.#boundsFor(EXPANDED_HEIGHT, display);
+    // Keep the bar's own x/y (respecting a manual drag) — only grow upward.
+    this.window.setBounds({ x: current.x, y: current.y - (EXPANDED_HEIGHT - current.height), width: WIDTH, height: EXPANDED_HEIGHT }, true);
+    void display;
+    return { ok: true };
+  }
+
+  /** Shrink back to the compact bar, keeping its bottom edge fixed. */
+  collapse() {
+    if (!this.window || this.window.isDestroyed() || !this.expanded) return { ok: true };
+    this.expanded = false;
+    const current = this.window.getBounds();
+    this.window.setBounds({ x: current.x, y: current.y + (current.height - COLLAPSED_HEIGHT), width: WIDTH, height: COLLAPSED_HEIGHT }, true);
+    this.lastBounds = this.window.getBounds();
+    return { ok: true };
+  }
+
   hide() {
+    this.collapse();
     if (this.window && !this.window.isDestroyed()) this.window.hide();
     this.#pushState({ phase: "idle", controlling: false, guiding: false, listening: false, seeing: false });
     void this.options.desktop.setManualControl(false);

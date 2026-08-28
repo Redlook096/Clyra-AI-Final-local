@@ -1,7 +1,37 @@
-import { ArrowUp, Mic, Search } from "lucide-react";
+import { Plus, Search, Sparkles } from "lucide-react";
+import { motion, useReducedMotion } from "motion/react";
 import { useMemo, useState, type FormEvent } from "react";
 import { cn } from "../lib/utils";
-import { AiOrb } from "./AiOrb";
+import { Bloub } from "./bloub/Bloub";
+
+const ASK_CLYRA_USED_KEY = "clyra-browser-ask-clyra-used";
+
+export function hasUsedAskClyra(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(ASK_CLYRA_USED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function markAskClyraUsed() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(ASK_CLYRA_USED_KEY, "1");
+  } catch {
+    // ignore
+  }
+}
+
+function useLiveAccentColor(fallback = "#2563eb") {
+  const [color] = useState(() => {
+    if (typeof document === "undefined") return fallback;
+    const value = getComputedStyle(document.documentElement).getPropertyValue("--accent-600").trim();
+    return value || fallback;
+  });
+  return color;
+}
 
 export type BrowserStartHistoryEntry = {
   id: string;
@@ -39,54 +69,50 @@ function faviconFor(url: string) {
   return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`;
 }
 
+// A short, human label for a host — "Google" rather than "google.com" — so
+// favourites and history never show raw domains or truncated URLs.
+const KNOWN_SITE_LABELS: Record<string, string> = {
+  "google.com": "Google",
+  "youtube.com": "YouTube",
+  "apple.com": "Apple",
+  "github.com": "GitHub",
+  "mail.google.com": "Gmail",
+  "drive.google.com": "Drive",
+  "calendar.google.com": "Calendar",
+  "bing.com": "Bing",
+  "bestbuy.com": "Best Buy",
+  "ebay.com": "eBay",
+  "reddit.com": "Reddit",
+  "duckduckgo.com": "DuckDuckGo",
+  "amazon.com": "Amazon",
+};
+
 function siteLabel(url: string) {
   const host = hostnameOf(url);
-  const known: Record<string, string> = {
-    "google.com": "Google",
-    "youtube.com": "YouTube",
-    "apple.com": "Apple",
-    "github.com": "GitHub",
-    "mail.google.com": "Gmail",
-    "drive.google.com": "Drive",
-    "bing.com": "Bing",
-    "bestbuy.com": "Best Buy",
-    "ebay.com": "eBay",
-    "duckduckgo.com": "DuckDuckGo",
-  };
-  return known[host] || host.split(".")[0]?.replace(/^./, (value) => value.toUpperCase()) || "Site";
+  return (
+    KNOWN_SITE_LABELS[host]
+    || host.split(".")[0]?.replace(/^./, (value) => value.toUpperCase())
+    || "Site"
+  );
 }
 
+// Turns a raw history entry into a readable line — e.g. a Google search
+// results page becomes "Google Search — <query>" rather than the literal
+// "https://www.google.com/search?q=..." URL.
 function entryTitle(entry: BrowserStartHistoryEntry) {
   const raw = entry.title.trim();
   try {
     const parsed = new URL(entry.url);
-    if (hostnameOf(entry.url) === "google.com" && parsed.pathname === "/search") {
+    const host = hostnameOf(entry.url);
+    if (host === "google.com" && parsed.pathname === "/search") {
       const query = (parsed.searchParams.get("q") || "").trim();
-      return query && !/^[:\d./]+$/.test(query) ? query : "Google search";
+      return query ? `Google Search — ${query}` : "Google Search";
     }
   } catch {
-    // Keep the provider label below when malformed history is encountered.
+    // fall through to the title/label below
   }
   if (!raw || /^https?:\/\//i.test(raw)) return siteLabel(entry.url);
   return raw;
-}
-
-function relativeVisit(value: string) {
-  const time = new Date(value).getTime();
-  if (!Number.isFinite(time)) return "Recent";
-  const elapsed = Math.max(0, Date.now() - time);
-  const minutes = Math.round(elapsed / 60_000);
-  if (minutes < 2) return "Now";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.round(hours / 24);
-  return days === 1 ? "Yesterday" : `${days}d`;
-}
-
-function shouldAskClyra(value: string) {
-  if (/^https?:\/\//i.test(value) || /^[\w-]+\.[a-z]{2,}(\/.*)?$/i.test(value)) return false;
-  return /\b(compare|summari[sz]e|research|organise|organize|my open tabs|this page|find (?:the|my)|fill (?:this|the)|take control|do it for me)\b/i.test(value);
 }
 
 /** True when the tab should show the Clyra start page instead of a live site. */
@@ -116,15 +142,22 @@ const DEFAULT_SHORTCUTS = [
   { id: "gmail", label: "Gmail", url: "https://mail.google.com/" },
 ] as const;
 
+const EASE = [0.22, 1, 0.36, 1] as const;
+
 export function BrowserStartPage({
   history = [],
   bookmarks = [],
   onNavigate,
-  onAskAgent,
+  onAskAgent: _onAskAgent,
+  onOpenSettings: _onOpenSettings,
   className,
 }: BrowserStartPageProps) {
   const [query, setQuery] = useState("");
-  const [focused, setFocused] = useState(false);
+  const accentColor = useLiveAccentColor();
+  const reduceMotion = useReducedMotion();
+  const motionOff = reduceMotion ? { duration: 0 } : undefined;
+  const [showAskHint] = useState(() => !hasUsedAskClyra());
+  const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform || navigator.userAgent);
 
   const shortcuts = useMemo(() => {
     if (bookmarks.length) {
@@ -134,124 +167,193 @@ export function BrowserStartPage({
         url: bookmark.url,
       }));
     }
-    const hosts = new Map<string, { url: string; title: string; count: number }>();
+    const hosts = new Map<string, { url: string; count: number }>();
     for (const entry of history) {
       const host = hostnameOf(entry.url);
       if (!host || isBrowserStartPageUrl(entry.url)) continue;
       const current = hosts.get(host);
       if (current) current.count += 1;
-      else hosts.set(host, { url: entry.url, title: entry.title || host, count: 1 });
+      else hosts.set(host, { url: entry.url, count: 1 });
     }
     const fromHistory = [...hosts.entries()]
       .sort((a, b) => b[1].count - a[1].count)
       .slice(0, 6)
-      .map(([host, item]) => ({ id: host, label: siteLabel(item.url), url: item.url }));
+      .map(([, item]) => ({ id: hostnameOf(item.url), label: siteLabel(item.url), url: item.url }));
     return fromHistory.length >= 4 ? fromHistory : [...DEFAULT_SHORTCUTS];
   }, [bookmarks, history]);
 
   const recent = useMemo(() => {
     const seen = new Set<string>();
-    return history.filter((entry) => {
-      const host = hostnameOf(entry.url);
-      if (!host || isBrowserStartPageUrl(entry.url)) return false;
-      const key = entry.url.split("#")[0] || entry.url;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }).slice(0, 4);
+    return history
+      .filter((entry) => {
+        const host = hostnameOf(entry.url);
+        if (!host || isBrowserStartPageUrl(entry.url)) return false;
+        const key = entry.url.split("#")[0] || entry.url;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 5);
   }, [history]);
 
-  const submit = (event?: FormEvent) => {
+  const submitSearch = (event?: FormEvent) => {
     event?.preventDefault();
     const next = query.trim();
     if (!next) return;
-    if (shouldAskClyra(next)) onAskAgent(next);
-    else onNavigate(next);
+    onNavigate(next);
     setQuery("");
   };
 
-  const suggestions = useMemo(() => {
-    const first = recent[0];
-    return [
-      first ? `Continue exploring ${hostnameOf(first.url)}` : "Research something for me",
-      "Summarise my open tabs",
-    ];
-  }, [recent]);
-
   return (
-    <div className={cn("clyra-browser-start absolute inset-0 z-[15] overflow-auto bg-[#fafafa] text-[color:var(--clyra-text)]", className)}>
-      <div className="clyra-browser-start__light" aria-hidden />
-      <main className="relative mx-auto flex min-h-full w-full max-w-[760px] flex-col items-center justify-center px-7 py-16">
-        <AiOrb className="h-8 w-8" state={focused ? "thinking" : "idle"} />
-        <h1 className="mt-5 text-center text-[clamp(34px,4vw,42px)] font-semibold tracking-[-0.045em] text-[#202124]">
-          Where do you want to go?
-        </h1>
-        <p className="mt-2 text-center text-[15px] text-[#74777d]">Search, browse, or ask Clyra.</p>
+    <div
+      className={cn(
+        "clyra-browser-start absolute inset-0 z-[15] flex flex-col overflow-auto bg-white text-[#1d1d1f]",
+        className,
+      )}
+      style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif' }}
+    >
+      <div className="relative mx-auto flex w-full max-w-[700px] flex-1 flex-col items-center px-6 pb-16 pt-[13vh]">
+        <motion.div
+          initial={{ opacity: 0, y: 8, scale: 0.95 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={motionOff ?? { duration: 0.28, ease: EASE }}
+        >
+          <Bloub state="idle" size={50} color={accentColor} background="#ffffff" />
+        </motion.div>
 
-        <form onSubmit={submit} className={cn("clyra-browser-start__composer mt-8 flex h-[56px] w-full items-center gap-3 px-4", focused && "is-focused")}>
-          <AiOrb className="h-[22px] w-[22px] shrink-0" state={focused ? "thinking" : "idle"} />
-          <Search className="h-4 w-4 shrink-0 text-[#9a9ca2]" strokeWidth={1.65} />
+        <motion.h1
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={motionOff ?? { duration: 0.26, ease: EASE, delay: 0.04 }}
+          className="mt-4 text-[36px] font-semibold tracking-[-0.025em] text-[#1d1d1f]"
+        >
+          Clyra
+        </motion.h1>
+        <motion.p
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={motionOff ?? { duration: 0.26, ease: EASE, delay: 0.06 }}
+          className="mt-2 text-[15px] text-[#6e6e73]"
+        >
+          Search the web or browse with Clyra
+        </motion.p>
+
+        <motion.form
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={motionOff ?? { duration: 0.26, ease: EASE, delay: 0.1 }}
+          onSubmit={submitSearch}
+          className="clyra-browser-search mt-8 flex h-[54px] w-full max-w-[660px] items-center gap-2.5 rounded-[17px] border border-black/[0.08] bg-white px-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-[border-color,box-shadow] duration-200"
+        >
+          <Search className="h-[17px] w-[17px] shrink-0 text-[#9a9a9f]" strokeWidth={1.75} />
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            onFocus={() => setFocused(true)}
-            onBlur={() => setFocused(false)}
-            placeholder="Search the web or ask Clyra…"
-            className="min-w-0 flex-1 bg-transparent text-[14px] text-[#24262a] outline-none placeholder:text-[#999ca2]"
-            aria-label="Search the web or ask Clyra"
+            placeholder="Search or enter an address"
+            className="min-w-0 flex-1 bg-transparent text-[15px] text-[#1d1d1f] outline-none placeholder:text-[#9a9a9f]"
+            aria-label="Search or enter an address"
             autoFocus
           />
-          {query.trim() ? (
-            <button type="submit" className="grid h-7 w-7 place-items-center rounded-full bg-[#1f2022] text-white transition-transform duration-100 active:scale-[0.94]" aria-label="Go">
-              <ArrowUp className="h-3.5 w-3.5" strokeWidth={1.8} />
-            </button>
-          ) : (
-            <button type="button" className="grid h-7 w-7 place-items-center rounded-[9px] text-[#8b8e94] transition-colors duration-150 hover:bg-black/[0.04] hover:text-[#33363a]" aria-label="Voice search">
-              <Mic className="h-4 w-4" strokeWidth={1.65} />
-            </button>
-          )}
-        </form>
+          {isMac ? (
+            <span className="hidden shrink-0 items-center gap-0.5 rounded-[6px] border border-black/[0.08] px-1.5 py-0.5 text-[11px] font-medium text-[#9a9a9f] sm:flex">
+              ⌘L
+            </span>
+          ) : null}
+        </motion.form>
 
-        <div className="mt-7 flex flex-wrap justify-center gap-3">
+        {showAskHint ? (
+          <motion.p
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={motionOff ?? { duration: 0.24, ease: EASE, delay: 0.16 }}
+            className="mt-3.5 flex items-center gap-1.5 text-[13.5px] text-[#9a9a9f]"
+          >
+            <Sparkles className="h-3.5 w-3.5 shrink-0 text-[color:var(--clyra-accent)]" strokeWidth={1.75} />
+            Want Clyra to browse with you? Press{" "}
+            <span className="font-medium text-[#6e6e73]">Ask Clyra</span> in the top-right.
+          </motion.p>
+        ) : null}
+
+        <motion.div
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={motionOff ?? { duration: 0.28, ease: EASE, delay: 0.22 }}
+          className="mt-12 flex w-full max-w-[660px] flex-wrap justify-center gap-x-7 gap-y-4"
+        >
           {shortcuts.map((item) => (
-            <button key={item.id} type="button" onClick={() => onNavigate(item.url)} className="group flex w-[64px] flex-col items-center gap-2 text-center">
-              <span className="grid h-[52px] w-[52px] place-items-center overflow-hidden rounded-[15px] border border-black/[0.055] bg-white shadow-[0_1px_2px_rgba(0,0,0,.035)] transition-[transform,box-shadow,background-color] duration-150 ease-[cubic-bezier(.22,1,.36,1)] group-hover:-translate-y-px group-hover:bg-[#fefefe] group-hover:shadow-[0_5px_16px_rgba(0,0,0,.07)] group-active:translate-y-0">
-                <img src={faviconFor(item.url)} alt="" className="h-5 w-5" />
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onNavigate(item.url)}
+              className="clyra-browser-favourite group flex w-[62px] flex-col items-center gap-2 text-center"
+            >
+              <span className="grid h-[46px] w-[46px] place-items-center overflow-hidden rounded-[13px] border border-black/[0.07] bg-[#f7f7f8] transition-[transform,box-shadow,background-color,border-color] duration-[180ms]">
+                <img src={faviconFor(item.url)} alt="" className="h-[18px] w-[18px]" />
               </span>
-              <span className="max-w-full truncate text-[11.5px] text-[#686b70] group-hover:text-[#27292d]">{item.label}</span>
+              <span className="max-w-full truncate text-[11.5px] text-[#6e6e73] transition-colors duration-150 group-hover:text-[#1d1d1f]">
+                {item.label}
+              </span>
             </button>
           ))}
-        </div>
-
-        <section className="mt-11 w-full max-w-[640px]">
-          <p className="mb-2.5 text-[11px] font-medium text-[#8c8f95]">For you</p>
-          <div className="grid gap-1 sm:grid-cols-2">
-            {suggestions.map((suggestion) => (
-              <button key={suggestion} type="button" onClick={() => onAskAgent(suggestion)} className="flex h-10 items-center gap-2 rounded-[11px] px-2.5 text-left text-[12.5px] text-[#56595f] transition-colors duration-150 hover:bg-black/[0.032] hover:text-[#222428]">
-                <AiOrb className="h-[18px] w-[18px] shrink-0" />
-                <span className="truncate">{suggestion}</span>
-              </button>
-            ))}
-          </div>
-        </section>
+          <button
+            type="button"
+            aria-label="Add favourite"
+            className="clyra-browser-favourite group flex w-[62px] flex-col items-center gap-2 text-center"
+          >
+            <span className="grid h-[46px] w-[46px] place-items-center rounded-[13px] border border-dashed border-black/[0.1] text-[#9a9a9f] transition-[transform,box-shadow,background-color,border-color] duration-[180ms] group-hover:border-black/[0.16] group-hover:text-[#6e6e73]">
+              <Plus className="h-[15px] w-[15px]" strokeWidth={1.75} />
+            </span>
+            <span className="max-w-full truncate text-[11.5px] text-[#9a9a9f]">Add</span>
+          </button>
+        </motion.div>
 
         {recent.length ? (
-          <section className="mt-7 w-full max-w-[640px]">
-            <p className="mb-1.5 text-[11px] font-medium text-[#8c8f95]">Recent</p>
+          <motion.div
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={motionOff ?? { duration: 0.28, ease: EASE, delay: 0.28 }}
+            className="mt-14 w-full max-w-[660px]"
+          >
+            <p className="mb-1.5 px-2 text-[12px] font-semibold uppercase tracking-[0.06em] text-[#9a9a9f]">
+              Recent
+            </p>
             <ul>
               {recent.map((entry) => (
                 <li key={entry.id}>
-                  <button type="button" onClick={() => onNavigate(entry.url)} className="flex h-10 w-full items-center gap-2.5 rounded-[10px] px-2.5 text-left transition-colors duration-150 hover:bg-black/[0.032]">
+                  <button
+                    type="button"
+                    onClick={() => onNavigate(entry.url)}
+                    className="clyra-browser-recent-row flex h-[44px] w-full items-center gap-3 rounded-[11px] px-2 text-left transition-colors duration-150"
+                  >
                     <img src={faviconFor(entry.url)} alt="" className="h-4 w-4 shrink-0" />
-                    <span className="min-w-0 flex-1 truncate text-[12.5px] text-[#303237]">{entryTitle(entry)}</span>
-                    <span className="shrink-0 text-[11px] text-[#989ba0]">{hostnameOf(entry.url)} · {relativeVisit(entry.visitedAt)}</span>
+                    <span className="min-w-0 flex-1 truncate text-[13px] text-[#1d1d1f]">
+                      {entryTitle(entry)}
+                    </span>
+                    <span className="shrink-0 text-[12px] text-[#9a9a9f]">
+                      {hostnameOf(entry.url)}
+                    </span>
                   </button>
                 </li>
               ))}
             </ul>
-          </section>
+          </motion.div>
         ) : null}
-      </main>
+      </div>
+
+      <style>{`
+        .clyra-browser-search:hover { border-color: rgba(0,0,0,0.12); }
+        .clyra-browser-search:focus-within {
+          border-color: color-mix(in srgb, var(--clyra-accent) 55%, transparent);
+          box-shadow: 0 0 0 3px color-mix(in srgb, var(--clyra-accent) 12%, transparent);
+        }
+        .clyra-browser-favourite:hover span:first-child {
+          transform: translateY(-2px);
+          background: #ffffff;
+          border-color: rgba(0,0,0,0.1);
+          box-shadow: 0 6px 14px rgba(0,0,0,0.06);
+        }
+        .clyra-browser-recent-row:hover { background: #f7f7f8; }
+      `}</style>
     </div>
   );
 }

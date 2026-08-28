@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Globe2, Monitor, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Smartphone } from "lucide-react";
+import { FolderOpen, Globe2, Monitor, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Server } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { api } from "./api";
 import { shouldAskPlatform, useClyraCode, type AgentAction } from "./store";
@@ -11,7 +11,6 @@ import { summarizeAnswers, type QuestionAnswers, type QuestionSet } from "./Ques
 import { RightPanel, usePreview, type RightTab } from "./RightPanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { GitHubPopover } from "./GitHubPopover";
-import { ProjectExportPopover } from "./ProjectExportPopover";
 import { formatTokens } from "./format";
 
 const WIDTH_KEY = "clyra-code:conversation-width";
@@ -34,13 +33,32 @@ const WELCOME_SUBTITLES = [
   ["Make something ", "great", ", one change at a time."],
 ] as const;
 
+const quickStartTiles: Array<{ label: string; prompt: string; icon: typeof Globe2 }> = [
+  { label: "Website", prompt: "Build me a modern website", icon: Globe2 },
+  { label: "Desktop app", prompt: "Build me a desktop app", icon: Monitor },
+  { label: "API / Backend", prompt: "Build me a backend API service", icon: Server },
+];
+
+function formatRecentTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const minutes = Math.max(0, Math.floor((Date.now() - then) / 60_000));
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 const PLATFORM_QUESTIONS: QuestionSet = {
   questions: [
     {
       id: "platform",
       question: "Which platform should I target?",
       type: "single",
-      options: ["iOS app", "Webapp/Website", "Desktop app"],
+      options: ["Webapp/Website", "Desktop app"],
     },
   ],
 };
@@ -55,7 +73,6 @@ const DEMO_QUESTIONS: QuestionSet = {
 };
 
 function platformDirective(answer: string): string {
-  if (/ios|iphone/i.test(answer)) return "Build this as a native iOS app with SwiftUI.\n\n";
   if (/desktop/i.test(answer)) return "Build this as a desktop app (Electron), shipped as a responsive web app first so the live preview works.\n\n";
   return "Build this as a website / web app.\n\n";
 }
@@ -83,6 +100,7 @@ export default function ClyraCodeWorkspace() {
     actionList,
     running,
     effectiveDiffs,
+    plan,
     selectProject,
     selectThread,
     newChat,
@@ -135,6 +153,41 @@ export default function ClyraCodeWorkspace() {
     setSuggestion((current) => ({ text, nonce: (current?.nonce ?? 0) + 1 }));
   }, []);
 
+  /* -------------------- open existing project -------------------- */
+  const [importingProject, setImportingProject] = useState(false);
+  const [importPathDraft, setImportPathDraft] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+
+  const importProjectFromPath = useCallback(async (rawPath: string) => {
+    const trimmed = rawPath.trim();
+    if (!trimmed || importingProject) return;
+    setImportingProject(true);
+    setImportError(null);
+    try {
+      const project = await api.importProject(trimmed);
+      await loadProjects();
+      selectProject(project.id);
+      setImportPathDraft(null);
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : "Could not import that project.");
+    } finally {
+      setImportingProject(false);
+    }
+  }, [importingProject, loadProjects, selectProject]);
+
+  const requestOpenExistingProject = useCallback(async () => {
+    if (importingProject) return;
+    setImportError(null);
+    const pick = window.clyraDesktop?.selectFolder;
+    if (pick) {
+      const result = await pick().catch(() => null);
+      if (!result || result.canceled || !result.path) return;
+      await importProjectFromPath(result.path);
+      return;
+    }
+    setImportPathDraft("");
+  }, [importProjectFromPath, importingProject]);
+
   const refreshThreads = useCallback(async () => {
     const rows = await Promise.all(state.projects.map(async (project) => {
       const threads = await api.listSessions(project.id).catch(() => [] as ChatThread[]);
@@ -154,20 +207,15 @@ export default function ClyraCodeWorkspace() {
     if (state.activeProjectId === projectId) selectProject(null);
   }, [selectProject, state.activeProjectId]);
 
-  // Successful runs bump buildVersion so the browser preview reloads and the
-  // iOS preview reinstalls + relaunches the freshly built app.
+  // Successful runs bump buildVersion so the browser preview reloads.
   const [buildVersion, setBuildVersion] = useState(0);
-  const [relaunchSignal, setRelaunchSignal] = useState(0);
   const previousRunState = useRef(state.runState);
   useEffect(() => {
     if (previousRunState.current !== "complete" && state.runState === "complete") {
       setBuildVersion((v) => v + 1);
-      if (state.platform === "ios") {
-        setRelaunchSignal((v) => v + 1);
-      }
     }
     previousRunState.current = state.runState;
-  }, [state.runState, state.platform]);
+  }, [state.runState]);
 
   useEffect(() => {
     setAgentActivityCount(Object.values(state.actions).filter((action) => /^(command|build|check|test|preview)$/.test(action.kind)).length);
@@ -321,10 +369,14 @@ export default function ClyraCodeWorkspace() {
     await window.clyraDesktop?.preview?.launch({ url, title: activeProject?.name || "Clyra desktop project" });
   }, [activeProject?.name, preview.session?.url]);
   const hasConversation = state.log.length > 0;
+  const recentProjects = useMemo(
+    () => state.projects.filter((project) => project.id !== activeProject?.id).slice(0, 4),
+    [state.projects, activeProject?.id],
+  );
 
   // Keep preview content out of the width animation.  The pane itself glides
-  // in first; the browser or iPhone surface then fades up at its final width,
-  // so an iPhone is never visibly stretched while the sidebar opens.
+  // in first; the browser surface then fades up at its final width, so it is
+  // never visibly stretched while the sidebar opens.
   useEffect(() => {
     if (!rightPanelOpen) {
       setPreviewContentVisible(false);
@@ -532,12 +584,16 @@ export default function ClyraCodeWorkspace() {
         }}
         onDeleteChat={(projectId, sessionId) => void handleDeleteChat(projectId, sessionId)}
         onRemoveProject={hideProject}
+        onOpenProjectFolder={(projectId) => {
+          void api.openProjectFolder(projectId).catch((error) => {
+            console.error("Could not open the project folder:", error);
+          });
+        }}
       />
       {!sidebarCollapsed ? <div className="cc-resize-handle" aria-hidden /> : null}
 
       <div className="absolute right-1 top-1.5 z-40 flex h-[37px] items-center gap-0.5">
-        {activeProject && state.platform === "ios" ? <ProjectExportPopover projectId={activeProject.id} projectName={activeProject.name} ios /> : null}
-        {activeProject && state.platform !== "ios" ? <GitHubPopover projectId={activeProject.id} projectName={activeProject.name} /> : null}
+        {activeProject ? <GitHubPopover projectId={activeProject.id} projectName={activeProject.name} /> : null}
         {desktopProject && preview.session?.url && canLaunchElectronPreview ? (
           <button
             type="button"
@@ -609,7 +665,7 @@ export default function ClyraCodeWorkspace() {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0, y: -5, transition: { duration: 0.26, ease: [0.22, 1, 0.36, 1] } }}
                 transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-                className="flex min-h-0 flex-1 flex-col justify-center overflow-y-auto pb-[9vh]"
+                className="flex min-h-0 flex-1 flex-col justify-center overflow-y-auto pt-[9vh]"
               >
                 <div className="mx-auto flex w-full max-w-[620px] flex-col items-center px-5 text-center">
                   <ClyraMark size={40} />
@@ -642,11 +698,7 @@ export default function ClyraCodeWorkspace() {
                     />
                   </div>
                   <div className="mt-4 flex items-center justify-center gap-1.5">
-                    {([
-                      { label: "Website", prompt: "Build me a modern website", icon: Globe2 },
-                      { label: "Desktop app", prompt: "Build me a desktop app", icon: Monitor },
-                      { label: "iOS app", prompt: "Build me a native iOS app with SwiftUI", icon: Smartphone },
-                    ] as const).map((entry) => {
+                    {quickStartTiles.map((entry) => {
                       const Icon = entry.icon;
                       return (
                         <button
@@ -661,9 +713,70 @@ export default function ClyraCodeWorkspace() {
                       );
                     })}
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => void requestOpenExistingProject()}
+                    className="mt-2.5 inline-flex h-[28px] items-center gap-1.5 self-center rounded-full border border-black/[0.06] px-3 text-[11.5px] text-[#A4A6AA] transition-colors duration-150 hover:border-black/[0.11] hover:text-[#5F6368]"
+                  >
+                    <FolderOpen className="h-[12px] w-[12px]" strokeWidth={1.75} />
+                    Open existing project
+                  </button>
+                  {importPathDraft !== null ? (
+                    <div className="mt-3 flex w-full items-center gap-1.5">
+                      <input
+                        autoFocus
+                        value={importPathDraft}
+                        onChange={(event) => setImportPathDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") { event.preventDefault(); void importProjectFromPath(importPathDraft); }
+                          else if (event.key === "Escape") { event.preventDefault(); setImportPathDraft(null); setImportError(null); }
+                        }}
+                        placeholder="/path/to/your/project"
+                        className="h-[34px] flex-1 rounded-[9px] border border-black/[0.08] bg-white px-3 text-[12.5px] text-[#343539] outline-none placeholder:text-[#B7B9BD] focus:border-[#3977F6]/40"
+                      />
+                      <button
+                        type="button"
+                        disabled={importingProject || !importPathDraft.trim()}
+                        onClick={() => void importProjectFromPath(importPathDraft)}
+                        className="h-[34px] shrink-0 rounded-[9px] bg-[#3977F6] px-3 text-[12.5px] font-medium text-white transition-opacity disabled:opacity-40"
+                      >
+                        {importingProject ? "Opening…" : "Open"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setImportPathDraft(null); setImportError(null); }}
+                        className="h-[34px] shrink-0 rounded-[9px] px-2.5 text-[12.5px] text-[#9A9CA0] transition-colors hover:text-[#696B70]"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : null}
+                  {importError ? (
+                    <p className="mt-2 text-[11.5px] text-[#D64545]">{importError}</p>
+                  ) : null}
                   <p className="mt-[15px] text-[11px] tracking-[-0.005em] text-[#9A9CA0]">
-                    {activeProject?.name || "New project"} <span aria-hidden>·</span> Web, desktop and iOS supported
+                    {activeProject?.name || "New project"} <span aria-hidden>·</span> Web and desktop supported
                   </p>
+                  {recentProjects.length ? (
+                    <div className="mt-7 w-full text-left">
+                      <p className="mb-1.5 px-2.5 text-[10.5px] font-medium uppercase tracking-[0.06em] text-[#C1C3C7]">
+                        Recent
+                      </p>
+                      <div className="flex flex-col">
+                        {recentProjects.map((project) => (
+                          <button
+                            key={project.id}
+                            type="button"
+                            onClick={() => selectProject(project.id)}
+                            className="flex items-center justify-between gap-3 rounded-[9px] px-2.5 py-[7px] text-left transition-colors duration-150 hover:bg-black/[0.03]"
+                          >
+                            <span className="min-w-0 truncate text-[12.5px] text-[#4B4D51]">{project.name || project.id}</span>
+                            <span className="shrink-0 text-[11px] text-[#B7B9BD]">{formatRecentTime(project.updatedAt)}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </motion.div>
             ) : (
@@ -739,6 +852,7 @@ export default function ClyraCodeWorkspace() {
             <RightPanel
               state={state}
               actionList={actionList}
+              plan={plan}
               tab={rightTab}
               onTabChange={(tab) => { setRightTab(tab); if (tab !== "changes") setFocusFile(null); }}
               preview={preview}
@@ -746,8 +860,6 @@ export default function ClyraCodeWorkspace() {
               focusFile={focusFile}
               agentRunning={running}
               onOpenTerminal={() => setTerminalOpen(true)}
-              platform={state.platform}
-              relaunchSignal={relaunchSignal}
               onVisualEdit={(instruction) => void startRun(instruction)}
               onVisualSourceEdit={recordVisualEdit}
               onPreviewError={handlePreviewError}

@@ -47,6 +47,8 @@ type SettingsModalProps = {
   setUserBubbleColor: (value: string) => void;
   orbColorTheme: OrbColorTheme;
   setOrbColorTheme: (value: OrbColorTheme) => void;
+  accentColor: string;
+  setAccentColor: (value: string) => void;
   voiceRate: number;
   setVoiceRate: (value: number) => void;
   voicePitch: number;
@@ -75,6 +77,16 @@ const bubbleColors = [
   { label: "Mint", value: "#DCFCE7" },
   { label: "Lilac", value: "#F3E8FF" },
   { label: "Rose", value: "#FFE4E6" },
+];
+
+const accentColors = [
+  { label: "Blue", value: "#2563eb" },
+  { label: "Ocean", value: "#0284c7" },
+  { label: "Violet", value: "#7c3aed" },
+  { label: "Sunset", value: "#ea580c" },
+  { label: "Forest", value: "#16a34a" },
+  { label: "Rose", value: "#e11d48" },
+  { label: "Graphite", value: "#475569" },
 ];
 
 const voicePresets = [
@@ -237,6 +249,8 @@ export function SettingsModal({
   setUserBubbleColor,
   orbColorTheme,
   setOrbColorTheme,
+  accentColor,
+  setAccentColor,
   voiceRate,
   setVoiceRate,
   voicePitch,
@@ -448,6 +462,40 @@ export function SettingsModal({
                           ]}
                         />
                       </SettingRow>
+                      <div className="py-4">
+                        <p className="text-[14px] font-medium text-slate-800">Accent color</p>
+                        <p className="mt-0.5 text-[12px] text-slate-500">Colors the Bloub avatar and every accent element across the app.</p>
+                        <div className="mt-3 flex flex-wrap items-center gap-2.5">
+                          {accentColors.map((color) => (
+                            <button
+                              key={color.value}
+                              type="button"
+                              onClick={() => setAccentColor(color.value)}
+                              title={color.label}
+                              className={cn(
+                                "h-8 w-8 rounded-full border border-slate-200/80 transition-all duration-150 hover:scale-110",
+                                accentColor.toLowerCase() === color.value.toLowerCase() && "ring-2 ring-blue-600 ring-offset-2",
+                              )}
+                              style={{ backgroundColor: color.value }}
+                            />
+                          ))}
+                          <label
+                            className={cn(
+                              "relative grid h-8 w-8 cursor-pointer place-items-center overflow-hidden rounded-full border border-slate-200/80 transition-all hover:scale-110",
+                              !accentColors.some((c) => c.value.toLowerCase() === accentColor.toLowerCase()) && "ring-2 ring-blue-600 ring-offset-2",
+                            )}
+                            title="Custom color"
+                          >
+                            <span className="absolute inset-0 bg-[conic-gradient(#ef4444,#f59e0b,#22c55e,#06b6d4,#6366f1,#ef4444)]" />
+                            <input
+                              type="color"
+                              value={accentColor}
+                              onChange={(event) => setAccentColor(event.target.value)}
+                              className="absolute inset-[-10px] h-14 w-14 cursor-pointer opacity-0"
+                            />
+                          </label>
+                        </div>
+                      </div>
                       <SettingRow title="Text size" detail="Adjust chat reading size.">
                         <Segmented
                           value={fontSize}

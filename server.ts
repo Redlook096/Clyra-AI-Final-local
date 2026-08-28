@@ -66,9 +66,6 @@ import { registerClineRoutes } from "./lib/cline/cline-routes";
 import { registerOpenCodeRoutes } from "./lib/opencode/opencode-routes";
 import { registerVoiceRoutes, attachDictationWebSocket } from "./backend/voice";
 import { attachTerminalWebSocket } from "./lib/terminal-ws";
-import { detectMobileSwiftProject } from "./lib/mobile-platform-detect";
-import { registerIPhoneRoutes, attachIPhoneStreamUpgrades } from "./lib/iphone/iphone-routes";
-import { attachAppleHostServer } from "./lib/iphone/remote/AppleHostServer";
 import { gitService } from "./lib/github/git-service";
 import { registerPreviewProxy } from "./lib/preview-proxy";
 import { registerCreatorTtsRoutes, stopCreatorTtsWorker } from "./backend/creator-tts/service";
@@ -1422,7 +1419,6 @@ async function startServer() {
 
   registerClineRoutes(app);
   registerOpenCodeRoutes(app);
-  registerIPhoneRoutes(app);
   registerVoiceRoutes(app);
   registerCreatorTtsRoutes(app);
   // The live-preview proxy is required by both Vite development and the
@@ -3052,11 +3048,7 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
         const right = new Date(b!.updatedAt).getTime();
         return right - left;
       });
-    // Tag Apple/iOS projects so the UI can switch to the iPhone preview.
-    const tagged = projects.map((project) => ({
-      ...project,
-      platform: detectMobileSwiftProject(path.join(projectsRoot(), project!.id, "files")) ? "ios" : "web",
-    }));
+    const tagged = projects.map((project) => ({ ...project, platform: "web" as const }));
     res.json({ projects: tagged });
   });
 
@@ -3108,6 +3100,63 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
     res.json({ project: metadata });
   });
 
+  // Point Clyra at a folder that already exists on disk instead of scaffolding
+  // a new one. `files` is symlinked straight to the real path (not copied) so
+  // the agent edits the user's actual project in place.
+  app.post("/api/vibe/projects/import", async (req, res) => {
+    const rawPath = String(req.body?.path ?? "").trim();
+    if (!rawPath) {
+      res.status(400).json({ error: "A folder path is required." });
+      return;
+    }
+    let stat;
+    try {
+      stat = await fs.stat(rawPath);
+    } catch {
+      res.status(400).json({ error: "That folder could not be found." });
+      return;
+    }
+    if (!stat.isDirectory()) {
+      res.status(400).json({ error: "That path is not a folder." });
+      return;
+    }
+    const name = path.basename(rawPath) || "Imported project";
+    const id = `${slugifyProjectName(name)}-${crypto.randomBytes(3).toString("hex")}`;
+    const now = new Date().toISOString();
+    const root = projectRoot(id);
+    try {
+      await ensureDir(root);
+      await fs.symlink(rawPath, path.join(root, "files"), process.platform === "win32" ? "junction" : "dir");
+      await ensureDir(path.join(root, "checkpoints"));
+      await ensureDir(path.join(root, "logs"));
+      await ensureDir(path.join(root, "preview"));
+      await ensureDir(path.join(root, ".agent"));
+      const metadata: VibeProjectMetadata = {
+        id,
+        name,
+        prompt: `Imported existing project from ${rawPath}`,
+        mode: "plan",
+        status: "Ready",
+        createdAt: now,
+        updatedAt: now,
+        lastBuildStatus: "imported",
+        lastReviewStatus: "pending",
+      };
+      await writeJson(path.join(root, "metadata.json"), metadata);
+      await writeJson(path.join(root, ".agent", "state.json"), { status: "ready", taskCursor: 0, updatedAt: now });
+      await writeJson(path.join(root, ".agent", "memory.json"), {
+        projectId: id,
+        designPreference: "match this project's existing conventions",
+        packageManager: "npm",
+        lastDecision: `Imported real project files from ${rawPath}; no scaffold generated.`,
+        updatedAt: now,
+      });
+      res.json({ project: metadata });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Could not import that project." });
+    }
+  });
+
   app.get("/api/vibe/projects/:id", async (req, res) => {
     const metadata = await readProjectMetadata(req.params.id);
     if (!metadata) {
@@ -3123,6 +3172,31 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
       plan = "";
     }
     res.json({ project: metadata, files, plan });
+  });
+
+  // Reveal the project's real files directory in the host OS file manager.
+  // Runs on the same machine as the app (true in both the packaged Electron
+  // build and local dev), so this needs no Electron-specific IPC at all.
+  app.post("/api/vibe/projects/:id/open-folder", async (req, res) => {
+    const projectId = safeProjectId(String(req.params.id ?? ""));
+    const metadata = await readProjectMetadata(projectId);
+    if (!metadata) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    const target = path.join(projectRoot(projectId), "files");
+    try {
+      await fs.mkdir(target, { recursive: true });
+      const opener =
+        process.platform === "darwin" ? ["open", [target]] :
+        process.platform === "win32" ? ["explorer", [target]] :
+        ["xdg-open", [target]];
+      const [command, args] = opener as [string, string[]];
+      spawn(command, args, { detached: true, stdio: "ignore" }).unref();
+      res.json({ ok: true, path: target });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Could not open the project folder" });
+    }
   });
 
   // Source exports stream directly from the project root. This keeps the
@@ -4179,8 +4253,6 @@ Do NOT wrap the JSON in Markdown code blocks like \`\`\`json. Return JUST the ra
   const httpServer = createServer(app);
   attachDictationWebSocket(httpServer);
   attachTerminalWebSocket(httpServer);
-  attachIPhoneStreamUpgrades(httpServer);
-  attachAppleHostServer(httpServer);
 
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);

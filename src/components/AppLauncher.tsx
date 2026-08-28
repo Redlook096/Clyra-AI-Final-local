@@ -3,22 +3,23 @@ import {
   Clapperboard,
   Clock3,
   Code2,
+  Eye,
   Globe2,
-  Gamepad2,
   Grid2X2,
   MessageCircle,
 } from "lucide-react";
 import { AnimatePresence, motion, useMotionValue, useReducedMotion, useSpring } from "motion/react";
 import { type PointerEvent, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { Bloub, type BloubHandle } from "./bloub/Bloub";
 export type LauncherToolId =
   | "chat"
   | "vibe"
   | "clip"
   | "browser"
-  | "forge"
   | "would-rather"
   | "fake-text"
-  | "shorts";
+  | "shorts"
+  | "companion";
 
 interface AppLauncherProps {
   onOpenTool: (tool: LauncherToolId) => void;
@@ -38,8 +39,8 @@ const tools: LauncherTool[] = [
   { id: "vibe", label: "Vibe Coder", shortLabel: "Vibe Coder", detail: "Build and preview production applications", icon: Code2, accent: "#0f172a" },
   { id: "chat", label: "Chat", shortLabel: "Chat", detail: "Think, write and reason with Clyra", icon: MessageCircle, accent: "#1e293b" },
   { id: "shorts", label: "Shorts Studio", shortLabel: "Shorts", detail: "Fake texts, Would You Rather, and AI clips", icon: Clapperboard, accent: "#334155" },
-  { id: "forge", label: "Clyra Forge", shortLabel: "Forge", detail: "Build editable 2D and 3D games with semantic AI tools", icon: Gamepad2, accent: "#0f172a" },
   { id: "browser", label: "AI Browser", shortLabel: "Browser", detail: "Research and act across live websites", icon: Globe2, accent: "#1e293b" },
+  { id: "companion", label: "Screen Companion", shortLabel: "Companion", detail: "Ask about anything on your screen", icon: Eye, accent: "#1e293b" },
 ];
 
 const CENTER = 320;
@@ -107,6 +108,7 @@ export function AppLauncher({ onOpenTool, onClose }: AppLauncherProps) {
   const activeIndexRef = useRef(initialToolIndex);
   const pointerFrameRef = useRef<number | null>(null);
   const pendingPointerRef = useRef<{ x: number; y: number; width: number } | null>(null);
+  const blobRef = useRef<BloubHandle | null>(null);
   const activeTool = tools[activeIndex];
   const quickTool = tools.find((tool) => tool.id === (activeTool.id === "chat" ? "browser" : "chat"))!;
   const QuickToolIcon = quickTool.icon;
@@ -132,7 +134,16 @@ export function AppLauncher({ onOpenTool, onClose }: AppLauncherProps) {
     pointerFrameRef.current = requestAnimationFrame(() => {
       pointerFrameRef.current = null;
       const pointer = pendingPointerRef.current;
-      if (!pointer || Math.hypot(pointer.x, pointer.y) < pointer.width * 0.18) return;
+      if (!pointer) return;
+      // The blob's gaze tracks the raw cursor position every frame — accurate
+      // and immediate, not the damped window-relative `followPointer` model
+      // Bloub uses elsewhere (that has its own slower settle-in turn, which
+      // reads as laggy over a tight radial menu the pointer never leaves).
+      const halfW = Math.max(1, pointer.width / 2);
+      const nx = Math.max(-1, Math.min(1, pointer.x / halfW));
+      const ny = Math.max(-1, Math.min(1, pointer.y / halfW));
+      blobRef.current?.setGaze(nx * 22, -ny * 16, 0, 0);
+      if (Math.hypot(pointer.x, pointer.y) < pointer.width * 0.18) return;
       const angle = normalizeDegrees(Math.atan2(pointer.y, pointer.x) * 180 / Math.PI + 90);
       const index = Math.floor(normalizeDegrees(angle + SLICE_ANGLE / 2) / SLICE_ANGLE) % tools.length;
       // The wedge rotates to the live pointer angle while the selected icon
@@ -302,14 +313,16 @@ export function AppLauncher({ onOpenTool, onClose }: AppLauncherProps) {
 
             <div className="absolute left-1/2 top-1/2 z-20 flex h-[24%] w-[24%] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center">
               <motion.div
-                initial={{ opacity: 0, scale: 0.96 }}
+                initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.96, transition: motionOff ?? LAUNCHER_CLOSE }}
+                exit={{ opacity: 0, scale: 0.94, transition: motionOff ?? LAUNCHER_CLOSE }}
                 transition={motionOff ?? { ...LAUNCHER_OPEN, delay: 0.1 }}
-                className="flex flex-col items-center gap-1"
+                className="flex flex-col items-center gap-2"
               >
-                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Clyra</span>
-                <span className="text-[9px] font-medium text-slate-400">{activeTool.shortLabel}</span>
+                <Bloub ref={blobRef} state="idle" size={72} color="#3b82f6" background="#ffffff" animateEntrance />
+                <span className="max-w-[110px] truncate text-[11px] font-semibold text-slate-700">
+                  {activeTool.shortLabel}
+                </span>
               </motion.div>
             </div>
           </motion.div>

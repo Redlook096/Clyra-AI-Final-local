@@ -53,7 +53,28 @@ export type AgentAction = {
   /** For permission rows. */
   permissionId?: string;
   permissionResolved?: string;
+  /** Real todo-tool payload for "todo" kind actions — the session's current plan. */
+  todos?: Array<{ content: string; status: string; priority: string }>;
 };
+
+/** Normalize a todowrite tool's `{todos: [...]}` input, or a bare todos array, into typed rows. */
+function parseTodos(value: unknown): AgentAction["todos"] {
+  const list = Array.isArray(value) ? value : (value as { todos?: unknown } | undefined)?.todos;
+  if (!Array.isArray(list)) return undefined;
+  const todos = list
+    .map((item) => {
+      const row = item as Record<string, unknown>;
+      const content = typeof row?.content === "string" ? row.content : "";
+      if (!content) return null;
+      return {
+        content,
+        status: typeof row?.status === "string" ? row.status : "pending",
+        priority: typeof row?.priority === "string" ? row.priority : "medium",
+      };
+    })
+    .filter((row): row is { content: string; status: string; priority: string } => Boolean(row));
+  return todos.length ? todos : undefined;
+}
 
 export type UserAnswer = { question: string; answer: string };
 
@@ -68,7 +89,7 @@ export type RunState = "idle" | "starting" | "running" | "complete" | "failed" |
 
 export type ConnectionState = "idle" | "connected" | "reconnecting";
 
-export type ProjectPlatform = "web" | "ios";
+export type ProjectPlatform = "web";
 
 export type ClyraCodeState = {
   projects: VibeProject[];
@@ -86,7 +107,6 @@ export type ClyraCodeState = {
   model: string | null;
   tokens: { input: number; output: number } | null;
   restored: boolean;
-  /** Active platform mode; drives Browser vs iPhone preview. */
   platform: ProjectPlatform;
 };
 
@@ -118,13 +138,11 @@ function stripProjectPrefix(path: string) {
 }
 
 /** The platform the user is asking to build for, or null when it is ambiguous. */
-export type DetectedPlatform = "web" | "ios" | "desktop" | null;
+export type DetectedPlatform = "web" | "desktop" | null;
 
 const PLATFORM_STYLE_ONLY =
-  /\b(ios|iphone|ipad|apple|macos|mac|windows|android|material|swiftui|ios-style|apple-style)\s+(theme|style|styles|look|looks|feel|design|ui|ux|vibe|aesthetic|inspired|flavou?r|polish)\b/i;
+  /\b(apple|macos|mac|windows|android|material|apple-style)\s+(theme|style|styles|look|looks|feel|design|ui|ux|vibe|aesthetic|inspired|flavou?r|polish)\b/i;
 
-const IOS_RE =
-  /\b(ios|iphone|ipad|swiftui|swift\s+app|xcode|apple\s+watch|watchos|visionos|apple\s+tv|tvos|app\s+store)\b/i;
 const DESKTOP_RE =
   /\b(desktop\s+app|electron|tauri|menubar|menu\s+bar|system\s+tray|macos\s+app|windows\s+app|linux\s+app|native\s+desktop)\b/i;
 const WEB_RE =
@@ -132,24 +150,17 @@ const WEB_RE =
 
 /**
  * Detect the intended target platform from a prompt. Styling-only mentions of a
- * platform (e.g. "iOS theme") are ignored so they never select a platform. When
+ * platform (e.g. "Apple theme") are ignored so they never select a platform. When
  * the intent is unclear the result is null and the caller should ask the user.
  */
 export function detectPlatformIntent(prompt: string): DetectedPlatform {
   const stripped = prompt.toLowerCase().replace(PLATFORM_STYLE_ONLY, " ");
-  const ios = IOS_RE.test(stripped);
   const desktop = DESKTOP_RE.test(stripped);
   const web = WEB_RE.test(stripped);
-  const hits = [ios, desktop, web].filter(Boolean).length;
+  const hits = [desktop, web].filter(Boolean).length;
   if (hits === 0 || hits > 1) return null;
-  if (ios) return "ios";
   if (desktop) return "desktop";
   return "web";
-}
-
-/** Detect iOS intent from a prompt so iOS App Mode activates automatically. */
-export function detectIosIntent(prompt: string): boolean {
-  return detectPlatformIntent(prompt) === "ios";
 }
 
 /**
@@ -161,7 +172,7 @@ export function shouldAskPlatform(prompt: string): boolean {
   const t = prompt.toLowerCase().trim();
   if (!t || t.length > 160) return false;
   const build = /\b(build|make|create|start|generate|scaffold|develop|code|write|ship)\b/i.test(t);
-  const deliverable = /\b(app|application|website|webapp|web\s+app|site|ios|iphone|ipad|android|desktop|native|product|landing|page|project|game|tool|software|extension|store)\b/i.test(t);
+  const deliverable = /\b(app|application|website|webapp|web\s+app|site|android|desktop|native|product|landing|page|project|game|tool|software|extension|store)\b/i.test(t);
   return build && deliverable && detectPlatformIntent(t) === null;
 }
 
@@ -248,6 +259,15 @@ function buildEditSnippet(kind: ActionKind, input: Record<string, unknown>): str
     ? newText.split("\n").map((line) => `+${line}`).join("\n")
     : "";
   return [minus, plus].filter(Boolean).join("\n");
+}
+
+function safeJsonParse(value: unknown): unknown {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
 }
 
 function firstString(input: Record<string, unknown>, ...keys: string[]): string {
@@ -465,6 +485,12 @@ export function useClyraCode() {
             writtenContent !== undefined && status === "success"
               ? writtenContent.split("\n").length
               : undefined;
+          const todos =
+            kind === "todo"
+              ? parseTodos(input) ??
+                parseTodos(safeJsonParse(partState.output)) ??
+                undefined
+              : undefined;
           setState((prev) => {
             const existing = prev.actions[actionId];
             const isFileKind = /^(create|edit|delete|read)$/.test(kind);
@@ -483,6 +509,7 @@ export function useClyraCode() {
               deletions: counts?.deletions ?? existing?.deletions,
               patch: patchSource || existing?.patch,
               contentAfter: writtenContent ?? existing?.contentAfter,
+              todos: todos ?? existing?.todos,
               startedAt: existing?.startedAt ?? partState.time?.start ?? ts,
               endedAt:
                 status === "success" || status === "error"
@@ -664,16 +691,13 @@ export function useClyraCode() {
       closeStream();
       activeSessionRef.current = null;
       activeProjectRef.current = projectId;
-      setState((prev) => {
-        const project = prev.projects.find((p) => p.id === projectId);
-        return {
-          ...INITIAL,
-          projects: prev.projects,
-          model: prev.model,
-          activeProjectId: projectId,
-          platform: project?.platform === "ios" ? "ios" : "web",
-        };
-      });
+      setState((prev) => ({
+        ...INITIAL,
+        projects: prev.projects,
+        model: prev.model,
+        activeProjectId: projectId,
+        platform: "web",
+      }));
       try {
         if (projectId) localStorage.setItem(STORAGE_KEY, JSON.stringify({ projectId }));
         else localStorage.removeItem(STORAGE_KEY);
@@ -701,7 +725,6 @@ export function useClyraCode() {
         runEndedAt: null,
         error: null,
         restored: false,
-        platform: detectIosIntent(prompt) ? "ios" : prev.platform,
         log: [...prev.log, userEntry],
       }));
 
@@ -977,7 +1000,11 @@ export function useClyraCode() {
       }
       effectiveDiffs = [...byFile.values()];
     }
-    return { actionList, running, fileActions, commandActions, pendingPermissions, effectiveDiffs };
+    // The plan is whichever todo action reported last — todowrite replaces the
+    // whole list on every call, so the newest one is the session's real plan.
+    const todoActions = actionList.filter((a) => a.kind === "todo" && a.todos?.length);
+    const plan = todoActions.length ? todoActions[todoActions.length - 1].todos ?? null : null;
+    return { actionList, running, fileActions, commandActions, pendingPermissions, effectiveDiffs, plan };
   }, [state.log, state.actions, state.runState, state.diffs]);
 
   return {
@@ -1062,6 +1089,7 @@ function rebuildMessage(
         deletions: counts?.deletions,
         patch: patchSource || undefined,
         contentAfter: writtenContent,
+        todos: kind === "todo" ? parseTodos(input) ?? parseTodos(safeJsonParse(partState.output)) : undefined,
         startedAt: partState.time?.start ?? ts,
         endedAt: partState.time?.end,
       };

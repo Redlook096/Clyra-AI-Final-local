@@ -80,8 +80,8 @@ export const VoiceFluidField = forwardRef<VoiceFluidHandle, { className?: string
 
             const { width, height } = app.renderer;
             const energy = displayEnergyRef.current;
-            const baseline = height * (0.78 - energy * 0.16);
-            const amplitude = 10 + energy * 46;
+            const baseline = height * (0.6 - energy * 0.18);
+            const amplitude = 14 + energy * 54;
             const points = 40;
 
             blob.clear();
@@ -98,7 +98,7 @@ export const VoiceFluidField = forwardRef<VoiceFluidHandle, { className?: string
             for (let i = 1; i < path.length; i++) blob.lineTo(path[i][0], path[i][1]);
             blob.lineTo(width, height);
             blob.closePath();
-            blob.fill({ color: 0x5b9dff, alpha: 0.32 + energy * 0.28 });
+            blob.fill({ color: 0x5b9dff, alpha: 0.4 + energy * 0.32 });
           });
         })
         .catch(() => undefined);

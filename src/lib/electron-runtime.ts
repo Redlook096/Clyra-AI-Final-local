@@ -19,9 +19,23 @@ export type ClyraDesktopBridge = {
     inspect: () => Promise<any>;
     setCursor: (cursor: unknown) => Promise<any>;
     openDevTools: () => Promise<any>;
+    snip: (tabId?: string) => Promise<{
+      ok: boolean;
+      cancelled?: boolean;
+      image?: string;
+      text?: string;
+      rect?: { x: number; y: number; width: number; height: number };
+      pageUrl?: string;
+      pageTitle?: string;
+      error?: string;
+    }>;
+    cancelSnip: (tabId?: string) => Promise<{ ok: boolean }>;
     onState: (callback: (state: any) => void) => () => void;
     onFocusAddress: (callback: () => void) => () => void;
     onFocusFind: (callback: () => void) => () => void;
+    onAskSelection: (
+      callback: (payload: { text: string; tabId: string; pageUrl?: string; pageTitle?: string }) => void,
+    ) => () => void;
   };
   surfaces: {
     update: (payload: {
@@ -108,6 +122,7 @@ export type ClyraDesktopBridge = {
     onData: (callback: (payload: { tabId?: string; data?: string } | string) => void) => () => void;
     onExit: (callback: (payload: { tabId?: string; code?: number } | number) => void) => () => void;
   };
+  selectFolder?: () => Promise<{ canceled: boolean; path?: string }>;
 };
 
 declare global {

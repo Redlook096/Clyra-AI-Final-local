@@ -5,18 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Clyra Companion</title>
   <style>
-    /* OpenCluely-inspired glass overlay UI (MIT donor look) — no stealth. */
     :root {
-      --glass: linear-gradient(135deg, rgba(0, 0, 0, 0.42) 0%, rgba(20, 20, 20, 0.55) 100%);
-      --glass-deep: linear-gradient(135deg, rgba(0, 0, 0, 0.55) 0%, rgba(18, 18, 22, 0.7) 100%);
-      --line: rgba(255, 255, 255, 0.14);
-      --text: rgba(255, 255, 255, 0.94);
-      --muted: rgba(255, 255, 255, 0.58);
-      --green: #10b981;
-      --red: #ff4757;
-      --blue: #93c5fd;
-      --stop: #dd5e58;
-      --black: #171817;
+      --accent: #3b82f6;
+      --accent-deep: #2563eb;
+      --glass: linear-gradient(135deg, rgba(255,255,255,0.94) 0%, rgba(248,250,255,0.9) 100%);
+      --glass-dark: rgba(20, 21, 26, 0.86);
+      --line: rgba(15, 23, 42, 0.09);
+      --text: #16181d;
+      --muted: rgba(22, 24, 29, 0.52);
+      --danger: #dd5e58;
+      --success: #10b981;
     }
     * { box-sizing: border-box; }
     html, body {
@@ -29,383 +27,263 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       -webkit-font-smoothing: antialiased;
     }
-    .stack {
+    #root {
+      position: absolute;
+      inset: 0;
       display: flex;
       flex-direction: column;
-      height: 100%;
+      justify-content: flex-end;
       padding: 8px;
-      gap: 8px;
     }
-    .command-tab {
-      height: 34px;
-      background: var(--glass);
-      backdrop-filter: blur(22px);
-      border-radius: 10px;
-      border: 1px solid var(--line);
-      display: flex;
-      align-items: center;
-      gap: 2px;
-      padding: 0 8px;
-      -webkit-app-region: drag;
-      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
-      flex-shrink: 0;
-    }
-    .command-item {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      height: 26px;
-      padding: 0 9px;
-      border-radius: 7px;
-      color: var(--text);
-      font-size: 11px;
-      font-weight: 600;
-      cursor: pointer;
-      border: 0;
-      background: transparent;
-      -webkit-app-region: no-drag;
-      transition: background 0.18s ease, color 0.18s ease;
-    }
-    .command-item:hover { background: rgba(255, 255, 255, 0.1); }
-    .command-item.active { color: #86efac; background: rgba(16, 185, 129, 0.12); }
-    .command-item.recording { color: var(--red); }
-    .command-item span.kbd {
-      color: var(--muted);
-      font-size: 10px;
-      font-weight: 600;
-    }
-    .command-separator {
-      width: 1px;
-      height: 14px;
-      margin: 0 4px;
-      background: linear-gradient(to bottom, transparent, rgba(255,255,255,0.28), transparent);
-      flex-shrink: 0;
-    }
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      margin-left: auto;
-      margin-right: 4px;
-      flex-shrink: 0;
-    }
-    .status-dot.on {
-      background: var(--green);
-      box-shadow: 0 0 10px rgba(16, 185, 129, 0.55);
-    }
-    .status-dot.off {
-      background: var(--red);
-      box-shadow: 0 0 8px rgba(244, 67, 54, 0.45);
-    }
-    .chat-shell {
+    /* ---------------- Chat panel (collapses to nothing) ---------------- */
+    .chat-panel {
       flex: 1;
       min-height: 0;
       display: flex;
       flex-direction: column;
-      background: var(--glass-deep);
-      backdrop-filter: blur(26px);
-      border-radius: 12px;
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      box-shadow: 0 10px 36px rgba(0, 0, 0, 0.28);
+      background: var(--glass-dark);
+      backdrop-filter: blur(28px);
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.08);
+      box-shadow: 0 20px 48px rgba(0,0,0,0.32);
+      color: rgba(255,255,255,0.94);
       overflow: hidden;
+      opacity: 0;
+      transform: translateY(8px) scale(0.985);
+      pointer-events: none;
+      transition: opacity 0.22s cubic-bezier(.16,1,.3,1), transform 0.26s cubic-bezier(.16,1,.3,1);
+      margin-bottom: 8px;
+    }
+    #root[data-expanded="true"] .chat-panel {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
     }
     .chat-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 12px 14px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-      background: rgba(0, 0, 0, 0.18);
+      display: flex; align-items: center; gap: 5px;
+      padding: 9px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
       -webkit-app-region: drag;
       flex-shrink: 0;
     }
-    .chat-header .title {
-      font-size: 13px;
-      font-weight: 600;
-      letter-spacing: -0.01em;
-    }
-    .chat-header .sub {
-      font-size: 10.5px;
-      color: var(--muted);
-      margin-left: 2px;
-    }
-    .chat-header .spacer { flex: 1; }
-    .icon-button {
+    .chat-header .title { font-size: 12px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
+    .chat-header .sub { font-size: 10px; color: rgba(255,255,255,0.45); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; min-width: 0; max-width: 96px; }
+    .chat-header .spacer { flex: 1; min-width: 6px; }
+    .icon-btn {
       -webkit-app-region: no-drag;
-      height: 28px;
-      min-width: 28px;
-      padding: 0 8px;
-      border-radius: 7px;
-      border: 1px solid rgba(255, 255, 255, 0.16);
-      background: rgba(255, 255, 255, 0.1);
-      color: var(--text);
-      font-size: 11px;
-      font-weight: 600;
-      cursor: pointer;
+      height: 23px; min-width: 23px; padding: 0 6px;
+      border-radius: 7px; border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.85);
+      font-size: 10px; font-weight: 600; cursor: pointer;
+      white-space: nowrap; flex-shrink: 0;
     }
-    .icon-button:hover { background: rgba(255, 255, 255, 0.18); }
+    .icon-btn:hover { background: rgba(255,255,255,0.14); }
+    .icon-btn.recording { color: #93c5fd; border-color: rgba(147,197,253,0.4); background: rgba(59,130,246,0.18); }
     .log {
-      flex: 1;
-      min-height: 0;
-      overflow: auto;
-      padding: 14px 14px 8px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
+      flex: 1; min-height: 0; overflow: auto;
+      padding: 12px 13px 6px; display: flex; flex-direction: column; gap: 8px;
       -webkit-app-region: no-drag;
     }
     .message {
-      padding: 10px 12px;
-      border-radius: 8px;
-      border-left: 3px solid rgba(255, 255, 255, 0.18);
-      background: rgba(255, 255, 255, 0.07);
-      font-size: 12.5px;
-      line-height: 1.5;
-      word-break: break-word;
-      backdrop-filter: blur(4px);
+      padding: 9px 11px; border-radius: 9px; border-left: 2.5px solid rgba(255,255,255,0.16);
+      background: rgba(255,255,255,0.055); font-size: 12px; line-height: 1.5; word-break: break-word;
     }
-    .message.user {
-      background: rgba(255, 152, 0, 0.12);
-      border-left-color: rgba(255, 167, 38, 0.7);
+    .message.user { background: rgba(59,130,246,0.14); border-left-color: rgba(147,197,253,0.8); }
+    .message.assistant { background: rgba(255,255,255,0.06); border-left-color: rgba(255,255,255,0.22); }
+    .message.system { background: rgba(255,255,255,0.04); border-left-color: rgba(255,255,255,0.14); color: rgba(255,255,255,0.62); font-size: 11px; }
+    .message .vision { margin-top: 7px; padding-top: 7px; border-top: 1px solid rgba(255,255,255,0.08); color: rgba(255,255,255,0.5); font-size: 10.5px; line-height: 1.45; }
+    .thinking-row { display: flex; align-items: center; gap: 7px; color: rgba(255,255,255,0.55); font-size: 11.5px; }
+    .thinking-row .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: dotpulse 1s ease-in-out infinite; }
+    @keyframes dotpulse { 0%,100% { opacity: .35; transform: scale(1);} 50% { opacity: 1; transform: scale(1.2);} }
+    .controls-row {
+      display: none; margin: 0 11px 8px; height: 28px; border-radius: 8px; overflow: hidden;
+      background: rgba(0,0,0,0.5); font-size: 10.5px; font-weight: 500; -webkit-app-region: no-drag;
     }
-    .message.assistant {
-      background: rgba(96, 165, 250, 0.1);
-      border-left-color: rgba(147, 197, 253, 0.75);
-    }
-    .message.system {
-      background: rgba(33, 150, 243, 0.1);
-      border-left-color: rgba(100, 181, 246, 0.7);
-      color: rgba(255, 255, 255, 0.78);
-      font-size: 11.5px;
-    }
-    .message .vision {
-      margin-top: 8px;
-      padding-top: 8px;
-      border-top: 1px solid rgba(255, 255, 255, 0.08);
-      color: var(--muted);
-      font-size: 11px;
-      line-height: 1.45;
-    }
-    .thinking {
+    .controls-row.show { display: flex; align-items: stretch; }
+    .controls-row .pill { display: flex; align-items: center; gap: 7px; padding: 0 11px; flex: 1; min-width: 0; }
+    .controls-row .live { width: 5px; height: 5px; border-radius: 999px; background: var(--accent); animation: dotpulse 1.2s ease-in-out infinite; }
+    .controls-row button { border: 0; background: transparent; color: rgba(255,255,255,0.88); padding: 0 11px; cursor: pointer; font: inherit; font-size: 10px; font-weight: 600; border-left: 1px solid rgba(255,255,255,0.12); }
+    .controls-row button:hover { background: rgba(255,255,255,0.08); }
+    .controls-row button.stop { background: var(--danger); border-left: 0; }
+    .controls-row button.hidden { display: none; }
+
+    /* ---------------- Collapsed bar (always visible, always interactive) ---------------- */
+    .bar {
+      flex-shrink: 0;
+      height: 48px;
       display: flex;
       align-items: center;
       gap: 8px;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 500;
-    }
-    .thinking .dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: var(--blue);
-      animation: pulse 1s ease-in-out infinite;
-    }
-    @keyframes pulse {
-      0%, 100% { opacity: 0.35; transform: scale(1); }
-      50% { opacity: 1; transform: scale(1.15); }
-    }
-    .controls {
-      display: none;
-      margin: 0 12px 8px;
-      height: 30px;
-      border-radius: 8px;
-      overflow: hidden;
-      background: var(--black);
-      color: #fff;
-      font-size: 11px;
-      font-weight: 500;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-      -webkit-app-region: no-drag;
-    }
-    .controls.show { display: flex; align-items: stretch; }
-    .controls .pill {
-      display: flex; align-items: center; gap: 8px; padding: 0 12px; flex: 1; min-width: 0;
-    }
-    .controls .live {
-      width: 6px; height: 6px; border-radius: 999px; background: rgba(255,255,255,.85);
-      animation: pulse 1.2s ease-in-out infinite;
-    }
-    .controls button {
-      border: 0; background: transparent; color: rgba(255,255,255,.92); padding: 0 12px; cursor: pointer;
-      font: inherit; font-size: 10.5px; font-weight: 600;
-      border-left: 1px solid rgba(255,255,255,.15);
-    }
-    .controls button:hover { background: rgba(255,255,255,.1); }
-    .controls button.stop { background: var(--stop); border-left: 0; }
-    .controls button.hidden { display: none; }
-    .composer {
-      border-top: 1px solid rgba(255, 255, 255, 0.08);
-      padding: 10px 12px 12px;
-      display: grid;
-      gap: 8px;
-      -webkit-app-region: no-drag;
-      background: rgba(0, 0, 0, 0.16);
-    }
-    .mode-row { display: flex; gap: 6px; }
-    .chip {
-      height: 26px;
-      border-radius: 7px;
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      background: rgba(255, 255, 255, 0.06);
-      color: rgba(255, 255, 255, 0.88);
-      padding: 0 10px;
-      font-size: 11px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .chip:hover { background: rgba(255, 255, 255, 0.12); }
-    .chip.active {
-      border-color: rgba(147, 197, 253, 0.45);
-      color: #dbeafe;
-      background: rgba(59, 130, 246, 0.18);
-    }
-    .row { display: flex; gap: 6px; align-items: stretch; }
-    textarea {
-      flex: 1;
-      resize: none;
-      border: 0;
-      outline: none;
-      background: transparent;
-      color: var(--text);
-      font: inherit;
-      font-size: 13px;
-      line-height: 1.4;
-      min-height: 40px;
-      max-height: 90px;
-    }
-    textarea::placeholder { color: rgba(255, 255, 255, 0.38); }
-    .actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-    .send {
-      margin-left: auto;
-      width: 30px;
-      height: 30px;
+      padding: 0 8px 0 6px;
+      background: var(--glass);
+      backdrop-filter: blur(24px);
       border-radius: 999px;
-      border: 0;
-      background: #3b82f6;
-      color: #fff;
-      cursor: pointer;
-      display: grid;
-      place-items: center;
-      font-weight: 700;
+      border: 1px solid var(--line);
+      box-shadow: 0 10px 30px rgba(15,23,42,0.16), 0 1px 2px rgba(15,23,42,0.05);
+      -webkit-app-region: drag;
     }
-    .send:disabled { background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.35); }
-    .hint { font-size: 10px; color: var(--muted); }
-    .wave {
-      display: none; align-items: center; justify-content: center; gap: 2px; height: 28px; flex: 1;
+    .bar-input {
+      flex: 1; min-width: 0; border: 0; outline: none; background: transparent;
+      font: inherit; font-size: 13px; color: var(--text); -webkit-app-region: no-drag;
     }
-    .wave.on { display: flex; }
-    .wave span {
-      width: 2.5px; border-radius: 999px; min-height: 4px;
-      background: linear-gradient(180deg, #93c5fd 0%, #3b82f6 60%, #1d4ed8 100%);
-      box-shadow: 0 0 6px rgba(59, 130, 246, 0.25);
+    .bar-input::placeholder { color: rgba(22,24,29,0.4); }
+    .context-chip {
+      display: none;
+      align-items: center; gap: 4px; height: 24px; padding: 0 9px; border-radius: 999px;
+      background: rgba(59,130,246,0.1); color: var(--accent-deep); font-size: 10.5px; font-weight: 600;
+      white-space: nowrap; -webkit-app-region: no-drag; flex-shrink: 0;
     }
+    .context-chip.show { display: inline-flex; }
+    .bar-btn {
+      -webkit-app-region: no-drag;
+      width: 32px; height: 32px; border-radius: 50%; border: 0; cursor: pointer;
+      display: grid; place-items: center; flex-shrink: 0;
+      background: transparent; color: rgba(22,24,29,0.62);
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+    .bar-btn:hover { background: rgba(15,23,42,0.06); color: var(--text); }
+    .bar-btn.recording { color: var(--danger); background: rgba(221,94,88,0.1); }
+    .bar-btn svg { width: 16px; height: 16px; }
+
+    /* ---------------- Blob (Clyra identity anchor) ---------------- */
+    .blob-wrap {
+      width: 34px; height: 34px; flex-shrink: 0; display: grid; place-items: center;
+      position: relative; -webkit-app-region: no-drag; cursor: pointer;
+    }
+    .blob-ring {
+      position: absolute; inset: -5px; border-radius: 50%;
+      border: 1.5px solid var(--accent); opacity: 0; transform: scale(0.8);
+      transition: opacity 0.25s ease, transform 0.25s ease;
+    }
+    .blob-wrap[data-state="controlling"] .blob-ring { opacity: 0.55; transform: scale(1); animation: ringpulse 1.6s ease-in-out infinite; }
+    @keyframes ringpulse { 0%,100% { opacity: 0.35; } 50% { opacity: 0.7; } }
+    .blob-body {
+      width: 28px; height: 28px; border-radius: 50%;
+      background: radial-gradient(circle at 32% 28%, #6ea3ff 0%, var(--accent) 55%, var(--accent-deep) 100%);
+      box-shadow: 0 2px 8px rgba(37,99,235,0.35);
+      display: flex; align-items: center; justify-content: center; gap: 3.5px;
+      transform: scale(1);
+      transition: transform 0.18s cubic-bezier(.16,1,.3,1), filter 0.25s ease;
+      will-change: transform;
+    }
+    .blob-eye {
+      width: 3.4px; border-radius: 999px; background: #fff;
+      transition: height 0.12s ease, transform 0.12s ease;
+    }
+    .blob-eye.l { height: 9px; }
+    .blob-eye.r { height: 6px; margin-top: 3px; }
+    /* idle: slow breathing */
+    .blob-wrap[data-state="idle"] .blob-body { animation: breathe 3.2s ease-in-out infinite; }
+    @keyframes breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.045); } }
+    /* listening: scale driven by --amp (real mic amplitude, set from JS) */
+    .blob-wrap[data-state="listening"] .blob-body { transform: scale(calc(1 + var(--amp, 0) * 0.16)); }
+    .blob-wrap[data-state="listening"] .blob-eye.l { height: calc(9px - var(--amp, 0) * 2px); }
+    /* capturing: one quick controlled ripple */
+    .blob-wrap[data-state="capturing"] .blob-ring { opacity: 0.7; transform: scale(1.35); transition: opacity 0.5s ease, transform 0.5s cubic-bezier(.16,1,.3,1); }
+    .blob-wrap[data-state="capturing"] .blob-body { animation: capture-pulse 0.5s cubic-bezier(.16,1,.3,1); }
+    @keyframes capture-pulse { 0% { transform: scale(1); } 40% { transform: scale(0.9); } 100% { transform: scale(1); } }
+    /* thinking: tighter, concentrated pulse */
+    .blob-wrap[data-state="thinking"] .blob-body { animation: think 0.9s ease-in-out infinite; }
+    @keyframes think { 0%,100% { transform: scale(0.96); } 50% { transform: scale(1.06); } }
+    /* speaking: procedural rhythmic pulse (Web Speech API exposes no real amplitude) */
+    .blob-wrap[data-state="speaking"] .blob-body { transform: scale(calc(1 + var(--amp, 0) * 0.12)); }
+    /* controlling: restrained, distinct — ring only, body calm */
+    .blob-wrap[data-state="controlling"] .blob-body { filter: saturate(1.15); }
+    /* error: one subtle desaturated tint, no flashing */
+    .blob-wrap[data-state="error"] .blob-body { animation: err 0.5s ease; }
+    @keyframes err { 0%,100% { filter: none; } 50% { filter: grayscale(0.4) saturate(0.7); } }
   </style>
 </head>
 <body>
-  <div class="stack">
-    <div class="command-tab" id="commandTab">
-      <button class="command-item" id="seeTab" title="See screen">📷 <span class="kbd">See</span></button>
-      <div class="command-separator"></div>
-      <button class="command-item" id="micTab" title="Talk">🎙</button>
-      <div class="command-separator"></div>
-      <button class="command-item" id="guideTab" title="Guide pointer">◎ <span class="kbd">Guide</span></button>
-      <div class="command-separator"></div>
-      <button class="command-item" id="controlTab" title="Take control">◉ <span class="kbd">Control</span></button>
-      <div class="command-separator"></div>
-      <button class="command-item" id="hideTab" title="Hide">✕</button>
-      <div class="status-dot off" id="statusDot"></div>
-    </div>
-
-    <div class="chat-shell">
+  <div id="root" data-expanded="false">
+    <div class="chat-panel" id="chatPanel">
       <div class="chat-header">
         <span class="title">Clyra Companion</span>
         <span class="sub" id="status">Ready · RapidOCR</span>
         <span class="spacer"></span>
-        <button class="icon-button" id="clearBtn" type="button">Clear</button>
+        <button class="icon-btn" id="guideBtn" type="button" title="Point at something without clicking">Guide</button>
+        <button class="icon-btn" id="controlBtn" type="button" title="Let Clyra drive the cursor">Control</button>
+        <button class="icon-btn" id="clearBtn" type="button">Clear</button>
+        <button class="icon-btn" id="collapseBtn" type="button">⌄</button>
       </div>
       <div class="log" id="log">
-        <div class="message system">OpenCluely-style overlay · Clyra vision + voice. I can point at your screen in Guide mode, or take control when you ask. No stealth.</div>
-        <div class="message assistant">Ask me what you’re looking at, or say “show me where to click” and I’ll point without taking over.</div>
+        <div class="message system">Ask about your screen, a selected region, or speak — no stealth, always visible when I'm capturing.</div>
       </div>
-      <div class="controls" id="controls">
+      <div class="controls-row" id="controls">
         <div class="pill"><span class="live"></span><span id="controlLabel">AI has control</span></div>
         <button type="button" id="takeControl">Take control</button>
         <button type="button" id="resumeAi" class="hidden">Resume AI</button>
         <button type="button" class="stop" id="stopControl">Stop</button>
       </div>
-      <div class="composer">
-        <div class="mode-row">
-          <button class="chip active" id="modeTalk" type="button">Talk</button>
-          <button class="chip" id="modeMessage" type="button">Message</button>
+    </div>
+
+    <div class="bar" id="bar">
+      <div class="blob-wrap" id="blobWrap" data-state="idle" title="Clyra">
+        <div class="blob-ring"></div>
+        <div class="blob-body">
+          <div class="blob-eye l"></div>
+          <div class="blob-eye r"></div>
         </div>
-        <div class="row">
-          <div class="wave" id="wave" aria-hidden="true"></div>
-          <textarea id="input" rows="2" placeholder="Ask about your screen, or how to click something…"></textarea>
-        </div>
-        <div class="actions">
-          <button class="chip" id="see" type="button">See screen</button>
-          <button class="chip" id="guide" type="button">Guide me</button>
-          <button class="chip" id="control" type="button">Take over</button>
-          <button class="send" id="send" disabled title="Send">↑</button>
-        </div>
-        <div class="hint">⌘⇧J · RapidOCR · Guide points without clicking · Control drives the OS cursor</div>
       </div>
+      <input class="bar-input" id="input" placeholder="Ask Clyra…" autocomplete="off" spellcheck="false" />
+      <span class="context-chip" id="contextChip"></span>
+      <button class="bar-btn" id="micBtn" title="Talk">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M19 11a7 7 0 0 1-14 0M12 19v3"/></svg>
+      </button>
+      <button class="bar-btn" id="seeBtn" title="See screen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
     </div>
   </div>
   <script>
     const api = window.clyraCompanion;
+    const root = document.getElementById("root");
+    const chatPanel = document.getElementById("chatPanel");
     const log = document.getElementById("log");
     const input = document.getElementById("input");
-    const send = document.getElementById("send");
     const status = document.getElementById("status");
-    const statusDot = document.getElementById("statusDot");
     const controls = document.getElementById("controls");
     const controlLabel = document.getElementById("controlLabel");
     const takeControl = document.getElementById("takeControl");
     const resumeAi = document.getElementById("resumeAi");
     const stopControl = document.getElementById("stopControl");
+    const blobWrap = document.getElementById("blobWrap");
+    const contextChip = document.getElementById("contextChip");
+    let expanded = false;
     let listening = false;
     let recognition = null;
     let voiceOn = true;
-    let messageMode = false;
-    const wave = document.getElementById("wave");
-    for (let i = 0; i < 27; i++) {
-      const span = document.createElement("span");
-      span.style.height = "4px";
-      span.style.opacity = "0.35";
-      wave.appendChild(span);
-    }
-    let wavePhase = 0;
-    let waveLevel = 0;
-    let waveRaf = 0;
-    function renderWave(level) {
-      waveLevel = Math.max(waveLevel * 0.82, Math.min(1, level || 0));
-      const bars = wave.querySelectorAll("span");
-      const middle = (bars.length - 1) / 2;
-      bars.forEach((bar, index) => {
-        const distance = Math.abs(index - middle) / middle;
-        const bell = Math.exp(-(distance * distance) * 2.4);
-        const waves = (Math.sin(wavePhase + index * 0.38) + Math.sin(wavePhase * 0.6 - index * 0.2) + 2) / 4;
-        const height = 3 + bell * (2 + waves * (6 + waveLevel * 20));
-        bar.style.height = `${height.toFixed(1)}px`;
-        bar.style.opacity = String(0.28 + bell * (0.3 + waveLevel * 0.4));
-      });
-    }
-    function tickWave(now) {
-      wavePhase += 0.14;
-      renderWave(listening ? 0.25 + Math.sin(now / 180) * 0.15 : 0);
-      waveRaf = requestAnimationFrame(tickWave);
+    let idleTimer = 0;
+
+    function setBlob(state) {
+      blobWrap.setAttribute("data-state", state);
     }
 
-    function speak(text) {
-      if (messageMode || !voiceOn || !text || !("speechSynthesis" in window)) return;
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(String(text).replace(/[`*_#]/g, " ").slice(0, 600));
-      utter.rate = 1.02;
-      utter.pitch = 1.0;
-      utter.volume = 0.96;
-      window.speechSynthesis.speak(utter);
+    function setContext(label) {
+      if (!label) { contextChip.classList.remove("show"); contextChip.textContent = ""; return; }
+      contextChip.textContent = label;
+      contextChip.classList.add("show");
+    }
+
+    function expand() {
+      if (expanded) return;
+      expanded = true;
+      root.setAttribute("data-expanded", "true");
+      void api?.expand?.();
+    }
+
+    function scheduleCollapse(delay = 6000) {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        if (!input.value.trim() && !listening && blobWrap.dataset.state === "idle") collapse();
+      }, delay);
+    }
+
+    function collapse() {
+      if (!expanded) return;
+      expanded = false;
+      root.setAttribute("data-expanded", "false");
+      void api?.collapse?.();
     }
 
     function append(role, text, extra) {
@@ -424,148 +302,207 @@
     }
 
     function setThinking(on) {
-      document.querySelectorAll(".thinking").forEach((n) => n.remove());
+      document.querySelectorAll(".thinking-row").forEach((n) => n.remove());
       if (!on) return;
       const el = document.createElement("div");
-      el.className = "thinking";
+      el.className = "thinking-row";
       el.innerHTML = '<span class="dot"></span><span>Thinking</span>';
       log.appendChild(el);
       log.scrollTop = log.scrollHeight;
     }
 
-    function syncSend() {
-      send.disabled = !input.value.trim();
+    // Procedural amplitude for the speaking pulse — the Web Speech API gives
+    // no real audio-amplitude access, so this is an honest, lively rhythm
+    // rather than a claim of reading actual TTS output.
+    let speakRaf = 0;
+    function speak(text) {
+      if (!voiceOn || !text || !("speechSynthesis" in window)) return;
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(String(text).replace(/[`*_#]/g, " ").slice(0, 600));
+      utter.rate = 1.02;
+      utter.pitch = 1.0;
+      utter.volume = 0.96;
+      utter.onstart = () => {
+        setBlob("speaking");
+        const start = performance.now();
+        const tick = (now) => {
+          const t = (now - start) / 1000;
+          const amp = 0.35 + Math.abs(Math.sin(t * 6.5)) * 0.5;
+          blobWrap.style.setProperty("--amp", amp.toFixed(3));
+          speakRaf = requestAnimationFrame(tick);
+        };
+        speakRaf = requestAnimationFrame(tick);
+      };
+      const stopSpeakAnim = () => {
+        if (speakRaf) cancelAnimationFrame(speakRaf);
+        blobWrap.style.setProperty("--amp", "0");
+        setBlob("idle");
+        scheduleCollapse();
+      };
+      utter.onend = stopSpeakAnim;
+      utter.onerror = stopSpeakAnim;
+      window.speechSynthesis.speak(utter);
     }
-
-    function setLive(on) {
-      statusDot.classList.toggle("on", on);
-      statusDot.classList.toggle("off", !on);
-    }
-
-    input.addEventListener("input", syncSend);
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        void submit();
-      }
-    });
 
     async function submit() {
       const text = input.value.trim();
       if (!text) return;
       input.value = "";
-      syncSend();
+      expand();
       append("user", text);
       setThinking(true);
-      setLive(true);
-      const result = await api.ask(text);
-      setThinking(false);
-      setLive(false);
-      if (result?.reply?.text) append("assistant", result.reply.text, result.vision?.summary);
-      else append("assistant", result?.error || "I could not answer that.");
-      if (result?.pointer) {
-        status.textContent = `Pointing · ${result.pointer.label || "Look here"}`;
+      setBlob("capturing");
+      status.textContent = "Looking at your screen…";
+      window.setTimeout(() => setBlob("thinking"), 480);
+      try {
+        const result = await api.ask(text);
+        setThinking(false);
+        if (result?.reply?.text) {
+          setContext(result?.vision?.summary ? "Screen" : "");
+          append("assistant", result.reply.text, result.vision?.summary);
+        } else {
+          setBlob("error");
+          append("assistant", result?.error || "I could not answer that.");
+          window.setTimeout(() => setBlob("idle"), 550);
+        }
+        if (result?.pointer) status.textContent = `Pointing · ${result.pointer.label || "Look here"}`;
+        else status.textContent = "Ready · RapidOCR";
+        if (!("speechSynthesis" in window) || !voiceOn) scheduleCollapse();
+      } catch (error) {
+        setThinking(false);
+        setBlob("error");
+        append("assistant", error?.message || "Something went wrong.");
+        window.setTimeout(() => setBlob("idle"), 550);
+        scheduleCollapse();
       }
     }
 
     async function seeScreen() {
-      setThinking(true);
-      setLive(true);
+      expand();
+      setBlob("capturing");
+      status.textContent = "Looking at your screen…";
       const result = await api.seeScreen(input.value.trim() || "What is on my screen?");
-      setThinking(false);
-      setLive(false);
+      setBlob("idle");
+      setContext(result?.vision ? "Screen" : "");
       append("assistant", result?.vision?.summary || result?.error || "Captured your screen.", result?.vision?.ocr?.text?.slice?.(0, 240));
+      status.textContent = "Ready · RapidOCR";
+      scheduleCollapse();
     }
 
+    input.addEventListener("focus", () => { expand(); if (idleTimer) clearTimeout(idleTimer); });
+    input.addEventListener("blur", () => scheduleCollapse(4000));
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); void submit(); }
+      else if (event.key === "Escape") { input.blur(); collapse(); }
+    });
+    document.getElementById("seeBtn").addEventListener("click", () => void seeScreen());
+
     async function startGuide() {
+      expand();
       const result = await api.startGuide(input.value.trim() || "Show me where to click");
       controls.classList.add("show");
       controlLabel.textContent = "Guiding — pointing only";
       takeControl.classList.add("hidden");
       resumeAi.classList.add("hidden");
-      document.getElementById("guideTab").classList.add("active");
-      document.getElementById("controlTab").classList.remove("active");
-      document.getElementById("guide").classList.add("active");
-      document.getElementById("control").classList.remove("active");
-      if (result?.pointer) {
-        append("assistant", `I'm pointing at “${result.pointer.label}” — look for the blue ring. I haven't clicked anything.`);
-      } else {
-        append("system", result?.error || "Guide mode on — ask me what to highlight.");
-      }
+      document.getElementById("guideBtn").classList.add("recording");
+      document.getElementById("controlBtn").classList.remove("recording");
+      if (result?.pointer) append("assistant", `I'm pointing at "${result.pointer.label}" — look for the blue ring. I haven't clicked anything.`);
+      else append("system", result?.error || "Guide mode on — ask me what to highlight.");
     }
 
     async function startControl() {
+      expand();
       await api.startControl();
       controls.classList.add("show");
       controlLabel.textContent = "AI has control";
       takeControl.classList.remove("hidden");
       resumeAi.classList.add("hidden");
-      document.getElementById("controlTab").classList.add("active");
-      document.getElementById("guideTab").classList.remove("active");
-      document.getElementById("control").classList.add("active");
-      document.getElementById("guide").classList.remove("active");
+      document.getElementById("controlBtn").classList.add("recording");
+      document.getElementById("guideBtn").classList.remove("recording");
+      setBlob("controlling");
       append("system", "Desktop control armed. I can move and click — Take control anytime to pause me.");
     }
 
-    send.addEventListener("click", () => void submit());
-    document.getElementById("hideTab").addEventListener("click", () => api.hide());
+    document.getElementById("guideBtn").addEventListener("click", () => void startGuide());
+    document.getElementById("controlBtn").addEventListener("click", () => void startControl());
     document.getElementById("clearBtn").addEventListener("click", () => {
       log.innerHTML = "";
       append("system", "Cleared. Capture is still available.");
     });
-    document.getElementById("see").addEventListener("click", () => void seeScreen());
-    document.getElementById("seeTab").addEventListener("click", () => void seeScreen());
-    document.getElementById("guide").addEventListener("click", () => void startGuide());
-    document.getElementById("guideTab").addEventListener("click", () => void startGuide());
-    document.getElementById("control").addEventListener("click", () => void startControl());
-    document.getElementById("controlTab").addEventListener("click", () => void startControl());
+    document.getElementById("collapseBtn").addEventListener("click", () => { input.blur(); collapse(); });
+    blobWrap.addEventListener("click", () => { input.focus(); expand(); });
 
     takeControl.addEventListener("click", async () => {
       await api.takeManualControl();
       takeControl.classList.add("hidden");
       resumeAi.classList.remove("hidden");
       controlLabel.textContent = "You have control";
+      setBlob("idle");
     });
     resumeAi.addEventListener("click", async () => {
       await api.resumeAi();
       resumeAi.classList.add("hidden");
       takeControl.classList.remove("hidden");
       controlLabel.textContent = "AI has control";
+      setBlob("controlling");
     });
     stopControl.addEventListener("click", async () => {
       await api.stopControl();
       controls.classList.remove("show");
-      document.getElementById("control").classList.remove("active");
-      document.getElementById("guide").classList.remove("active");
-      document.getElementById("controlTab").classList.remove("active");
-      document.getElementById("guideTab").classList.remove("active");
+      document.getElementById("guideBtn").classList.remove("recording");
+      document.getElementById("controlBtn").classList.remove("recording");
+      setBlob("idle");
       status.textContent = "Ready · RapidOCR";
     });
 
-    document.getElementById("modeTalk").addEventListener("click", () => {
-      messageMode = false;
-      document.getElementById("modeTalk").classList.add("active");
-      document.getElementById("modeMessage").classList.remove("active");
-    });
-    document.getElementById("modeMessage").addEventListener("click", () => {
-      messageMode = true;
-      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
-      document.getElementById("modeMessage").classList.add("active");
-      document.getElementById("modeTalk").classList.remove("active");
-    });
-
+    // ---- Real microphone amplitude (push-to-talk via SpeechRecognition) ----
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    document.getElementById("micTab").addEventListener("click", () => {
+    let audioCtx = null;
+    let analyser = null;
+    let micStream = null;
+    let meterRaf = 0;
+
+    async function startMeter() {
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioCtx.createMediaStreamSource(micStream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        const tick = () => {
+          analyser.getByteFrequencyData(data);
+          let sum = 0;
+          for (let i = 0; i < data.length; i++) sum += data[i];
+          const level = Math.min(1, (sum / data.length / 255) * 3.2);
+          blobWrap.style.setProperty("--amp", level.toFixed(3));
+          meterRaf = requestAnimationFrame(tick);
+        };
+        meterRaf = requestAnimationFrame(tick);
+      } catch {
+        // No mic permission — mic button still works for STT via the browser's
+        // own permission prompt; the amplitude meter is a visual bonus only.
+      }
+    }
+
+    function stopMeter() {
+      if (meterRaf) cancelAnimationFrame(meterRaf);
+      meterRaf = 0;
+      blobWrap.style.setProperty("--amp", "0");
+      if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
+      if (audioCtx) { void audioCtx.close(); audioCtx = null; }
+      analyser = null;
+    }
+
+    document.getElementById("micBtn").addEventListener("click", () => {
       if (!SpeechRecognition) {
         append("system", "Speech recognition is not available in this overlay — type instead.");
         return;
       }
+      expand();
       if (listening) {
         recognition?.stop();
-        listening = false;
-        document.getElementById("micTab").classList.remove("recording");
-        wave.classList.remove("on");
-        if (waveRaf) cancelAnimationFrame(waveRaf);
         return;
       }
       recognition = new SpeechRecognition();
@@ -574,27 +511,21 @@
       recognition.lang = "en-US";
       recognition.onresult = (event) => {
         let text = "";
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          text += event.results[i][0].transcript;
-        }
+        for (let i = event.resultIndex; i < event.results.length; i++) text += event.results[i][0].transcript;
         input.value = text.trim();
-        syncSend();
-        waveLevel = 0.7;
-        if (event.results[event.results.length - 1].isFinal) {
-          void submit();
-        }
+        if (event.results[event.results.length - 1].isFinal) void submit();
       };
       recognition.onend = () => {
         listening = false;
-        document.getElementById("micTab").classList.remove("recording");
-        wave.classList.remove("on");
-        if (waveRaf) cancelAnimationFrame(waveRaf);
+        document.getElementById("micBtn").classList.remove("recording");
+        setBlob("idle");
+        stopMeter();
       };
       recognition.start();
       listening = true;
-      document.getElementById("micTab").classList.add("recording");
-      wave.classList.add("on");
-      waveRaf = requestAnimationFrame(tickWave);
+      document.getElementById("micBtn").classList.add("recording");
+      setBlob("listening");
+      void startMeter();
     });
 
     if (api?.onState) {
@@ -602,11 +533,10 @@
         if (state?.status) status.textContent = state.status;
         if (state?.controlling || state?.guiding) {
           controls.classList.add("show");
-          controlLabel.textContent = state.manualControl
-            ? "You have control"
-            : state.guiding
-              ? "Guiding — pointing only"
-              : "AI has control";
+          controlLabel.textContent = state.manualControl ? "You have control" : state.guiding ? "Guiding — pointing only" : "AI has control";
+          if (!state.manualControl) setBlob("controlling");
+        } else {
+          controls.classList.remove("show");
         }
       });
     }

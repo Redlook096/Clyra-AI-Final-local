@@ -350,13 +350,12 @@ export class OpenCodeRuntimeManager {
     const files = [...new Set([...sessionFiles, ...await this.filesTouchedSince(project.projectPath, ledger.createdAt)])];
     const implementationFiles = files.filter((file) => !/(^|\/)(PLAN\.md|AGENTS\.md|\.gitignore|package-lock\.json)$/i.test(file));
     const toolText = JSON.stringify(messages.map((message) => message.parts ?? []));
-    const hasValidation = /(?:npm\s+run\s+(?:build|test|typecheck|lint)|\b(?:typecheck|vitest|jest|eslint|swiftc|swift\s+build|xcodebuild)\b)/i.test(toolText);
-    const isSwiftTask = /\b(?:swift|swiftui|ios|iphone)\b/i.test(ledger.objective);
-    const minimumFiles = isSwiftTask ? 2 : 3;
+    const hasValidation = /(?:npm\s+run\s+(?:build|test|typecheck|lint)|\b(?:typecheck|vitest|jest|eslint)\b)/i.test(toolText);
+    const minimumFiles = 3;
     if (implementationFiles.length < minimumFiles) {
       return `only ${implementationFiles.length} implementation file${implementationFiles.length === 1 ? "" : "s"} changed (need a real multi-file implementation)`;
     }
-    if (!hasValidation) return "no real build, typecheck, test, or Swift validation command ran";
+    if (!hasValidation) return "no real build, typecheck, test, or lint command ran";
     return undefined;
   }
 
@@ -399,10 +398,8 @@ export class OpenCodeRuntimeManager {
       // Upgrade projects still carrying the original seeded guidance so the
       // multi-file architecture rules apply to existing workspaces too.
       const existing = await fs.promises.readFile(agentsPath, "utf8");
-      const isPortableIosGuide = /Cross-platform SwiftUI Source Mode|swiftui-design-skill\/SKILL\.md/.test(existing);
       if (/Be an adaptive expert coding agent\.|Clyra Code Agent/.test(existing)
-        && !/PLAN\.md as durable task memory/.test(existing)
-        && !isPortableIosGuide) {
+        && !/PLAN\.md as durable task memory/.test(existing)) {
         await fs.promises.writeFile(agentsPath, DEFAULT_AGENTS_MD, "utf8").catch(() => undefined);
       }
     } catch {
@@ -568,10 +565,6 @@ export class OpenCodeRuntimeManager {
         const hasTool = parts.some((part) => part.type === "tool" || Boolean(part.tool));
         const hasErrorPart = parts.some((part) => part.type === "error" || (part.state as { status?: string } | undefined)?.status === "error");
         if (assistant && !hasText && !hasTool && !hasErrorPart) {
-          // A generated Swift starter is only a baseline, never evidence that
-          // the user's requested product is complete. Continue the same
-          // OpenCode session through its bounded recovery path instead of
-          // presenting an early, generic iOS scaffold as a finished app.
           // Deep tool-use runs can occasionally end with a blank continuation
           // from the model even though OpenCode has already completed real
           // reads/commands. Resume that *same* session before declaring the

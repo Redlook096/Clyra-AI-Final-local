@@ -8,7 +8,10 @@ loader.config({ monaco });
 import {
   ArrowLeft,
   ArrowRight,
+  CheckCircle2,
   ChevronDown,
+  Circle,
+  CircleDot,
   ExternalLink,
   FileCode2,
   FilePlus2,
@@ -17,6 +20,7 @@ import {
   FolderOpen,
   FolderPlus,
   Globe,
+  ListChecks,
   Maximize2,
   Minimize2,
   RotateCw,
@@ -25,12 +29,12 @@ import {
   Pencil,
   Trash2,
   X,
+  XCircle,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { ShiningText } from "../ShiningText";
 import { api, type FileDiff, type PreviewLogLine, type PreviewSession } from "./api";
-import { IPhonePanel } from "./IPhonePanel";
-import type { AgentAction, ClyraCodeState, ProjectPlatform } from "./store";
+import type { AgentAction, ClyraCodeState } from "./store";
 import { DiffCounters } from "./AnimatedCounter";
 import { computeLineDiff, linesFromPatch } from "./diff";
 import { stripFilePrefix } from "./format";
@@ -42,7 +46,7 @@ import {
   type InspectPayload,
 } from "./VisualInspector";
 
-export type RightTab = "browser" | "changes" | "files";
+export type RightTab = "browser" | "plan" | "changes" | "files";
 
 /* ------------------------------------------------------------------ */
 /* Preview controller                                                  */
@@ -367,6 +371,68 @@ function BrowserView({
 /* Changes view                                                        */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* Plan view — the session's real, current todowrite() checklist       */
+/* ------------------------------------------------------------------ */
+
+type PlanTodo = { content: string; status: string; priority: string };
+
+function PlanView({ plan }: { plan: PlanTodo[] | null }) {
+  if (!plan || !plan.length) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center">
+        <p className="text-[12.5px] text-[color:var(--text-tertiary)]">No plan for this task yet.</p>
+      </div>
+    );
+  }
+  const done = plan.filter((todo) => todo.status === "completed").length;
+  return (
+    <div className="cc-scroll min-h-0 flex-1 overflow-y-auto py-2">
+      <div className="flex items-center justify-between px-3.5 py-1.5">
+        <span className="text-[11px] font-medium text-[color:var(--text-tertiary)]">
+          {done} of {plan.length} done
+        </span>
+      </div>
+      <ul className="flex flex-col">
+        {plan.map((todo, index) => (
+          <li
+            key={index}
+            className={cn(
+              "flex items-start gap-2 px-3.5 py-[7px] text-[12px] leading-[1.45]",
+              todo.status === "in_progress" && "bg-[color:var(--surface-selected)]",
+            )}
+          >
+            <span className="mt-[1.5px] shrink-0">
+              {todo.status === "completed" ? (
+                <CheckCircle2 className="h-[14px] w-[14px] text-[#2E9A5A]" strokeWidth={1.8} />
+              ) : todo.status === "in_progress" ? (
+                <CircleDot className="h-[14px] w-[14px] text-[#3977F6]" strokeWidth={1.8} />
+              ) : todo.status === "cancelled" ? (
+                <XCircle className="h-[14px] w-[14px] text-[color:var(--text-disabled)]" strokeWidth={1.8} />
+              ) : (
+                <Circle className="h-[14px] w-[14px] text-[color:var(--text-disabled)]" strokeWidth={1.8} />
+              )}
+            </span>
+            <span
+              className={cn(
+                "min-w-0 flex-1",
+                todo.status === "completed" && "text-[color:var(--text-tertiary)] line-through decoration-[color:var(--text-disabled)]",
+                todo.status === "cancelled" && "text-[color:var(--text-disabled)] line-through",
+                (todo.status === "pending" || todo.status === "in_progress") && "text-[color:var(--text-secondary)]",
+              )}
+            >
+              {todo.content}
+            </span>
+            {todo.priority === "high" && todo.status !== "completed" && todo.status !== "cancelled" ? (
+              <span className="mt-[2px] h-[5px] w-[5px] shrink-0 rounded-full bg-[#D9822B]" title="High priority" />
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function ChangesView({
   diffs,
   actions,
@@ -483,7 +549,7 @@ type FileTreeNode = { name: string; path: string; children: Map<string, FileTree
 
 function fileLanguage(filePath: string) {
   const extension = filePath.split(".").pop()?.toLowerCase();
-  return ({ ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", json: "json", css: "css", html: "html", md: "markdown", swift: "swift", yml: "yaml", yaml: "yaml", sh: "shell", zsh: "shell" } as Record<string, string>)[extension ?? ""] ?? "plaintext";
+  return ({ ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", json: "json", css: "css", html: "html", md: "markdown", yml: "yaml", yaml: "yaml", sh: "shell", zsh: "shell" } as Record<string, string>)[extension ?? ""] ?? "plaintext";
 }
 
 function buildFileTree(files: WorkspaceFile[]) {
@@ -523,8 +589,6 @@ function FilesView({ projectId, diffs }: { projectId: string | null; diffs: File
   const refresh = useCallback(async () => {
     if (!projectId) { setFiles([]); return; }
     const data = await api.getProject(projectId).catch(() => null);
-    // Agent checkpoints stay hidden, but the bundled Apple/SwiftUI skills are
-    // real project guidance and belong in the workbench alongside source.
     const next = (data?.files ?? []).filter((file) => shouldShowWorkspaceFile(file.path));
     setFiles(next);
     setSelected((current) => current && next.some((file) => file.path === current) ? current : next[0]?.path ?? null);
@@ -597,9 +661,9 @@ function FilesView({ projectId, diffs }: { projectId: string | null; diffs: File
   }, [projectId, refresh]);
 
   const handleEditorMount: OnMount = useCallback((editor, monaco) => {
-    // Monaco normally shows an empty widget for a brand-new Swift file until
-    // it has language-server data. Keep one quiet, useful local completion
-    // source available so the editor behaves like an IDE from the first key.
+    // Monaco normally shows an empty widget for a brand-new file until it has
+    // language-server data. Keep one quiet, useful local completion source
+    // available so the editor behaves like an IDE from the first key.
     const disposable = monaco.languages.registerCompletionItemProvider("*", {
       triggerCharacters: [".", "<", "@", "(", "[", "\"", "'"],
       provideCompletionItems: (model, position) => {
@@ -611,10 +675,8 @@ function FilesView({ projectId, diffs }: { projectId: string | null; diffs: File
           endColumn: range.endColumn,
         };
         const language = model.getLanguageId();
-        const entries = language === "swift"
-          ? ["VStack", "HStack", "ZStack", "Text", "Button", "TextField", "NavigationStack", "@State", ".padding()", ".frame(width:height:)"]
-          : language === "typescript" || language === "javascript"
-            ? ["const", "function", "return", "useState", "useEffect", "async", "export default"]
+        const entries = language === "typescript" || language === "javascript"
+          ? ["const", "function", "return", "useState", "useEffect", "async", "export default"]
           : ["class", "function", "return", "import", "const", "let", "if", "for"];
         return { suggestions: entries.map((label) => ({
           label,
@@ -692,6 +754,7 @@ const EXTRA_TABS: Array<{ id: RightTab; label: string }> = [
 export function RightPanel({
   state,
   actionList,
+  plan,
   tab,
   onTabChange,
   preview,
@@ -699,8 +762,6 @@ export function RightPanel({
   focusFile,
   agentRunning = false,
   onOpenTerminal,
-  platform = "web",
-  relaunchSignal = 0,
   onVisualEdit,
   onVisualSourceEdit,
   onPreviewError,
@@ -709,6 +770,7 @@ export function RightPanel({
 }: {
   state: ClyraCodeState;
   actionList: AgentAction[];
+  plan: PlanTodo[] | null;
   tab: RightTab;
   onTabChange: (tab: RightTab) => void;
   preview: ReturnType<typeof usePreview>;
@@ -716,9 +778,6 @@ export function RightPanel({
   focusFile: string | null;
   agentRunning?: boolean;
   onOpenTerminal?: () => void;
-  platform?: ProjectPlatform;
-  /** Bumps after successful agent runs; iOS preview reinstalls + relaunches. */
-  relaunchSignal?: number;
   /** Route visual changes that need the agent back into the coding stream. */
   onVisualEdit?: (instruction: string) => void;
   /** Record a successful direct source edit in Clyra's existing change stream. */
@@ -817,13 +876,6 @@ export function RightPanel({
     if (liveStyles && selection.elId) {
       postToFrame({ type: "clyra:style", elId: selection.elId, styles: liveStyles });
     }
-    if (property === "__ios__") {
-      onVisualEdit?.(
-        `In the iOS app, change the selected view ${selection.label ?? ""} at (${selection.x ?? 0}, ${selection.y ?? 0}) on ${selection.device ?? "the simulator"}: ${value}. Locate the real SwiftUI view in the project and update its source.`,
-      );
-      setSelection(null);
-      return;
-    }
     const rule =
       selection.rules?.find((r) => r.file && r.declarations[property] !== undefined) ??
       selection.rules?.find((r) => r.file);
@@ -873,13 +925,14 @@ export function RightPanel({
         .catch(() => agentFallback("layout", `${Math.round(rect.width)}×${Math.round(rect.height)}`));
     } else if (onVisualEdit) {
       onVisualEdit(
-        `Move or resize the selected preview element so it is ${Math.round(rect.width)}×${Math.round(rect.height)} at (${Math.round(rect.left)}, ${Math.round(rect.top)}).\n${selectionContextDetail(selection)}\nUse its existing responsive layout system (flex, grid, CSS layout, or SwiftUI modifiers) rather than introducing absolute positioning unless it is already positioned freely.`,
+        `Move or resize the selected preview element so it is ${Math.round(rect.width)}×${Math.round(rect.height)} at (${Math.round(rect.left)}, ${Math.round(rect.top)}).\n${selectionContextDetail(selection)}\nUse its existing responsive layout system (flex, grid, or CSS layout) rather than introducing absolute positioning unless it is already positioned freely.`,
       );
     }
   };
 
   const tabs: Array<{ id: RightTab; label: string; icon?: typeof Globe }> = [
-    { id: "browser", label: platform === "ios" ? "iPhone Preview" : "Browser", icon: Globe },
+    { id: "browser", label: "Browser", icon: Globe },
+    ...(plan?.length ? [{ id: "plan" as const, label: "Plan", icon: ListChecks }] : []),
     ...EXTRA_TABS,
   ];
 
@@ -911,45 +964,26 @@ export function RightPanel({
       </div>
 
       {tab === "browser" ? (
-        platform === "ios" ? (
-          <IPhonePanel
-            projectId={state.activeProjectId}
-            buildVersion={relaunchSignal}
-            agentRunning={agentRunning}
-            inspectMode={inspectMode}
-            onToggleInspect={() => setInspectMode((mode) => !mode)}
-            onInspectElement={(payload) => {
-              setSelection(payload);
-              onAddContext({
-                id: `inspect-${Date.now()}`,
-                label: selectionChipLabel(payload),
-                detail: selectionContextDetail(payload),
-              });
-            }}
-            onPreviewError={onPreviewError}
-            fullscreen={fullscreen}
-            onToggleFullscreen={() => onToggleFullscreen?.()}
-          />
-        ) : (
-          <BrowserView
-            session={preview.session}
-            frameVersion={preview.frameVersion}
-            onReload={preview.reload}
-            onRestart={preview.restart}
-            onOpenTerminal={onOpenTerminal}
-            onAddContext={onAddContext}
-            agentRunning={agentRunning}
-            projectId={state.activeProjectId}
-            inspectMode={inspectMode}
-            onToggleInspect={() => setInspectMode((mode) => !mode)}
-            onFrameReady={(win) => {
-              frameWindowRef.current = win;
-            }}
-            onPreviewError={onPreviewError}
-            fullscreen={fullscreen}
-            onToggleFullscreen={() => onToggleFullscreen?.()}
-          />
-        )
+        <BrowserView
+          session={preview.session}
+          frameVersion={preview.frameVersion}
+          onReload={preview.reload}
+          onRestart={preview.restart}
+          onOpenTerminal={onOpenTerminal}
+          onAddContext={onAddContext}
+          agentRunning={agentRunning}
+          projectId={state.activeProjectId}
+          inspectMode={inspectMode}
+          onToggleInspect={() => setInspectMode((mode) => !mode)}
+          onFrameReady={(win) => {
+            frameWindowRef.current = win;
+          }}
+          onPreviewError={onPreviewError}
+          fullscreen={fullscreen}
+          onToggleFullscreen={() => onToggleFullscreen?.()}
+        />
+      ) : tab === "plan" ? (
+        <PlanView plan={plan} />
       ) : tab === "changes" ? (
         <ChangesView diffs={state.diffs} actions={actionList} focusFile={focusFile} />
       ) : (

@@ -13,6 +13,7 @@ import {
   CirclePlay,
   CircleX,
   Clock3,
+  Crop,
   Download,
   Ellipsis,
   ExternalLink,
@@ -40,6 +41,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { createPortal } from "react-dom";
 import {
   useCallback,
   useEffect,
@@ -54,9 +56,18 @@ import {
 import { cn } from "../lib/utils";
 import { getElectronDesktop, isElectronRuntime, requestElectronBrowser } from "../lib/electron-runtime";
 import { ElectronWebContentsSurface } from "./ElectronWebContentsSurface";
-import { BrowserStartPage, isBrowserStartPageUrl } from "./BrowserStartPage";
-import { AiOrb } from "./AiOrb";
+import { BrowserStartPage, hasUsedAskClyra, isBrowserStartPageUrl, markAskClyraUsed } from "./BrowserStartPage";
 import { ShiningBrainIcon, ShiningText, ThinkingDots } from "./ShiningText";
+import { Bloub } from "./bloub/Bloub";
+
+function useLiveAccentColor(fallback = "#2563eb") {
+  const [color] = useState(() => {
+    if (typeof document === "undefined") return fallback;
+    const value = getComputedStyle(document.documentElement).getPropertyValue("--accent-600").trim();
+    return value || fallback;
+  });
+  return color;
+}
 
 type AgentStatus =
   | "idle"
@@ -268,6 +279,20 @@ function looksLikeStaleFailureTranscript(messages: AgentMessage[]) {
 }
 
 type SideView = "agent" | "history" | "bookmarks" | "downloads" | "settings";
+
+type SnipCard = {
+  image: string;
+  text: string;
+  rect: { x: number; y: number; width: number; height: number };
+  pageUrl?: string;
+  pageTitle?: string;
+  left: number;
+  top: number;
+  status: "loading" | "done" | "error";
+  direct?: string;
+  explanation?: string;
+  error?: string;
+};
 
 const defaultSettings: BrowserSettings = {
   defaultSearchEngine: "google",
@@ -667,9 +692,24 @@ export default function WebBrowserWorkspace() {
   // reading the restored page.
   const [isBrowserBusy, setIsBrowserBusy] = useState(false);
   const [isAgentBusy, setIsAgentBusy] = useState(false);
+  const accentColor = useLiveAccentColor();
+  const [showAskClyraPulse, setShowAskClyraPulse] = useState(() => !hasUsedAskClyra());
+  useEffect(() => {
+    if (!showAskClyraPulse) return;
+    const timer = window.setTimeout(() => setShowAskClyraPulse(false), 6_000);
+    return () => window.clearTimeout(timer);
+  }, [showAskClyraPulse]);
+  const [snipBusy, setSnipBusy] = useState(false);
+  const [snipCard, setSnipCard] = useState<SnipCard | null>(null);
+  const [snipFollowUp, setSnipFollowUp] = useState("");
+  const [snipFollowUpBusy, setSnipFollowUpBusy] = useState(false);
   const [sideView, setSideView] = useState<SideView>("agent");
   // Start with Ask Clyra closed so a new browser / new tab opens on the page canvas.
   const [sideOpen, setSideOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findResult, setFindResult] = useState<{ total: number; current: number } | null>(null);
+  const findInputRef = useRef<HTMLInputElement | null>(null);
   const [omniboxFocused, setOmniboxFocused] = useState(false);
   const [agentDemo] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -893,7 +933,10 @@ export default function WebBrowserWorkspace() {
     if (!desktop) return;
     const stopState = desktop.browser.onState((state) => applyState(state as BrowserState));
     const stopAddress = desktop.browser.onFocusAddress(focusOmnibox);
-    const stopFind = desktop.browser.onFocusFind(() => setSideView("history"));
+    const stopFind = desktop.browser.onFocusFind(() => {
+      setFindOpen(true);
+      window.setTimeout(() => findInputRef.current?.select(), 30);
+    });
     return () => {
       stopState();
       stopAddress();
@@ -1014,6 +1057,134 @@ export default function WebBrowserWorkspace() {
     await takeManualControl();
     await requestBrowser("/api/openbrowser/navigate", { body: { target } }).catch(() => undefined);
   };
+
+  // "Snip & Ask": the toolbar crop icon and the "Ask Clyra about selection"
+  // context-menu item both end here. A screenshot goes to the same Gemini
+  // vision pipeline the voice-call camera already uses — the answer card
+  // just formats the response as a direct answer first, explanation after.
+  const askVisionSnip = useCallback(async (image: string, pageText: string, question: string) => {
+    try {
+      const response = await fetch("/api/companion/vision-frame", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image,
+          question:
+            `${question}\n\n` +
+            (pageText ? `Page text near the selection:\n${pageText.slice(0, 3000)}\n\n` : "") +
+            "Answer in two parts: the direct answer first (one or two sentences, no preamble), " +
+            "then, only if genuinely useful, a short \"Explanation\" section with a few key points. " +
+            "Keep it compact — this renders in a small floating card.",
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.ok === false) {
+        throw new Error(payload?.error || "Clyra couldn't read that selection.");
+      }
+      const text = String(payload.text || payload.summary || "").trim();
+      const splitAt = text.search(/\n\s*(explanation|key points)[:\-]?/i);
+      return splitAt > 0
+        ? { direct: text.slice(0, splitAt).trim(), explanation: text.slice(splitAt).replace(/^\n?\s*(explanation|key points)[:\-]?\s*/i, "").trim() }
+        : { direct: text, explanation: "" };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : "Clyra couldn't read that selection." };
+    }
+  }, []);
+
+  const positionSnipCard = useCallback((rect: { x: number; y: number; width: number; height: number }) => {
+    const hostRect = previewRef.current?.getBoundingClientRect();
+    const cardWidth = 340;
+    if (!hostRect) return { left: 80, top: 80 };
+    const spaceRight = hostRect.width - (rect.x + rect.width);
+    const left = spaceRight > cardWidth + 24
+      ? hostRect.left + rect.x + rect.width + 14
+      : Math.max(hostRect.left + 12, hostRect.left + rect.x - cardWidth - 14);
+    const top = Math.min(hostRect.top + rect.y, hostRect.top + hostRect.height - 160);
+    return { left: Math.round(left), top: Math.round(Math.max(hostRect.top + 12, top)) };
+  }, []);
+
+  const openSnipCard = useCallback(
+    async (payload: { image: string; text: string; rect: { x: number; y: number; width: number; height: number }; pageUrl?: string; pageTitle?: string }) => {
+      const { left, top } = positionSnipCard(payload.rect);
+      setSnipCard({ ...payload, left, top, status: "loading" });
+      const result = await askVisionSnip(
+        payload.image,
+        payload.text,
+        "What is in this screenshot? If it's a question, problem, or diagram, answer or solve it directly.",
+      );
+      setSnipCard((current) => {
+        if (!current || current.image !== payload.image) return current;
+        return "error" in result && result.error
+          ? { ...current, status: "error", error: result.error }
+          : { ...current, status: "done", direct: result.direct, explanation: result.explanation };
+      });
+    },
+    [askVisionSnip, positionSnipCard],
+  );
+
+  const handleSnip = useCallback(async () => {
+    const desktop = getElectronDesktop();
+    if (!desktop || snipBusy) return;
+    setSnipBusy(true);
+    try {
+      const res = await desktop.browser.snip(browserState?.activeTabId);
+      if (!res?.ok || res.cancelled || !res.image || !res.rect) return;
+      void openSnipCard({ image: res.image, text: res.text || "", rect: res.rect, pageUrl: res.pageUrl, pageTitle: res.pageTitle });
+    } finally {
+      setSnipBusy(false);
+    }
+  }, [browserState?.activeTabId, openSnipCard, snipBusy]);
+
+  const handleSnipFollowUp = useCallback(async () => {
+    if (!snipCard || !snipFollowUp.trim()) return;
+    setSnipFollowUpBusy(true);
+    const question = snipFollowUp.trim();
+    setSnipFollowUp("");
+    const result = await askVisionSnip(snipCard.image, snipCard.text, question);
+    setSnipFollowUpBusy(false);
+    setSnipCard((current) => {
+      if (!current) return current;
+      if ("error" in result && result.error) return { ...current, status: "error", error: result.error };
+      const appended = current.explanation ? `${current.explanation}\n\n— ${question}\n${result.direct}` : `— ${question}\n${result.direct}`;
+      return { ...current, status: "done", direct: current.direct, explanation: appended };
+    });
+  }, [askVisionSnip, snipCard, snipFollowUp]);
+
+  const handleSnipCardDragStart = useCallback((event: ReactMouseEvent) => {
+    if (!snipCard) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const originLeft = snipCard.left;
+    const originTop = snipCard.top;
+    const onMove = (moveEvent: MouseEvent) => {
+      setSnipCard((current) =>
+        current ? { ...current, left: originLeft + (moveEvent.clientX - startX), top: originTop + (moveEvent.clientY - startY) } : current,
+      );
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [snipCard]);
+
+  // The context-menu path (right-click → "Ask Clyra about selection") sends
+  // plain text, not a screenshot — route it straight into the existing "Ask
+  // Clyra" chat panel instead of the floating card, since there's no image
+  // for the vision pipeline to look at.
+  useEffect(() => {
+    const desktop = getElectronDesktop();
+    if (!desktop) return;
+    return desktop.browser.onAskSelection(({ text }) => {
+      if (!text?.trim()) return;
+      setSideView("agent");
+      setSideOpen(true);
+      void runAgentTask(`About this selected text, answer or explain it:\n\n"${text.trim().slice(0, 2000)}"`);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const flushTyping = useCallback(() => {
     if (typingTimerRef.current != null) window.clearTimeout(typingTimerRef.current);
@@ -1270,6 +1441,22 @@ export default function WebBrowserWorkspace() {
     await requestBrowser("/api/openbrowser/settings", { method: "PATCH", body: patch, quiet: true }).catch(() => undefined);
   };
 
+  const runFind = async (query: string) => {
+    try {
+      const payload = await requestBrowser("/api/openbrowser/find", { body: { text: query }, quiet: true });
+      setFindResult(query ? payload?.result || { total: 0, current: 0 } : null);
+    } catch {
+      setFindResult(query ? { total: 0, current: 0 } : null);
+    }
+  };
+
+  const closeFind = () => {
+    setFindOpen(false);
+    setFindQuery("");
+    setFindResult(null);
+    void requestBrowser("/api/openbrowser/find", { body: { text: "" }, quiet: true }).catch(() => undefined);
+  };
+
   const saveBookmark = async () => {
     await requestBrowser("/api/openbrowser/bookmarks", { body: {}, quiet: true }).catch(() => undefined);
   };
@@ -1318,11 +1505,22 @@ export default function WebBrowserWorkspace() {
       } else if (modifier && event.key === "0") {
         event.preventDefault();
         void zoom("reset");
+      } else if (modifier && event.key.toLowerCase() === "f" && !typing) {
+        // Electron's own Cmd+F is caught by the native window shortcut and
+        // arrives via onFocusFind; this covers the web-preview fallback path
+        // (no Electron bridge) so the same find bar still opens there.
+        if (!getElectronDesktop()) {
+          event.preventDefault();
+          setFindOpen(true);
+          window.setTimeout(() => findInputRef.current?.select(), 30);
+        }
+      } else if (event.key === "Escape" && findOpen) {
+        closeFind();
       }
     };
     window.addEventListener("keydown", onShortcut);
     return () => window.removeEventListener("keydown", onShortcut);
-  }, [browserState?.activeTabId, focusOmnibox, performAction]);
+  }, [browserState?.activeTabId, focusOmnibox, performAction, findOpen]);
 
   const settings = browserState?.settings || defaultSettings;
 
@@ -1468,9 +1666,9 @@ export default function WebBrowserWorkspace() {
               <motion.button
                 key={tab.id}
                 layout="position"
-                initial={{ opacity: 0, scale: 0.99, x: -2 }}
+                initial={{ opacity: 0, scale: 0.98, x: -12 }}
                 animate={{ opacity: 1, scale: 1, x: 0 }}
-                exit={{ opacity: 0, scale: 0.99, x: -2 }}
+                exit={{ opacity: 0, scale: 0.98, x: -12 }}
                 transition={{ type: "spring", stiffness: 440, damping: 34, mass: 0.5 }}
                 type="button"
                 onPointerEnter={() => setHoveredBrowserTabId(tab.id)}
@@ -1486,9 +1684,9 @@ export default function WebBrowserWorkspace() {
                   "group/tab isolate relative mb-0 flex min-w-[170px] max-w-[210px] items-center gap-2 overflow-hidden px-[15px] text-left font-medium transition-[background-color,color] duration-150 ease-out",
                   tab.active && !activeInternalTab
                     ? agentOwnsTab
-                      ? "mb-[3px] h-[34px] rounded-[12px] bg-transparent text-[var(--atlas-text-secondary)]"
-                      : "mb-[3px] h-[34px] rounded-[12px] bg-[var(--atlas-tab-active)] text-[var(--atlas-text-primary)] shadow-[0_1px_3px_rgba(15,23,42,.08)]"
-                    : "mb-[3px] h-[34px] rounded-[11px] text-[var(--atlas-text-secondary)]",
+                      ? "h-[36px] rounded-t-[10px] bg-transparent text-[var(--atlas-text-secondary)]"
+                      : "h-[36px] rounded-t-[10px] bg-[var(--atlas-tab-active)] text-[var(--atlas-text-primary)]"
+                    : "mb-px h-[34px] rounded-[9px] text-[var(--atlas-text-secondary)]",
                   agentOwnsTab && "clyra-browser-agent-tab",
                 )}
                 style={{ fontSize: "13px" }}
@@ -1531,9 +1729,9 @@ export default function WebBrowserWorkspace() {
                 <motion.button
                   key={tab.id}
                   layout="position"
-                  initial={{ opacity: 0, scale: 0.99, x: -2 }}
+                  initial={{ opacity: 0, scale: 0.98, x: -12 }}
                   animate={{ opacity: 1, scale: 1, x: 0 }}
-                  exit={{ opacity: 0, scale: 0.99, x: -2 }}
+                  exit={{ opacity: 0, scale: 0.98, x: -12 }}
                   transition={{ type: "spring", stiffness: 440, damping: 34, mass: 0.5 }}
                   type="button"
                   onPointerEnter={() => setHoveredBrowserTabId(tab.id)}
@@ -1542,8 +1740,8 @@ export default function WebBrowserWorkspace() {
                   className={cn(
                     "group/tab isolate relative mb-0 flex min-w-[170px] max-w-[210px] items-center gap-2 overflow-hidden px-[15px] text-left text-[13px] font-medium transition-[background-color,color] duration-150 ease-out",
                     selected
-                      ? "mb-[3px] h-[34px] rounded-[12px] bg-[var(--atlas-tab-active)] text-[var(--atlas-text-primary)] shadow-[0_1px_3px_rgba(15,23,42,.08)]"
-                      : "mb-[3px] h-[34px] rounded-[11px] text-[var(--atlas-text-secondary)]",
+                      ? "h-[36px] rounded-t-[10px] bg-[var(--atlas-tab-active)] text-[var(--atlas-text-primary)]"
+                      : "mb-px h-[34px] rounded-[9px] text-[var(--atlas-text-secondary)]",
                   )}
                 >
                   {hoveredBrowserTabId === tab.id && !selected ? <motion.span layoutId="browser-tab-hover" transition={{ type: "spring", stiffness: 580, damping: 42, mass: 0.42 }} className="pointer-events-none absolute inset-0 rounded-[9px] bg-black/[0.045]" /> : null}
@@ -1588,15 +1786,17 @@ export default function WebBrowserWorkspace() {
           <form onSubmit={(event) => void navigate(event)} className="relative min-w-0 flex-1 px-1.5">
             <div
               className={cn(
-                "group/omnibox flex h-9 w-full items-center gap-2 rounded-[15px] border border-black/[0.055] bg-white/90 px-3 transition-[background-color,box-shadow,border-color] duration-200 ease-[cubic-bezier(.22,1,.36,1)]",
+                "group/omnibox flex h-9 items-center transition-[background-color,box-shadow,border-radius] duration-150",
                 omniboxFocused
-                  ? "border-[var(--atlas-clyra-blue)]/20 bg-white shadow-[0_4px_16px_rgba(31,71,140,.08),0_0_0_3px_rgba(35,104,245,.055)]"
-                  : "shadow-[0_1px_2px_rgba(0,0,0,.025)] hover:bg-white",
+                  ? "w-full gap-2 rounded-[10px] bg-white px-3 shadow-[inset_0_0_0_1px_var(--atlas-divider)]"
+                  : "w-full justify-center gap-0 rounded-[10px] bg-transparent px-3 hover:bg-black/[0.035]",
               )}
             >
-              {browserState?.secure && !showStartPage
-                ? <LockKeyhole className="h-3.5 w-3.5 shrink-0 text-[var(--atlas-text-tertiary)]" strokeWidth={1.65} />
-                : <Search className="h-3.5 w-3.5 shrink-0 text-[var(--atlas-text-tertiary)]" strokeWidth={1.65} />}
+              {omniboxFocused ? (
+                browserState?.secure
+                  ? <LockKeyhole className="h-4 w-4 shrink-0 text-[var(--atlas-text-tertiary)]" strokeWidth={1.8} />
+                  : <Search className="h-4 w-4 shrink-0 text-[var(--atlas-text-tertiary)]" />
+              ) : null}
               <input
                 data-browser-omnibox
                 value={omniboxFocused ? address : restingHost}
@@ -1621,7 +1821,7 @@ export default function WebBrowserWorkspace() {
                   "min-w-0 flex-1 bg-transparent outline-none",
                   omniboxFocused
                     ? "text-left text-[13px] font-medium text-[var(--atlas-text-primary)]"
-                    : "cursor-text text-left text-[13px] font-medium text-[var(--atlas-text-secondary)]",
+                    : "cursor-text text-center text-[13px] font-medium text-[var(--atlas-text-tertiary)]",
                 )}
                 placeholder="Search or enter address"
                 aria-label="Address and search bar"
@@ -1649,6 +1849,16 @@ export default function WebBrowserWorkspace() {
               </button>
             </div>
           </form>
+          {desktopChromium && !activeInternalTab ? (
+            <IconButton
+              label="Snip & Ask"
+              onClick={() => void handleSnip()}
+              disabled={snipBusy}
+              className="h-8 w-8"
+            >
+              {snipBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crop className="h-4 w-4" strokeWidth={1.8} />}
+            </IconButton>
+          ) : null}
           <div className="relative z-50">
             <IconButton label="Browser menu" onClick={() => setBrowserMenuOpen((value) => !value)} active={browserMenuOpen} className="h-8 w-8">
               <Ellipsis className="h-4 w-4" />
@@ -1688,6 +1898,8 @@ export default function WebBrowserWorkspace() {
           <button
             type="button"
             onClick={() => {
+              markAskClyraUsed();
+              setShowAskClyraPulse(false);
               setSideView("agent");
               setSideOpen((value) => {
                 const next = sideView === "agent" ? !value : true;
@@ -1696,15 +1908,17 @@ export default function WebBrowserWorkspace() {
               });
             }}
             className={cn(
-              "ml-0.5 flex h-8 shrink-0 items-center gap-1.5 rounded-[10px] px-2.5 text-[12px] font-medium transition-[background-color,color,transform] duration-150 active:scale-[0.97]",
+              "relative ml-0.5 flex h-8 shrink-0 items-center gap-1 rounded-[9px] px-3 text-[12px] font-medium transition-[background-color,color] duration-150",
               sideOpen && sideView === "agent"
                 ? "bg-black/[0.04] text-[var(--atlas-clyra-blue)]"
                 : "bg-transparent text-[var(--atlas-clyra-blue)] hover:bg-black/[0.035]",
             )}
             aria-label={sideOpen ? "Hide Ask Clyra" : "Ask Clyra"}
           >
-            <AiOrb className="h-5 w-5" state={isAgentBusy ? "thinking" : "idle"} />
-            <span className="hidden xl:inline">Ask Clyra</span>
+            {showAskClyraPulse ? (
+              <span className="clyra-ask-pulse pointer-events-none absolute inset-0 rounded-[9px]" aria-hidden />
+            ) : null}
+            Ask Clyra
           </button>
         </div>
 
@@ -1723,6 +1937,46 @@ export default function WebBrowserWorkspace() {
         {/* Page | divider | sidebar */}
         <div className="flex min-h-0 flex-1">
         <section className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-white">
+          {findOpen ? (
+              <div
+                className="absolute right-3 top-3 z-[80] flex h-9 items-center gap-1.5 rounded-[10px] border border-[var(--atlas-divider)] bg-white px-2 shadow-[0_10px_28px_rgba(15,23,42,0.14)]"
+              >
+                <Search className="h-3.5 w-3.5 shrink-0 text-[var(--atlas-text-tertiary)]" />
+                <input
+                  ref={findInputRef}
+                  autoFocus
+                  value={findQuery}
+                  onChange={(event) => {
+                    setFindQuery(event.target.value);
+                    void runFind(event.target.value);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void runFind(findQuery);
+                    } else if (event.key === "Escape") {
+                      event.preventDefault();
+                      closeFind();
+                    }
+                  }}
+                  placeholder="Find on page"
+                  className="h-6 w-40 border-0 bg-transparent text-[12.5px] text-[var(--atlas-text-primary)] outline-none placeholder:text-[var(--atlas-text-tertiary)]"
+                />
+                {findResult ? (
+                  <span className="shrink-0 whitespace-nowrap text-[11px] text-[var(--atlas-text-tertiary)]">
+                    {findResult.total ? `${findResult.current} of ${findResult.total}` : "0 results"}
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={closeFind}
+                  aria-label="Close find"
+                  className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-[var(--atlas-text-tertiary)] hover:bg-black/[0.05] hover:text-[var(--atlas-text-primary)]"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+          ) : null}
           <div
             ref={previewRef}
             tabIndex={0}
@@ -1788,7 +2042,8 @@ export default function WebBrowserWorkspace() {
                 alt={`Live browser page: ${browserState.title}`}
                 draggable={false}
                 onClick={(event) => void clickPreview(event)}
-                className="block h-full w-full cursor-default select-none object-contain object-top"
+                className="block h-full w-full cursor-default select-none object-contain object-top transition-opacity duration-150 ease-out"
+                style={{ opacity: isBrowserBusy || (isAgentBusy && browserState.loading) ? 0.55 : 1 }}
               />
             ) : (
               <div className="grid h-full place-items-center bg-white">
@@ -1859,18 +2114,108 @@ export default function WebBrowserWorkspace() {
                 <motion.div
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-                  className="pointer-events-none absolute inset-x-0 top-0 z-30 h-[1.5px] overflow-hidden bg-transparent"
+                  exit={{ opacity: 0, transition: { duration: 0.18 } }}
+                  transition={{ duration: 0.12 }}
+                  className="pointer-events-none absolute inset-x-0 top-0 z-30 h-[2.5px] overflow-hidden bg-transparent"
                 >
+                  {/* Chrome-style progress: a bar that eases up to ~85% and
+                      only completes to 100% on the exit transition above, so
+                      it never sits mid-way — it reads as real progress even
+                      though the page load itself has no granular signal. */}
                   <motion.div
-                    className="h-full w-[38%] rounded-full bg-gradient-to-r from-transparent via-[var(--atlas-text-secondary)] to-transparent"
-                    animate={{ x: ["-120%", "320%"] }}
-                    transition={{ duration: 1.15, repeat: Infinity, ease: [0.16, 1, 0.3, 1] }}
+                    className="h-full rounded-r-full"
+                    style={{ background: "var(--clyra-accent, #2563eb)" }}
+                    initial={{ width: "0%" }}
+                    animate={{ width: ["0%", "45%", "72%", "85%"] }}
+                    transition={{ duration: 2.4, ease: [0.16, 1, 0.3, 1], times: [0, 0.15, 0.5, 1] }}
                   />
                 </motion.div>
               ) : null}
             </AnimatePresence>
+
+            {typeof document !== "undefined" &&
+              createPortal(
+                <AnimatePresence>
+                  {snipCard ? (
+                    <motion.div
+                      key="snip-card"
+                      initial={{ opacity: 0, scale: 0.96, y: 4 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.12 } }}
+                      transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                      style={{ position: "fixed", left: snipCard.left, top: snipCard.top, width: 340, zIndex: 300 }}
+                      className="overflow-hidden rounded-2xl border border-black/[0.08] bg-white/97 shadow-[0_20px_50px_rgba(15,23,42,0.16)] backdrop-blur-xl"
+                    >
+                      <div
+                        onMouseDown={handleSnipCardDragStart}
+                        className="flex cursor-grab items-center justify-between gap-2 border-b border-black/[0.06] px-3.5 py-2.5 active:cursor-grabbing"
+                      >
+                        <span className="text-[11.5px] font-semibold tracking-[-0.01em] text-[#1d1d1f]">Clyra</span>
+                        <button
+                          type="button"
+                          onClick={() => setSnipCard(null)}
+                          aria-label="Close"
+                          className="grid h-6 w-6 place-items-center rounded-full text-[#9a9a9f] transition-colors hover:bg-black/[0.05] hover:text-[#1d1d1f]"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                      <div className="max-h-[340px] overflow-y-auto px-3.5 py-3">
+                        {snipCard.status === "loading" ? (
+                          <div className="flex items-center gap-2 text-[13px] text-[#6e6e73]">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Reading selection…
+                          </div>
+                        ) : snipCard.status === "error" ? (
+                          <p className="text-[13px] leading-relaxed text-rose-600">{snipCard.error}</p>
+                        ) : (
+                          <>
+                            <p className="text-[13.5px] leading-relaxed text-[#1d1d1f]">{snipCard.direct}</p>
+                            {snipCard.explanation ? (
+                              <p className="mt-2.5 whitespace-pre-wrap text-[12.5px] leading-relaxed text-[#6e6e73]">
+                                {snipCard.explanation}
+                              </p>
+                            ) : null}
+                          </>
+                        )}
+                      </div>
+                      {snipCard.status === "done" ? (
+                        <>
+                          <div className="flex items-center gap-1 border-t border-black/[0.06] px-2.5 py-1.5">
+                            <button
+                              type="button"
+                              onClick={() => void navigator.clipboard?.writeText([snipCard.direct, snipCard.explanation].filter(Boolean).join("\n\n"))}
+                              className="rounded-lg px-2.5 py-1.5 text-[11.5px] font-medium text-[#6e6e73] transition-colors hover:bg-black/[0.05] hover:text-[#1d1d1f]"
+                            >
+                              Copy
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-1.5 border-t border-black/[0.06] px-3 py-2">
+                            <input
+                              value={snipFollowUp}
+                              onChange={(event) => setSnipFollowUp(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") void handleSnipFollowUp();
+                              }}
+                              placeholder="Ask a follow-up…"
+                              className="min-w-0 flex-1 bg-transparent text-[12.5px] text-[#1d1d1f] outline-none placeholder:text-[#9a9a9f]"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => void handleSnipFollowUp()}
+                              disabled={snipFollowUpBusy || !snipFollowUp.trim()}
+                              aria-label="Ask follow-up"
+                              className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#1d1d1f] text-white transition-opacity disabled:opacity-25"
+                            >
+                              {snipFollowUpBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <ArrowUp className="h-3 w-3" />}
+                            </button>
+                          </div>
+                        </>
+                      ) : null}
+                    </motion.div>
+                  ) : null}
+                </AnimatePresence>,
+                document.body,
+              )}
 
             {/* Floating Atlas agent bar over webpage */}
             <AnimatePresence>
@@ -1949,7 +2294,7 @@ export default function WebBrowserWorkspace() {
         </section>
 
         {sideOpen ? (
-          <div className="hidden w-px shrink-0 bg-[var(--atlas-divider)] lg:block" aria-hidden />
+          <div className="block w-px shrink-0 bg-[var(--atlas-divider)]" aria-hidden />
         ) : null}
 
         <AnimatePresence initial={false}>
@@ -1961,7 +2306,7 @@ export default function WebBrowserWorkspace() {
               transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
               onUpdate={() => window.dispatchEvent(new Event("clyra:native-surface-layout"))}
               onAnimationComplete={() => window.dispatchEvent(new Event("clyra:native-surface-layout"))}
-              className="absolute inset-x-0 bottom-0 top-[calc(var(--atlas-titlebar-height)+var(--atlas-toolbar-height))] z-40 flex min-h-0 w-full flex-col overflow-hidden bg-[var(--atlas-sidebar-bg)] text-[var(--atlas-text-primary)] lg:static lg:w-[var(--atlas-sidebar-width)] lg:max-w-[var(--atlas-sidebar-width)] lg:shrink-0"
+              className="static flex min-h-0 max-w-[var(--atlas-sidebar-width)] shrink-0 flex-col overflow-hidden bg-[var(--atlas-sidebar-bg)] text-[var(--atlas-text-primary)]"
             >
               <header className="relative flex h-[34px] shrink-0 items-center gap-2 border-b border-[var(--atlas-divider)] px-2">
                 <button
@@ -1972,7 +2317,10 @@ export default function WebBrowserWorkspace() {
                 >
                   <ArrowLeft className="h-3.5 w-3.5" />
                 </button>
-                <span className="text-[11px] font-medium text-[var(--atlas-text-secondary)]">Ask Clyra</span>
+                <Bloub state={isAgentBusy ? "thinking" : "idle"} size={18} color={accentColor} background="#ffffff" className="shrink-0" />
+                <span className="text-[11px] font-medium text-[var(--atlas-text-secondary)]">
+                  {sideView === "agent" ? "Ask Clyra" : sideView === "downloads" ? "Downloads" : sideView === "history" ? "History" : sideView === "bookmarks" ? "Bookmarks" : "Browser settings"}
+                </span>
               </header>
 
               {sideView === "agent" ? (
@@ -1987,8 +2335,9 @@ export default function WebBrowserWorkspace() {
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: -6, height: 0 }}
                             transition={{ duration: settings.reducedMotion ? 0.01 : 0.2, ease: [0.16, 1, 0.3, 1] }}
-                            className="mx-auto flex min-h-[calc(100vh-360px)] max-w-[280px] flex-col justify-center pb-10 pt-6 text-center"
+                            className="mx-auto flex min-h-[calc(100vh-360px)] max-w-[280px] flex-col items-center justify-center pb-10 pt-6 text-center"
                           >
+                            <Bloub state="idle" size={40} color={accentColor} background="#ffffff" className="mb-3.5" />
                             <p className="text-[12px] font-medium leading-5 text-[var(--atlas-text-secondary)]">
                               Ask about this page, or describe a browser task.
                             </p>

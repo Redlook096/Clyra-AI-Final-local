@@ -341,10 +341,12 @@ export const AgentFileEdit = memo(function AgentFileEdit({
         {open && hasLines && !failed ? (
           <motion.div
             key="body"
+            layout
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{
+              layout: { duration: 0.16, ease: AGENT_EASE },
               height: { duration: 0.26, ease: AGENT_EASE },
               opacity: { duration: 0.2, delay: 0.03 },
             }}

@@ -5,6 +5,7 @@ import {
   AnimatePresence,
   type MotionValue,
   motion,
+  useReducedMotion,
   useSpring,
   useTransform,
 } from "motion/react";
@@ -154,6 +155,7 @@ export function VibeMiniCodeBox({
   onCollapsed?: () => void;
   archived?: boolean;
 }) {
+  const reducedMotion = useReducedMotion();
   const [revealed, setRevealed] = useState(() => (archived ? code.length : 0));
   const [collapsed, setCollapsed] = useState(() => !!archived);
   const [started, setStarted] = useState(() => !!archived);
@@ -172,7 +174,16 @@ export function VibeMiniCodeBox({
     }
     if (!active || collapsed) return;
     if (!started) {
-      const id = window.setTimeout(() => setStarted(true), START_HOLD_MS);
+      const id = window.setTimeout(() => setStarted(true), reducedMotion ? 0 : START_HOLD_MS);
+      return () => window.clearTimeout(id);
+    }
+    // Reduced motion: reveal and settle instantly, skip the char-by-char play.
+    if (reducedMotion) {
+      if (revealed < code.length) {
+        setRevealed(code.length);
+        return;
+      }
+      const id = window.setTimeout(() => setCollapsed(true), 0);
       return () => window.clearTimeout(id);
     }
     if (revealed < code.length) {
@@ -191,7 +202,7 @@ export function VibeMiniCodeBox({
     const hold = segmentComplete ? COLLAPSE_HOLD_MS : Math.min(COLLAPSE_HOLD_MS, 1100);
     const id = window.setTimeout(() => setCollapsed(true), hold);
     return () => window.clearTimeout(id);
-  }, [archived, active, collapsed, revealed, code.length, segmentComplete, started]);
+  }, [archived, active, collapsed, revealed, code.length, segmentComplete, started, reducedMotion]);
 
   useEffect(() => {
     if (archived) return;
@@ -212,7 +223,10 @@ export function VibeMiniCodeBox({
   }, [archived, revealed, collapsed, active]);
 
   const shown = code.slice(0, revealed);
-  const isOpen = !collapsed || manuallyOpen;
+  // Hold the code body closed until `started` flips (after the header's own
+  // brief hold), so the very first reveal is a real height:0 -> auto expand
+  // instead of appearing already-open underneath the card's fade-in.
+  const isOpen = (!collapsed && (started || archived)) || manuallyOpen;
   const headerInteractive = collapsed;
   const maxBodyPx = collapsed ? MAX_CODE_H_REOPENED : MAX_CODE_H_TYPING;
 
@@ -283,11 +297,11 @@ export function VibeMiniCodeBox({
       layout
       initial={{ opacity: 0, y: 12, scale: 0.988 }}
       animate={{ opacity: active || archived ? 1 : 0.76, y: 0, scale: 1 }}
-      transition={{ duration: 0.48, ease: [0.16, 1, 0.3, 1] }}
+      transition={{ duration: reducedMotion ? 0 : 0.48, ease: [0.16, 1, 0.3, 1] }}
       className="w-full max-w-[640px]"
     >
       <motion.div
-        transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+        transition={{ duration: reducedMotion ? 0 : 0.32, ease: [0.22, 1, 0.36, 1] }}
         className={cn(
           "clyra-vibe-agent-card overflow-hidden rounded-xl backdrop-blur-md backdrop-saturate-125",
           active && !collapsed && "ring-1 ring-blue-500/10",
@@ -368,12 +382,14 @@ export function VibeMiniCodeBox({
           {isOpen && (
             <motion.div
               key="code"
+              layout
               initial={{ height: 0, opacity: 0, y: -2 }}
               animate={{ height: "auto", opacity: 1, y: 0 }}
               exit={{ height: 0, opacity: 0, y: -2 }}
               transition={{
-                height: { duration: 0.42, ease: [0.22, 1, 0.36, 1] },
-                opacity: { duration: 0.24 },
+                layout: { duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] },
+                height: { duration: reducedMotion ? 0 : 0.42, ease: [0.22, 1, 0.36, 1] },
+                opacity: { duration: reducedMotion ? 0 : 0.24 },
               }}
               className="overflow-hidden border-t border-slate-100/70 bg-white/35"
             >
@@ -399,7 +415,7 @@ export function VibeMiniCodeBox({
                       layout="position"
                       initial={{ opacity: 0, y: 5 }}
                       animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                      transition={{ duration: reducedMotion ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
                       className="flex min-h-[20px] gap-2"
                     >
                       <span className="w-8 shrink-0 select-none text-right font-mono text-[10px] tabular-nums leading-[20px] text-slate-400">

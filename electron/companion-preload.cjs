@@ -18,5 +18,7 @@ contextBridge.exposeInMainWorld("clyraCompanion", {
   resumeAi: () => ipcRenderer.invoke("companion:resume"),
   stopControl: () => ipcRenderer.invoke("companion:stop"),
   runAction: (action) => ipcRenderer.invoke("companion:action", { action }),
+  expand: () => ipcRenderer.invoke("companion:expand"),
+  collapse: () => ipcRenderer.invoke("companion:collapse"),
   onState: (callback) => subscribe("companion:state", callback),
 });

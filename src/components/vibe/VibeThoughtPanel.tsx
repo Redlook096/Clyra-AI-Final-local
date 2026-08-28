@@ -231,14 +231,13 @@ export function VibeThoughtPanel({
         {open && (
           <motion.div
             key="thought-panel"
+            layout
             initial={{ height: 0, opacity: 0, y: -2 }}
             animate={{ height: "auto", opacity: 1, y: 0 }}
             exit={{ height: 0, opacity: 0, y: -2 }}
             transition={{
-              type: "spring",
-              bounce: 0.02,
-              stiffness: 220,
-              damping: 36,
+              layout: { duration: 0.16, ease: [0.22, 1, 0.36, 1] },
+              height: { duration: 0.34, ease: [0.22, 1, 0.36, 1] },
               opacity: { duration: 0.2 },
             }}
             className="overflow-hidden"

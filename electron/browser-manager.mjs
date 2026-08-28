@@ -1,10 +1,148 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { dialog, session, WebContentsView } from "electron";
+import { dialog, Menu, session, WebContentsView } from "electron";
 
 const HOME_URL = "https://www.google.com/";
 const MAX_TABS = 16;
+
+// Runs *inside* the target page (injected via executeJavaScript, never given
+// node/ipc access) to drive Snip Mode entirely with real DOM events, so the
+// selection tracks scrolling/zoom/layout exactly like the page itself does.
+// Written as a real function and shipped via `.toString()` rather than a
+// template-literal string so none of this needs escaping.
+function clyraSnipOverlayInjector() {
+  if (window.__clyraSnipActive) return Promise.resolve({ cancelled: true });
+  window.__clyraSnipActive = true;
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.style.cssText =
+      "position:fixed;inset:0;z-index:2147483647;background:rgba(17,17,20,0.22);cursor:crosshair;user-select:none;";
+    const box = document.createElement("div");
+    box.style.cssText =
+      "position:fixed;left:0;top:0;width:0;height:0;display:none;z-index:2147483647;pointer-events:none;" +
+      "border:1.5px solid #2563eb;background:rgba(37,99,235,0.10);border-radius:2px;" +
+      "box-shadow:0 0 0 2000px rgba(17,17,20,0.22);";
+    // The box itself draws the dim layer via its own giant shadow so the
+    // selected region reads as fully undimmed the instant a drag starts,
+    // rather than dim overlay + separately-dimmed box fighting each other.
+    overlay.style.background = "transparent";
+    overlay.setAttribute("data-clyra-snip-overlay", "1");
+    box.setAttribute("data-clyra-snip-overlay", "1");
+    document.documentElement.appendChild(overlay);
+    document.documentElement.appendChild(box);
+
+    let startX = 0;
+    let startY = 0;
+    let dragging = false;
+
+    const cleanup = () => {
+      window.__clyraSnipActive = false;
+      overlay.removeEventListener("mousedown", onDown);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("keydown", onKey, true);
+      overlay.remove();
+      box.remove();
+    };
+
+    const extractText = (rect) => {
+      try {
+        const pieces = [];
+        const seen = new Set();
+        const nodes = document.body ? document.body.querySelectorAll("*") : [];
+        for (const el of nodes) {
+          if (pieces.length >= 40) break;
+          if (el.children && el.children.length > 0) continue; // leaf-ish only
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) continue;
+          const overlaps = !(
+            r.right < rect.x ||
+            r.left > rect.x + rect.width ||
+            r.bottom < rect.y ||
+            r.top > rect.y + rect.height
+          );
+          if (!overlaps) continue;
+          const text = (el.innerText || el.textContent || "").trim();
+          if (text && text.length < 600 && !seen.has(text)) {
+            seen.add(text);
+            pieces.push(text);
+          }
+        }
+        return pieces.join("\n").slice(0, 4000);
+      } catch {
+        return "";
+      }
+    };
+
+    const finish = (cancelled, rect) => {
+      cleanup();
+      if (cancelled || !rect) {
+        resolve({ cancelled: true });
+        return;
+      }
+      resolve({ cancelled: false, rect, text: extractText(rect) });
+    };
+
+    function onDown(event) {
+      if (event.button !== 0) return;
+      dragging = true;
+      startX = event.clientX;
+      startY = event.clientY;
+      box.style.left = `${startX}px`;
+      box.style.top = `${startY}px`;
+      box.style.width = "0px";
+      box.style.height = "0px";
+      box.style.display = "block";
+      event.preventDefault();
+    }
+    function onMove(event) {
+      if (!dragging) return;
+      const x = Math.min(event.clientX, startX);
+      const y = Math.min(event.clientY, startY);
+      const w = Math.abs(event.clientX - startX);
+      const h = Math.abs(event.clientY - startY);
+      box.style.left = `${x}px`;
+      box.style.top = `${y}px`;
+      box.style.width = `${w}px`;
+      box.style.height = `${h}px`;
+    }
+    function onUp(event) {
+      if (!dragging) return;
+      dragging = false;
+      const x = Math.min(event.clientX, startX);
+      const y = Math.min(event.clientY, startY);
+      const w = Math.abs(event.clientX - startX);
+      const h = Math.abs(event.clientY - startY);
+      if (w < 6 || h < 6) {
+        finish(true);
+        return;
+      }
+      finish(false, { x, y, width: w, height: h });
+    }
+    function onKey(event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        finish(true);
+      }
+    }
+
+    overlay.addEventListener("mousedown", onDown);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("keydown", onKey, true);
+  });
+}
+
+// Removes the overlay from a page without waiting for a selection — used
+// when the user switches tabs or closes a tab while Snip Mode is still
+// active, so nothing is left listening in the background.
+function clyraSnipCancelInjector() {
+  window.__clyraSnipActive = false;
+  const nodes = document.querySelectorAll("[data-clyra-snip-overlay]");
+  nodes.forEach((node) => node.remove());
+  return true;
+}
 
 function injectionSignals(lines) {
   const patterns = [
@@ -62,6 +200,7 @@ export class ChromiumBrowserManager {
     this.profilePath = path.join(userDataPath, "chromium-browser.json");
     this.browserSession = session.fromPartition("persist:browser", { cache: true });
     this.tabs = new Map();
+    this.pendingSnipCancels = new Map();
     this.activeTabId = null;
     this.closedTabs = [];
     this.history = [];
@@ -301,6 +440,44 @@ export class ChromiumBrowserManager {
     contents.on("enter-html-full-screen", () => this.window.setFullScreen(true));
     contents.on("leave-html-full-screen", () => this.window.setFullScreen(false));
     contents.on("before-input-event", (event, input) => this.handleShortcut(event, input));
+    contents.on("context-menu", (_event, params) => this.showContextMenu(tab, params));
+  }
+
+  /** Native right-click menu — Chromium's own edit items plus a single
+   *  Clyra entry that hands the highlighted text straight to the "Ask
+   *  Clyra" panel already built into the browser workspace. */
+  showContextMenu(tab, params) {
+    const contents = tab.view.webContents;
+    const hasSelection = Boolean(params.selectionText && params.selectionText.trim());
+    const template = [];
+    if (hasSelection) {
+      template.push({
+        label: "Ask Clyra about selection",
+        click: () => {
+          if (this.uiView?.webContents && !this.uiView.webContents.isDestroyed()) {
+            this.uiView.webContents.send("browser:ask-selection", {
+              text: params.selectionText,
+              tabId: tab.id,
+              pageUrl: contents.getURL(),
+              pageTitle: contents.getTitle(),
+            });
+          }
+        },
+      });
+      template.push({ type: "separator" });
+      template.push({ label: "Copy", role: "copy" });
+    }
+    if (params.isEditable) {
+      if (template.length) template.push({ type: "separator" });
+      template.push({ label: "Cut", role: "cut", enabled: params.editFlags.canCut });
+      template.push({ label: "Paste", role: "paste", enabled: params.editFlags.canPaste });
+    }
+    template.push({ type: "separator" });
+    template.push({ label: "Back", enabled: contents.navigationHistory.canGoBack(), click: () => contents.navigationHistory.goBack() });
+    template.push({ label: "Forward", enabled: contents.navigationHistory.canGoForward(), click: () => contents.navigationHistory.goForward() });
+    template.push({ label: "Reload", click: () => contents.reload() });
+    if (!template.length) return;
+    Menu.buildFromTemplate(template).popup({ window: this.window });
   }
 
   handleShortcut(event, input) {
@@ -331,6 +508,7 @@ export class ChromiumBrowserManager {
   activateTab(id, { persist = true } = {}) {
     const next = this.tabs.get(id);
     if (!next) throw new Error("That browser tab no longer exists.");
+    if (this.activeTabId && this.activeTabId !== id) this.cancelSnip(this.activeTabId);
     for (const [tabId, tab] of this.tabs) {
       const show = tabId === id && this.surface.visible;
       tab.view.setVisible(show);
@@ -351,6 +529,7 @@ export class ChromiumBrowserManager {
   async closeTab(id = this.activeTabId) {
     const tab = id ? this.tabs.get(id) : null;
     if (!tab) return this.getState();
+    this.cancelSnip(id);
     if (this.tabs.size === 1) {
       await tab.view.webContents.loadURL(HOME_URL);
       return this.getState();
@@ -412,14 +591,45 @@ export class ChromiumBrowserManager {
     const contents = this.contentsFor(tabId);
     if (!contents) throw new Error("No active browser tab.");
     const destination = normalizeInput(target, this.settings.defaultSearchEngine);
-    try {
-      await contents.loadURL(destination);
-    } catch (error) {
+    // contents.loadURL()'s promise only resolves once the whole page has
+    // finished loading (did-finish-load) or rejects on failure — awaiting it
+    // here kept every caller (the IPC handler, and therefore the renderer's
+    // "busy"/dimmed-preview state) blocked for the entire page load instead
+    // of just the moment navigation begins. did-start-loading/did-navigate
+    // are already wired to emitState() above, so the address bar, loading
+    // spinner and URL update live the instant the navigation actually starts
+    // — this only needs to kick the load off and report real failures async.
+    const load = contents.loadURL(destination).catch((error) => {
       // Chromium can reject a redundant Google new-tab recovery while the
-      // existing native tab is already usable. Keep that recovery local and
-      // surface genuine navigation failures for every other destination.
-      if (destination !== HOME_URL || !/^https:\/\/(?:www\.)?google\.com\/?$/i.test(contents.getURL())) throw error;
-    }
+      // existing native tab is already usable; that recovery case is benign.
+      if (destination === HOME_URL && /^https:\/\/(?:www\.)?google\.com\/?$/i.test(contents.getURL())) return;
+      console.error("[browser] navigate failed:", error instanceof Error ? error.message : error);
+    });
+    void load;
+    return this.getState();
+  }
+
+  /**
+   * Same navigation as navigate(), but for callers that must observe the
+   * *landed* page next (the autonomous browser agent) rather than just
+   * trigger the address change — so this one genuinely waits for the load
+   * to finish. Listeners are attached before loadURL() starts so there is no
+   * race with a load that resolves before the caller gets to wait for it.
+   */
+  async navigateAndWaitForLoad(target, tabId = this.activeTabId, timeoutMs = 15_000) {
+    const contents = this.contentsFor(tabId);
+    if (!contents) throw new Error("No active browser tab.");
+    const settled = new Promise((resolve) => {
+      const done = () => {
+        contents.removeListener("did-stop-loading", done);
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(done, timeoutMs);
+      contents.once("did-stop-loading", done);
+    });
+    await this.navigate(target, tabId);
+    await settled;
     return this.getState();
   }
 
@@ -558,8 +768,8 @@ export class ChromiumBrowserManager {
     };
     if (tabIsVisible) contents.focus();
     switch (action?.type) {
-      case "navigate": await this.navigate(action.url, tabId); break;
-      case "search": await this.navigate(action.query, tabId); break;
+      case "navigate": await this.navigateAndWaitForLoad(action.url, tabId); break;
+      case "search": await this.navigateAndWaitForLoad(action.query, tabId); break;
       case "back": case "go_back": if (contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack(); break;
       case "forward": case "go_forward": if (contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward(); break;
       case "reload": contents.reload(); break;
@@ -994,6 +1204,68 @@ export class ChromiumBrowserManager {
         tab.view.setVisible(false);
         tab.view.webContents.setBackgroundThrottling(true);
       }
+    }
+  }
+
+  /**
+   * "Snip & Ask": lets the user drag a rectangle over the live page and
+   * returns a pixel-perfect capture of just that region plus any leaf-node
+   * text overlapping it. The actual crosshair/drag UI is real DOM injected
+   * into the page itself (see `clyraSnipOverlayInjector`) rather than a
+   * Clyra-side overlay, so it tracks the page's own scroll/zoom/layout
+   * automatically and `capturePage(rect)` — which Electron already scales
+   * correctly for devicePixelRatio — can use the exact same coordinates.
+   */
+  async enterSnipMode(tabId) {
+    const tab = this.tabs.get(tabId || this.activeTabId);
+    if (!tab) throw new Error("That browser tab is no longer available.");
+    const contents = tab.view.webContents;
+    if (contents.isDestroyed()) throw new Error("That browser tab is no longer available.");
+
+    const selectionPromise = contents
+      .executeJavaScript(`(${clyraSnipOverlayInjector.toString()})()`, true)
+      .catch(() => ({ cancelled: true }));
+
+    // Lets `activateTab`/`closeTab` interrupt a snip that's still waiting on
+    // a *different, now-hidden* tab, so the toolbar button never spins
+    // forever just because the user switched away mid-selection.
+    const cancelPromise = new Promise((resolve) => {
+      this.pendingSnipCancels.set(tab.id, () => resolve({ cancelled: true }));
+    });
+
+    const result = await Promise.race([selectionPromise, cancelPromise]);
+    this.pendingSnipCancels.delete(tab.id);
+
+    if (result.cancelled || !result.rect) {
+      if (!contents.isDestroyed()) {
+        void contents.executeJavaScript(`(${clyraSnipCancelInjector.toString()})()`, true).catch(() => undefined);
+      }
+      return { cancelled: true };
+    }
+
+    const image = await contents.capturePage(result.rect);
+    if (!image || image.isEmpty()) throw new Error("The selected region captured empty — try again.");
+    return {
+      cancelled: false,
+      image: image.toDataURL(),
+      text: result.text || "",
+      rect: result.rect,
+      pageUrl: contents.getURL(),
+      pageTitle: contents.getTitle(),
+    };
+  }
+
+  /** Best-effort cleanup when Snip Mode is still active on a tab that's
+   *  being switched away from or closed. */
+  cancelSnip(tabId) {
+    const resolve = this.pendingSnipCancels.get(tabId);
+    if (resolve) {
+      resolve();
+      this.pendingSnipCancels.delete(tabId);
+    }
+    const tab = this.tabs.get(tabId);
+    if (tab && !tab.view.webContents.isDestroyed()) {
+      void tab.view.webContents.executeJavaScript(`(${clyraSnipCancelInjector.toString()})()`, true).catch(() => undefined);
     }
   }
 

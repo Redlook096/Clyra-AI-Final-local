@@ -336,6 +336,25 @@ async function cancellableDelay(ms: number, signal?: AbortSignal) {
   });
 }
 
+/**
+ * Yield until the browser's next real paint opportunity. A tight loop that
+ * only yields via `setTimeout(fn, 0)` between heavy synchronous canvas draws
+ * can starve the compositor of any chance to actually grab a frame for
+ * `canvas.captureStream()` — observed as a MediaRecorder that runs the whole
+ * timeline yet ends with zero captured bytes. requestAnimationFrame ties the
+ * yield directly to the browser's paint cycle instead of a bare timer tick.
+ */
+async function nextAnimationFrame(signal?: AbortSignal) {
+  throwIfCancelled(signal);
+  await new Promise<void>((resolve, reject) => {
+    const handle = window.requestAnimationFrame(() => resolve());
+    signal?.addEventListener("abort", () => {
+      window.cancelAnimationFrame(handle);
+      reject(new DOMException("Cancelled", "AbortError"));
+    }, { once: true });
+  });
+}
+
 function roundedRect(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
   context.beginPath();
   context.roundRect(x, y, width, height, radius);
@@ -395,6 +414,10 @@ async function loadVideo(source?: string) {
       if (settled) return;
       settled = true;
       window.clearTimeout(timeout);
+      // Only the caller-returned (successful) element stays attached — it
+      // owns cleanup once rendering finishes. A failed/timed-out load has no
+      // owner, so remove it here instead of leaking a dead node.
+      if (!value) video.remove();
       resolve(value);
     };
     const timeout = window.setTimeout(() => finish(null), 12_000);
@@ -403,6 +426,14 @@ async function loadVideo(source?: string) {
     video.playsInline = true;
     video.preload = "auto";
     video.crossOrigin = "anonymous";
+    // Chrome deprioritises (and can abort in-flight range requests for) a
+    // <video> that isn't attached to the document — observed as the gameplay
+    // background silently failing to load only during export, never in the
+    // live DOM-attached preview. Keep it off-screen but genuinely in the
+    // document so buffering behaves the same as the working preview element.
+    video.style.cssText = "position:fixed;left:-10000px;top:0;width:1px;height:1px;pointer-events:none;opacity:0.001;";
+    video.setAttribute("aria-hidden", "true");
+    document.body.appendChild(video);
     video.addEventListener("loadeddata", () => finish(video), { once: true });
     video.addEventListener("error", () => finish(null), { once: true });
     video.src = source;
@@ -465,6 +496,20 @@ async function prepareRecorder({ width = 720, height = 1280, fps = 30, manualFra
   const audioContext = new AudioContext();
   await audioContext.resume();
   const audioDestination = audioContext.createMediaStreamDestination();
+  // Keep the audio track continuously producing real (silent) samples for
+  // the whole recording. When a render has no narration to schedule (e.g.
+  // narration skipped entirely), the audio track otherwise never receives a
+  // single sample — observed to make MediaRecorder mux zero bytes for the
+  // *video* track too on a long enough recording, even though the video
+  // capture itself is working fine. A permanently running zero-gain
+  // oscillator keeps the muxer fed regardless of whether real narration
+  // audio is ever connected.
+  const silentBed = audioContext.createOscillator();
+  const silentGain = audioContext.createGain();
+  silentGain.gain.value = 0;
+  silentBed.connect(silentGain);
+  silentGain.connect(audioDestination);
+  silentBed.start();
   const outputFps = Math.max(24, Math.min(60, Math.round(fps)));
   // Fixed-rate capture records every logical render tick. The Fake Text
   // renderer drives this in real time so gameplay and overlay share one 1×
@@ -827,7 +872,13 @@ export async function renderMessageStoryVideo(options: { name: string; messages:
   const timeline = buildIMessageTimeline(timedMessages, options.playbackRate || 1, { showTypingIndicator: options.showTypingIndicator });
   // Fake Text Story is rendered at its actual project resolution; the drawing
   // code scales one fixed logical canvas so preview and export keep their ratios.
-  const setup = await prepareRecorder({ width: 1080, height: 1920, fps: 60, manualFrameCapture: true });
+  // Manual-capture (`requestFrame()`) can drop the vast majority of frames
+  // when a long timeline is drawn faster than the recorder's encoder can
+  // keep up, occasionally producing an empty recording. The automatic
+  // fixed-fps capture stream instead samples the canvas on its own
+  // wall-clock timer (same fix already applied to Would You Rather), so the
+  // frame loop below is deliberately paced in real time to match.
+  const setup = await prepareRecorder({ width: 1080, height: 1920, fps: 60, manualFrameCapture: false });
   let backgroundVideo: HTMLVideoElement | null = null;
   try {
     backgroundVideo = await loadVideo(options.backgroundVideo);
@@ -896,6 +947,7 @@ export async function renderMessageStoryVideo(options: { name: string; messages:
     const outputFps = 60;
     const frameDurationMs = 1_000 / outputFps;
     const lastFrameIndex = Math.ceil(timeline.durationMs / frameDurationMs);
+    const frameStartWallMs = performance.now();
     for (let frameIndex = 0; frameIndex <= lastFrameIndex; frameIndex += 1) {
       throwIfCancelled(options.signal);
       const elapsed = Math.min(timeline.durationMs, frameIndex * frameDurationMs);
@@ -906,8 +958,18 @@ export async function renderMessageStoryVideo(options: { name: string; messages:
         await synchroniseGameplayFrame(elapsed);
       }
       drawFrame(elapsed);
-      setup.captureFrame();
       options.onProgress?.(0.3 + elapsed / timeline.durationMs * 0.64);
+      // Pace the draw loop to real wall-clock time so the automatic capture
+      // stream (sampling at a fixed fps on its own timer) sees each frame
+      // for its true share of the timeline. Always yield via a real macrotask
+      // (setTimeout), even when the draw fell behind schedule (waitMs <= 0):
+      // a tight synchronous loop that never yields can starve the browser of
+      // any chance to actually grab a compositor frame, producing an empty
+      // recording even though captureStream itself is fine.
+      await nextAnimationFrame(options.signal);
+      const targetWallMs = frameStartWallMs + (frameIndex + 1) * frameDurationMs;
+      const waitMs = targetWallMs - performance.now();
+      if (waitMs > 0) await cancellableDelay(waitMs, options.signal);
     }
     // Keep one final frame in the MediaRecorder without adding a visible
     // post-roll to the story timeline.
@@ -925,6 +987,7 @@ export async function renderMessageStoryVideo(options: { name: string; messages:
       backgroundVideo.pause();
       backgroundVideo.removeAttribute("src");
       backgroundVideo.load();
+      backgroundVideo.remove();
     }
   }
 }
@@ -1020,54 +1083,136 @@ export async function renderWouldRatherVideo(options: { choice?: CreatorChoice; 
     });
     options.onProgress?.((index + 1) / rounds.length * 0.24);
   }
-  const setup = await prepareRecorder();
+  // Manual-capture (`requestFrame()`) drops the vast majority of frames when
+  // a long timeline is drawn faster than the recorder's encoder can keep up
+  // (observed: only ~200 of 900+ requested frames survived). The automatic
+  // fixed-fps capture stream instead samples the canvas on its own
+  // wall-clock timer, so the frame loop below is deliberately paced in real
+  // time to match; narration audio is scheduled independently up front (see
+  // above), so pacing the *drawing* loop no longer risks desyncing it.
+  const setup = await prepareRecorder({ manualFrameCapture: false, fps: 30 });
   try {
+    const audioStart = setup.audioContext.currentTime + 0.15;
+    type RoundTiming = {
+      item: (typeof prepared)[number];
+      relStart: number;
+      firstEntranceStart: number;
+      firstEntranceEnd: number;
+      firstHoldEnd: number;
+      orEnd: number;
+      secondEntranceStart: number;
+      secondEntranceEnd: number;
+      secondHoldEnd: number;
+      timerSeconds: number;
+      countdownStart: number;
+      countdownZeroEnd: number;
+      revealEnd: number;
+      roundEnd: number;
+    };
+    const timings: RoundTiming[] = [];
+    let cursor = 0;
+    // Decode every narration clip up front and schedule its playback against
+    // one shared AudioContext clock. Frame timing below is derived from
+    // these same decoded durations, so picture and sound are mathematically
+    // in sync instead of depending on how fast the browser happens to run.
     for (let roundIndex = 0; roundIndex < prepared.length; roundIndex += 1) {
       throwIfCancelled(options.signal);
       const item = prepared[roundIndex]!;
-      drawWouldRatherVideo(setup.context, item.choice, item.images, "prompt");
-      await cancellableDelay(180, options.signal);
-      await playIntoRecording(setup.audioContext, setup.audioDestination, item.audio[0], options.signal);
-
-      const firstEntranceStarted = performance.now();
-      while (performance.now() - firstEntranceStarted < 320) {
-        throwIfCancelled(options.signal);
-        drawWouldRatherVideo(setup.context, item.choice, item.images, "first", null, (performance.now() - firstEntranceStarted) / 320);
-        await cancellableDelay(16, options.signal);
-      }
-      drawWouldRatherVideo(setup.context, item.choice, item.images, "first");
-      await playIntoRecording(setup.audioContext, setup.audioDestination, item.audio[1], options.signal);
-      await cancellableDelay(1_000, options.signal);
-
-      drawWouldRatherVideo(setup.context, item.choice, item.images, "or");
-      await playIntoRecording(setup.audioContext, setup.audioDestination, item.audio[2], options.signal);
-
-      const secondEntranceStarted = performance.now();
-      while (performance.now() - secondEntranceStarted < 320) {
-        throwIfCancelled(options.signal);
-        drawWouldRatherVideo(setup.context, item.choice, item.images, "second", null, (performance.now() - secondEntranceStarted) / 320);
-        await cancellableDelay(16, options.signal);
-      }
-      drawWouldRatherVideo(setup.context, item.choice, item.images, "second");
-      await playIntoRecording(setup.audioContext, setup.audioDestination, item.audio[3], options.signal);
-
+      const decoded = await Promise.all(item.audio.map((buffer) => setup.audioContext.decodeAudioData(buffer.slice(0))));
+      const scheduleAt = (index: number, atSec: number) => {
+        const source = setup.audioContext.createBufferSource();
+        source.buffer = decoded[index]!;
+        source.connect(setup.audioDestination);
+        source.start(audioStart + atSec);
+      };
+      const relStart = cursor;
+      let t = 0.18;
+      scheduleAt(0, relStart + t);
+      t += decoded[0]!.duration;
+      const firstEntranceStart = t;
+      t += 0.32;
+      const firstEntranceEnd = t;
+      scheduleAt(1, relStart + t);
+      t += decoded[1]!.duration;
+      t += 1.0;
+      const firstHoldEnd = t;
+      scheduleAt(2, relStart + t);
+      t += decoded[2]!.duration;
+      const orEnd = t;
+      const secondEntranceStart = t;
+      t += 0.32;
+      const secondEntranceEnd = t;
+      scheduleAt(3, relStart + t);
+      t += decoded[3]!.duration;
+      const secondHoldEnd = t;
       const timerSeconds = Math.max(3, Math.min(10, Math.round(item.choice.timerSeconds || 3)));
-      for (let count = timerSeconds; count >= 1; count -= 1) {
-        drawWouldRatherVideo(setup.context, item.choice, item.images, "countdown", count);
-        scheduleCreatorCue(setup.audioContext, setup.audioDestination, "tick", true);
-        options.onProgress?.(0.24 + ((roundIndex + (timerSeconds - count + 1) / timerSeconds) / prepared.length) * 0.64);
-        await cancellableDelay(1_000, options.signal);
-      }
-      drawWouldRatherVideo(setup.context, item.choice, item.images, "countdown", 0);
-      await cancellableDelay(220, options.signal);
-      scheduleCreatorCue(setup.audioContext, setup.audioDestination, "ding", true);
-      drawWouldRatherVideo(setup.context, item.choice, item.images, "reveal");
-      await cancellableDelay(Math.max(800, Math.min(3_000, (item.choice.revealSeconds || 1.5) * 1_000)), options.signal);
-      if (roundIndex < prepared.length - 1) {
+      const countdownStart = t;
+      t += timerSeconds * 1.0;
+      t += 0.22;
+      const countdownZeroEnd = t;
+      const revealDur = Math.max(0.8, Math.min(3, (item.choice.revealSeconds || 1.5)));
+      t += revealDur;
+      const revealEnd = t;
+      let roundEnd = t;
+      if (roundIndex < prepared.length - 1) roundEnd += 0.22;
+      timings.push({
+        item, relStart, firstEntranceStart, firstEntranceEnd, firstHoldEnd, orEnd,
+        secondEntranceStart, secondEntranceEnd, secondHoldEnd, timerSeconds,
+        countdownStart, countdownZeroEnd, revealEnd, roundEnd,
+      });
+      cursor = relStart + roundEnd;
+    }
+    const totalSeconds = cursor;
+    const outputFps = 30;
+    const frameDurationSec = 1 / outputFps;
+    const totalFrames = Math.max(1, Math.ceil(totalSeconds / frameDurationSec));
+    let timingIndex = 0;
+    let lastCountdown = -1;
+    const frameStartWallMs = performance.now();
+    for (let frameIndex = 0; frameIndex <= totalFrames; frameIndex += 1) {
+      throwIfCancelled(options.signal);
+      const elapsed = Math.min(totalSeconds, frameIndex * frameDurationSec);
+      while (timingIndex < timings.length - 1 && elapsed >= timings[timingIndex]!.relStart + timings[timingIndex]!.roundEnd) timingIndex += 1;
+      const timing = timings[timingIndex]!;
+      const rel = elapsed - timing.relStart;
+      if (rel < timing.firstEntranceStart) {
+        drawWouldRatherVideo(setup.context, timing.item.choice, timing.item.images, "prompt");
+      } else if (rel < timing.firstEntranceEnd) {
+        drawWouldRatherVideo(setup.context, timing.item.choice, timing.item.images, "first", null, (rel - timing.firstEntranceStart) / 0.32);
+      } else if (rel < timing.orEnd) {
+        drawWouldRatherVideo(setup.context, timing.item.choice, timing.item.images, "first");
+      } else if (rel < timing.secondEntranceStart + 0.001) {
+        drawWouldRatherVideo(setup.context, timing.item.choice, timing.item.images, "or");
+      } else if (rel < timing.secondEntranceEnd) {
+        drawWouldRatherVideo(setup.context, timing.item.choice, timing.item.images, "second", null, (rel - timing.secondEntranceStart) / 0.32);
+      } else if (rel < timing.countdownStart) {
+        drawWouldRatherVideo(setup.context, timing.item.choice, timing.item.images, "second");
+      } else if (rel < timing.countdownZeroEnd - 0.22) {
+        const count = Math.max(1, timing.timerSeconds - Math.floor((rel - timing.countdownStart) / 1.0));
+        if (count !== lastCountdown) {
+          scheduleCreatorCue(setup.audioContext, setup.audioDestination, "tick", true);
+          lastCountdown = count;
+        }
+        drawWouldRatherVideo(setup.context, timing.item.choice, timing.item.images, "countdown", count);
+      } else if (rel < timing.countdownZeroEnd) {
+        drawWouldRatherVideo(setup.context, timing.item.choice, timing.item.images, "countdown", 0);
+      } else if (rel < timing.revealEnd) {
+        if (lastCountdown !== 0) {
+          scheduleCreatorCue(setup.audioContext, setup.audioDestination, "ding", true);
+          lastCountdown = 0;
+        }
+        drawWouldRatherVideo(setup.context, timing.item.choice, timing.item.images, "reveal");
+      } else {
         setup.context.fillStyle = "#050505";
         setup.context.fillRect(0, 0, 720, 1280);
-        await cancellableDelay(220, options.signal);
       }
+      options.onProgress?.(0.24 + Math.min(1, elapsed / Math.max(0.001, totalSeconds)) * 0.64);
+      // Pace the draw loop to real wall-clock time so the automatic capture
+      // stream (sampling at a fixed fps on its own timer) sees each phase
+      // for its true share of the timeline.
+      const targetWallMs = frameStartWallMs + (frameIndex + 1) * frameDurationSec * 1_000;
+      const waitMs = targetWallMs - performance.now();
+      if (waitMs > 0) await cancellableDelay(waitMs, options.signal);
     }
     const blob = await finishRecording(setup);
     options.onProgress?.(0.97);

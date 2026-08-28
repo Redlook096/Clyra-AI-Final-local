@@ -760,6 +760,32 @@ async function ensurePage() {
   const currentProfile = await loadProfile();
   await fs.mkdir(USER_DATA_PATH, { recursive: true });
   await fs.mkdir(DOWNLOADS_PATH, { recursive: true });
+
+  // Playwright's own default UA in headless mode literally contains the
+  // string "HeadlessChrome/<version>" — sent as the real HTTP header, not
+  // just a JS-readable property, so a script-level patch alone would leave
+  // the wire-level header and navigator.userAgent disagreeing (itself a bot
+  // signal). The only way to correct the actual header is the `userAgent`
+  // *launch* option, which needs the string up front — so a short-lived
+  // throwaway browser is booted just to read Playwright's real default,
+  // version and all, before launching the real persistent context with
+  // that same string minus the one word "Headless". This never hardcodes
+  // a version number, so it can't drift out of sync with whatever
+  // Chromium build Playwright actually ships.
+  const patchedUserAgent = await (async () => {
+    const probe = await chromium.launch({ headless: true }).catch(() => null);
+    if (!probe) return undefined;
+    try {
+      const probePage = await probe.newPage();
+      const real = await probePage.evaluate(() => navigator.userAgent);
+      return real.includes("HeadlessChrome/") ? real.replace("HeadlessChrome/", "Chrome/") : undefined;
+    } catch {
+      return undefined;
+    } finally {
+      await probe.close().catch(() => undefined);
+    }
+  })();
+
   context = await chromium.launchPersistentContext(USER_DATA_PATH, {
     headless: true,
     viewport: VIEWPORT,
@@ -767,10 +793,25 @@ async function ensurePage() {
     locale: "en-AU",
     acceptDownloads: true,
     downloadsPath: DOWNLOADS_PATH,
-    args: ["--disable-dev-shm-usage", "--no-sandbox", "--disable-background-networking", "--disable-component-update"],
-    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    userAgent: patchedUserAgent,
+    args: [
+      "--disable-dev-shm-usage",
+      "--no-sandbox",
+      "--disable-background-networking",
+      "--disable-component-update",
+      // The single most common automated-Chromium tell (navigator.webdriver,
+      // certain CDP-only code paths) — this flag turns most of it off at
+      // the engine level rather than patching symptoms after the fact.
+      "--disable-blink-features=AutomationControlled",
+    ],
   });
   await context.addInitScript({ content: "globalThis.__name ||= ((target) => target);" });
+  // Belt-and-suspenders for the one flag `--disable-blink-features` doesn't
+  // reliably clear on every Chromium build: force `navigator.webdriver`
+  // back to the value a real, human-driven browser reports.
+  await context.addInitScript({
+    content: "Object.defineProperty(Navigator.prototype, 'webdriver', { get: () => undefined, configurable: true });",
+  });
   context.on("page", (created) => void wirePage(created));
   let existing = context.pages();
   if (existing.length > MAX_OPEN_TABS) {
@@ -977,11 +1018,34 @@ async function captureFrame(activePage: Page) {
   return { buffer: frameBuffer, version: frameVersion };
 }
 
+/**
+ * window.history exposes no canGoForward API to page JS (browsers withhold
+ * it deliberately), and history.length alone can't say whether the current
+ * position is at the front or back of that history either — it only ever
+ * grows, so a plain length check stays "true" even after going back to the
+ * very first entry. CDP's own navigation controller has the real answer:
+ * currentIndex vs the full entries list, the same source Chrome's own
+ * back/forward buttons read from.
+ */
 async function navigationFlags(activePage: Page) {
-  return activePage.evaluate(() => ({
-    canGoBack: history.length > 1,
-    canGoForward: false,
-  })).catch(() => ({ canGoBack: false, canGoForward: false }));
+  try {
+    const session = await context?.newCDPSession(activePage);
+    if (!session) return { canGoBack: false, canGoForward: false };
+    try {
+      const nav = (await session.send("Page.getNavigationHistory")) as {
+        currentIndex: number;
+        entries: unknown[];
+      };
+      return {
+        canGoBack: nav.currentIndex > 0,
+        canGoForward: nav.currentIndex < nav.entries.length - 1,
+      };
+    } finally {
+      await session.detach().catch(() => undefined);
+    }
+  } catch {
+    return { canGoBack: false, canGoForward: false };
+  }
 }
 
 async function captureState(activePage: Page, options: { screenshot?: boolean; fast?: boolean } = {}): Promise<ManagedBrowserState> {
@@ -990,6 +1054,11 @@ async function captureState(activePage: Page, options: { screenshot?: boolean; f
     const url = activePage.url();
     let fallbackTitle = "New tab";
     try { fallbackTitle = new URL(url).hostname.replace(/^www\./, "") || "New tab"; } catch { /* noop */ }
+    // This path skips the expensive DOM scrape and JPEG capture, but the
+    // back/forward flags were never part of that cost — a plain CDP query —
+    // so there is no reason for the frequent state poll to keep clobbering
+    // a correct value with a hardcoded false right after an action set it.
+    const flags = await navigationFlags(activePage);
     return {
       url,
       title: fallbackTitle,
@@ -999,8 +1068,8 @@ async function captureState(activePage: Page, options: { screenshot?: boolean; f
       elements: [],
       tabs: quickTabStates(),
       activeTabId: tabId(activePage),
-      canGoBack: false,
-      canGoForward: false,
+      canGoBack: flags.canGoBack,
+      canGoForward: flags.canGoForward,
       secure: url.startsWith("https://"),
       zoom: pageZoom.get(activePage) || 1,
       history: currentProfile.history.slice(0, 100),
@@ -1968,23 +2037,52 @@ export function resizeManagedBrowserViewport(width: number, height: number) {
   });
 }
 
+// A manual navigate never reads the "before" observation: agentAction's own
+// "navigate" case calls this.navigate(action.url) directly, and
+// validateBrowserAction only inspects action.url for a navigate action. This
+// stub lets the Electron path skip the expensive full-page element scrape
+// that getElectronObservation() would otherwise force before every keystroke
+// of address-bar navigation — that scrape was the actual cause of manual
+// navigation feeling slow/unresponsive, and its failure (e.g. a destroyed
+// tab mid-navigation) could silently swallow the navigate entirely.
+const EMPTY_OBSERVATION: StructuredObservation = {
+  page: { url: "", title: "", loading: false, fingerprint: "" },
+  viewport: { width: 0, height: 0, scrollX: 0, scrollY: 0, pageHeight: 0, zoom: 1 },
+  headings: [],
+  elements: [],
+  visibleText: [],
+  mainText: "",
+  structuredData: [],
+  tabs: [],
+  diff: { urlChanged: false, titleChanged: false, addedText: [], removedText: [] },
+  promptInjectionSignals: [],
+};
+
 export function navigateManagedBrowser(input: string) {
   if (USE_ELECTRON_BROWSER) {
     return serializeOperation(async () => {
-      const before = await getElectronObservation();
       const action: BrowserAction = { type: "navigate", url: input };
-      validateBrowserAction(action, before, "user");
-      const result = await runElectronAction(action, before, "user");
+      validateBrowserAction(action, EMPTY_OBSERVATION, "user");
+      const result = await runElectronAction(action, EMPTY_OBSERVATION, "user");
       return result.state;
     });
   }
+  // A manual URL-bar navigation doesn't touch any on-page element and never
+  // needs the agent's safety checks (`validateBrowserAction` only reads
+  // `action.url` for a "navigate" action, never the observation) — so this
+  // skips the full interactive-element DOM scrape entirely, both before and
+  // after the navigation, and takes a single screenshot instead of two.
+  // That scrape was the dominant cost on every manual navigation.
   return serializeOperation(async () => {
     const activePage = await ensurePage();
-    const observation = await inspectPage(activePage);
-    const action: BrowserAction = { type: "navigate", url: input };
-    validateBrowserAction(action, observation, "user");
-    await executeAction(activePage, action, observation, "user");
-    return captureState(page && !page.isClosed() ? page : activePage);
+    const currentProfile = await loadProfile();
+    const normalized = normalizeBrowserInput(input, currentProfile.settings.defaultSearchEngine || "bing");
+    if (!/^https?:\/\//i.test(normalized)) throw new Error("Only HTTP and HTTPS navigation is allowed");
+    await activePage.goto(normalized, { waitUntil: "domcontentloaded" });
+    await recordHistory(activePage, /^https?:\/\//i.test(input) ? undefined : input);
+    const current = page && !page.isClosed() ? page : activePage;
+    await captureFrame(current);
+    return captureState(current, { fast: true });
   });
 }
 

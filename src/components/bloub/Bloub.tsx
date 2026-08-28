@@ -94,9 +94,11 @@ export interface BloubHandle {
    * Manual gaze override (absolute yaw/pitch, degrees). Wins over
    * pointer-follow and entrance. `roll` is optional and off by default
    * (the state's own signature head-tilt is kept) — pass 0 to force the
-   * head upright instead.
+   * head upright instead. `wander` (0–1, default 0) layers the normal idle
+   * micro-drift/saccades back on top of the fixed direction — 0 holds
+   * perfectly still, higher values read as more alive.
    */
-  setGaze: (yaw: number, pitch: number, roll?: number) => void;
+  setGaze: (yaw: number, pitch: number, roll?: number, wander?: number) => void;
   /** Releases a manual gaze set via `setGaze`, handing control back to pointer-follow / the state's own pose. */
   releaseGaze: () => void;
   /** Restarts the entrance sequence programmatically. */
@@ -104,6 +106,8 @@ export interface BloubHandle {
   /** Freezes the current frame; gaze/state/shape setters still take effect on resume. */
   pause: () => void;
   resume: () => void;
+  /** Forces a single blink pulse (close-open, ~0.2s) right now. */
+  blink: () => void;
 }
 
 const REDUCED_MOTION_STATES = new Set<BloubState>(["orbit", "comet", "play", "swirl", "burst"]);
@@ -234,9 +238,9 @@ export const Bloub = forwardRef<BloubHandle, BloubProps>(function Bloub(
         redraw();
       },
       setColor: (hex) => setColorState(hex),
-      setGaze: (yaw, pitch, roll) => {
+      setGaze: (yaw, pitch, roll, wander = 0) => {
         manualGazeRef.current = true;
-        engine.setLook({ yaw, pitch, mix: 1, spin: 0, wander: 0, roll }, clockRef.current);
+        engine.setLook({ yaw, pitch, mix: 1, spin: 0, wander, roll }, clockRef.current);
         redraw();
       },
       releaseGaze: () => {
@@ -260,6 +264,10 @@ export const Bloub = forwardRef<BloubHandle, BloubProps>(function Bloub(
         runningRef.current = true;
         lastRef.current = 0;
         rafRef.current = requestAnimationFrame(stepRef.current!);
+      },
+      blink: () => {
+        engine.blink(clockRef.current);
+        redraw();
       },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps

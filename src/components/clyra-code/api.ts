@@ -13,8 +13,7 @@ export type VibeProject = {
   createdAt: string;
   updatedAt: string;
   previewUrl?: string;
-  /** Detected platform: web (default) or ios for Swift/Xcode projects. */
-  platform?: "web" | "ios";
+  platform?: "web";
 };
 
 export type ProjectGitStatus = {
@@ -24,55 +23,6 @@ export type ProjectGitStatus = {
   ahead: number;
   behind: number;
   changes: Array<{ path: string; status: "A" | "M" | "D" | "R" | "?"; staged: boolean }>;
-};
-
-export type IPhoneDevice = {
-  udid: string;
-  name: string;
-  runtime: string;
-  state: "Booted" | "Shutdown" | "Booting" | "Shutting Down";
-};
-
-export type IPhoneStatus = {
-  mac: boolean;
-  arch: "arm64" | "x86_64" | "other";
-  xcodeVersion: string | null;
-  fastStreamSupported: boolean;
-  devices: IPhoneDevice[];
-  booted: IPhoneDevice | null;
-};
-
-export type XcodeState =
-  | "NO_XCODE"
-  | "COMMAND_LINE_TOOLS_ONLY"
-  | "XCODE_INSTALLED_NOT_SELECTED"
-  | "XCODE_NEEDS_FIRST_LAUNCH"
-  | "NO_IOS_RUNTIME"
-  | "READY";
-
-export type XcodeDiagnosis = {
-  state: XcodeState;
-  arch: "arm64" | "x86_64" | "other";
-  macOSVersion: string | null;
-  xcodeAppInstalled: boolean;
-  selectedDeveloperDir: string | null;
-  xcodeVersion: string | null;
-  simctlAvailable: boolean;
-  runtimes: Array<{ identifier: string; name: string; version: string; isAvailable: boolean }>;
-  deviceTypes: Array<{ identifier: string; name: string }>;
-  devices: Array<{ udid: string; name: string; runtime: string; state: string }>;
-  xcodesInstalled: boolean;
-  message: string;
-};
-
-export type IPhoneRunResult = {
-  ok: boolean;
-  deviceId?: string;
-  bundleId?: string;
-  streamUrl?: string;
-  streamKind?: "iframe" | "img";
-  buildOutput?: string;
-  error?: string;
 };
 
 export type FileDiff = {
@@ -160,11 +110,20 @@ export const api = {
       body: JSON.stringify({ name, prompt }),
     }).then((r) => r.project),
 
+  importProject: (path: string) =>
+    json<{ project: VibeProject }>("/api/vibe/projects/import", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    }).then((r) => r.project),
+
   renameProject: (id: string, name: string) =>
     json<{ project: VibeProject }>(`/api/vibe/projects/${enc(id)}`, {
       method: "PATCH",
       body: JSON.stringify({ name }),
     }).then((r) => r.project),
+
+  openProjectFolder: (id: string) =>
+    json<{ ok: boolean; path: string }>(`/api/vibe/projects/${enc(id)}/open-folder`, { method: "POST" }),
 
   githubStatus: () => json<{ connected: boolean; account: { login: string; avatarUrl?: string } | null; authAvailable: boolean; message: string }>("/api/vibe/github/status"),
 
@@ -189,57 +148,6 @@ export const api = {
   checkoutProjectGitBranch: (id: string, branch: string) => json<{ current: string | null; branches: string[] }>(`/api/vibe/projects/${enc(id)}/git/checkout`, {
     method: "POST", body: JSON.stringify({ branch }),
   }),
-
-  iphoneStatus: () => json<IPhoneStatus>("/api/iphone/status"),
-
-  iphoneDevices: () => json<{ devices: IPhoneDevice[] }>("/api/iphone/devices").then((r) => r.devices ?? []),
-
-  iphoneReadiness: (projectId: string) =>
-    json<{ ready: boolean; projectPath: string }>(`/api/iphone/projects/${enc(projectId)}/readiness`),
-
-  iphoneRun: (projectId: string, deviceId?: string) =>
-    json<IPhoneRunResult>(`/api/iphone/projects/${enc(projectId)}/run`, {
-      method: "POST",
-      body: JSON.stringify(deviceId ? { deviceId } : {}),
-    }),
-
-  iphoneRebuild: (projectId: string) =>
-    json<IPhoneRunResult>(`/api/iphone/projects/${enc(projectId)}/rebuild`, { method: "POST" }),
-
-  iphoneRelaunch: (projectId: string) =>
-    json<{ ok: boolean; error?: string }>(`/api/iphone/projects/${enc(projectId)}/relaunch`, { method: "POST" }),
-
-  iphoneStop: (projectId: string) =>
-    json<{ ok: boolean }>(`/api/iphone/projects/${enc(projectId)}/stop`, { method: "POST" }),
-
-  iphoneControl: (projectId: string, input: Record<string, unknown>) =>
-    json<{ ok: boolean; error?: string }>(`/api/iphone/projects/${enc(projectId)}/control`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
-
-  iphoneLogs: (projectId: string) =>
-    json<{ logs: Array<{ timestamp: number; level: string; source: string; message: string }> }>(
-      `/api/iphone/projects/${enc(projectId)}/logs`,
-    ),
-
-  iphoneSetupDiagnose: () => json<XcodeDiagnosis>("/api/iphone/setup/diagnose"),
-
-  iphoneXcodeVersions: () =>
-    json<{ versions: Array<{ version: string; build: string; installed: boolean }> }>("/api/iphone/setup/xcode-versions"),
-
-  iphoneInstallCommand: (version: string) =>
-    json<{ command: string }>(`/api/iphone/setup/install-command?version=${enc(version)}`),
-
-  iphoneRecommendedXcode: () =>
-    json<{ recommendedXcode: string | null; compatibleXcodes: string[]; blockedReason: string | null; sourceEvidence: string[] }>(
-      "/api/iphone/setup/recommended-xcode",
-    ),
-
-  iphoneDiskSpace: () =>
-    json<{ availableGB: number; requiredGB: number; breakdown: Array<{ label: string; gb: number }>; sufficient: boolean; shortfallGB: number }>(
-      "/api/iphone/setup/disk-space",
-    ),
 
   sourceEdit: (projectId: string, payload: { file: string; selector: string; property: string; value: string }) =>
     json<{

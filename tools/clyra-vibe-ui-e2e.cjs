@@ -56,20 +56,20 @@ async function main() {
 
   // 2. Platform ambiguity
   await textarea().click();
-  await textarea().fill("give it an iOS theme");
+  await textarea().fill("give it an Android theme");
   await textarea().press("Enter");
   await page.waitForTimeout(900);
   const platformTitle = await page.getByText("Which platform should I target?").count();
   if (platformTitle > 0) ok("ambiguous prompt opened platform question");
   else bad("ambiguous prompt opened platform question");
   const platformOptions = await page.locator('[data-q-id="platform"]').allTextContents();
-  if (platformOptions.length >= 3 && platformOptions.some((t) => t.includes("Webapp/Website")) && platformOptions.some((t) => t.includes("Desktop app"))) ok("platform options present", platformOptions.join(", "));
+  if (platformOptions.length >= 2 && platformOptions.some((t) => t.includes("Webapp/Website")) && platformOptions.some((t) => t.includes("Desktop app"))) ok("platform options present", platformOptions.join(", "));
   else bad("platform options present", platformOptions.join(", "));
 
-  // Select iOS app, Continue -> triggers real run.
-  const iosOpt = page.locator('[data-q-id="platform"]', { hasText: "iOS app" }).first();
-  if (await iosOpt.count()) { await iosOpt.click({ force: true }); ok("selected iOS app"); }
-  else bad("selected iOS app");
+  // Select Desktop app, Continue -> triggers real run.
+  const desktopOpt = page.locator('[data-q-id="platform"]', { hasText: "Desktop app" }).first();
+  if (await desktopOpt.count()) { await desktopOpt.click({ force: true }); ok("selected Desktop app"); }
+  else bad("selected Desktop app");
   await page.waitForTimeout(300);
   const cont2 = page.locator('[data-testid="question-continue"]');
   if ((await cont2.count()) && (await cont2.isEnabled())) { await cont2.click({ force: true }); ok("platform question submitted (real run kicked off)"); }
@@ -77,7 +77,7 @@ async function main() {
 
   // Answer should render as compact UI in the user bubble (not raw directive).
   await page.waitForTimeout(2000);
-  const answerInBubble = await page.getByText("iOS app", { exact: true }).count();
+  const answerInBubble = await page.getByText("Desktop app", { exact: true }).count();
   const questionInBubble = await page.getByText("Which platform should I target?").count();
   if (answerInBubble > 0 && questionInBubble > 0) ok("answers rendered as compact UI in user bubble");
   else bad("answers rendered as compact UI", `answer=${answerInBubble}, question=${questionInBubble}`);

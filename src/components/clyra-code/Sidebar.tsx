@@ -9,7 +9,6 @@ import {
   Plus,
   Search,
   Settings2,
-  Smartphone,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { VibeProject } from "./api";
@@ -35,7 +34,7 @@ type Menu = { kind: "project"; projectId: string } | { kind: "chat"; projectId: 
 
 export function Sidebar({
   projects, threadsByProject, activeProjectId, activeSessionId, onSelectProject, onSelectChat, onNewProject, onNewChat,
-  onRenameProject, onRenameChat, onDeleteChat, onRemoveProject, collapsed = false, onToggleCollapsed,
+  onRenameProject, onRenameChat, onDeleteChat, onRemoveProject, onOpenProjectFolder, collapsed = false, onToggleCollapsed,
 }: {
   projects: VibeProject[];
   threadsByProject: Record<string, ChatThread[]>;
@@ -49,6 +48,7 @@ export function Sidebar({
   onRenameChat: (projectId: string, chatId: string, title: string) => void;
   onDeleteChat: (projectId: string, chatId: string) => void;
   onRemoveProject: (projectId: string) => void;
+  onOpenProjectFolder: (projectId: string) => void;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
 }) {
@@ -139,9 +139,9 @@ export function Sidebar({
             </AnimatePresence>
           </div>;
         })}
-        {menu?.kind === "project" ? <Menu items={[{ label: "New chat", action: () => onNewChat(menu.projectId) }, { label: "Rename project", action: () => { const project = projects.find((item) => item.id === menu.projectId); setEditing({ type: "project", projectId: menu.projectId, value: project?.name || "" }); } }, { label: "Open folder", action: () => void navigator.clipboard.writeText(projects.find((item) => item.id === menu.projectId)?.id || "") }, { label: "Remove from Clyra", action: () => onRemoveProject(menu.projectId), destructive: true }]} /> : null}
+        {menu?.kind === "project" ? <Menu items={[{ label: "New chat", action: () => onNewChat(menu.projectId) }, { label: "Rename project", action: () => { const project = projects.find((item) => item.id === menu.projectId); setEditing({ type: "project", projectId: menu.projectId, value: project?.name || "" }); } }, { label: "Open folder", action: () => onOpenProjectFolder(menu.projectId) },{ label: "Remove from Clyra", action: () => onRemoveProject(menu.projectId), destructive: true }]} /> : null}
         {menu?.kind === "chat" ? <Menu items={[{ label: "Rename", action: () => { const thread = (threadsByProject[menu.projectId] ?? []).find((item) => item.id === menu.chatId); setEditing({ type: "chat", projectId: menu.projectId, chatId: menu.chatId, value: thread?.title || "" }); } }, { label: "Delete", action: () => onDeleteChat(menu.projectId, menu.chatId), destructive: true }]} /> : null}
-      </div> : <div className="mt-2 flex min-h-0 flex-1 flex-col items-center gap-0.5 overflow-y-auto px-1">{orderedProjects.map((project) => { const selected = project.id === activeProjectId; return <button key={project.id} type="button" title={project.name || project.id} onClick={() => onSelectProject(project.id)} className={cn("flex h-7 w-7 items-center justify-center rounded-[7px] transition-colors", selected ? "bg-black/[0.045] text-[#3977F6]" : "text-[#96989D] hover:bg-black/[0.03]")}>{project.platform === "ios" ? <Smartphone className="h-3.5 w-3.5" /> : <Globe2 className="h-3.5 w-3.5" />}</button>; })}</div>}
+      </div> : <div className="mt-2 flex min-h-0 flex-1 flex-col items-center gap-0.5 overflow-y-auto px-1">{orderedProjects.map((project) => { const selected = project.id === activeProjectId; return <button key={project.id} type="button" title={project.name || project.id} onClick={() => onSelectProject(project.id)} className={cn("flex h-7 w-7 items-center justify-center rounded-[7px] transition-colors", selected ? "bg-black/[0.045] text-[#3977F6]" : "text-[#96989D] hover:bg-black/[0.03]")}>{<Globe2 className="h-3.5 w-3.5" />}</button>; })}</div>}
 
       <div className={cn("flex h-[42px] items-center border-t border-black/[0.05]", collapsed ? "justify-center px-1" : "gap-1.5 px-2.5")}><span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#E8E8E7] text-[9px] font-semibold text-[#505258]">L</span>{!collapsed ? <><span className="flex-1 truncate text-[11.5px] text-[#505258]">Luke</span><button type="button" aria-label="Settings" className="rounded-[6px] p-0.5 text-[#96989D] transition-colors hover:bg-black/[0.035]"><Settings2 className="h-[13px] w-[13px]" strokeWidth={1.7} /></button></> : null}</div>
     </motion.aside>

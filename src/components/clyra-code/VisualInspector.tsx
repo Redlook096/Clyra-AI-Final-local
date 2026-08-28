@@ -1,13 +1,10 @@
-import { useState } from "react";
 import { motion } from "motion/react";
 import { X } from "lucide-react";
-import { cn } from "../../lib/utils";
 import { AGENT_EASE } from "./motion";
 
 /**
- * Inspect selection payload — serialized from the real preview DOM (web) or
- * captured coordinates on the iOS simulator stream. Carries the structured
- * context that reference chips embed for the coding agent.
+ * Inspect selection payload — serialized from the real preview DOM. Carries
+ * the structured context that reference chips embed for the coding agent.
  */
 export type InspectRule = {
   file: string | null;
@@ -17,7 +14,7 @@ export type InspectRule = {
 
 export type InspectPayload = {
   elId?: number;
-  platform?: "web" | "ios";
+  platform?: "web";
   tag?: string;
   kind?: string;
   name?: string;
@@ -30,15 +27,9 @@ export type InspectPayload = {
   url?: string;
   sourceHint?: string | null;
   sourceLine?: number | null;
-  x?: number;
-  y?: number;
-  device?: string;
 };
 
 export function selectionChipLabel(payload: InspectPayload) {
-  if (payload.platform === "ios") {
-    return `▣ iPhone view @ ${payload.x ?? 0}, ${payload.y ?? 0}`;
-  }
   return `▣ ${payload.kind ?? "Element"} · ${payload.label ?? payload.name ?? "element"}`;
 }
 
@@ -57,11 +48,9 @@ export function selectionContextDetail(payload: InspectPayload) {
       cssSelectors: payload.rules?.map((rule) => rule.selector).slice(0, 6),
       styles: payload.styles ?? {},
       bounds: payload.bounds,
-      coordinates: payload.platform === "ios" ? { x: payload.x, y: payload.y } : undefined,
-      device: payload.device,
       domPath: payload.domPath,
       instructions:
-        "The user is referring to THIS selected element. Locate its real source (component/CSS/SwiftUI view) and make the requested change to it.",
+        "The user is referring to THIS selected element. Locate its real source (component/CSS) and make the requested change to it.",
     },
     null,
     2,
@@ -117,7 +106,6 @@ export function VisualInspector({
   onChange: (property: string, value: string, liveStyles?: Record<string, string>) => void;
 }) {
   const styles = payload.styles ?? {};
-  const [note, setNote] = useState("");
 
   const sourceHint = payload.sourceHint ?? payload.rules?.find((rule) => rule.file)?.file ?? null;
 
@@ -147,7 +135,7 @@ export function VisualInspector({
     >
       <div className="flex items-center gap-1.5">
         <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-[#343539]">
-          {payload.platform === "ios" ? "iPhone view" : payload.label ?? payload.name}
+          {payload.label ?? payload.name}
         </span>
         <button
           type="button"
@@ -164,104 +152,71 @@ export function VisualInspector({
         </p>
       ) : null}
 
-      {payload.platform === "ios" ? (
-        <div className="mt-2 flex flex-col gap-1.5">
-          <p className="text-[10.5px] leading-[1.45] text-[#94969A]">
-            iOS changes are applied through the agent as SwiftUI edits.
+      <div className="cc-scroll mt-1.5 flex max-h-[46vh] flex-col gap-1.5 overflow-y-auto pr-0.5">
+        <div className="grid grid-cols-2 gap-1.5">
+          {COLOR_PROPS.map((entry) => (
+            <label key={entry.prop} className="flex items-center gap-1.5 rounded-[6px] px-1 py-0.5 transition-colors hover:bg-black/[0.025]">
+              <input
+                type="color"
+                value={normalizeColor(styles[entry.prop] ?? "")}
+                onChange={(event) => applyColor(entry.prop, event.target.value)}
+                className="h-5 w-6 shrink-0 cursor-pointer rounded-[4px] border border-black/[0.08] bg-transparent p-0"
+              />
+              <span className="truncate text-[10.5px] text-[#686A70]">{entry.label}</span>
+            </label>
+          ))}
+        </div>
+        <div className="grid grid-cols-2 gap-1.5">
+          {NUMBER_PROPS.map((entry) => (
+            <label key={entry.prop} className="flex items-center gap-1.5 rounded-[6px] px-1 py-0.5 transition-colors hover:bg-black/[0.025]">
+              <span className="w-[52px] shrink-0 truncate text-[10.5px] text-[#686A70]">{entry.label}</span>
+              <input
+                type="number"
+                defaultValue={styles[entry.prop] ? String(px(styles[entry.prop])) : ""}
+                placeholder="–"
+                step={entry.prop === "opacity" ? 0.05 : entry.prop === "fontWeight" ? 100 : 1}
+                min={entry.prop === "opacity" ? 0 : 0}
+                max={entry.prop === "opacity" ? 1 : undefined}
+                onBlur={(event) => commitNumber(entry.prop, event.target.value, entry.suffix)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    commitNumber(entry.prop, (event.target as HTMLInputElement).value, entry.suffix);
+                    (event.target as HTMLInputElement).blur();
+                  }
+                }}
+                className="min-w-0 flex-1 rounded-[5px] border border-black/[0.08] bg-white px-1.5 py-[3px] text-[10.5px] tabular-nums outline-none focus:border-black/[0.14]"
+              />
+            </label>
+          ))}
+        </div>
+        <div className="grid grid-cols-2 gap-1.5">
+          {SELECT_PROPS.filter((entry) => styles[entry.prop]).map((entry) => (
+            <label key={entry.prop} className="flex items-center gap-1.5 rounded-[6px] px-1 py-0.5 transition-colors hover:bg-black/[0.025]">
+              <span className="w-[52px] shrink-0 truncate text-[10.5px] text-[#686A70]">{entry.label}</span>
+              <select
+                defaultValue={styles[entry.prop]}
+                onChange={(event) => applySelect(entry.prop, event.target.value)}
+                className="min-w-0 flex-1 rounded-[5px] border border-black/[0.08] bg-white px-1 py-[3px] text-[10.5px] outline-none focus:border-black/[0.14]"
+              >
+                {entry.options.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+        </div>
+        {sourceHint ? (
+          <p className="mt-0.5 text-[9.5px] leading-[1.4] text-[#A0A2A6]">
+            Changes write directly to {sourceHint.split("/").pop()} and the preview refreshes live.
           </p>
-          <textarea
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            placeholder="e.g. make this view smaller and blue"
-            rows={2}
-            className="w-full resize-none rounded-[7px] border border-black/[0.09] bg-white px-2 py-1.5 text-[11px] leading-[1.45] outline-none focus:border-black/[0.14]"
-          />
-          <button
-            type="button"
-            disabled={!note.trim()}
-            onClick={() => {
-              if (note.trim()) {
-                onChange("__ios__", note.trim());
-                setNote("");
-              }
-            }}
-            className={cn(
-              "h-[26px] rounded-[7px] text-[11px] font-medium transition-colors",
-              note.trim()
-                ? "bg-[#242528] text-white hover:bg-[#17181A]"
-                : "bg-[#F0F0EF] text-[#B7B8BA]",
-            )}
-          >
-            Apply through agent
-          </button>
-        </div>
-      ) : (
-        <div className="cc-scroll mt-1.5 flex max-h-[46vh] flex-col gap-1.5 overflow-y-auto pr-0.5">
-          <div className="grid grid-cols-2 gap-1.5">
-            {COLOR_PROPS.map((entry) => (
-              <label key={entry.prop} className="flex items-center gap-1.5 rounded-[6px] px-1 py-0.5 transition-colors hover:bg-black/[0.025]">
-                <input
-                  type="color"
-                  value={normalizeColor(styles[entry.prop] ?? "")}
-                  onChange={(event) => applyColor(entry.prop, event.target.value)}
-                  className="h-5 w-6 shrink-0 cursor-pointer rounded-[4px] border border-black/[0.08] bg-transparent p-0"
-                />
-                <span className="truncate text-[10.5px] text-[#686A70]">{entry.label}</span>
-              </label>
-            ))}
-          </div>
-          <div className="grid grid-cols-2 gap-1.5">
-            {NUMBER_PROPS.map((entry) => (
-              <label key={entry.prop} className="flex items-center gap-1.5 rounded-[6px] px-1 py-0.5 transition-colors hover:bg-black/[0.025]">
-                <span className="w-[52px] shrink-0 truncate text-[10.5px] text-[#686A70]">{entry.label}</span>
-                <input
-                  type="number"
-                  defaultValue={styles[entry.prop] ? String(px(styles[entry.prop])) : ""}
-                  placeholder="–"
-                  step={entry.prop === "opacity" ? 0.05 : entry.prop === "fontWeight" ? 100 : 1}
-                  min={entry.prop === "opacity" ? 0 : 0}
-                  max={entry.prop === "opacity" ? 1 : undefined}
-                  onBlur={(event) => commitNumber(entry.prop, event.target.value, entry.suffix)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      commitNumber(entry.prop, (event.target as HTMLInputElement).value, entry.suffix);
-                      (event.target as HTMLInputElement).blur();
-                    }
-                  }}
-                  className="min-w-0 flex-1 rounded-[5px] border border-black/[0.08] bg-white px-1.5 py-[3px] text-[10.5px] tabular-nums outline-none focus:border-black/[0.14]"
-                />
-              </label>
-            ))}
-          </div>
-          <div className="grid grid-cols-2 gap-1.5">
-            {SELECT_PROPS.filter((entry) => styles[entry.prop]).map((entry) => (
-              <label key={entry.prop} className="flex items-center gap-1.5 rounded-[6px] px-1 py-0.5 transition-colors hover:bg-black/[0.025]">
-                <span className="w-[52px] shrink-0 truncate text-[10.5px] text-[#686A70]">{entry.label}</span>
-                <select
-                  defaultValue={styles[entry.prop]}
-                  onChange={(event) => applySelect(entry.prop, event.target.value)}
-                  className="min-w-0 flex-1 rounded-[5px] border border-black/[0.08] bg-white px-1 py-[3px] text-[10.5px] outline-none focus:border-black/[0.14]"
-                >
-                  {entry.options.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ))}
-          </div>
-          {sourceHint ? (
-            <p className="mt-0.5 text-[9.5px] leading-[1.4] text-[#A0A2A6]">
-              Changes write directly to {sourceHint.split("/").pop()} and the preview refreshes live.
-            </p>
-          ) : (
-            <p className="mt-0.5 text-[9.5px] leading-[1.4] text-[#A0A2A6]">
-              No CSS file mapping — changes are applied through the coding agent.
-            </p>
-          )}
-        </div>
-      )}
+        ) : (
+          <p className="mt-0.5 text-[9.5px] leading-[1.4] text-[#A0A2A6]">
+            No CSS file mapping — changes are applied through the coding agent.
+          </p>
+        )}
+      </div>
     </motion.div>
   );
 }

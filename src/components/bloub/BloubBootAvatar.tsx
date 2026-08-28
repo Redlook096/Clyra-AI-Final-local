@@ -1,13 +1,15 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Bloub, type BloubHandle } from "./Bloub";
+import { Bloub, type BloubHandle, type BloubState } from "./Bloub";
 
 export type BloubBootPhase = "holding" | "ripple" | "complete";
 
 interface BloubBootAvatarProps {
   /** Boot preload progress, 0–1. Eyes stay hidden until this reaches 1. */
   progress: number;
-  /** Mirrors the app's boot-overlay phase. */
+  /** Mirrors the app's boot-overlay phase (kept for the caller's own visual
+   *  choreography; the avatar's own wake/blink/wink/fly sequence below runs
+   *  entirely on its own clock once `progress` reaches 1). */
   phase: BloubBootPhase;
   color: string;
   /** CSS selector for the on-page slot to fly into once the overlay lifts. */
@@ -18,13 +20,26 @@ interface BloubBootAvatarProps {
   onArrive?: () => void;
 }
 
-type Travel = { dx: number; dy: number; scale: number; opacity: number };
+type Travel = { dx: number; dy: number; scale: number };
+
+// Every step is timed relative to the step before it: eyes stay hidden
+// until loading finishes, then open -> a quick wink (short beat, not a long
+// pause) -> immediately smooth fly-and-shrink into the header slot, staying
+// fully visible the entire time (no fade/hide mid-flight — the clone and
+// the landed avatar are pixel-identical at the exact moment they swap, so
+// there is nothing to crossfade). Nothing here is tied to the parent's
+// ripple/complete timing — the caller is only told "arrived" once this is
+// genuinely done.
+const WINK_AFTER_EYES_MS = 260;
+const IDLE_AFTER_WINK_MS = 130;
+const FLY_AFTER_IDLE_MS = 170;
 
 /**
  * The boot-splash avatar: bare round body while the app loads (no eyes),
- * wakes up with a blink the instant loading completes, then — while the
- * existing ripple hand-off plays — flies from its centred boot position
- * into the real chat-home avatar slot and fades out right as it lands.
+ * then — once loading completes — opens its eyes, winks once, and flies
+ * from its oversized boot position into the real chat-home avatar slot,
+ * shrinking down to size as it travels rather than teleporting or snapping,
+ * remaining fully visible throughout (never fading out mid-flight).
  *
  * Rendered as a single persistent instance across the "holding" -> "ripple"
  * phases (same React position/key in the tree) so the in-flight FLIP
@@ -32,42 +47,31 @@ type Travel = { dx: number; dy: number; scale: number; opacity: number };
  */
 export function BloubBootAvatar({
   progress,
-  phase,
   color,
   targetSelector,
-  size = 72,
+  size = 140,
   onArrive,
 }: BloubBootAvatarProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const bloubRef = useRef<BloubHandle | null>(null);
   const [travel, setTravel] = useState<Travel | null>(null);
-  const startedRef = useRef(false);
+  const [poseState, setPoseState] = useState<BloubState>("idle");
+  const [arrived, setArrived] = useState(false);
   const arrivedRef = useRef(false);
+  const sequenceStartedRef = useRef(false);
   const awake = progress >= 1;
 
-  // Same fixed, upright, dead-centre gaze as the landed header avatar —
-  // set the instant the eyes open so it never shows the state's default
-  // off-axis rest look, not even for a frame.
-  const wokeRef = useRef(false);
-  useEffect(() => {
-    if (awake && !wokeRef.current) {
-      wokeRef.current = true;
-      bloubRef.current?.setGaze(0, 0, 0);
-    }
-  }, [awake]);
-
-  useLayoutEffect(() => {
-    if (phase !== "ripple" || startedRef.current) return;
-    startedRef.current = true;
-
+  const startTravel = () => {
     const node = wrapRef.current;
     const target = document.querySelector(targetSelector) as HTMLElement | null;
     const origin = node?.getBoundingClientRect();
 
     if (!node || !origin || !target) {
       // Nowhere to fly to (e.g. booted straight into an existing
-      // conversation): just settle back into idle in place.
-      setTravel({ dx: 0, dy: 0, scale: 1, opacity: 0 });
+      // conversation): nothing to travel toward — just report arrival.
+      arrivedRef.current = true;
+      setArrived(true);
+      onArrive?.();
       return;
     }
 
@@ -75,39 +79,66 @@ export function BloubBootAvatar({
     const dx = targetRect.left + targetRect.width / 2 - (origin.left + origin.width / 2);
     const dy = targetRect.top + targetRect.height / 2 - (origin.top + origin.height / 2);
     const scale = targetRect.width > 0 ? targetRect.width / origin.width : 1;
-    setTravel({ dx, dy, scale, opacity: 0 });
-  }, [phase, targetSelector]);
+    setTravel({ dx, dy, scale });
+  };
+
+  // The whole performance, run exactly once on the rising edge of `awake`.
+  useEffect(() => {
+    if (!awake || sequenceStartedRef.current) return;
+    sequenceStartedRef.current = true;
+
+    // Fixed, upright, dead-centre gaze the instant the eyes open — matches
+    // the landed header avatar, never the state's default off-axis rest
+    // look. No wander during the performance — it holds perfectly still
+    // apart from the wink until it lands.
+    bloubRef.current?.setGaze(0, 0, 0, 0);
+
+    const timers: number[] = [];
+    const after = (ms: number, fn: () => void) => {
+      timers.push(window.setTimeout(fn, ms));
+    };
+
+    // Reveal (~0.26s) happens automatically as soon as `eyesVisible` goes
+    // true. Shortly after, a quick wink, then straight into the flight.
+    after(WINK_AFTER_EYES_MS, () => {
+      setPoseState("wink");
+      after(IDLE_AFTER_WINK_MS, () => {
+        setPoseState("idle");
+        // Give the un-wink blend a moment to settle before launching the
+        // flight so the two motions read as one smooth handoff instead of
+        // overlapping.
+        after(FLY_AFTER_IDLE_MS, startTravel);
+      });
+    });
+
+    return () => {
+      timers.forEach((id) => window.clearTimeout(id));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [awake]);
 
   return (
     <motion.div
       ref={wrapRef}
       className="clyra-boot-avatar"
-      style={{ width: size, height: size }}
+      style={{ width: size, height: size, opacity: arrived ? 0 : 1, transition: "opacity 80ms linear" }}
       initial={false}
-      animate={
-        travel
-          ? { x: travel.dx, y: travel.dy, scale: travel.scale, opacity: travel.opacity }
-          : { x: 0, y: 0, scale: 1, opacity: 1 }
-      }
+      animate={travel ? { x: travel.dx, y: travel.dy, scale: travel.scale } : { x: 0, y: 0, scale: 1 }}
       transition={
         travel
-          ? {
-              x: { duration: 0.62, ease: [0.16, 1, 0.3, 1] },
-              y: { duration: 0.62, ease: [0.16, 1, 0.3, 1] },
-              scale: { duration: 0.62, ease: [0.16, 1, 0.3, 1] },
-              opacity: { duration: 0.2, delay: 0.42 },
-            }
+          ? { duration: 0.68, ease: [0.16, 1, 0.3, 1] }
           : { duration: 0 }
       }
       onAnimationComplete={() => {
         if (!travel || arrivedRef.current) return;
         arrivedRef.current = true;
+        setArrived(true);
         onArrive?.();
       }}
     >
       <Bloub
         ref={bloubRef}
-        state="idle"
+        state={poseState}
         size={size}
         color={color}
         background="#ffffff"

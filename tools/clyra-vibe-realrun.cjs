@@ -54,8 +54,7 @@ async function runPrompt(name, prompt) {
 
 (async () => {
   const web = await runPrompt("qa-website-e2e", "Build a small one-page website for a bakery called Rye & Salt: a single index.html with a heading and one short paragraph.");
-  const ios = await runPrompt("qa-ios-e2e", "Build a small native iOS app in SwiftUI called Tide: a single screen with the app name centered.");
-  const passed = web.state === "complete" && ios.state === "complete";
-  log(`\n===== OVERALL: ${passed ? "PASS" : "FAIL"} (web=${web.state}, ios=${ios.state}) =====`);
+  const passed = web.state === "complete";
+  log(`\n===== OVERALL: ${passed ? "PASS" : "FAIL"} (web=${web.state}) =====`);
   process.exit(0);
 })().catch((e) => { log("CRASH: " + (e && e.message)); process.exit(2); });

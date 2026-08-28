@@ -24,6 +24,7 @@ import {
 } from "motion/react";
 import {
   AppWindow,
+  Archive,
   Bell,
   Brain,
   ChevronDown,
@@ -37,7 +38,6 @@ import {
   ChevronRight,
   FileUp,
   Folder,
-  Gamepad2,
   Globe,
   GraduationCap,
   Heart,
@@ -47,9 +47,11 @@ import {
   Mail,
   MessagesSquare,
   Mic,
+  MoreHorizontal,
   MousePointer2,
   Paperclip,
   Pencil,
+  Pin,
   Play,
   Search,
   Share2,
@@ -113,7 +115,7 @@ import { VoiceWaveform } from "./components/voice/VoiceWaveform";
 import { VoicePcmCapturer } from "./lib/voicePcmCapture";
 import { useVoiceCall } from "./hooks/useVoiceCall";
 import { type OrbColorTheme } from "./components/AiOrb";
-import { Bloub, type BloubHandle } from "./components/bloub/Bloub";
+import { Bloub, type BloubHandle, type BloubState } from "./components/bloub/Bloub";
 import { BloubBootAvatar } from "./components/bloub/BloubBootAvatar";
 
 // Maps the app's existing orb colour themes to a single Bloub accent hex.
@@ -132,7 +134,6 @@ import { getElectronDesktop } from "./lib/electron-runtime";
 import { VibeAgentMessageBody } from "./components/vibe/VibeAgentMessageBody";
 import { VibeLivePreviewPanel } from "./components/vibe/VibeLivePreviewPanel";
 import { WorkspaceTaskView, type TaskViewHandle, type TaskViewPreview, type TaskViewTab } from "./components/WorkspaceTaskView";
-import { buildWelcomeRows } from "./features/chat/welcomeSuggestions";
 import { buildLocalVibeFallbackResponse } from "./lib/buildLocalVibeFallback";
 import { VIBE_CURSOR_AGENT_SYSTEM_PROMPT } from "./lib/vibeAgentConstants";
 import { extractVibeFilesFromContent } from "./lib/parseVibeAgentContent";
@@ -259,11 +260,6 @@ const loadStudyPalWorkspace = () =>
     default: () => <WorkspaceImportFailure name="Study Pal" />,
   }));
 const StudyPalWorkspace = lazy(loadStudyPalWorkspace);
-const loadForgeWorkspace = () =>
-  import("./components/forge/ForgeWorkspace").catch(() => ({
-    default: () => <WorkspaceImportFailure name="Clyra Forge" />,
-  }));
-const ForgeWorkspace = lazy(loadForgeWorkspace);
 
 function prepareVibeForBoot(
   onProgress?: (update: VibeBootProgressUpdate) => void,
@@ -328,7 +324,7 @@ function prepareVibeForBoot(
   return vibeBootPreparation;
 }
 
-type WorkspaceTabId = "chat" | "vibe" | "clip" | "browser" | "forge" | "study" | "companion" | CreatorMode;
+type WorkspaceTabId = "chat" | "vibe" | "clip" | "browser" | "study" | "companion" | CreatorMode;
 type AppAgentId = "vibe" | "browse" | "clip" | "study" | "fake-text" | "would-rather";
 type GoogleToolId = "gmail" | "calendar" | "docs" | "sheets" | "slides" | "drive";
 type AppAgentStatus = "queued" | "running" | "ready" | "needs_input" | "failed";
@@ -349,7 +345,6 @@ const WORKSPACE_TAB_ORDER: WorkspaceTabId[] = [
   "vibe",
   "clip",
   "browser",
-  "forge",
   "fake-text",
   "would-rather",
 ];
@@ -369,7 +364,7 @@ function readEmbeddedWorkspace(): WorkspaceTabId {
   const tool = params.get("embedTool");
   if (tool === "browse" || tool === "browser") return "browser";
   if (tool === "fake-text" || tool === "would-rather") return tool;
-  if (tool === "vibe" || tool === "clip" || tool === "forge" || tool === "study" || tool === "companion") return tool;
+  if (tool === "vibe" || tool === "clip" || tool === "study" || tool === "companion") return tool;
   return "chat";
 }
 const WORKSPACE_TAB_WIDTH = 105;
@@ -417,6 +412,84 @@ function readStoredOrbColorTheme(): OrbColorTheme {
   }
 }
 
+function readStoredTheme(): "Light" | "Dark" {
+  if (typeof window === "undefined") return "Light";
+  try {
+    return window.localStorage.getItem("clyra-theme") === "Dark" ? "Dark" : "Light";
+  } catch {
+    return "Light";
+  }
+}
+
+const DEFAULT_ACCENT_COLOR = "#2563eb";
+
+function readStoredAccentColor(): string {
+  if (typeof window === "undefined") return DEFAULT_ACCENT_COLOR;
+  try {
+    const stored = window.localStorage.getItem("clyra-accent-color");
+    return stored && /^#[0-9a-fA-F]{6}$/.test(stored) ? stored : DEFAULT_ACCENT_COLOR;
+  } catch {
+    return DEFAULT_ACCENT_COLOR;
+  }
+}
+
+// Builds a Tailwind-shaped 50–900 tonal scale from one base hex so every
+// `blue-*` utility across the app (which the stylesheet remaps to these CSS
+// variables — see `@theme` in index.css) re-tints together instead of each
+// component needing its own accent-aware styling.
+const ACCENT_SCALE_LIGHTNESS: Record<string, number> = {
+  "50": 96, "100": 92, "200": 84, "300": 74, "400": 62,
+  "500": 52, "600": 42, "700": 33, "800": 26, "900": 20,
+};
+
+function hexToHsl(hex: string): { h: number; s: number; l: number } {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0, l: l * 100 };
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h: number;
+  if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) * 60;
+  else if (max === g) h = ((b - r) / d + 2) * 60;
+  else h = ((r - g) / d + 4) * 60;
+  return { h, s: s * 100, l: l * 100 };
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  const sat = s / 100;
+  const light = l / 100;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = sat * Math.min(light, 1 - light);
+  const f = (n: number) => light - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  const toHex = (n: number) => Math.round(f(n) * 255).toString(16).padStart(2, "0");
+  return `#${toHex(0)}${toHex(8)}${toHex(4)}`;
+}
+
+function buildAccentScale(baseHex: string): Record<string, string> {
+  const { h, s } = hexToHsl(baseHex);
+  const saturation = Math.max(s, 55);
+  const scale: Record<string, string> = {};
+  for (const [stop, lightness] of Object.entries(ACCENT_SCALE_LIGHTNESS)) {
+    scale[stop] = hslToHex(h, saturation, lightness);
+  }
+  return scale;
+}
+
+function applyAccentColor(hex: string) {
+  if (typeof document === "undefined") return;
+  const scale = buildAccentScale(hex);
+  const root = document.documentElement.style;
+  for (const [stop, value] of Object.entries(scale)) {
+    root.setProperty(`--accent-${stop}`, value);
+  }
+  root.setProperty("--clyra-accent", scale["600"]);
+  root.setProperty("--clyra-accent-soft", scale["50"]);
+}
+
 function readStoredNumber(key: string, fallback: number, min: number, max: number) {
   if (typeof window === "undefined") return fallback;
   try {
@@ -457,6 +530,67 @@ function formatRecentUpdate(updatedAt: number) {
   const elapsedHours = Math.round(elapsedMinutes / 60);
   if (elapsedHours < 24) return `Updated ${elapsedHours}h ago`;
   return `Updated ${Math.round(elapsedHours / 24)}d ago`;
+}
+
+/**
+ * Composer effort picker. Maps directly onto the two DeepSeek tiers the
+ * server already understands (`lib/deepseek-models.ts`):
+ *  - light  -> deepseek-v4-flash, no reasoning — fastest, current default.
+ *  - medium -> deepseek-v4-pro, no reasoning — the normal, better-quality chat.
+ *  - high   -> deepseek-v4-pro WITH reasoning enabled — the closest thing to
+ *              an agentic pass this endpoint supports without a dedicated
+ *              multi-step tool-use harness (that only exists for Vibe Coder
+ *              today); this is deliberately the "basic" version of that.
+ */
+type ChatEffort = "light" | "medium" | "high";
+const CHAT_EFFORT_MODEL: Record<ChatEffort, string> = {
+  light: "deepseek-v4-flash",
+  medium: "deepseek-v4-pro",
+  high: "deepseek-v4-pro",
+};
+const CHAT_EFFORT_THINKING: Record<ChatEffort, boolean> = {
+  light: false,
+  medium: false,
+  high: true,
+};
+const CHAT_EFFORT_LABEL: Record<ChatEffort, string> = {
+  light: "Light",
+  medium: "Medium",
+  high: "High",
+};
+const CHAT_EFFORT_HINT: Record<ChatEffort, string> = {
+  light: "Fastest replies",
+  medium: "Balanced quality",
+  high: "Deeper reasoning",
+};
+
+/** "Just now" / "12 min" / "Yesterday" / "25 Aug" — used by the Recent
+ *  conversations rows on the chat home screen. */
+function formatChatRowTimestamp(updatedAt: number) {
+  const elapsedMinutes = Math.max(0, Math.floor((Date.now() - updatedAt) / 60_000));
+  if (elapsedMinutes < 1) return "Just now";
+  if (elapsedMinutes < 60) return `${elapsedMinutes} min`;
+  const date = new Date(updatedAt);
+  const now = new Date();
+  const isSameDay = date.toDateString() === now.toDateString();
+  if (isSameDay) return `${Math.floor(elapsedMinutes / 60)}h`;
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+const GREETING_PREFIXES_BY_HOUR: Array<{ maxHour: number; options: string[] }> = [
+  { maxHour: 5, options: ["Still up,", "Burning the midnight oil,", "Good to see you,"] },
+  { maxHour: 12, options: ["Good morning,", "Morning,", "Rise and shine,"] },
+  { maxHour: 17, options: ["Good afternoon,", "Good day,"] },
+  { maxHour: 21, options: ["Good evening,", "Evening,"] },
+  { maxHour: 24, options: ["Good evening,", "Winding down,", "Good to see you,"] },
+];
+
+function pickGreetingPrefix(hour: number): string {
+  const bucket = GREETING_PREFIXES_BY_HOUR.find((entry) => hour < entry.maxHour) ?? GREETING_PREFIXES_BY_HOUR[GREETING_PREFIXES_BY_HOUR.length - 1];
+  return bucket.options[Math.floor(Math.random() * bucket.options.length)];
 }
 
 type BootOverlayState = "holding" | "ripple" | "complete";
@@ -1546,7 +1680,7 @@ function AppAgentFlowPanel({
                 }}
                 className={cn(
                   "inline-flex min-w-max items-center gap-1.5 rounded-full px-3 py-2 text-[10px] font-semibold transition-[background-color,color,box-shadow] duration-200",
-                  isActive ? "bg-[#0052fb] text-white shadow-sm" : "text-slate-500 hover:bg-slate-100 hover:text-slate-800",
+                  isActive ? "bg-[var(--accent-600)] text-white shadow-sm" : "text-slate-500 hover:bg-slate-100 hover:text-slate-800",
                 )}
               >
                 <AppAgentGlyph id={agent.id} className="h-3.5 w-3.5" />
@@ -2227,6 +2361,8 @@ export default function App() {
     kind?: "chat" | "vibe";
     vibeRunning?: boolean;
     vibeUnread?: boolean;
+    pinned?: boolean;
+    archived?: boolean;
   }
 
   const [selectedCommand, setSelectedCommand] =
@@ -2827,16 +2963,169 @@ export default function App() {
   // nowhere near it, so it doesn't follow the cursor here — it holds a
   // fixed, centred, forward gaze instead of the state's default off-axis
   // rest look.
+  const [greetingPrefix] = useState(() => pickGreetingPrefix(new Date().getHours()));
   const homeBloubRef = useRef<BloubHandle | null>(null);
   useEffect(() => {
-    if (bloubLanded) homeBloubRef.current?.setGaze(0, 0, 0);
+    if (!bloubLanded) return;
+    // Land completely still — no wander, no other animation — then, only
+    // once it's held that pose for a full second, ease in a little idle
+    // wander (tiny drift/saccades) so it reads as alive rather than static.
+    homeBloubRef.current?.setGaze(0, 0, 0, 0);
+    const timer = window.setTimeout(() => {
+      homeBloubRef.current?.setGaze(0, 0, 0, 0.35);
+    }, 1000);
+    return () => window.clearTimeout(timer);
   }, [bloubLanded]);
+
+  // The header avatar looks toward the cursor while it's over the sidebar
+  // toggle, the workspace tab switcher, or the temporary-chat button — all
+  // near enough on screen to read as a deliberate glance rather than noise.
+  const homeGazeActiveRef = useRef(0);
+  const homeGazeRafRef = useRef<number | null>(null);
+  const updateHomeGaze = useCallback((clientX: number, clientY: number) => {
+    if (homeGazeRafRef.current != null) return;
+    homeGazeRafRef.current = window.requestAnimationFrame(() => {
+      homeGazeRafRef.current = null;
+      const target = document.getElementById("clyra-bloub-home-target");
+      if (!target) return;
+      const rect = target.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const scale = 260;
+      const nx = Math.max(-1, Math.min(1, (clientX - cx) / scale));
+      const ny = Math.max(-1, Math.min(1, (clientY - cy) / scale));
+      homeBloubRef.current?.setGaze(nx * 22, -ny * 14, 0, 0);
+    });
+  }, []);
+  const handleHomeGazeEnter = useCallback(
+    (event: React.MouseEvent) => {
+      homeGazeActiveRef.current += 1;
+      updateHomeGaze(event.clientX, event.clientY);
+    },
+    [updateHomeGaze],
+  );
+  const handleHomeGazeMove = useCallback(
+    (event: React.MouseEvent) => {
+      updateHomeGaze(event.clientX, event.clientY);
+    },
+    [updateHomeGaze],
+  );
+  const handleHomeGazeLeave = useCallback(() => {
+    homeGazeActiveRef.current = Math.max(0, homeGazeActiveRef.current - 1);
+    if (homeGazeActiveRef.current === 0) {
+      homeBloubRef.current?.setGaze(0, 0, 0, bloubLanded ? 0.35 : 0);
+    }
+  }, [bloubLanded]);
+
+  // Self-correcting backstop for the enter/leave pairs above: if any of them
+  // ever misses its matching leave (e.g. the tab bar unmounting mid-hover
+  // via its own auto-hide timer), the ref-counter above can get stuck above
+  // zero and the head would keep looking off to one side forever. This
+  // re-checks real cursor position against the trigger elements on every
+  // mousemove and force-centers the gaze the instant the pointer is truly
+  // outside all of them — independent of whatever the counter thinks.
+  useEffect(() => {
+    // Only run on the empty-state chat home screen, where the header avatar
+    // and its gaze targets actually exist.
+    if (activeWorkspaceTab !== "chat" || messages.length !== 0) return;
+    const selectors = [".clyra-sidebar-toggle", ".clyra-temp-chat-toggle", ".clyra-workflow-tabs", ".input-wrapper"];
+    let rafId: number | null = null;
+    let wasInside = false;
+    const check = (clientX: number, clientY: number) => {
+      const inside = selectors.some((selector) => {
+        const el = document.querySelector(selector);
+        if (!el) return false;
+        const rect = el.getBoundingClientRect();
+        return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+      });
+      if (!inside && wasInside) {
+        homeGazeActiveRef.current = 0;
+        homeBloubRef.current?.setGaze(0, 0, 0, bloubLanded ? 0.35 : 0);
+      }
+      wasInside = inside;
+    };
+    const onMove = (event: MouseEvent) => {
+      if (rafId != null) return;
+      const { clientX, clientY } = event;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        check(clientX, clientY);
+      });
+    };
+    window.addEventListener("mousemove", onMove);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      if (rafId != null) cancelAnimationFrame(rafId);
+    };
+  }, [activeWorkspaceTab, messages.length, bloubLanded]);
+
+  // Click reactions cycle through a small set of the engine's built-in
+  // preset animations, never repeating the one just played, and refuse to
+  // start a new one until the current performance has actually finished —
+  // per-preset durations come straight from the engine's own state table.
+  const HOME_BLOUB_CLICK_PRESETS: Array<{ state: BloubState; ms: number }> = [
+    { state: "burst", ms: 2600 },
+    { state: "swirl", ms: 1300 },
+    { state: "comet", ms: 2400 },
+    { state: "exclaim", ms: 2000 },
+    { state: "wide", ms: 1800 },
+    { state: "orbit", ms: 3400 },
+  ];
+  const homeBloubBusyRef = useRef(false);
+  const homeBloubLastPresetRef = useRef<BloubState | null>(null);
+  const playHomeBloubPreset = useCallback((pool: Array<{ state: BloubState; ms: number }>) => {
+    if (homeBloubBusyRef.current) return;
+    const choices = pool.filter((p) => p.state !== homeBloubLastPresetRef.current);
+    const pick = (choices.length ? choices : pool)[Math.floor(Math.random() * (choices.length ? choices.length : pool.length))];
+    homeBloubLastPresetRef.current = pick.state;
+    homeBloubBusyRef.current = true;
+    homeBloubRef.current?.setState(pick.state);
+    window.setTimeout(() => {
+      homeBloubBusyRef.current = false;
+      homeBloubRef.current?.setState("idle");
+    }, pick.ms);
+  }, []);
+  const handleHomeBloubClick = useCallback(() => {
+    playHomeBloubPreset(HOME_BLOUB_CLICK_PRESETS);
+  }, [playHomeBloubPreset]);
+
+  // The composer gets the same cursor-follow treatment as the header
+  // buttons (see `handleHomeGaze*` above), plus — while actively typing —
+  // it looks toward the live caret position instead of the mouse. Caret
+  // position is measured with a hidden mirror element (matching font/
+  // padding/width) rather than the Selection API, since a plain
+  // `<textarea>` has no way to query a caret's on-screen pixel position.
+  const composerCaretMirrorRef = useRef<HTMLDivElement | null>(null);
+  const updateComposerCaretGaze = useCallback(() => {
+    const ta = textareaRef.current;
+    const mirror = composerCaretMirrorRef.current;
+    if (!ta || !mirror) return;
+    const caret = ta.selectionStart ?? ta.value.length;
+    const cs = window.getComputedStyle(ta);
+    mirror.style.font = cs.font;
+    mirror.style.letterSpacing = cs.letterSpacing;
+    mirror.style.padding = cs.padding;
+    mirror.style.border = cs.border;
+    mirror.style.width = `${ta.clientWidth}px`;
+    mirror.textContent = ta.value.slice(0, caret);
+    const marker = document.createElement("span");
+    marker.textContent = "​";
+    mirror.appendChild(marker);
+    const taRect = ta.getBoundingClientRect();
+    const mirrorRect = mirror.getBoundingClientRect();
+    const markerRect = marker.getBoundingClientRect();
+    const x = taRect.left + (markerRect.left - mirrorRect.left) - ta.scrollLeft;
+    const y = taRect.top + (markerRect.top - mirrorRect.top) - ta.scrollTop;
+    updateHomeGaze(x, y);
+  }, [updateHomeGaze]);
 
   // The static document-level cover remains until this first layout commit,
   // where the React-owned boot surface is already in place beneath it.
   useLayoutEffect(() => {
     document.getElementById("clyra-preboot-surface")?.remove();
   }, []);
+
+  const beginRippleRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     if (isEmbeddedToolRoute) return;
@@ -2845,33 +3134,40 @@ export default function App() {
     let cancelled = false;
     let finished = false;
     const timers: number[] = [];
-    const startedAt = performance.now();
     const schedule = (delay: number, callback: () => void) => {
       timers.push(window.setTimeout(callback, delay));
     };
     vibeBootPreparation = null;
 
+    // The optical ripple reveal — the app's own "other" intro animation —
+    // must never start until the boot avatar has actually landed in its
+    // header slot (see `onAvatarArrive` on `BootIntroOverlay` below, which
+    // calls this). Triggering it any earlier would show the ripple/reveal
+    // while the avatar is still mid-flight, which reads as two competing
+    // animations instead of one sequenced handoff.
     const beginRipple = () => {
       if (cancelled) return;
       setIntroState("ripple");
-      // Keep the optical handoff mounted through its full 980ms pass, then
-      // release the surface without a separate fade.
-      schedule(1_020, () => {
+      setIsSidebarOpen(true);
+      schedule(1_000, () => {
         if (cancelled) return;
         setIntroState("complete");
-        setIsSidebarOpen(true);
       });
     };
+    beginRippleRef.current = beginRipple;
 
     const completePreparation = (ready: boolean) => {
       if (finished || cancelled) return;
       finished = true;
       markVibeBootReady(ready);
       setIntroProgress(1);
-      // Keep the final fill on screen long enough to settle, with a short
-      // calm floor on fast local startups rather than a fake fixed loader.
-      const remainingFloor = Math.max(0, 950 - (performance.now() - startedAt));
-      schedule(Math.max(280, remainingFloor), beginRipple);
+      // Safety net only: if the avatar's arrival signal never fires (e.g. no
+      // chat-home slot to fly into, or an unexpected stall), don't leave the
+      // user stuck behind the boot overlay forever.
+      schedule(6_000, () => {
+        if (cancelled) return;
+        beginRipple();
+      });
     };
 
     void prepareVibeForBoot((update) => {
@@ -2903,6 +3199,17 @@ export default function App() {
   const [editingChatId, setEditingChatId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [value, setValue] = useState("");
+  const [chatEffort, setChatEffort] = useState<ChatEffort>(() => {
+    const stored = readStoredString("clyra-chat-effort");
+    return stored === "light" || stored === "medium" || stored === "high" ? stored : "medium";
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("clyra-chat-effort", chatEffort);
+    } catch {
+      // Best-effort only — the picker still works for the session either way.
+    }
+  }, [chatEffort]);
   const [chatDrafts, setChatDrafts] = useState<Record<string, string>>(() => {
     try {
       return JSON.parse(localStorage.getItem("clyra-chat-drafts") || "{}") as Record<string, string>;
@@ -2919,6 +3226,9 @@ export default function App() {
   const [isCommandPalettePinned, setIsCommandPalettePinned] = useState(false);
   const [recentCommand, setRecentCommand] = useState<string | null>(null);
   const [isInputExpanded, setIsInputExpanded] = useState(false);
+  const [isEffortMenuOpen, setIsEffortMenuOpen] = useState(false);
+  const [effortMenuPos, setEffortMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const effortTriggerRef = useRef<HTMLButtonElement>(null);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const composerDictation = useComposerVoiceCapture((text) => {
     setValue(text);
@@ -3251,7 +3561,8 @@ export default function App() {
   const [showRewards, setShowRewards] = useState(false);
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [showClipsLibrary, setShowClipsLibrary] = useState(false);
-  const [theme, setTheme] = useState("Light");
+  const [theme, setTheme] = useState<string>(readStoredTheme);
+  const [accentColor, setAccentColor] = useState<string>(readStoredAccentColor);
   const [sendOnEnter, setSendOnEnter] = useState(true);
   const [fontSize, setFontSize] = useState("Medium");
   const [autoScroll, setAutoScroll] = useState(true);
@@ -3352,6 +3663,12 @@ export default function App() {
   const jumpScrollRafRef = useRef<number | null>(null);
   const lastScrollTopRef = useRef(0);
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
+  /** Wraps the rendered message list so its own layout growth (streamed
+   * text, mini code box expand/collapse, spring counters, etc.) can be
+   * observed directly instead of only reacting to message-content changes. */
+  const chatContentRef = useRef<HTMLDivElement | null>(null);
+  const chatContentHeightRef = useRef(0);
+  const chatFollowFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
     setIsSearching(searchQuery.length > 0);
@@ -3364,6 +3681,24 @@ export default function App() {
       console.error("Failed to save orb color theme:", error);
     }
   }, [orbColorTheme]);
+
+  useEffect(() => {
+    document.documentElement.dataset.clyraTheme = theme === "Dark" ? "dark" : "light";
+    try {
+      window.localStorage.setItem("clyra-theme", theme);
+    } catch {
+      // ignore
+    }
+  }, [theme]);
+
+  useEffect(() => {
+    applyAccentColor(accentColor);
+    try {
+      window.localStorage.setItem("clyra-accent-color", accentColor);
+    } catch {
+      // ignore
+    }
+  }, [accentColor]);
 
   useEffect(() => {
     try {
@@ -3388,6 +3723,11 @@ export default function App() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+        // Cmd/Ctrl+F means "find on this page" everywhere else in Clyra's
+        // own AI Browser — this global "search chats" binding was capturing
+        // that keystroke first and silently swallowing the browser's own
+        // find-in-page shortcut. Only claim it outside the browser workspace.
+        if (activeWorkspaceTab === "browser") return;
         e.preventDefault();
         setIsSearchModalOpen(true);
       }
@@ -3398,7 +3738,7 @@ export default function App() {
       window.removeEventListener("keydown", handleKeyDown, { capture: true });
       document.removeEventListener("keydown", handleKeyDown, { capture: true });
     };
-  }, []);
+  }, [activeWorkspaceTab]);
 
   const lastAssistantId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -3489,18 +3829,12 @@ export default function App() {
       }
       setIsSidebarOpen(false);
       window.setTimeout(() => {
-        const chatContainer = document.getElementById("chat-container");
-        if (chatContainer) {
-          chatNearBottomRef.current = true;
-          userPinnedAwayRef.current = false;
-          chatContainer.scrollTo({
-            top: chatContainer.scrollHeight,
-            behavior: "smooth",
-          });
-        }
+        chatNearBottomRef.current = true;
+        userPinnedAwayRef.current = false;
+        scrollToLatest();
       }, 120);
     },
-    [chatDrafts, currentChatId, isVibeChat, value],
+    [chatDrafts, currentChatId, isVibeChat, value, scrollToLatest],
   );
 
   const handleChatSelect = useCallback(
@@ -3652,6 +3986,52 @@ export default function App() {
     const timer = window.setTimeout(() => scrollToLatest(), 64);
     return () => window.clearTimeout(timer);
   }, [messages, scrollToLatest]);
+
+  // Streamed sub-components (Vibe mini code boxes expanding/typing/collapsing,
+  // rolling +/- counters, markdown reflow, etc.) grow the transcript on their
+  // own animation clocks, independent of message-content updates. Watch the
+  // rendered content's real layout size directly and glue the viewport to its
+  // moving bottom edge one rAF at a time, so scroll never lags behind or races
+  // ahead of what is actually animating on screen.
+  useEffect(() => {
+    const container = document.getElementById("chat-container");
+    const content = chatContentRef.current;
+    if (!container || !content) return;
+    chatContentHeightRef.current = container.scrollHeight;
+    const observer = new ResizeObserver(() => {
+      if (!autoScroll || userPinnedAwayRef.current || !chatNearBottomRef.current) {
+        chatContentHeightRef.current = container.scrollHeight;
+        return;
+      }
+      if (chatFollowFrameRef.current != null) return;
+      chatFollowFrameRef.current = requestAnimationFrame(() => {
+        chatFollowFrameRef.current = null;
+        if (!autoScroll || userPinnedAwayRef.current || !chatNearBottomRef.current) {
+          chatContentHeightRef.current = container.scrollHeight;
+          return;
+        }
+        const nextHeight = container.scrollHeight;
+        const delta = nextHeight - chatContentHeightRef.current;
+        programmaticScrollRef.current = true;
+        if (delta > 0) {
+          container.scrollTop += delta;
+        } else {
+          container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+        }
+        lastScrollTopRef.current = container.scrollTop;
+        chatContentHeightRef.current = nextHeight;
+        programmaticScrollRef.current = false;
+      });
+    });
+    observer.observe(content);
+    return () => {
+      observer.disconnect();
+      if (chatFollowFrameRef.current != null) {
+        cancelAnimationFrame(chatFollowFrameRef.current);
+        chatFollowFrameRef.current = null;
+      }
+    };
+  }, [autoScroll]);
 
   useEffect(() => {
     if (toastMessage) {
@@ -4546,6 +4926,27 @@ Request details: ${userPrompt}`,
       const vibeAbort = new AbortController();
       let acceptRemoteVibeChunks = true;
       let vibeTimeout: number | undefined;
+      // The SSE transport can deliver text in bursts of many tiny chunks per
+      // frame. Committing every single chunk straight to state re-parses the
+      // whole Vibe segment tree (VibeAgentMessageBody) each time, which is
+      // exactly the "rushes then lags" stutter — bursts of synchronous work
+      // followed by idle gaps. Coalesce to at most one commit per animation
+      // frame so the UI always sees one clean, evenly-paced update per paint.
+      let vibeFlushRaf: number | null = null;
+      const flushVibeContent = () => {
+        vibeFlushRaf = null;
+        patchMessagesForChat(streamChatId, (prev) =>
+          prev.map((msg) =>
+            msg.id === aiMsgId
+              ? {
+                  ...msg,
+                  content: full,
+                  isThinking: false,
+                }
+              : msg,
+          ),
+        );
+      };
       try {
         await Promise.race([
           streamOpenAI(
@@ -4556,17 +4957,9 @@ Request details: ${userPrompt}`,
                 return;
               }
               full += chunkText;
-              patchMessagesForChat(streamChatId, (prev) =>
-                prev.map((msg) =>
-                  msg.id === aiMsgId
-                    ? {
-                        ...msg,
-                        content: full,
-                        isThinking: false,
-                      }
-                    : msg,
-                ),
-              );
+              if (vibeFlushRaf == null) {
+                vibeFlushRaf = window.requestAnimationFrame(flushVibeContent);
+              }
             },
             0.6,
             8000,
@@ -4584,6 +4977,13 @@ Request details: ${userPrompt}`,
       } finally {
         acceptRemoteVibeChunks = false;
         if (vibeTimeout !== undefined) window.clearTimeout(vibeTimeout);
+        if (vibeFlushRaf != null) {
+          window.cancelAnimationFrame(vibeFlushRaf);
+          vibeFlushRaf = null;
+        }
+        // Make sure whatever accumulated after the last painted frame still
+        // reaches state before the completion patch below reads `full`.
+        flushVibeContent();
       }
 
       const codeBlockMatches =
@@ -4625,13 +5025,12 @@ Request details: ${userPrompt}`,
       );
 
       setTimeout(() => {
-        const chatContainer = document.getElementById("chat-container");
-        if (chatContainer && autoScroll && !userPinnedAwayRef.current) {
+        // Route through the shared eased scroller instead of the browser's
+        // own native smooth-scroll so this never races the rAF-driven
+        // follow effect that's already tracking the transcript's growth.
+        if (autoScroll && !userPinnedAwayRef.current) {
           chatNearBottomRef.current = true;
-          chatContainer.scrollTo({
-            top: chatContainer.scrollHeight,
-            behavior: "smooth",
-          });
+          scrollToLatest();
         }
       }, 300);
     } catch (error) {
@@ -5216,13 +5615,11 @@ Please analyze the code you just wrote and fix this error.`;
       }
 
       setTimeout(() => {
-        const chatContainer = document.getElementById("chat-container");
-        if (chatContainer && autoScroll && !userPinnedAwayRef.current) {
+        // Same shared eased scroller as above — keep every Vibe auto-scroll
+        // on one motion curve instead of mixing in native smooth-scroll.
+        if (autoScroll && !userPinnedAwayRef.current) {
           chatNearBottomRef.current = true;
-          chatContainer.scrollTo({
-            top: chatContainer.scrollHeight,
-            behavior: "smooth",
-          });
+          scrollToLatest();
         }
       }, 100);
 
@@ -5993,6 +6390,10 @@ Please analyze the code you just wrote and fix this error.`;
               }
             },
             temperature,
+            8000,
+            CHAT_EFFORT_MODEL[chatEffort],
+            undefined,
+            CHAT_EFFORT_THINKING[chatEffort],
           );
 
           // End of streaming
@@ -6138,7 +6539,6 @@ Please analyze the code you just wrote and fix this error.`;
     activeWorkspaceTab === "clip" || selectedCommand?.id === "clip";
   const isBrowserWorkspace = activeWorkspaceTab === "browser";
   const isCompanionWorkspace = activeWorkspaceTab === "companion";
-  const isForgeWorkspace = activeWorkspaceTab === "forge";
   const isStudyWorkspace = activeWorkspaceTab === "study";
   const creatorMode: CreatorMode | null =
     activeWorkspaceTab === "would-rather" ||
@@ -6174,8 +6574,6 @@ Please analyze the code you just wrote and fix this error.`;
         ? "browser"
         : isCompanionWorkspace
           ? "companion"
-        : isForgeWorkspace
-          ? "forge"
         : isStudyWorkspace
           ? "study"
         : creatorMode ??
@@ -6206,7 +6604,7 @@ Please analyze the code you just wrote and fix this error.`;
   }> = [
     { id: "chat", label: "Chat", icon: MessageCircleDashed },
     { id: "vibe", label: "Vibe Coder", icon: SquarePen },
-    { id: "clip", label: "Clip", icon: Scissors },
+    { id: "clip", label: "Shorts", icon: Scissors },
   ];
   const showWorkflowTabs = !isEmbeddedToolPreview && !workflowTabsHidden;
 
@@ -6222,7 +6620,7 @@ Please analyze the code you just wrote and fix this error.`;
       ? Math.max(420, viewportWidth - sidebarClearancePx)
       : viewportWidth;
   const centeredContentWidth =
-    isBrowserWorkspace || isCompanionWorkspace || isForgeWorkspace || isStudyWorkspace
+    isBrowserWorkspace || isCompanionWorkspace || isStudyWorkspace
       ? Math.min(1280, Math.max(0, effectiveWorkspaceViewport - 32))
       : isClipWorkspace
         ? Math.min(820, Math.max(0, effectiveWorkspaceViewport - 32))
@@ -6276,7 +6674,31 @@ Please analyze the code you just wrote and fix this error.`;
   };
 
   const recentUserRequest = recentChat?.messages.find((message) => message.role === "user")?.content.trim();
-  const welcomeRows = useMemo(() => buildWelcomeRows(chats), [chats]);
+  // Real saved chats for the home-screen "Recent conversations" list —
+  // pinned first, then newest first.
+  const homeRecentChats = useMemo(
+    () =>
+      chats
+        .filter((chat) => chat.messages.length > 0 && !chat.archived && chat.kind !== "vibe")
+        .sort((a, b) => {
+          if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+          return b.updatedAt - a.updatedAt;
+        })
+        .slice(0, 6),
+    [chats],
+  );
+  const [openRecentRowMenuId, setOpenRecentRowMenuId] = useState<string | null>(null);
+  const [isRecentChatsPanelOpen, setIsRecentChatsPanelOpen] = useState(false);
+  const allRecentChats = useMemo(
+    () =>
+      chats
+        .filter((chat) => chat.messages.length > 0 && !chat.archived && chat.kind !== "vibe")
+        .sort((a, b) => {
+          if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+          return b.updatedAt - a.updatedAt;
+        }),
+    [chats],
+  );
   const chatQuickActions: Array<{
     baseLabel: string;
     skeletonLabel: string;
@@ -6486,27 +6908,12 @@ Please analyze the code you just wrote and fix this error.`;
 
   return (
     <FullscreenContext.Provider value={{ isFullscreen, setIsFullscreen }}>
-      {theme === "Dark" && (
-        <style
-          dangerouslySetInnerHTML={{
-            __html: `
-                html { filter: invert(1) hue-rotate(180deg); background: #fff; }
-                img, video, iframe, [data-invert-ignore] { filter: invert(1) hue-rotate(-180deg); }
-                html:not([data-invert-ignore]) pre, html:not([data-invert-ignore]) code { filter: invert(1) hue-rotate(-180deg); }
-                [data-invert-ignore] pre, [data-invert-ignore] code { filter: none !important; }
-                .border-slate-200\\/60 { border-color: rgba(226, 232, 240, 0.4); }
-                body { background: #fff; }
-                /* Make grey text more visible (white) in dark mode */
-                .text-slate-400, .text-slate-500, .text-slate-600 { color: #000 !important; }
-                /* Remove all glow effects (inverted shadows) in dark mode except for AI orb */
-                *:not(.clyra-ai-orb-shell):not(.clyra-ai-orb-shell *):not(.clyra-ai-orb):not(.clyra-ai-orb *) {
-                    box-shadow: none !important;
-                }
-            `,
-          }}
-        />
-      )}
-      <VoiceCallScreen call={voiceCall} testMode={voiceTestMode} avatarColor={BLOUB_THEME_COLOR[orbColorTheme]} />
+      <VoiceCallScreen
+        call={voiceCall}
+        testMode={voiceTestMode}
+        avatarColor={accentColor}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+      />
       <GoogleConnectSheet
         open={Boolean(googleConnectRequest)}
         busy={googleConnectBusy}
@@ -6550,6 +6957,77 @@ Please analyze the code you just wrote and fix this error.`;
           handleWorkspaceTabChange(mode);
         }}
       />
+      {typeof document !== "undefined" &&
+        createPortal(
+          <AnimatePresence>
+            {isRecentChatsPanelOpen && (
+              <>
+                <motion.div
+                  className="clyra-recent-panel-scrim"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0, transition: { duration: 0.16 } }}
+                  transition={{ duration: 0.22 }}
+                  onClick={() => setIsRecentChatsPanelOpen(false)}
+                />
+                <motion.div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="All conversations"
+                  className="clyra-recent-panel"
+                  initial={{ x: -28, opacity: 0 }}
+                  animate={{ x: 0, opacity: 1 }}
+                  exit={{ x: -28, opacity: 0, transition: { duration: 0.18, ease: [0.4, 0, 1, 1] } }}
+                  transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
+                >
+                  <div className="clyra-recent-panel__header">
+                    <h2>All conversations</h2>
+                    <button
+                      type="button"
+                      onClick={() => setIsRecentChatsPanelOpen(false)}
+                      aria-label="Close"
+                      className="clyra-recent-panel__close"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="clyra-recent-panel__list">
+                    {allRecentChats.length === 0 ? (
+                      <div className="clyra-recent-panel__empty">
+                        <MessageCircleDashed className="h-5 w-5" />
+                        <p>No conversations yet — start one and it will show up here.</p>
+                      </div>
+                    ) : (
+                      allRecentChats.map((chat) => (
+                        <button
+                          key={chat.id}
+                          type="button"
+                          className="clyra-recent-panel__row"
+                          onClick={() => {
+                            openChatSession(chat);
+                            setIsRecentChatsPanelOpen(false);
+                          }}
+                        >
+                          <span className="clyra-recent-panel__row-icon">
+                            <MessageCircleDashed className="h-4 w-4" />
+                          </span>
+                          <span className="clyra-recent-panel__row-body">
+                            <span className="clyra-recent-panel__row-title">{chat.title || "New conversation"}</span>
+                            <span className="clyra-recent-panel__row-meta">
+                              {chat.messages.length} message{chat.messages.length === 1 ? "" : "s"} · {formatChatRowTimestamp(chat.updatedAt)}
+                            </span>
+                          </span>
+                          {chat.pinned ? <Pin className="h-3.5 w-3.5 shrink-0 text-blue-500" /> : null}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>,
+          document.body,
+        )}
       <WorkspaceTaskView
         ref={taskViewRef}
         open={isTaskViewOpen}
@@ -6577,7 +7055,6 @@ Please analyze the code you just wrote and fix this error.`;
             vibe: { label: "Vibe Coder", icon: <Code2 className="h-3.5 w-3.5" /> },
             clip: { label: "AI Clipper", icon: <Scissors className="h-3.5 w-3.5" /> },
             browser: { label: "Browser", icon: <Globe className="h-3.5 w-3.5" /> },
-            forge: { label: "Clyra Forge", icon: <Gamepad2 className="h-3.5 w-3.5" /> },
             companion: { label: "Companion", icon: <AppWindow className="h-3.5 w-3.5" /> },
             study: { label: "Study Pal", icon: <GraduationCap className="h-3.5 w-3.5" /> },
             "fake-text": { label: "Text Story", icon: <MessagesSquare className="h-3.5 w-3.5" /> },
@@ -6600,8 +7077,11 @@ Please analyze the code you just wrote and fix this error.`;
               <BootIntroOverlay
                 state={introState}
                 progress={introProgress}
-                avatarColor={BLOUB_THEME_COLOR[orbColorTheme]}
-                onAvatarArrive={() => setBloubLanded(true)}
+                avatarColor={accentColor}
+                onAvatarArrive={() => {
+                  setBloubLanded(true);
+                  beginRippleRef.current();
+                }}
               />
             ) : null}
           </AnimatePresence>,
@@ -6613,6 +7093,9 @@ Please analyze the code you just wrote and fix this error.`;
             <motion.button
               type="button"
               onClick={toggleSidebar}
+              onMouseEnter={handleHomeGazeEnter}
+              onMouseMove={handleHomeGazeMove}
+              onMouseLeave={handleHomeGazeLeave}
               aria-label="Open sidebar"
               aria-expanded={isSidebarOpen}
               title="Open sidebar"
@@ -6620,7 +7103,7 @@ Please analyze the code you just wrote and fix this error.`;
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: -8 }}
               transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-              className="clyra-sidebar-toggle group fixed left-4 top-7 z-[200] flex h-11 w-11 items-center justify-center rounded-full border border-transparent bg-transparent text-slate-600 shadow-none transition-[color,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] hover:scale-[1.05] hover:text-slate-900 active:scale-[0.94] sm:left-6 sm:top-8"
+              className="clyra-sidebar-toggle group fixed left-4 top-[10px] z-[200] flex h-11 w-11 items-center justify-center rounded-full border border-transparent bg-transparent text-slate-600 shadow-none transition-[color,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] hover:scale-[1.05] hover:text-slate-900 active:scale-[0.94] sm:left-6 sm:top-[17px]"
             >
               <span className="pointer-events-none relative block h-[12px] w-[18px] opacity-95">
                 <span className="pointer-events-none absolute left-0 top-0 h-[2px] w-full rounded-full bg-current" />
@@ -6636,8 +7119,11 @@ Please analyze the code you just wrote and fix this error.`;
         <motion.button
           type="button"
           onClick={() => setIsTemporaryChat((enabled) => !enabled)}
+          onMouseEnter={handleHomeGazeEnter}
+          onMouseMove={handleHomeGazeMove}
+          onMouseLeave={handleHomeGazeLeave}
           className={cn(
-            "clyra-temp-chat-toggle fixed right-4 top-7 z-[200] grid h-11 w-11 place-items-center rounded-full text-slate-400 transition-[color,transform] duration-300 hover:scale-[1.04] hover:text-slate-600 active:scale-[0.94] sm:right-6 sm:top-8",
+            "clyra-temp-chat-toggle fixed right-4 top-[10px] z-[200] grid h-11 w-11 place-items-center rounded-full text-slate-400 transition-[color,transform] duration-300 hover:scale-[1.04] hover:text-slate-600 active:scale-[0.94] sm:right-6 sm:top-[17px]",
             isTemporaryChat && "text-slate-600",
           )}
           title={isTemporaryChat ? "Turn off Temporary Chat" : "Temporary Chat"}
@@ -7134,10 +7620,11 @@ Please analyze the code you just wrote and fix this error.`;
             className="pointer-events-none absolute inset-x-0 top-0 z-[190] h-[88px] overflow-visible"
           >
             <motion.div
-              className="pointer-events-auto absolute left-1/2 top-5 z-50 -translate-x-1/2 sm:top-6"
+              className="pointer-events-auto absolute left-1/2 top-3 z-50 -translate-x-1/2 sm:top-4"
               initial={false}
               animate={{ y: 0 }}
-              onMouseLeave={() => {
+              onMouseLeave={(event) => {
+                handleHomeGazeLeave();
                 if (activeWorkspaceTab !== "chat") {
                   if (workflowTabsRevealTimerRef.current != null) {
                     window.clearTimeout(workflowTabsRevealTimerRef.current);
@@ -7148,12 +7635,14 @@ Please analyze the code you just wrote and fix this error.`;
                   }, 450);
                 }
               }}
-              onMouseEnter={() => {
+              onMouseEnter={(event) => {
+                handleHomeGazeEnter(event);
                 if (workflowTabsRevealTimerRef.current != null) {
                   window.clearTimeout(workflowTabsRevealTimerRef.current);
                   workflowTabsRevealTimerRef.current = null;
                 }
               }}
+              onMouseMove={handleHomeGazeMove}
             >
               <div
                 className={cn(
@@ -7222,9 +7711,19 @@ Please analyze the code you just wrote and fix this error.`;
                       aria-selected={isActive}
                       onPointerDown={(event) => {
                         event.preventDefault();
+                        if (tabItem.id === "clip") {
+                          setIsShortsWelcomeOpen(true);
+                          return;
+                        }
                         handleWorkspaceTabChange(tabItem.id);
                       }}
-                      onClick={() => handleWorkspaceTabChange(tabItem.id)}
+                      onClick={() => {
+                        if (tabItem.id === "clip") {
+                          setIsShortsWelcomeOpen(true);
+                          return;
+                        }
+                        handleWorkspaceTabChange(tabItem.id);
+                      }}
                       onMouseEnter={() => {
                         setHoveredWorkspaceTab(tabItem.id);
                         if (tabItem.id === "vibe") void loadVibeCoderWorkspace();
@@ -7346,7 +7845,6 @@ Please analyze the code you just wrote and fix this error.`;
                         !isClipWorkspace &&
                         !isBrowserWorkspace &&
                         !isCompanionWorkspace &&
-                        !isForgeWorkspace &&
                         !isStudyWorkspace &&
                         !isCreatorWorkspace &&
                         "justify-center",
@@ -7391,10 +7889,6 @@ Please analyze the code you just wrote and fix this error.`;
                         <Suspense fallback={null}>
                           <ScreenCompanionWorkspace />
                         </Suspense>
-                      ) : isForgeWorkspace ? (
-                        <Suspense fallback={null}>
-                          <ForgeWorkspace />
-                        </Suspense>
                       ) : isStudyWorkspace ? (
                         <Suspense fallback={null}>
                           <StudyPalWorkspace globalTabsVisible={false} agentPrompt={new URLSearchParams(window.location.search).get("agentPrompt") || ""} />
@@ -7411,17 +7905,18 @@ Please analyze the code you just wrote and fix this error.`;
                             initial={{ opacity: 0, y: 10 }}
                             animate={{ opacity: 1, y: 0 }}
                             transition={{ duration: .32, ease: [0.16, 1, 0.3, 1] }}
-                            className="clyra-primary-chat-welcome flex w-full max-w-[720px] flex-col px-5 sm:px-8"
+                            className="clyra-primary-chat-welcome flex w-full max-w-[585px] flex-col px-5 sm:px-8"
                           >
                             <motion.div
                             initial={false}
-                            className="flex flex-col items-center text-center pt-24 pb-4"
+                            className="flex flex-col items-center text-center pt-28 pb-4 sm:pt-32"
                           >
                             <span
                               id="clyra-bloub-home-target"
-                              className="clyra-chat-welcome__blob mb-5 flex items-center justify-center"
+                              className="clyra-chat-welcome__blob mb-10 flex cursor-pointer items-center justify-center"
                               aria-hidden
-                              style={{ opacity: bloubLanded ? 1 : 0, transition: "opacity 0.26s cubic-bezier(0.22,1,0.36,1)" }}
+                              style={{ opacity: bloubLanded ? 1 : 0 }}
+                              onClick={handleHomeBloubClick}
                             >
                               {/*
                                 This welcome block only renders once `isVibeWorkspace` (and
@@ -7437,8 +7932,8 @@ Please analyze the code you just wrote and fix this error.`;
                               <Bloub
                                 ref={homeBloubRef}
                                 state="idle"
-                                size={72}
-                                color={BLOUB_THEME_COLOR[orbColorTheme]}
+                                size={96}
+                                color={accentColor}
                                 background="#ffffff"
                                 animateEntrance={false}
                               />
@@ -7456,22 +7951,12 @@ Please analyze the code you just wrote and fix this error.`;
                                 Temporary Chat
                               </span>
                             </motion.div>
-                            <h1 className="text-[40px] font-semibold tracking-[-0.04em] text-slate-900 sm:text-[48px]">
-                              Good evening, <span className="text-blue-600">Luke</span>
+                            <h1 className="text-[40px] font-semibold leading-[1.08] tracking-[-0.04em] text-slate-900 sm:text-[48px]">
+                              {greetingPrefix} <span className="text-blue-600">Luke</span>
                             </h1>
-                            <p className="mt-2 text-[17px] text-slate-500">
+                            <p className="mt-5 text-[17px] text-slate-500">
                               What would you like to accomplish today?
                             </p>
-                            <p className="mt-2 max-w-[440px] text-[12.5px] leading-5 text-slate-400">
-                              Ask a question, bring in a source, or let Clyra research the web with you.
-                            </p>
-                            <div className="clyra-primary-chat-welcome__sources mt-6" aria-label="Available Clyra sources">
-                              <GoogleProductIcon product="drive" />
-                              <GoogleProductIcon product="docs" />
-                              <YouTubeBrandIcon />
-                              <Globe strokeWidth={1.7} />
-                              <span>Web, YouTube, and your Google sources</span>
-                            </div>
                           </motion.div>
                         </motion.div>
                       ) : (
@@ -7487,6 +7972,7 @@ Please analyze the code you just wrote and fix this error.`;
                             className="clyra-visible-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden"
                             id="chat-container"
                           >
+                            <div ref={chatContentRef} className="flex w-full flex-col">
                             {messages.map((message) => {
                               const fontClass =
                                 fontSize === "Small"
@@ -7549,6 +8035,21 @@ Please analyze the code you just wrote and fix this error.`;
                                             : "#1e293b",
                                       }}
                                     >
+                                      {isLastAssistant && message.assistantKind !== "vibe" ? (
+                                        <motion.span
+                                          className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center"
+                                          initial={{ opacity: 0, scale: 0.7 }}
+                                          animate={{ opacity: 1, scale: 1 }}
+                                          transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
+                                        >
+                                          <Bloub
+                                            state={message.isThinking || message.isStreaming ? "thinking" : "idle"}
+                                            size={28}
+                                            color={accentColor}
+                                            background={theme === "Dark" ? "#17181e" : "#ffffff"}
+                                          />
+                                        </motion.span>
+                                      ) : null}
                                       <div
                                         className={cn(
                                           "clyra-assistant-message",
@@ -7665,6 +8166,7 @@ Please analyze the code you just wrote and fix this error.`;
                                 </motion.div>
                               );
                             })}
+                            </div>
                           </div>
                           <AnimatePresence>
                             {showScrollToLatest ? (
@@ -7699,7 +8201,6 @@ Please analyze the code you just wrote and fix this error.`;
                           !isClipWorkspace &&
                           !isBrowserWorkspace &&
                           !isCompanionWorkspace &&
-                          !isForgeWorkspace &&
                           !isStudyWorkspace &&
                           !isCreatorWorkspace &&
                           !isVibeWorkspace && (
@@ -7837,13 +8338,15 @@ Please analyze the code you just wrote and fix this error.`;
                                 "input-wrapper relative backdrop-blur-xl border transition-[background-color,border-color,padding,box-shadow,border-radius] duration-[560ms] ease-[cubic-bezier(0.16,1,0.3,1)] cursor-text overflow-visible mx-auto z-[3]",
                                 isVibeWorkspace && "clyra-vibe-composer",
                                 isExpanded && "clyra-composer-expanded",
-                                theme === "Dark"
-                                  ? "bg-slate-200/90 border-slate-400/50"
-                                  : "bg-white/80 border-slate-200/60",
+                                "bg-white border-slate-200/60",
                                 isExpanded ? "p-2 sm:p-3" : "p-1.5 sm:p-2",
                               )}
                               initial={false}
+                              onMouseEnter={handleHomeGazeEnter}
+                              onMouseMove={isComposerFocused ? undefined : handleHomeGazeMove}
+                              onMouseLeave={handleHomeGazeLeave}
                             >
+                              <div ref={composerCaretMirrorRef} aria-hidden className="pointer-events-none absolute left-0 top-0 -z-50 whitespace-pre-wrap break-words opacity-0" style={{ position: "fixed", left: -9999, top: -9999 }} />
                               <motion.div
                                 className="relative z-10 w-full h-full"
                                 initial={false}
@@ -8186,12 +8689,17 @@ Please analyze the code you just wrote and fix this error.`;
                                         setActiveSkeletonText(null);
                                       }
                                       adjustHeight();
+                                      updateComposerCaretGaze();
                                     }}
                                     onKeyDown={handleKeyDown}
+                                    onKeyUp={updateComposerCaretGaze}
+                                    onClick={updateComposerCaretGaze}
                                     onFocus={() => {
                                       setIsComposerFocused(true);
                                       setIsInputExpanded(true);
                                       adjustHeight();
+                                      homeGazeActiveRef.current += 1;
+                                      updateComposerCaretGaze();
                                     }}
                                     onBlur={(event) => {
                                       const next = event.relatedTarget as Node | null;
@@ -8201,6 +8709,7 @@ Please analyze the code you just wrote and fix this error.`;
                                       ) {
                                         return;
                                       }
+                                      handleHomeGazeLeave();
                                       setIsComposerFocused(false);
                                       const currentValue =
                                         event.currentTarget.value.trim();
@@ -8228,8 +8737,8 @@ Please analyze the code you just wrote and fix this error.`;
                                         ? "placeholder:text-slate-500"
                                         : "placeholder:text-slate-400",
                                       isExpanded
-                                        ? "min-h-[46px] max-h-[160px] py-2.5 px-1"
-                                        : "min-h-[42px] max-h-[160px] py-2 px-1",
+                                        ? "min-h-[58px] max-h-[160px] py-2 px-1"
+                                        : "min-h-[54px] max-h-[160px] py-1.5 px-1",
                                       "clyra-visible-scrollbar transition-[height,min-height,max-height,padding,opacity,transform] duration-[560ms] ease-[cubic-bezier(0.16,1,0.3,1)]",
                                       isFadingInText
                                         ? "opacity-0 translate-y-1 scale-[0.99]"
@@ -8267,7 +8776,7 @@ Please analyze the code you just wrote and fix this error.`;
                                       className={cn(
                                         "h-9 w-9 rounded-full transition-all duration-700 shrink-0 relative z-10",
                                         "flex items-center justify-center",
-                                        "bg-[#0052fb] text-white hover:bg-[#0048e0] shadow-sm",
+                                        "bg-[var(--accent-600)] text-white hover:bg-[var(--accent-700)] shadow-sm",
                                       )}
                                     >
                                       {canSendMessage ? (
@@ -8331,16 +8840,6 @@ Please analyze the code you just wrote and fix this error.`;
                                     <div className="flex items-center gap-1 sm:gap-2">
                                       {composerDictation.phase === "idle" ? <motion.button
                                         type="button"
-                                        onClick={() => void composerDictation.start()}
-                                        whileHover={{ scale: 1.05 }}
-                                        whileTap={{ scale: 0.95 }}
-                                        className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
-                                        aria-label="Dictate a prompt"
-                                      >
-                                        <Mic className="h-[18px] w-[18px]" />
-                                      </motion.button> : null}
-                                      {composerDictation.phase === "idle" ? <motion.button
-                                        type="button"
                                         onClick={handleAttachFile}
                                         whileHover={{ scale: 1.05 }}
                                         whileTap={{ scale: 0.95 }}
@@ -8350,6 +8849,82 @@ Please analyze the code you just wrote and fix this error.`;
                                       >
                                         <Paperclip className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
                                       </motion.button> : null}
+                                      {composerDictation.phase === "idle" ? (
+                                        <div className="clyra-effort-picker relative">
+                                          <motion.button
+                                            ref={effortTriggerRef}
+                                            type="button"
+                                            onClick={() => {
+                                              if (!isEffortMenuOpen && effortTriggerRef.current) {
+                                                const rect = effortTriggerRef.current.getBoundingClientRect();
+                                                setEffortMenuPos({ top: rect.bottom + 6, left: rect.left });
+                                              }
+                                              setIsEffortMenuOpen((open) => !open);
+                                            }}
+                                            onKeyDown={(event) => {
+                                              if (event.key === "Escape") setIsEffortMenuOpen(false);
+                                            }}
+                                            whileHover={{ scale: 1.03 }}
+                                            whileTap={{ scale: 0.97 }}
+                                            className={cn("clyra-effort-trigger", isEffortMenuOpen && "is-open")}
+                                            aria-label="Response effort"
+                                            aria-haspopup="listbox"
+                                            aria-expanded={isEffortMenuOpen}
+                                          >
+                                            <span>{CHAT_EFFORT_LABEL[chatEffort]}</span>
+                                            <motion.span
+                                              animate={{ rotate: isEffortMenuOpen ? 180 : 0 }}
+                                              transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                                              className="flex"
+                                            >
+                                              <ChevronDown className="h-3.5 w-3.5" />
+                                            </motion.span>
+                                          </motion.button>
+                                          {typeof document !== "undefined" && createPortal(
+                                            <AnimatePresence>
+                                              {isEffortMenuOpen && effortMenuPos && (
+                                                <>
+                                                  <div
+                                                    className="clyra-effort-menu-scrim"
+                                                    onClick={() => setIsEffortMenuOpen(false)}
+                                                  />
+                                                  <motion.div
+                                                    role="listbox"
+                                                    aria-label="Response effort options"
+                                                    initial={{ opacity: 0, scale: 0.94, y: -4 }}
+                                                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                                                    exit={{ opacity: 0, scale: 0.96, y: -3, transition: { duration: 0.12, ease: [0.4, 0, 1, 1] } }}
+                                                    transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                                                    className="clyra-effort-menu"
+                                                    style={{ position: "fixed", top: effortMenuPos.top, left: effortMenuPos.left }}
+                                                  >
+                                                    {(["light", "medium", "high"] as ChatEffort[]).map((option) => (
+                                                      <button
+                                                        key={option}
+                                                        type="button"
+                                                        role="option"
+                                                        aria-selected={chatEffort === option}
+                                                        className={cn(chatEffort === option && "is-active")}
+                                                        onClick={() => {
+                                                          setChatEffort(option);
+                                                          setIsEffortMenuOpen(false);
+                                                        }}
+                                                      >
+                                                        <span className="clyra-effort-menu-text">
+                                                          <span className="clyra-effort-menu-label">{CHAT_EFFORT_LABEL[option]}</span>
+                                                          <span className="clyra-effort-menu-hint">{CHAT_EFFORT_HINT[option]}</span>
+                                                        </span>
+                                                        {chatEffort === option && <Check className="h-3.5 w-3.5 shrink-0" />}
+                                                      </button>
+                                                    ))}
+                                                  </motion.div>
+                                                </>
+                                              )}
+                                            </AnimatePresence>,
+                                            document.body
+                                          )}
+                                        </div>
+                                      ) : null}
 
                                       <AnimatePresence>
                                         {activeInputCommand && (
@@ -8467,13 +9042,15 @@ Please analyze the code you just wrote and fix this error.`;
                                         className={cn(
                                           "h-10 w-10 rounded-full transition-all duration-200 shrink-0 relative z-10",
                                           "flex items-center justify-center shadow-sm",
-                                          "bg-[#0052fb] text-white shadow-md hover:bg-[#0048e0] hover:shadow-lg",
+                                          canSendMessage
+                                            ? "bg-[var(--accent-600)] text-white shadow-md hover:bg-[var(--accent-700)] hover:shadow-lg"
+                                            : "bg-[var(--accent-50)] text-[var(--accent-600)] shadow-none hover:bg-[var(--accent-600)] hover:text-white hover:shadow-md",
                                         )}
                                       >
                                         {canSendMessage ? (
                                           <ArrowUpIcon className="h-5 w-5" />
                                         ) : (
-                                          <VoiceWaveIcon className="text-white" />
+                                          <VoiceWaveIcon className="text-current" />
                                         )}
                                       </motion.button>
                                     </div>
@@ -8483,34 +9060,162 @@ Please analyze the code you just wrote and fix this error.`;
                                 </AnimatePresence>
                               </motion.div>
                             </motion.div>
+                            {messages.length === 0 && (
+                              <div className="clyra-composer-sources" aria-label="Available Clyra sources">
+                                <GoogleProductIcon product="drive" />
+                                <GoogleProductIcon product="docs" />
+                                <YouTubeBrandIcon />
+                                <Globe strokeWidth={1.7} />
+                                <span>Web, YouTube, and your Google sources</span>
+                              </div>
+                            )}
                             </div>
-                            {messages.length === 0 && welcomeRows.length ? (
+                            {messages.length === 0 ? (
                               <section className="clyra-chat-welcome__recent" aria-label="Recent conversations">
                                 <div className="clyra-chat-welcome__recent-header">
                                   <h2>Recent conversations</h2>
-                                  <button type="button" onClick={() => setIsSidebarOpen(true)}>View all <ChevronRight className="h-3.5 w-3.5" /></button>
+                                  <button type="button" onClick={() => setIsRecentChatsPanelOpen(true)}>View all <ChevronRight className="h-3.5 w-3.5" /></button>
                                 </div>
-                                <div className="clyra-chat-welcome__recent-list">
-                                  {welcomeRows.map((row) => {
-                                    return (
-                                      <button key={row.id} type="button" onClick={() => {
-                                        if (row.kind === "recent") {
-                                          const chat = chats.find((item) => `recent-${item.id}` === row.id);
-                                          if (chat) openChatSession(chat);
-                                          return;
-                                        }
-                                        applyQuickPrompt(row.prompt || "");
-                                      }}>
-                                        <MessageCircleDashed className="clyra-chat-welcome__recent-icon h-4 w-4" />
-                                        <span className="clyra-chat-welcome__recent-copy">
-                                          <strong>{row.title}</strong>
-                                          <small>{row.preview}</small>
-                                        </span>
-                                        <time>{row.timestamp}</time>
-                                      </button>
-                                    );
-                                  })}
-                                </div>
+                                {homeRecentChats.length === 0 ? (
+                                  <div className="clyra-chat-welcome__recent-empty">
+                                    <MessageCircleDashed className="h-5 w-5" />
+                                    <p>No conversations yet — start one above and it will show up here.</p>
+                                  </div>
+                                ) : (
+                                  <div className="clyra-chat-welcome__recent-list">
+                                    {homeRecentChats.map((chat) => {
+                                      const isEditing = editingChatId === chat.id;
+                                      const lastMessage = chat.messages.at(-1);
+                                      const preview = lastMessage
+                                        ? `${lastMessage.role === "user" ? "You: " : ""}${lastMessage.content}`
+                                        : "Continue this conversation";
+                                      const commitRename = () => {
+                                        setChats((prev) =>
+                                          prev.map((c) => (c.id === chat.id ? { ...c, title: editingTitle || c.title } : c)),
+                                        );
+                                        setEditingChatId(null);
+                                      };
+                                      return (
+                                        <div
+                                          key={chat.id}
+                                          role="button"
+                                          tabIndex={0}
+                                          className="clyra-chat-welcome__recent-row"
+                                          onClick={() => {
+                                            if (isEditing) return;
+                                            openChatSession(chat);
+                                          }}
+                                          onKeyDown={(event) => {
+                                            if (isEditing) return;
+                                            if (event.key === "Enter" || event.key === " ") {
+                                              event.preventDefault();
+                                              openChatSession(chat);
+                                            }
+                                          }}
+                                        >
+                                          <span className="clyra-chat-welcome__recent-icon-badge">
+                                            <MessageCircleDashed className="clyra-chat-welcome__recent-icon h-4 w-4" />
+                                          </span>
+                                          <span className="clyra-chat-welcome__recent-copy">
+                                            {isEditing ? (
+                                              <input
+                                                type="text"
+                                                value={editingTitle}
+                                                onChange={(event) => setEditingTitle(event.target.value)}
+                                                onClick={(event) => event.stopPropagation()}
+                                                onKeyDown={(event) => {
+                                                  event.stopPropagation();
+                                                  if (event.key === "Enter") commitRename();
+                                                  else if (event.key === "Escape") setEditingChatId(null);
+                                                }}
+                                                onBlur={commitRename}
+                                                autoFocus
+                                                className="clyra-chat-welcome__recent-rename-input"
+                                              />
+                                            ) : (
+                                              <strong>
+                                                {chat.pinned && <Pin className="clyra-chat-welcome__recent-pin h-3 w-3" />}
+                                                {chat.title}
+                                              </strong>
+                                            )}
+                                            <small>{preview}</small>
+                                          </span>
+                                          <time>{formatChatRowTimestamp(chat.updatedAt)}</time>
+                                          <button
+                                            type="button"
+                                            className="clyra-chat-welcome__recent-menu-trigger"
+                                            aria-label="Conversation options"
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              setOpenRecentRowMenuId((current) => (current === chat.id ? null : chat.id));
+                                            }}
+                                          >
+                                            <MoreHorizontal className="h-4 w-4" />
+                                          </button>
+                                          {openRecentRowMenuId === chat.id && (
+                                            <>
+                                              <div
+                                                className="clyra-chat-welcome__recent-menu-scrim"
+                                                onClick={(event) => {
+                                                  event.stopPropagation();
+                                                  setOpenRecentRowMenuId(null);
+                                                }}
+                                              />
+                                              <div className="clyra-chat-welcome__recent-menu" onClick={(event) => event.stopPropagation()}>
+                                                <button
+                                                  type="button"
+                                                  onClick={() => {
+                                                    setEditingChatId(chat.id);
+                                                    setEditingTitle(chat.title);
+                                                    setOpenRecentRowMenuId(null);
+                                                  }}
+                                                >
+                                                  <Pencil className="h-3.5 w-3.5" /> Rename
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  onClick={() => {
+                                                    setChats((prev) =>
+                                                      prev.map((c) => (c.id === chat.id ? { ...c, pinned: !c.pinned } : c)),
+                                                    );
+                                                    setOpenRecentRowMenuId(null);
+                                                  }}
+                                                >
+                                                  <Pin className="h-3.5 w-3.5" /> {chat.pinned ? "Unpin" : "Pin"}
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  onClick={() => {
+                                                    setChats((prev) =>
+                                                      prev.map((c) => (c.id === chat.id ? { ...c, archived: true } : c)),
+                                                    );
+                                                    setOpenRecentRowMenuId(null);
+                                                  }}
+                                                >
+                                                  <Archive className="h-3.5 w-3.5" /> Archive
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  className="clyra-chat-welcome__recent-menu-danger"
+                                                  onClick={() => {
+                                                    setChats((prev) => prev.filter((c) => c.id !== chat.id));
+                                                    if (currentChatId === chat.id) {
+                                                      setCurrentChatId(null);
+                                                      setMessages([]);
+                                                    }
+                                                    setOpenRecentRowMenuId(null);
+                                                  }}
+                                                >
+                                                  <Trash2 className="h-3.5 w-3.5" /> Delete
+                                                </button>
+                                              </div>
+                                            </>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
                               </section>
                             ) : null}
                           </motion.div>
@@ -8684,6 +9389,8 @@ Please analyze the code you just wrote and fix this error.`;
         setUserBubbleColor={setUserBubbleColor}
         orbColorTheme={orbColorTheme}
         setOrbColorTheme={setOrbColorTheme}
+        accentColor={accentColor}
+        setAccentColor={setAccentColor}
         voiceRate={voiceRate}
         setVoiceRate={setVoiceRate}
         voicePitch={voicePitch}
@@ -8713,6 +9420,7 @@ export async function streamOpenAI(
   maxTokens: number = 8000,
   model: string = "deepseek-v4-flash",
   signal?: AbortSignal,
+  thinkingEnabled: boolean = false,
 ) {
   const formattedMessages = systemInstruction
     ? [{ role: "system", content: systemInstruction }, ...messages]
@@ -8730,7 +9438,7 @@ export async function streamOpenAI(
       temperature,
       stream: true,
       max_tokens: maxTokens,
-      thinking: { type: "disabled" },
+      thinking: { type: thinkingEnabled ? "enabled" : "disabled" },
     }),
   });
 

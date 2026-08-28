@@ -3,7 +3,7 @@
  * wired to Clyra RapidOCR + optional Electron overlay / guide pointer / control.
  */
 import { useCallback, useState } from "react";
-import { Eye, MousePointer2, MonitorSmartphone, Sparkles } from "lucide-react";
+import { Eye, MousePointer2, MonitorSmartphone, MessageCircle, Camera, Mic, Crosshair, MousePointerClick } from "lucide-react";
 import { cn } from "../lib/utils";
 import { getElectronDesktop } from "../lib/electron-runtime";
 import { VoiceWaveform } from "./voice/VoiceWaveform";
@@ -55,9 +55,12 @@ export default function ScreenCompanionWorkspace() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           question,
-          visionSummary:
-            screenCtx?.visionSummary ||
-            "User is asking about their current screen via Clyra Companion (OpenCluely UI, no stealth).",
+          // Only send a visionSummary when one is genuinely available. The
+          // server's offline fallback treats any summary over 40 chars as
+          // real screen content and echoes it back verbatim — a placeholder
+          // sentence here previously satisfied that check and got returned
+          // as the "answer" to unrelated questions instead of the real one.
+          visionSummary: screenCtx?.visionSummary || "",
           ocrText: screenCtx?.ocrText || "",
         }),
       });
@@ -107,7 +110,7 @@ export default function ScreenCompanionWorkspace() {
               ]);
             }}
           >
-            📷 <span className="text-white/55">See</span>
+            <Camera className="inline h-3 w-3" /> <span className="text-white/55">See</span>
           </button>
           <span className="h-3.5 w-px bg-gradient-to-b from-transparent via-white/30 to-transparent" />
           <button
@@ -115,7 +118,7 @@ export default function ScreenCompanionWorkspace() {
             className={cn("rounded-[7px] px-2.5 py-1 hover:bg-white/10", listeningDemo && "text-[#ff4757]")}
             onClick={() => setListeningDemo((v) => !v)}
           >
-            🎙
+            <Mic className="h-3 w-3" />
           </button>
           <span className="h-3.5 w-px bg-gradient-to-b from-transparent via-white/30 to-transparent" />
           <button
@@ -137,7 +140,7 @@ export default function ScreenCompanionWorkspace() {
               ]);
             }}
           >
-            ◎ <span className="text-white/55">Guide</span>
+            <Crosshair className="inline h-3 w-3" /> <span className="text-white/55">Guide</span>
           </button>
           <span className="h-3.5 w-px bg-gradient-to-b from-transparent via-white/30 to-transparent" />
           <button
@@ -151,7 +154,7 @@ export default function ScreenCompanionWorkspace() {
               setPointer({ x: 40, y: 55, label: "Working" });
             }}
           >
-            ◉ <span className="text-white/55">Control</span>
+            <MousePointerClick className="inline h-3 w-3" /> <span className="text-white/55">Control</span>
           </button>
           <span className="ml-1 h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.55)]" />
         </div>
@@ -203,7 +206,7 @@ export default function ScreenCompanionWorkspace() {
           {desktop ? "Open Electron overlay (⌘⇧J)" : "Electron required for overlay"}
         </button>
         <ul className="mt-6 space-y-2.5 text-[12px] text-white/65">
-          <li className="flex gap-2"><Sparkles className="mt-0.5 h-3.5 w-3.5 text-sky-300" /> Clyra chat / STT / TTS</li>
+          <li className="flex gap-2"><MessageCircle className="mt-0.5 h-3.5 w-3.5 text-sky-300" /> Clyra chat / STT / TTS</li>
           <li className="flex gap-2"><Eye className="mt-0.5 h-3.5 w-3.5 text-sky-300" /> RapidOCR open-source vision</li>
           <li className="flex gap-2"><MousePointer2 className="mt-0.5 h-3.5 w-3.5 text-sky-300" /> Guide points · Control clicks</li>
         </ul>

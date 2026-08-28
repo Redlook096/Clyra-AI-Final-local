@@ -809,6 +809,19 @@ function registerIpc() {
   ipcMain.handle("browser:inspect", async (event) => { authorize(event); return { ok: true, snapshot: await browserManager.inspect() }; });
   ipcMain.handle("browser:set-cursor", async (event, cursor) => { authorize(event); await browserManager.setCursor(cursor); return { ok: true }; });
   ipcMain.handle("browser:devtools", (event) => { authorize(event); browserManager.activeContents()?.openDevTools({ mode: "detach" }); return { ok: true }; });
+  ipcMain.handle("browser:snip", async (event, { tabId }) => {
+    authorize(event);
+    try {
+      return { ok: true, ...(await browserManager.enterSnipMode(tabId)) };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+  ipcMain.handle("browser:cancel-snip", (event, { tabId }) => {
+    authorize(event);
+    browserManager.cancelSnip(tabId);
+    return { ok: true };
+  });
   ipcMain.handle("preview:launch-desktop", async (event, payload = {}) => {
     authorize(event);
     const target = String(payload.url || "");
@@ -973,6 +986,14 @@ function registerIpc() {
     authorizeCompanion(event);
     return companionManager?.runDesktopAction(payload?.action || {});
   });
+  ipcMain.handle("companion:expand", (event) => {
+    authorizeCompanion(event);
+    return companionManager?.expand() || { ok: true };
+  });
+  ipcMain.handle("companion:collapse", (event) => {
+    authorizeCompanion(event);
+    return companionManager?.collapse() || { ok: true };
+  });
   // Main renderer may open the companion overlay.
   ipcMain.handle("companion:toggle", async (event) => {
     authorize(event);
@@ -1070,6 +1091,16 @@ function registerIpc() {
       onExit: (cb) => exitListeners.push(cb),
     };
   }
+
+  ipcMain.handle("dialog:select-folder", async (event) => {
+    authorize(event);
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ["openDirectory", "createDirectory"],
+      title: "Open Existing Project",
+    });
+    if (result.canceled || !result.filePaths[0]) return { canceled: true };
+    return { canceled: false, path: result.filePaths[0] };
+  });
 
   ipcMain.handle("terminal:open", (event, payload) => {
     authorize(event);

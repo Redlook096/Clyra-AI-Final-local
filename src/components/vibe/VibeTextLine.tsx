@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { motion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 
 const DWELL_MS = 160;
 const MS_PER_CHARACTER = 2;
@@ -27,6 +27,7 @@ export function VibeTextLine({
   onCompleted?: () => void;
   archived?: boolean;
 }) {
+  const reducedMotion = useReducedMotion();
   const [revealed, setRevealed] = useState(() => (archived ? body.length : 0));
   const [done, setDone] = useState(() => !!archived);
   const notifiedRef = useRef(false);
@@ -39,6 +40,10 @@ export function VibeTextLine({
       return;
     }
     if (!active || done) return;
+    if (reducedMotion) {
+      setRevealed(body.length);
+      return;
+    }
     if (revealed >= body.length) return;
 
     let cancelled = false;
@@ -73,7 +78,7 @@ export function VibeTextLine({
       if (rafRef.current != null) window.cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     };
-  }, [archived, active, done, body.length, revealed]);
+  }, [archived, active, done, body.length, revealed, reducedMotion]);
 
   useEffect(() => {
     if (archived) return;
@@ -98,7 +103,7 @@ export function VibeTextLine({
     <motion.p
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+      transition={{ duration: reducedMotion ? 0 : 0.32, ease: [0.22, 1, 0.36, 1] }}
       className="clyra-vibe-agent-line max-w-[640px] whitespace-pre-wrap text-[13px] sm:text-[13.5px] font-normal leading-[1.58] tracking-[-0.015em] text-slate-500"
     >
       {body.slice(0, revealed)}

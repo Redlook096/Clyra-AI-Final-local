@@ -101,7 +101,7 @@ function proxyRequest(
   req.pipe(upstreamReq);
 }
 
-/** Proxy a websocket upgrade to the given target port. Reused by the iPhone stream proxy. */
+/** Proxy a websocket upgrade to the given target port. */
 export function proxyUpgrade(req: http.IncomingMessage, socket: import("node:stream").Duplex, head: Buffer, targetPort: number) {
   const { WebSocketServer } = require("ws") as typeof import("ws");
   const wss = new WebSocketServer({ noServer: true });
